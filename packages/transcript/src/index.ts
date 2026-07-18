@@ -12,6 +12,7 @@ export {
   createTranscriptWordLookup,
   registerTranscriptWordLookup,
 } from "./anchor-lookup.js";
+export { createAnnotationTranscriptSource } from "./annotation-context.js";
 export type {
   TranscriptEngineOptions,
   TranscriptAlignmentJobs,

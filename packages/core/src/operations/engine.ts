@@ -17,6 +17,13 @@ import transcriptSegmentMergeSchema from "./schemas/transcript.segment.merge.jso
 import transcriptSpeakerAssignSchema from "./schemas/transcript.speaker.assign.json" with { type: "json" };
 import transcriptRealignSchema from "./schemas/transcript.realign.json" with { type: "json" };
 import anchorRebindSchema from "./schemas/anchor.rebind.json" with { type: "json" };
+import annotationCreateSchema from "./schemas/annotation.create.json" with { type: "json" };
+import annotationUpdateSchema from "./schemas/annotation.update.json" with { type: "json" };
+import annotationDeleteSchema from "./schemas/annotation.delete.json" with { type: "json" };
+import annotationResolveSchema from "./schemas/annotation.resolve.json" with { type: "json" };
+import annotationRejectSchema from "./schemas/annotation.reject.json" with { type: "json" };
+import annotationReopenSchema from "./schemas/annotation.reopen.json" with { type: "json" };
+import annotationConvertSchema from "./schemas/annotation.convert.json" with { type: "json" };
 import {
   AnchorResolverRegistry,
   computeAnchorTransitions,
@@ -194,6 +201,48 @@ const catalog = new Map<string, CatalogEntry>([
     "normal",
     "none",
     "Rebind anchor on {owner} to {anchor}",
+  )],
+  ["annotation.create", catalogEntry(
+    annotationCreateSchema,
+    "low",
+    "none",
+    "Added {shape} annotation {id} at {anchorDescription}",
+  )],
+  ["annotation.update", catalogEntry(
+    annotationUpdateSchema,
+    "low",
+    "none",
+    "Edited annotation {id} ({changedFields})",
+  )],
+  ["annotation.delete", catalogEntry(
+    annotationDeleteSchema,
+    "normal",
+    "none",
+    "Deleted annotation {id}",
+  )],
+  ["annotation.resolve", catalogEntry(
+    annotationResolveSchema,
+    "low",
+    "none",
+    "Resolved annotation {id} via {txnId|manual: reason}",
+  )],
+  ["annotation.reject", catalogEntry(
+    annotationRejectSchema,
+    "low",
+    "none",
+    "Rejected annotation {id}: {reason}",
+  )],
+  ["annotation.reopen", catalogEntry(
+    annotationReopenSchema,
+    "low",
+    "none",
+    "Reopened annotation {id}: {reason}",
+  )],
+  ["annotation.convert", catalogEntry(
+    annotationConvertSchema,
+    "normal",
+    "none",
+    "Converted annotation {id} to overlay {itemId} on {layerId}",
   )],
 ]);
 

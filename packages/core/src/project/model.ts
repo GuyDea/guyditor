@@ -199,7 +199,7 @@ export interface PlacedItem {
   at: SemanticAnchor;
   duration: FrameTime | { until: SemanticAnchor } | "intrinsic";
   anchorMetadata?: AnchorMetadata;
-  source?: { in: FrameTime; out: FrameTime };
+  source?: { in: FrameTime; out: FrameTime } | { annotationId: string };
   effects?: Effect[];
   params?: Record<string, unknown>;
   seed?: number;

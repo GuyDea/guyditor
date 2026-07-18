@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["annotationId"],
+  "oneOf": [
+    { "required": ["reason"], "properties": { "reason": true } },
+    { "required": ["txnId"], "properties": { "txnId": true } }
+  ],
+  "properties": {
+    "annotationId": { "type": "string", "pattern": "^ann_[a-z2-7]{10}$" },
+    "reason": { "type": "string", "minLength": 1 },
+    "txnId": { "type": "string", "pattern": "^txn_[a-z2-7]{10}$" }
+  }
+}

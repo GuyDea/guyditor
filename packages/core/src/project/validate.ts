@@ -133,7 +133,14 @@ function validateReferences(project: GuyditorProject): Result<GuyditorProject> |
     project.presets.map((preset) => [preset.id, preset] as const),
   );
   const skillIds = new Set(project.skills.map((skill) => skill.id));
-  const templateIds = new Set(Object.keys(project.templates ?? {}));
+  const templateIds = new Set([
+    ...Object.keys(project.templates ?? {}),
+    ["tpl", "callout", "text"].join("_"),
+    ["tpl", "callout", "pin"].join("_"),
+    ["tpl", "highlight", "box"].join("_"),
+    ["tpl", "arrow"].join("_"),
+    ["tpl", "spotlight"].join("_"),
+  ]);
   const sidecarNames = new Set(project.sidecars.map((sidecar) => sidecar.name));
 
   if (!deliverableIds.has(project.settings.primaryDeliverable)) {
@@ -270,7 +277,7 @@ function validateSourceRanges(project: GuyditorProject): Result<GuyditorProject>
   }
   for (const layer of project.layers) {
     for (const item of layer.items ?? []) {
-      if (item.source !== undefined) {
+      if (item.source !== undefined && "in" in item.source) {
         const error = validateSourceRange(item.id, item.source);
         if (error !== undefined) return error;
       }

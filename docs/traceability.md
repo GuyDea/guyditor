@@ -51,13 +51,13 @@
 | FR-309 | Part 5 | todo | | |
 | FR-310 | Part 5 | todo | | |
 | FR-311 | Part 5 | todo | | |
-| FR-400 | Part 8 | todo | | |
-| FR-401 | Part 8 | todo | | |
-| FR-402 | Part 8 | partial | `packages/core/src/anchors/parser.test.ts`; `packages/core/src/anchors/resolver.test.ts`; `packages/core/src/anchors/engine.test.ts`; `packages/transcript/src/anchor-lookup.test.ts` | Core semantic anchors, annotation-resolver injection, orphan warnings/bookkeeping, and `anchor.rebind` are implemented. With no Part 8 resolver registered, `ann:` deterministically reports `ann-orphaned`; annotation records and `AnnotationService` remain Part 8 work. |
-| FR-403 | Part 8 | todo | | |
-| FR-404 | Part 8 | todo | | |
-| FR-405 | Part 8 | todo | | |
-| FR-406 | Part 8 | todo | | |
+| FR-400 | Part 8 | partial | `packages/transcript/src/annotation-context.test.ts` | The data-side settled-frame contract is represented by exact timeline/source frame extraction requests in annotation context packages. Preview seeking, scrubbing, and rendered frame verification remain UI/media work. |
+| FR-401 | Part 8 | implemented | `packages/core/src/annotations/sidecar.test.ts`; `packages/core/src/annotations/service.test.ts` | `guyditor.annotations/v1` stores all eight modeled shapes (including geometry-free time range), structured anchors, author/lifecycle history, source projection, orphan and conversion provenance; closed validation and canonical sidecar round trips are implemented. |
+| FR-402 | Part 8 | implemented | `packages/core/src/anchors/resolver.test.ts`; `packages/core/src/anchors/engine.test.ts`; `packages/core/src/annotations/service.test.ts`; `packages/transcript/src/anchor-lookup.test.ts` | Annotation clip/word/object/beat/timeline anchors resolve through the task-13 registry callback; `ann:` now resolves live annotation records, while accepted edits atomically stamp and journal newly orphaned annotations and clear recovered/re-anchored orphans. |
+| FR-403 | Part 8 | implemented | `packages/core/src/annotations/coordinates.test.ts`; `packages/core/src/annotations/sidecar.test.ts` | Canvas coordinates normalize each axis independently, scalar sizes use canvas height, spatial decimals canonicalize to six places, freehand RDP uses epsilon 0.002 with a 512-point cap, and cross-aspect contain mapping reports approximate placement. |
+| FR-404 | Part 8 | implemented | `packages/core/src/annotations/service.test.ts` | Review annotations remain sidecar-only and become renderable only through normal-risk `annotation.convert`; built-in template mapping, source-projection transfer, annotation provenance, atomic addressing/resolution, and frozen-SVG freehand conversion are implemented. |
+| FR-405 | Part 8 | partial | `packages/transcript/src/annotation-context.test.ts` | `buildAnnotationContext` assembles the normative manifest, exact clean/marked/nearby proxy frame-extraction requests, transcript window, clip window, annotation, and visible-layer metadata. PNG/MP4/audio rendering and Agent Gateway serialization remain Parts 10/12/9. |
+| FR-406 | Part 8 | implemented | `packages/core/src/annotations/service.test.ts` | All lifecycle operations and legal transitions are enforced, ready proposals derive `addressed`, and accepted transactions resolve every `addresses` annotation atomically with `resolvedBy` and an `annotation.resolve` journal operation. |
 | FR-500 | Part 6 | todo | | |
 | FR-501 | Part 6 | todo | | |
 | FR-502 | Part 6 | todo | | |

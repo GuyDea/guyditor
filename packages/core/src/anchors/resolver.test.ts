@@ -4,7 +4,9 @@ import {
   resolveAnchor,
   resolveAnchorRange,
 } from "../index.js";
+import * as corePackage from "../index.js";
 import type {
+  AnnotationSidecar,
   AnchorResolution,
   AnchorResolverDependencies,
   GuyditorProject,
@@ -220,29 +222,55 @@ describe("resolveAnchor", () => {
     });
   });
 
-  it("uses a registered annotation callback and otherwise reports ann-orphaned", async () => {
+  it("resolves ann: through the annotation sidecar callback and otherwise reports ann-orphaned", async () => {
     const project = projectFixture();
     expect(await resolve(project, "ann:ann_aaaaaaaaaa")).toEqual({
       status: "orphaned",
       reason: "ann-orphaned",
     });
-    expect(await resolve(project, "ann:ann_aaaaaaaaaa", {
-      annotationResolver: {
-        resolveAnnotation(_project, annotationId, sequenceId) {
-          expect(annotationId).toBe("ann_aaaaaaaaaa");
-          expect(sequenceId).toBe(SCOPE);
-          return Promise.resolve({
-            ok: true,
-            value: {
-              status: "resolved",
-              timeline: { frames: 9, fps: "24/1" },
-            },
-          });
+    const sidecar: AnnotationSidecar = {
+      format: "guyditor.annotations/v1",
+      annotations: [{
+        id: "ann_aaaaaaaaaa",
+        shape: "note",
+        body: "Review here",
+        geometry: null,
+        anchor: {
+          kind: "clip",
+          clipId: "clp_aaaaaaaaaa",
+          assetId: "ast_aaaaaaaaaa",
+          sourceFrame: { frames: 9, fps: "24/1" },
         },
-      },
+        extent: { frames: 0, fps: "24/1" },
+        canvasRef: { sequenceId: SCOPE, aspect: "16:9" },
+        state: "open",
+        blocking: true,
+        author: { kind: "human", id: "creator" },
+        createdAt: "2026-07-18T12:00:00Z",
+        history: [],
+      }],
+    };
+    const api = corePackage as unknown as {
+      createAnnotationAnchorResolver?: (
+        sidecars: readonly AnnotationSidecar[],
+      ) => NonNullable<AnchorResolverDependencies["annotationResolver"]>;
+      serializeAnnotationSidecar(value: unknown): string;
+    };
+    expect(typeof api.createAnnotationAnchorResolver).toBe("function");
+    if (api.createAnnotationAnchorResolver === undefined) return;
+    const { createHash } = await import("node:crypto");
+    project.sidecars[0]!.sha256 = createHash("sha256")
+      .update(api.serializeAnnotationSidecar(sidecar)).digest("hex");
+
+    expect(await resolve(project, "ann:ann_aaaaaaaaaa", {
+      annotationResolver: api.createAnnotationAnchorResolver([sidecar]),
     })).toEqual({
       status: "resolved",
       timeline: { frames: 9, fps: "24/1" },
+      source: {
+        assetId: "ast_aaaaaaaaaa",
+        time: { frames: 9, fps: "24/1" },
+      },
     });
   });
 

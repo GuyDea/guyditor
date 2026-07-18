@@ -503,7 +503,10 @@
       "properties": {
         "id": { "type": "string", "pattern": "^(clp|gfx)_[a-z2-7]{10}$" },
         "asset": { "type": "string", "pattern": "^ast_[a-z2-7]{10}$" },
-        "template": { "type": "string", "pattern": "^tpl_[a-z2-7]{10}$" },
+        "template": {
+          "type": "string",
+          "pattern": "^tpl_([a-z2-7]{10}|callout_(text|pin)|highlight_box|arrow|spotlight)$"
+        },
         "at": { "$ref": "#/$defs/anchor" },
         "duration": {
           "oneOf": [
@@ -513,7 +516,12 @@
           ]
         },
         "anchorMetadata": { "$ref": "#/$defs/anchorMetadata" },
-        "source": { "$ref": "#/$defs/frameRange" },
+        "source": {
+          "oneOf": [
+            { "$ref": "#/$defs/frameRange" },
+            { "$ref": "#/$defs/annotationProvenance" }
+          ]
+        },
         "effects": { "type": "array", "items": { "$ref": "#/$defs/effect" } },
         "params": { "$ref": "#/$defs/unknownRecord" },
         "seed": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
@@ -525,6 +533,14 @@
       "additionalProperties": false,
       "required": ["until"],
       "properties": { "until": { "$ref": "#/$defs/anchor" } }
+    },
+    "annotationProvenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["annotationId"],
+      "properties": {
+        "annotationId": { "type": "string", "pattern": "^ann_[a-z2-7]{10}$" }
+      }
     },
     "captionTrack": {
       "type": "object",
