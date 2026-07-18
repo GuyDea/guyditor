@@ -5,7 +5,7 @@
 | BR-001 | Part 0 | todo | | |
 | BR-002 | Part 9 | todo | | |
 | BR-003 | Part 9 | todo | | |
-| BR-004 | Part 9 | todo | | |
+| BR-004 | Part 9 | partial | `packages/core/src/proposals/proposal.test.ts`; `packages/agent/src/operation-audit.test.ts` | Audit linkage now preserves proposal creation, creator acceptance/rejection, and the accepted transaction/revision without changing the existing review boundary. Business rules 5–6 remain enforced by persisted review-gated proposals with reasons and semantic diffs; this step adds observability only. Agent Gateway recommendation/evidence surfaces remain pending. |
 | BR-005 | Part 0 | todo | | |
 | BR-006 | Part 0 | todo | | |
 | BR-007 | Part 9 | todo | | |
@@ -119,8 +119,8 @@
 | NFR-003 | Part 9 | todo | | |
 | NFR-004 | Part 7 | todo | | |
 | NFR-005 | Part 3 | partial | `packages/media/src/ingest.test.ts` | Ingest records a streaming 4 MiB-chunk SHA-256 and has a source write-guard regression test; ongoing quick/full verification and export-time integrity enforcement remain. |
-| NFR-006 | Part 9 | todo | | |
-| NFR-007 | Part 9 | todo | | |
+| NFR-006 | Part 9 | partial | `packages/agent/src/cost-meter.test.ts` | Persistent `state/costmeter.sqlite` aggregation tracks estimated and actual USD spend per task, episode, and lifetime. Preflight applies strict projected-spend thresholds at all levels, checks caps before warnings, emits linked budget audit events, and records reconciled external-call/charge pairs. Provider price-book/adapters, confirmation-token release in the gateway, and UI cost surfaces remain pending. |
+| NFR-007 | Part 9 | partial | `packages/agent/src/audit-log.test.ts`; `packages/agent/src/session.test.ts`; `packages/agent/src/operation-audit.test.ts` | Canonical append-only per-`ses_` JSONL implements every §9.11 record family, monotonic envelopes, typed replay with corrupt-line warnings, age/count retention with active-session protection, session open/close, and linked core commit/proposal events. The log is non-load-bearing for project reopen/commit (R-007). Gateway instruction/tool/external-provider integration and audit browser/export remain pending. |
 | NFR-100 | Part 1 | todo | | |
 | NFR-101 | Part 1 | partial | `workers/mlworker/tests/test_worker_protocol.py`; `packages/media/src/mlworker/mlworker.contract.test.ts`; `packages/media/src/mlworker/supervisor.test.ts` | Startup capabilities reflect importable engines and `GUYDITOR_ML_DISABLE`; omitted capabilities do not prevent startup. Supervision degrades to `E_MLWORKER_DOWN` after three failures with actionable repair guidance. The wider application degradation matrix remains. |
 | NFR-102 | Part 13 | partial | `packages/media/src/cache.test.ts`; `packages/media/src/proxy.test.ts` | Proxy/peaks cache byte accounting, per-asset proxy projections, disposable hash-keyed paths, and atomic partial-file safety are implemented. Storage preflight, the full category accountant, cleanup planning/execution, and cleanup UI remain Part 13 work. |

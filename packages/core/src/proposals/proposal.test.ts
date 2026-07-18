@@ -20,6 +20,8 @@ import {
   parseProjectYaml,
 } from "../index.js";
 import type {
+  AuditSink,
+  AuditSinkEvent,
   AutomationPolicy,
   IdPrefix,
   OperationDispatcher,
@@ -112,6 +114,7 @@ function applySingleFileUnifiedDiff(base: string, patch: string): string {
 
 async function projectEngine(
   policy?: AutomationPolicy,
+  auditSink?: AuditSink,
 ): Promise<{ root: string; engine: OperationEngine }> {
   const root = await directory();
   const idFactory = ids();
@@ -127,6 +130,7 @@ async function projectEngine(
       idFactory,
       now: () => NOW,
       ...(policy === undefined ? {} : { automationPolicy: policy }),
+      ...(auditSink === undefined ? {} : { auditSink }),
     }),
   };
 }
@@ -143,6 +147,74 @@ async function createReady(engine: OperationEngine): Promise<Proposal> {
 }
 
 describe("proposal lifecycle", () => {
+  it("emits linked creation and acceptance audit events", async () => {
+    const events: AuditSinkEvent[] = [];
+    const { engine } = await projectEngine(undefined, {
+      record(event) {
+        events.push(event);
+      },
+    });
+
+    const proposal = await createReady(engine);
+    await valueOf(engine.acceptProposal(proposal.id, "creator"));
+
+    expect(events).toEqual([
+      {
+        type: "proposal.created",
+        sessionId: "ses_aaaaaaaaaa",
+        projectId: "prj_aaaaaaaaaa",
+        proposalId: proposal.id,
+        opCount: 1,
+        riskClass: "normal",
+      },
+      {
+        type: "operation.committed",
+        sessionId: "ses_aaaaaaaaaa",
+        projectId: "prj_aaaaaaaaaa",
+        transactionId: "txn_bbbbbbbbbb",
+        revision: "rev_00002",
+        proposalId: proposal.id,
+        origin: "agent",
+        operationCount: 1,
+      },
+      {
+        type: "proposal.outcome",
+        sessionId: "ses_aaaaaaaaaa",
+        projectId: "prj_aaaaaaaaaa",
+        proposalId: proposal.id,
+        outcome: "accepted",
+        transactionId: "txn_bbbbbbbbbb",
+        revision: "rev_00002",
+      },
+    ]);
+  });
+
+  it("emits linked creation and rejection audit events", async () => {
+    const events: AuditSinkEvent[] = [];
+    const { engine } = await projectEngine(undefined, {
+      record(event) {
+        events.push(event);
+      },
+    });
+
+    const proposal = await createReady(engine);
+    await valueOf(engine.rejectProposal(proposal.id, "creator"));
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        type: "proposal.created",
+        proposalId: proposal.id,
+      }),
+      {
+        type: "proposal.outcome",
+        sessionId: "ses_aaaaaaaaaa",
+        projectId: "prj_aaaaaaaaaa",
+        proposalId: proposal.id,
+        outcome: "rejected",
+      },
+    ]);
+  });
+
   it("creates a ready proposal layout and accepts it through a linked journal transaction", async () => {
     const { root, engine } = await projectEngine();
     const acceptedBefore = await readFile(join(root, "episode.guyditor.yaml"), "utf8");

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { OperationEngine } from "../index.js";
 import type {
+  AuditSinkEvent,
   GuyditorProject,
   IdPrefix,
   OperationBatchResult,
@@ -52,6 +53,43 @@ function moduloGeneratedClipIds(project: GuyditorProject): GuyditorProject {
 }
 
 describe("OperationEngine", () => {
+  it("emits a session-linked audit event after a commit succeeds", async () => {
+    const events: AuditSinkEvent[] = [];
+    const engine = new OperationEngine(projectFixture(), {
+      idFactory,
+      auditSink: {
+        record(event) {
+          events.push(event);
+        },
+      },
+    });
+
+    await valueOf(engine.execute([{
+      op: "clip.trim",
+      params: {
+        clipId: "clp_aaaaaaaaaa",
+        edge: "tail",
+        delta: { frames: 1, fps: "24/1" },
+        snapPolicy: "none",
+      },
+    }], {
+      baseRevision: "rev_00001",
+      origin: "system",
+      sessionId: "ses_aaaaaaaaaa",
+      dryRun: false,
+    }));
+
+    expect(events).toEqual([{
+      type: "operation.committed",
+      sessionId: "ses_aaaaaaaaaa",
+      projectId: "prj_aaaaaaaaaa",
+      transactionId: TXN_ID,
+      revision: "rev_00002",
+      origin: "system",
+      operationCount: 1,
+    }]);
+  });
+
   it("validates and dispatches catalogued transcript operations at their declared risk", async () => {
     const original = projectFixture();
     let dispatched = "";

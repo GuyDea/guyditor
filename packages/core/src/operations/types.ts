@@ -7,6 +7,39 @@ import type { SemanticOperation, TransactionRecord } from "../store/types.js";
 export type RiskClass = "low" | "normal" | "consequential";
 export type CaptionImpact = "none" | "shift" | "retime" | "realign";
 
+export type AuditSinkEvent =
+  | {
+      type: "operation.committed";
+      sessionId?: string;
+      projectId: string;
+      transactionId: string;
+      revision: string;
+      proposalId?: string;
+      origin: OperationContext["origin"];
+      operationCount: number;
+    }
+  | {
+      type: "proposal.created";
+      sessionId?: string;
+      projectId: string;
+      proposalId: string;
+      opCount: number;
+      riskClass: RiskClass;
+    }
+  | {
+      type: "proposal.outcome";
+      sessionId?: string;
+      projectId: string;
+      proposalId: string;
+      outcome: "accepted" | "rejected" | "withdrawn" | "auto_accepted";
+      transactionId?: string;
+      revision?: string;
+    };
+
+export interface AuditSink {
+  record(event: AuditSinkEvent): void;
+}
+
 export interface OperationInput {
   op: string;
   params: Record<string, unknown>;

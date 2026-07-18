@@ -66,6 +66,8 @@ import { applyAnchorOperation } from "./anchor.js";
 import { assessBatchRisk, buildSemanticDiff } from "./diff.js";
 import type {
   AppliedOperation,
+  AuditSink,
+  AuditSinkEvent,
   AutomationPolicy,
   CreateProposalRequest,
   ContinuityGuard,
@@ -115,6 +117,7 @@ export interface OperationEngineOptions {
   automationPolicy?: AutomationPolicy;
   approvedTransitionPresets?: readonly string[];
   continuityGuard?: ContinuityGuard;
+  auditSink?: AuditSink;
 }
 
 const ajv = new Ajv2020({ allErrors: true, strict: true });
@@ -332,6 +335,7 @@ export class OperationEngine {
   readonly #automationPolicy: AutomationPolicy | undefined;
   readonly #approvedTransitionPresets: ReadonlySet<string>;
   readonly #continuityGuard: ContinuityGuard | undefined;
+  readonly #auditSink: AuditSink | undefined;
   readonly #autoAcceptsBySession = new Map<string, number>();
   readonly #undoStack: Array<{
     transactionId: string;
@@ -361,6 +365,7 @@ export class OperationEngine {
     this.#automationPolicy = options.automationPolicy;
     this.#approvedTransitionPresets = new Set(options.approvedTransitionPresets ?? []);
     this.#continuityGuard = options.continuityGuard;
+    this.#auditSink = options.auditSink;
   }
 
   public get currentProject(): GuyditorProject {
@@ -560,6 +565,16 @@ export class OperationEngine {
       : await this.#committer.commit(committedCandidate, transaction);
     if (!committed.ok) return committed;
     this.#project = committed.value;
+    this.#recordAudit({
+      type: "operation.committed",
+      ...(context.sessionId === undefined ? {} : { sessionId: context.sessionId }),
+      projectId: committed.value.project.id,
+      transactionId,
+      revision: committed.value.revision,
+      ...(context.proposalId === undefined ? {} : { proposalId: context.proposalId }),
+      origin: context.origin,
+      operationCount: applied.length,
+    });
     if (
       context.origin === "ui" &&
       context.recordUndo !== false &&
@@ -824,6 +839,14 @@ export class OperationEngine {
       revision: proposedRevision,
     });
     if (!saved.ok) return saved;
+    this.#recordAudit({
+      type: "proposal.created",
+      ...(proposal.sessionId === undefined ? {} : { sessionId: proposal.sessionId }),
+      projectId: this.#project.project.id,
+      proposalId: proposal.id,
+      opCount: proposal.operations.length,
+      riskClass: proposal.riskClass,
+    });
     return this.#shouldAutoAccept(proposal)
       ? this.#acceptProposal(proposal.id, "auto", true)
       : saved;
@@ -925,6 +948,17 @@ export class OperationEngine {
         (this.#autoAcceptsBySession.get(session) ?? 0) + 1,
       );
     }
+    this.#recordAudit({
+      type: "proposal.outcome",
+      ...(proposal.sessionId === undefined ? {} : { sessionId: proposal.sessionId }),
+      projectId: this.#project.project.id,
+      proposalId: proposal.id,
+      outcome: automatic ? "auto_accepted" : "accepted",
+      ...(resolved.resultTransaction === undefined
+        ? {}
+        : { transactionId: resolved.resultTransaction }),
+      revision: this.#project.revision,
+    });
     return success(resolved);
   }
 
@@ -979,7 +1013,23 @@ export class OperationEngine {
     const updated = await store.updateProposal(resolved);
     if (!updated.ok) return updated;
     const archived = await store.archiveProposal(id);
-    return archived.ok ? success(resolved) : archived;
+    if (!archived.ok) return archived;
+    this.#recordAudit({
+      type: "proposal.outcome",
+      ...(resolved.sessionId === undefined ? {} : { sessionId: resolved.sessionId }),
+      projectId: this.#project.project.id,
+      proposalId: resolved.id,
+      outcome: status,
+    });
+    return success(resolved);
+  }
+
+  #recordAudit(event: AuditSinkEvent): void {
+    try {
+      this.#auditSink?.record(event);
+    } catch {
+      // Operational audit is deliberately separate from accepted project state.
+    }
   }
 
   public async supersedeProposal(

@@ -9,6 +9,8 @@ export type {
 } from "./engine.js";
 export type {
   AppliedOperation,
+  AuditSink,
+  AuditSinkEvent,
   AutomationPolicy,
   CaptionImpact,
   ContinuityWarning,
