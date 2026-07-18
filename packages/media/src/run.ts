@@ -9,7 +9,9 @@ import { FfmpegError } from "./errors.js";
 
 export interface RunFfmpegOptions {
   cwd?: string;
+  onStdoutLine?: (line: string) => void;
   onStderrLine?: (line: string) => void;
+  signal?: AbortSignal;
 }
 
 export interface FfmpegRunResult {
@@ -28,11 +30,13 @@ function runBinary(
     const child = spawn(binary.path, [...args], {
       cwd: options.cwd,
       shell: false,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["ignore", "pipe", "pipe"] as const,
       windowsHide: true,
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
     });
     const stdoutChunks: Buffer[] = [];
     const stderrLines: string[] = [];
+    let stdoutRemainder = "";
     let stderrRemainder = "";
     let spawnError: Error | undefined;
 
@@ -42,7 +46,19 @@ function runBinary(
       options.onStderrLine?.(normalized);
     }
 
-    child.stdout.on("data", (chunk: Buffer) => stdoutChunks.push(chunk));
+    function recordStdoutLine(line: string): void {
+      const normalized = line.endsWith("\r") ? line.slice(0, -1) : line;
+      options.onStdoutLine?.(normalized);
+    }
+
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdoutChunks.push(chunk);
+      if (options.onStdoutLine === undefined) return;
+      stdoutRemainder += chunk.toString("utf8");
+      const lines = stdoutRemainder.split("\n");
+      stdoutRemainder = lines.pop() ?? "";
+      for (const line of lines) recordStdoutLine(line);
+    });
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk: string) => {
       stderrRemainder += chunk;
@@ -54,6 +70,7 @@ function runBinary(
       spawnError = error;
     });
     child.once("close", (exitCode, signal) => {
+      if (stdoutRemainder.length > 0) recordStdoutLine(stdoutRemainder);
       if (stderrRemainder.length > 0) recordStderrLine(stderrRemainder);
       const lastStderrLines = stderrLines.slice(-20);
       if (spawnError !== undefined) {

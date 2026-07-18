@@ -4,3 +4,4 @@ dist/
 .guyditor/
 *.tsbuildinfo
 *.log
+.guyditor-demo/

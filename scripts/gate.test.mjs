@@ -97,6 +97,7 @@ test("m0 runs fixtures first, then checks, and prints deferred work", () => {
   assert.equal(status, 0);
   assert.deepEqual(commands, [
     ["pnpm", "fixtures"],
+    ["node", "scripts/video-zero.mjs"],
     ["pnpm", "check:conventions"],
     ["pnpm", "-r", "typecheck"],
     ["pnpm", "exec", "vitest", "run"],
@@ -133,7 +134,7 @@ test("m0 stops at the first failed check", () => {
   assert.equal(status, 7);
   assert.deepEqual(commands, [
     ["pnpm", "fixtures"],
-    ["pnpm", "check:conventions"],
+    ["node", "scripts/video-zero.mjs"],
   ]);
 });
 
@@ -154,7 +155,7 @@ test("m0 uses the Windows pnpm executable without changing command displays", ()
   assert.equal(status, 0);
   assert.deepEqual(
     commands.map(([command]) => command),
-    ["pnpm.cmd", "pnpm.cmd", "pnpm.cmd", "pnpm.cmd", "node"],
+    ["pnpm.cmd", "node", "pnpm.cmd", "pnpm.cmd", "pnpm.cmd", "node"],
   );
   assert.match(output[0], /^==> pnpm fixtures$/);
 });

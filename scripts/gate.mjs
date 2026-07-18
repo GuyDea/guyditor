@@ -7,6 +7,7 @@ import { validateFixtureManifest } from "./fixture-spec.mjs";
 
 export const M0_COMMANDS = Object.freeze([
   Object.freeze({ args: ["fixtures"], command: "pnpm" }),
+  Object.freeze({ args: ["scripts/video-zero.mjs"], command: "node" }),
   Object.freeze({ args: ["check:conventions"], command: "pnpm" }),
   Object.freeze({ args: ["-r", "typecheck"], command: "pnpm" }),
   Object.freeze({ args: ["exec", "vitest", "run"], command: "pnpm" }),

@@ -24,6 +24,34 @@ afterEach(async () => {
 });
 
 describe("runFfmpeg", () => {
+  it("streams machine-readable progress lines from stdout", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "guyditor-progress-"));
+    temporaryDirectories.push(directory);
+    process.env.GUYDITOR_FFMPEG = resolveFfmpeg().path;
+    const progressLines: string[] = [];
+
+    await runFfmpeg(
+      [
+        "-nostdin",
+        "-f",
+        "lavfi",
+        "-i",
+        "color=c=black:s=16x16:r=10:d=0.2",
+        "-frames:v",
+        "2",
+        "-progress",
+        "pipe:1",
+        "-f",
+        "null",
+        "-",
+      ],
+      { onStdoutLine: (line) => progressLines.push(line) },
+    );
+
+    expect(progressLines).toContain("progress=end");
+    expect(progressLines.some((line) => line.startsWith("out_time="))).toBe(true);
+  });
+
   it("streams all stderr lines but retains only the last 20 on failure", async () => {
     const directory = await mkdtemp(path.join(tmpdir(), "guyditor-runner-"));
     temporaryDirectories.push(directory);

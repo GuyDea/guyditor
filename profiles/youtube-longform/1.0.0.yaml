@@ -1,0 +1,10 @@
+id: youtube-longform
+version: 1.0.0
+video:
+  codec: libx264
+  crf: 18
+  pixelFormat: yuv420p
+audio:
+  codec: aac
+  bitrate: 192k
+container: mp4

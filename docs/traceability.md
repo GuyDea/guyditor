@@ -104,12 +104,12 @@
 | FR-904 | Part 5 | partial | `packages/core/src/operations/engine.test.ts`; `packages/core/src/store/store.test.ts` | Applied operations and journal records carry inverse metadata; undo-stack orchestration remains UI work. |
 | FR-905 | Part 2 | todo | | |
 | FR-906 | Part 10 | todo | | |
-| FR-1000 | Part 12 | todo | | |
+| FR-1000 | Part 12 | partial | `packages/render/src/graph.test.ts`; `packages/render/src/filtergraph.test.ts`; `packages/render/src/videozero.test.ts`; `scripts/video-zero.mjs` | M0 local-only subset: one sequence-bound video layer; cuts, exact trims, `gapBefore` as black+silence, speed effects, same-clip audio/silence concat, and H.264/AAC MP4 export through `RenderService` + `JobQueue`. Package-local lint forbids HTTP/socket imports and `fetch`; non-file FFmpeg paths are rejected. Transitions, overlaps, multi-layer/items composition, keying, transforms, captions/overlays, freeze, proposals, and proxy quality return `E_RENDER_UNSUPPORTED` with the owning spec part. |
 | FR-1001 | Part 12 | todo | | |
-| FR-1002 | Part 12 | todo | | |
+| FR-1002 | Part 12 | partial | `packages/render/src/graph.test.ts`; `packages/render/src/videozero.test.ts` | Render graphs embed the minimal pinned toolchain manifest (FFmpeg/ffprobe versions and binary hashes, render package version, OS, encoder threads); exports verify recorded asset/sidecar hashes and tests assert exact stream properties and duration. Full functional-equivalence analysis remains Part 12 work. |
 | FR-1003 | Part 12 | partial | `packages/core/src/jobs/queue.test.ts` | Persistent queue, cancellation, retry, progress, and concurrency library complete; main-process/IPC bridging and the UI job panel remain. |
 | FR-1004 | Part 12 | todo | | |
-| FR-1005 | Part 12 | todo | | |
+| FR-1005 | Part 12 | partial | `packages/render/src/videozero.test.ts`; `scripts/video-zero.mjs` | Minimal adjacent export report records accepted revision, deliverable/variant, profile hash, toolchain, per-source and sidecar SHA-256, resolved encode settings, validation/warnings, and output SHA-256/bytes/stream duration. Deliverable-directory copies, loudness measurements, and cache accounting remain. |
 | FR-1100 | Part 3 | partial | `packages/media/src/binaries.test.ts`; `packages/media/src/probe.test.ts` | FFmpeg/ffprobe resolution, execution, and probe-to-Asset format metadata plumbing are covered; ingest, proxies, tier classification, and the full format matrix remain. |
 | FR-1101 | Part 4 | todo | | |
 | FR-1102 | Part 12 | todo | | |
