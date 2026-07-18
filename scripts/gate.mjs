@@ -10,7 +10,10 @@ export const M0_COMMANDS = Object.freeze([
   Object.freeze({ args: ["scripts/video-zero.mjs"], command: "node" }),
   Object.freeze({ args: ["check:conventions"], command: "pnpm" }),
   Object.freeze({ args: ["-r", "typecheck"], command: "pnpm" }),
-  Object.freeze({ args: ["exec", "vitest", "run"], command: "pnpm" }),
+  Object.freeze({
+    args: ["exec", "vitest", "run", "--project", "unit", "--project", "golden"],
+    command: "pnpm",
+  }),
   Object.freeze({
     args: [
       "--test",
@@ -22,8 +25,27 @@ export const M0_COMMANDS = Object.freeze([
   }),
 ]);
 
+export const M1_COMMANDS = Object.freeze([
+  ...M0_COMMANDS,
+  Object.freeze({ args: ["workers/mlworker/setup.sh"], command: "bash" }),
+  Object.freeze({
+    args: [
+      "run",
+      "--project",
+      "workers/mlworker",
+      "pytest",
+      "workers/mlworker/tests",
+    ],
+    command: "uv",
+  }),
+  Object.freeze({
+    args: ["exec", "vitest", "run", "--project", "contract"],
+    command: "pnpm",
+  }),
+]);
+
 const DEFERRED_M0_STEPS = Object.freeze([
-  "dedicated contract, golden, e2e, and AC suites (root Vitest currently selects empty specialized projects)",
+  "remaining milestone contract, golden, e2e, and AC coverage beyond the implemented M0/M1 suites",
   "milestone traceability-status enforcement",
   "dogfood evidence",
   "gate report emission",
@@ -53,12 +75,13 @@ export function runGate(
     runCommand = spawnCommand,
   } = {},
 ) {
-  if (milestone !== "m0") {
+  if (milestone !== "m0" && milestone !== "m1") {
     error(`gate ${milestone ?? "<missing>"}: gate not yet defined`);
     return 1;
   }
 
-  for (const { command, args } of M0_COMMANDS) {
+  const commands = milestone === "m0" ? M0_COMMANDS : M1_COMMANDS;
+  for (const { command, args } of commands) {
     const display = commandText(command, args);
     const executable =
       platform === "win32" && command === "pnpm" ? `${command}.cmd` : command;
@@ -68,19 +91,19 @@ export function runGate(
     try {
       result = runCommand(executable, args);
     } catch (spawnError) {
-      error(`gate m0: could not run ${display}: ${spawnError.message}`);
+      error(`gate ${milestone}: could not run ${display}: ${spawnError.message}`);
       return 1;
     }
 
     if (result?.error) {
-      error(`gate m0: could not run ${display}: ${result.error.message}`);
+      error(`gate ${milestone}: could not run ${display}: ${result.error.message}`);
       return 1;
     }
     if (result?.status !== 0) {
       const detail = result?.signal
         ? `terminated by signal ${result.signal}`
         : `exited with status ${result?.status ?? "unknown"}`;
-      error(`gate m0: ${display} ${detail}`);
+      error(`gate ${milestone}: ${display} ${detail}`);
       return typeof result?.status === "number" && result.status !== 0
         ? result.status
         : 1;
@@ -92,21 +115,25 @@ export function runGate(
     manifest = readFixtureManifest();
   } catch (manifestError) {
     error(
-      `gate m0: could not read .fixtures/manifest.json: ${manifestError.message}`,
+      `gate ${milestone}: could not read .fixtures/manifest.json: ${manifestError.message}`,
     );
     return 1;
   }
   const manifestErrors = validateFixtureManifest(manifest);
   if (manifestErrors.length > 0) {
-    error(`gate m0: invalid fixture manifest: ${manifestErrors.join("; ")}`);
+    error(`gate ${milestone}: invalid fixture manifest: ${manifestErrors.join("; ")}`);
     return 1;
   }
 
-  log("gate m0: fixture manifest contains every required entry");
-  log("gate m0: implementable scaffold checks passed");
-  log("Deferred §14.8 scaffold-era steps:");
-  for (const step of DEFERRED_M0_STEPS) {
-    log(`- ${step}`);
+  log(`gate ${milestone}: fixture manifest contains every required entry`);
+  if (milestone === "m0") {
+    log("gate m0: implementable scaffold checks passed");
+    log("Deferred §14.8 scaffold-era steps:");
+    for (const step of DEFERRED_M0_STEPS) {
+      log(`- ${step}`);
+    }
+  } else {
+    log("gate m1: implemented partial milestone checks passed");
   }
   return 0;
 }

@@ -100,7 +100,7 @@ test("m0 runs fixtures first, then checks, and prints deferred work", () => {
     ["node", "scripts/video-zero.mjs"],
     ["pnpm", "check:conventions"],
     ["pnpm", "-r", "typecheck"],
-    ["pnpm", "exec", "vitest", "run"],
+    ["pnpm", "exec", "vitest", "run", "--project", "unit", "--project", "golden"],
     [
       "node",
       "--test",
@@ -158,6 +158,26 @@ test("m0 uses the Windows pnpm executable without changing command displays", ()
     ["pnpm.cmd", "node", "pnpm.cmd", "pnpm.cmd", "pnpm.cmd", "node"],
   );
   assert.match(output[0], /^==> pnpm fixtures$/);
+});
+
+test("m1 extends the M0 checks with setup, Python tests, and real contracts", () => {
+  const commands = [];
+
+  const status = runGate("m1", {
+    log: () => {},
+    readFixtureManifest: completeManifest,
+    runCommand: (command, args) => {
+      commands.push([command, ...args]);
+      return { status: 0 };
+    },
+  });
+
+  assert.equal(status, 0);
+  assert.deepEqual(commands.slice(-3), [
+    ["bash", "workers/mlworker/setup.sh"],
+    ["uv", "run", "--project", "workers/mlworker", "pytest", "workers/mlworker/tests"],
+    ["pnpm", "exec", "vitest", "run", "--project", "contract"],
+  ]);
 });
 
 test("m0 rejects a fixture manifest missing a required entry", () => {
@@ -226,7 +246,7 @@ test("m0 rejects motion paths with missing coordinates", () => {
   assert.match(errors.join("\n"), /subjectBoundingBoxPath.*x.*y.*width.*height/);
 });
 
-for (const milestone of [undefined, "m1", "m2", "m3", "m4", "unsupported"]) {
+for (const milestone of [undefined, "m2", "m3", "m4", "unsupported"]) {
   test(`gate ${milestone ?? "<missing>"} exits one with a clear message`, () => {
     const gatePath = path.join(import.meta.dirname, "gate.mjs");
     const args = milestone === undefined ? [gatePath] : [gatePath, milestone];

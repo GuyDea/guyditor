@@ -449,10 +449,14 @@ test("exempts anchored Part 0 validator pattern strings", async () => {
   assert.deepEqual(await checkConventions({ rootDir }), []);
 });
 
-test("ignores standard Python cache directories", async () => {
+test("ignores local Python environments, installers, caches, and locks", async () => {
   const rootDir = await makeRepository({
     "workers/mlworker/__pycache__/bad.pyc": "ast_BAD\n",
     "workers/mlworker/.pytest_cache/bad.txt": "w123\n",
+    "workers/mlworker/.venv/lib/bad.py": Buffer.alloc(100 * 1024 + 1, "x"),
+    "workers/mlworker/.uv-cache/archive/bad.py": Buffer.alloc(100 * 1024 + 1, "x"),
+    "workers/mlworker/.uv-python/cpython/lib/bad.py": Buffer.alloc(100 * 1024 + 1, "x"),
+    "workers/mlworker/uv.lock": Buffer.alloc(100 * 1024 + 1, "x"),
   });
 
   assert.deepEqual(await checkConventions({ rootDir }), []);

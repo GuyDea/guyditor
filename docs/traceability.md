@@ -13,7 +13,7 @@
 | FR-001 | Part 3 | implemented | `packages/core/src/store/create-project.test.ts`; `packages/core/src/store/store.test.ts` | Request-based `ProjectStore.createProject` enforces empty/new, non-nested, non-cache locations; loads a versioned primary profile; records skill/watch-folder pins; scaffolds canonical/operational directories; and writes creation transaction 1 with `rev_00001` snapshot, lock, journal, and HEAD. |
 | FR-002 | Part 3 | implemented | `packages/media/src/ingest.test.ts`; `packages/media/src/probe.test.ts`; `packages/core/src/operations/asset.test.ts` | Batch `MediaEngine.ingest` runs through `JobQueue`, validates sources, hashes and probes concurrently, classifies and registers assets through one `asset.ingest` transaction, deduplicates known paths, protects in-use removals, and queues configurable follow-up records. |
 | FR-003 | Part 3 | implemented | `packages/media/src/commands.test.ts`; `packages/media/src/proxy.test.ts`; `packages/media/src/peaks.test.ts`; `packages/media/src/cache.test.ts` | `proxy.generate` and `MediaEngine.ensureProxy` implement the hashed edit-proxy ladder, five-check staleness contract, deduplicated jobs, atomic media/metadata publication, and small-image exemption. `peaks.generate` streams mono 48 kHz s16le into fixed int8 tiers. Cache use scans and missing-proxy projections are available through `MediaEngine.estimateCacheUse`. |
-| FR-004 | Part 3 | todo | | |
+| FR-004 | Part 3 | partial | `workers/mlworker/tests/test_worker_protocol.py`; `packages/media/src/mlworker/mlworker.contract.test.ts` | The local mlworker now exposes a VAD analysis primitive with speech/silence intervals; fixture-grounded contracts hold all three synthetic silence boundaries within 150 ms. Asset analysis persistence and silence-driven edit features remain. |
 | FR-005 | Part 3 | todo | | |
 | FR-006 | Part 3 | todo | | |
 | FR-007 | Part 3 | todo | | |
@@ -30,7 +30,7 @@
 | FR-106 | Part 2 | todo | | |
 | FR-107 | Part 2 | todo | | |
 | FR-108 | Part 2 | todo | | |
-| FR-200 | Part 4 | todo | | |
+| FR-200 | Part 4 | partial | `workers/mlworker/tests/test_worker_protocol.py`; `packages/media/src/mlworker/mlworker.contract.test.ts`; `packages/media/src/mlworker/executors.test.ts` | The Python 3.11 mlworker implements faster-whisper transcription with detected language/confidence, nested word timestamps, progress, cancellation, model caching, and JobQueue execution. The canonical transcript sidecar and `TranscriptEngine` land in the next task. |
 | FR-201 | Part 4 | todo | | |
 | FR-202 | Part 4 | todo | | |
 | FR-203 | Part 4 | todo | | |
@@ -122,11 +122,11 @@
 | NFR-006 | Part 9 | todo | | |
 | NFR-007 | Part 9 | todo | | |
 | NFR-100 | Part 1 | todo | | |
-| NFR-101 | Part 1 | todo | | |
+| NFR-101 | Part 1 | partial | `workers/mlworker/tests/test_worker_protocol.py`; `packages/media/src/mlworker/mlworker.contract.test.ts`; `packages/media/src/mlworker/supervisor.test.ts` | Startup capabilities reflect importable engines and `GUYDITOR_ML_DISABLE`; omitted capabilities do not prevent startup. Supervision degrades to `E_MLWORKER_DOWN` after three failures with actionable repair guidance. The wider application degradation matrix remains. |
 | NFR-102 | Part 13 | partial | `packages/media/src/cache.test.ts`; `packages/media/src/proxy.test.ts` | Proxy/peaks cache byte accounting, per-asset proxy projections, disposable hash-keyed paths, and atomic partial-file safety are implemented. Storage preflight, the full category accountant, cleanup planning/execution, and cleanup UI remain Part 13 work. |
 | NFR-103 | Part 12 | partial | `packages/core/src/jobs/queue.test.ts` | Startup recovery safely fails interrupted jobs with retry metadata; render/analysis integration and partial-artifact cleanup remain. |
 | NFR-104 | Part 12 | todo | | |
-| NFR-105 | Part 1 | todo | | |
+| NFR-105 | Part 1 | partial | `packages/media/src/mlworker/supervisor.test.ts`; `packages/media/src/mlworker/executors.test.ts`; `packages/media/src/mlworker/mlworker.contract.test.ts` | A typed JSON-RPC supervisor/task-runner boundary isolates media jobs from faster-whisper and VAD engine internals. The public `TranscriptionEngine`/`TranscriptEngine` layer and additional provider boundaries remain. |
 | NFR-106 | Part 13 | todo | | |
 | NFR-107 | Part 13 | todo | | |
 | NFR-108 | Part 13 | todo | | |

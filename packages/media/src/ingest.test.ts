@@ -228,7 +228,16 @@ describe.skipIf(!FIXTURES_AVAILABLE)("MediaEngine fixture ingest", () => {
       "transcribe",
       "proxy.generate",
     ]);
-    expect(followUps.find((job) => job?.kind === "transcribe")?.state).toBe("queued");
+    expect(followUps.find((job) => job?.kind === "transcribe")).toMatchObject({
+      state: "queued",
+      payload: {
+        assetId: result.assets[0]?.assetId,
+        audioPath: path.join(FIXTURE_ROOT, "bars-1080p30-10s.mp4"),
+        language: null,
+        model: "large-v3",
+        wordTimestamps: true,
+      },
+    });
   });
 });
 

@@ -80,3 +80,23 @@ export type {
 } from "./proxy.js";
 export { runFfmpeg, runFfprobe } from "./run.js";
 export type { FfmpegRunResult, RunFfmpegOptions } from "./run.js";
+export { registerMlworkerJobExecutors } from "./mlworker/executors.js";
+export { MlworkerSupervisor } from "./mlworker/supervisor.js";
+export type { MlworkerSupervisorOptions } from "./mlworker/supervisor.js";
+export type {
+  MlworkerCapability,
+  MlworkerDevice,
+  MlworkerError,
+  MlworkerHello,
+  MlworkerProgress,
+  MlworkerRunOptions,
+  MlworkerSegment,
+  MlworkerState,
+  MlworkerStateEvent,
+  MlworkerTaskMethod,
+  MlworkerTaskRunner,
+  MlworkerTranscribeResult,
+  MlworkerVadInterval,
+  MlworkerVadResult,
+  MlworkerWord,
+} from "./mlworker/types.js";

@@ -43,6 +43,8 @@ import {
   proxyIsStale,
 } from "./proxy.js";
 import type { ProxyTier } from "./commands.js";
+import { registerMlworkerJobExecutors } from "./mlworker/executors.js";
+import type { MlworkerTaskRunner } from "./mlworker/types.js";
 
 const HASH_CHUNK_BYTES = 4 * 1024 * 1024;
 
@@ -68,6 +70,7 @@ export interface IngestRequest {
 export interface MediaEngineOptions {
   jobQueue: JobQueue;
   followUpJobs?: readonly FollowUpJobKind[];
+  mlworker?: MlworkerTaskRunner;
   idFactory?: (prefix: IdPrefix) => string;
   now?: () => Date;
 }
@@ -395,6 +398,9 @@ export class MediaEngine {
     ])];
     this.#idFactory = options.idFactory ?? makeId;
     this.#now = options.now ?? (() => new Date());
+    if (options.mlworker !== undefined) {
+      registerMlworkerJobExecutors(this.#queue, options.mlworker);
+    }
     this.#queue.registerExecutor("ingest", async (job, { reportProgress }) => {
       const payload = job.payload as unknown as IngestJobPayload;
       const project = this.#projects.get(payload.projectRoot);
@@ -638,7 +644,15 @@ export class MediaEngine {
           title: followUpTitle(kind, assetId),
           payload: kind === "peaks.generate"
             ? { assetId, projectRoot: project.root }
-            : { assetId },
+            : {
+                assetId,
+                audioPath: path.isAbsolute(asset.path)
+                  ? asset.path
+                  : path.resolve(project.root, asset.path),
+                language: null,
+                model: "large-v3",
+                wordTimestamps: true,
+              },
           cancellable: true,
         });
         followUpJobIds.push(followUp.jobId);

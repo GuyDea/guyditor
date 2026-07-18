@@ -52,11 +52,15 @@ const IGNORED_DIRECTORY_NAMES = new Set([
   ".guyditor",
   ".pytest_cache",
   ".turbo",
+  ".uv-cache",
+  ".uv-python",
+  ".venv",
   "__pycache__",
   "coverage",
   "dist",
   "node_modules",
 ]);
+const IGNORED_FILE_NAMES = new Set(["uv.lock"]);
 const CANONICAL_SERVICE_SET = new Set(CANONICAL_SERVICES);
 const RANDOM_PREFIX_PATTERN = RANDOM_ID_PREFIXES.join("|");
 const JS_IDENTIFIER_CONTINUE = String.raw`\p{ID_Continue}$_\u200C\u200D`;
@@ -142,7 +146,7 @@ async function collectFiles(rootDir) {
         if (!IGNORED_DIRECTORY_NAMES.has(entry.name)) {
           await walk(absolutePath, relativePath);
         }
-      } else if (entry.isFile()) {
+      } else if (entry.isFile() && !IGNORED_FILE_NAMES.has(entry.name)) {
         files.push({ absolutePath, relativePath });
       }
     }
