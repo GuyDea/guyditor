@@ -13,4 +13,4 @@ uv venv .venv --python 3.11 --clear
 VIRTUAL_ENV="$worker_root/.venv" uv pip install -e .
 
 "$worker_root/.venv/bin/python" -c \
-  'import sys; assert sys.version_info >= (3, 11); import faster_whisper, mlworker, pytest'
+  'import sys; assert sys.version_info >= (3, 11); import faster_whisper, mlworker, pytest, torch, torchaudio; assert torch.version.cuda is None'

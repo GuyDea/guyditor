@@ -23,6 +23,8 @@ import {
 } from "./sidecar.js";
 import type {
   SampleTime,
+  TranscriptAlignment,
+  TranscriptEngineIdentity,
   TranscriptSegment,
   TranscriptSidecar,
   TranscriptWord,
@@ -791,6 +793,114 @@ function speakerAssign(
   });
 }
 
+interface RealignUpdate {
+  wordId: string;
+  start: SampleTime;
+  end: SampleTime;
+  confidence: number | null;
+  alignment: TranscriptAlignment;
+}
+
+function realign(
+  documents: readonly TranscriptDocument[],
+  project: GuyditorProject,
+  input: OperationInput,
+  writes: Map<string, string>,
+) {
+  const assetId = input.params["assetId"] as string;
+  const document = documents.find(({ sidecar }) => sidecar.assetId === assetId);
+  if (document === undefined) {
+    return operationFailure(
+      "E_TRANSCRIPT_ASSET_NOT_FOUND",
+      `Asset ${assetId} has no canonical transcript.`,
+      [assetId],
+    );
+  }
+  const updates = input.params["updates"] as RealignUpdate[];
+  const wordIds = updates.map(({ wordId }) => wordId);
+  if (new Set(wordIds).size !== wordIds.length) {
+    return operationFailure(
+      "E_TRANSCRIPT_REALIGN_DUPLICATE",
+      "A realignment transaction may update each word at most once.",
+      wordIds,
+    );
+  }
+  const previous: RealignUpdate[] = [];
+  const candidates = new Map<string, TranscriptWord>();
+  for (const update of updates) {
+    const located = findWord([document], update.wordId);
+    if (located === undefined || located.word.state !== "active") {
+      return operationFailure(
+        "E_TRANSCRIPT_WORD_NOT_FOUND",
+        `Realigned word ${update.wordId} is not active in asset ${assetId}.`,
+        [assetId, update.wordId],
+      );
+    }
+    previous.push({
+      wordId: update.wordId,
+      start: located.word.start,
+      end: located.word.end,
+      confidence: located.word.confidence,
+      alignment: located.word.alignment,
+    });
+    candidates.set(update.wordId, {
+      ...located.word,
+      start: update.start,
+      end: update.end,
+      confidence: update.confidence,
+      alignment: update.alignment,
+    });
+  }
+  for (const segment of document.sidecar.segments) {
+    let previousEnd: SampleTime | undefined;
+    for (const wordId of segment.words) {
+      const original = document.sidecar.words[wordId];
+      if (original?.state !== "active") continue;
+      const word = candidates.get(wordId) ?? original;
+      if (
+        word.start.rate !== document.sidecar.audio.rate ||
+        word.end.rate !== document.sidecar.audio.rate ||
+        compareTime(word.start, word.end) >= 0 ||
+        compareTime(word.start, segment.start) < 0 ||
+        compareTime(word.end, segment.end) > 0 ||
+        (previousEnd !== undefined && compareTime(previousEnd, word.start) > 0)
+      ) {
+        return operationFailure(
+          "E_TRANSCRIPT_REALIGN_RANGE",
+          `Realignment would make ${wordId} invalid or overlap its active neighbor.`,
+          [assetId, wordId],
+        );
+      }
+      previousEnd = word.end;
+    }
+  }
+  for (const [wordId, word] of candidates) document.sidecar.words[wordId] = word;
+  const previousAlignment = document.sidecar.provenance.alignment;
+  document.sidecar.provenance = {
+    ...document.sidecar.provenance,
+    alignment: input.params["alignment"] as TranscriptEngineIdentity | null,
+  };
+  const wordRange = input.params["wordRange"] as {
+    fromWord: string;
+    toWord: string;
+  } | undefined;
+  return success({
+    model: updateReference(project, document, writes),
+    inverse: [{
+      op: input.op,
+      params: {
+        assetId,
+        ...(wordRange === undefined ? {} : { wordRange }),
+        updates: previous,
+        alignment: previousAlignment,
+        jobId: input.params["jobId"],
+      },
+    }],
+    affected: [assetId, ...wordIds],
+    summary: `Realign ${String(updates.length)} transcript words for ${assetId}`,
+  });
+}
+
 function dispatcher(
   documents: readonly TranscriptDocument[],
   writes: Map<string, string>,
@@ -815,6 +925,8 @@ function dispatcher(
           return segmentMerge(documents, project, input, writes);
         case "transcript.speaker.assign":
           return speakerAssign(documents, project, input, writes, idFactory);
+        case "transcript.realign":
+          return realign(documents, project, input, writes);
         default:
           return operationFailure(
             "E_TRANSCRIPT_DISPATCH",

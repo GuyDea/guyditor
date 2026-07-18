@@ -47,7 +47,7 @@ class RecordingRunner implements MlworkerTaskRunner {
 }
 
 describe("registerMlworkerJobExecutors", () => {
-  it("maps transcribe and vad jobs to one task runner with queue progress", async () => {
+  it("maps transcribe, align, and vad jobs to one task runner with queue progress", async () => {
     const { queue } = JobQueue.open(":memory:", { concurrency: 2 });
     queues.push(queue);
     const runner = new RecordingRunner();
@@ -70,6 +70,17 @@ describe("registerMlworkerJobExecutors", () => {
       cancellable: true,
       payload: { audioPath: "/tmp/audio.wav" },
     });
+    const align = queue.enqueue({
+      kind: "align",
+      title: "Align fixture transcript",
+      cancellable: true,
+      payload: {
+        audioPath: "/tmp/audio.wav",
+        language: "en",
+        model: "wav2vec2-base-960h",
+        segments: [],
+      },
+    });
 
     expect(await waitForTerminal(queue, transcribe.jobId)).toMatchObject({
       state: "done",
@@ -78,6 +89,10 @@ describe("registerMlworkerJobExecutors", () => {
     expect(await waitForTerminal(queue, vad.jobId)).toMatchObject({
       state: "done",
       payload: { method: "vad", accepted: true },
+    });
+    expect(await waitForTerminal(queue, align.jobId)).toMatchObject({
+      state: "done",
+      payload: { method: "align", accepted: true },
     });
     expect(runner.calls).toEqual([
       {
@@ -93,6 +108,16 @@ describe("registerMlworkerJobExecutors", () => {
       {
         method: "vad",
         params: { taskId: vad.jobId, audioPath: "/tmp/audio.wav" },
+      },
+      {
+        method: "align",
+        params: {
+          taskId: align.jobId,
+          audioPath: "/tmp/audio.wav",
+          language: "en",
+          model: "wav2vec2-base-960h",
+          segments: [],
+        },
       },
     ]);
   });
@@ -128,4 +153,3 @@ describe("registerMlworkerJobExecutors", () => {
     });
   });
 });
-

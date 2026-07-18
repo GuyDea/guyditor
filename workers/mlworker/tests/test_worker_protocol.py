@@ -22,6 +22,10 @@ class WorkerProcess:
         env = os.environ.copy()
         env.update(extra_env or {})
         env["PYTHONNOUSERSITE"] = "1"
+        env.setdefault(
+            "GUYDITOR_ML_MODEL_DIR",
+            str(WORKER_ROOT / ".uv-cache" / "models"),
+        )
         self.process = subprocess.Popen(
             [sys.executable, "-m", "mlworker", "--stdio"],
             cwd=WORKER_ROOT,
@@ -116,16 +120,26 @@ def test_hello_advertises_importable_capabilities(worker: WorkerProcess) -> None
     capabilities = params["capabilities"]
     assert isinstance(capabilities, list)
     assert {capability["task"] for capability in capabilities} == {
+        "align",
         "transcribe",
         "vad",
     }
     for capability in capabilities:
         assert isinstance(capability["engine"], str)
         assert isinstance(capability["engineVersion"], str)
+    align_capability = next(
+        capability for capability in capabilities if capability["task"] == "align"
+    )
+    assert align_capability == {
+        "task": "align",
+        "engine": "torchaudio-wav2vec2-ctc-forced-align",
+        "engineVersion": pytest.importorskip("torchaudio").__version__,
+        "models": ["wav2vec2-base-960h"],
+    }
 
 
 def test_disable_env_omits_capabilities_without_preventing_startup() -> None:
-    worker = WorkerProcess({"GUYDITOR_ML_DISABLE": "transcribe,vad"})
+    worker = WorkerProcess({"GUYDITOR_ML_DISABLE": "align,transcribe,vad"})
     try:
         hello = worker.read()
         params = hello["params"]
@@ -136,6 +150,119 @@ def test_disable_env_omits_capabilities_without_preventing_startup() -> None:
         assert worker.response(1)["result"] == {"pong": True}
     finally:
         worker.close()
+
+
+@pytest.mark.slow
+def test_align_reports_progress_and_monotonic_word_schema(
+    worker: WorkerProcess,
+    tmp_path: Path,
+) -> None:
+    audio_path = tmp_path / "align-tone.wav"
+    write_tone_wav(audio_path)
+    worker.read()
+    worker.send(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "align",
+            "params": {
+                "taskId": "job_align22222",
+                "audioPath": str(audio_path),
+                "language": "en",
+                "model": "wav2vec2-base-960h",
+                "segments": [
+                    {
+                        "index": 7,
+                        "start": {"samples": 0, "rate": 16_000},
+                        "end": {"samples": 32_000, "rate": 16_000},
+                        "tokens": ["fake", "three", "words"],
+                    }
+                ],
+            },
+        }
+    )
+
+    progress: list[float] = []
+    response: dict[str, object] | None = None
+    deadline = time.monotonic() + 600
+    while time.monotonic() < deadline:
+        message = worker.read(max(0.01, deadline - time.monotonic()))
+        if message.get("method") == "$/progress":
+            params = message["params"]
+            assert isinstance(params, dict)
+            progress.append(float(params["progress"]))
+        if message.get("id") == 1:
+            response = message
+            break
+    assert response is not None
+    assert "error" not in response, worker.stderr
+    assert progress
+    assert progress[-1] == 1
+    result = response["result"]
+    assert isinstance(result, dict)
+    assert result["engine"] == {
+        "name": "torchaudio-wav2vec2-ctc-forced-align",
+        "version": pytest.importorskip("torchaudio").__version__,
+        "model": "wav2vec2-base-960h",
+    }
+    tokens = result["tokens"]
+    assert isinstance(tokens, list)
+    assert len(tokens) == 3
+    previous_end = 0
+    for token_index, token in enumerate(tokens):
+        assert token["segmentIndex"] == 7
+        assert token["tokenIndex"] == token_index
+        assert token["start"]["rate"] == 16_000
+        assert token["end"]["rate"] == 16_000
+        assert previous_end <= token["start"]["samples"]
+        assert token["start"]["samples"] < token["end"]["samples"] <= 32_000
+        assert 0 <= token["score"] <= 1
+        assert isinstance(token["aligned"], bool)
+        previous_end = token["end"]["samples"]
+
+
+def test_cancel_align_acknowledges_and_worker_remains_available(
+    worker: WorkerProcess,
+    tmp_path: Path,
+) -> None:
+    audio_path = tmp_path / "cancel-align.wav"
+    write_tone_wav(audio_path, duration=4.0)
+    worker.read()
+    worker.send(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "align",
+            "params": {
+                "taskId": "job_algncancel",
+                "audioPath": str(audio_path),
+                "language": "en",
+                "model": "wav2vec2-base-960h",
+                "segments": [
+                    {
+                        "index": 0,
+                        "start": {"samples": 0, "rate": 16_000},
+                        "end": {"samples": 64_000, "rate": 16_000},
+                        "tokens": ["cancel", "this", "alignment"],
+                    }
+                ],
+            },
+        }
+    )
+    started = time.monotonic()
+    worker.send(
+        {
+            "jsonrpc": "2.0",
+            "method": "$/cancel",
+            "params": {"taskId": "job_algncancel"},
+        }
+    )
+
+    cancelled = worker.response(1, timeout=2)
+    assert time.monotonic() - started <= 2
+    assert cancelled["error"]["code"] == -32800
+    worker.send({"jsonrpc": "2.0", "id": 2, "method": "ping", "params": {}})
+    assert worker.response(2, timeout=2)["result"] == {"pong": True}
 
 
 def test_vad_reports_speech_and_silence_intervals(

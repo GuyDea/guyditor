@@ -6,6 +6,8 @@ import os
 from pathlib import Path
 from typing import Any, Callable
 
+from .alignment import align
+
 
 ProgressCallback = Callable[[float, str], None]
 ANALYSIS_RATE = 16_000
@@ -233,6 +235,7 @@ def vad(params: dict[str, Any], progress: ProgressCallback) -> dict[str, Any]:
 
 
 TASKS: dict[str, Callable[[dict[str, Any], ProgressCallback], dict[str, Any]]] = {
+    "align": align,
     "transcribe": transcribe,
     "vad": vad,
 }

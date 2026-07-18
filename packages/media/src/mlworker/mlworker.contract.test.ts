@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { MlworkerSupervisor } from "./supervisor.js";
 import type {
+  MlworkerAlignResult,
   MlworkerTranscribeResult,
   MlworkerVadResult,
   SampleTime,
@@ -16,7 +17,12 @@ const WORKER_ROOT = path.join(REPOSITORY_ROOT, "workers/mlworker");
 const PYTHON = path.join(WORKER_ROOT, ".venv/bin/python");
 const FIXTURE = path.join(REPOSITORY_ROOT, ".fixtures/speech-48k-20s.wav");
 const MANIFEST = path.join(REPOSITORY_ROOT, ".fixtures/manifest.json");
-const AVAILABLE = existsSync(PYTHON) && existsSync(FIXTURE) && existsSync(MANIFEST);
+const TRANSCRIPT_FIXTURE = path.join(
+  REPOSITORY_ROOT,
+  ".fixtures/transcripts/short-exact.json",
+);
+const AVAILABLE = existsSync(PYTHON) && existsSync(FIXTURE) &&
+  existsSync(MANIFEST) && existsSync(TRANSCRIPT_FIXTURE);
 const suiteName = AVAILABLE
   ? "mlworker real-process contract"
   : "mlworker real-process contract (skipped: run workers/mlworker/setup.sh and pnpm fixtures)";
@@ -62,14 +68,24 @@ describe.skipIf(!AVAILABLE)(suiteName, () => {
     });
     expect(hello.value.capabilities.map(({ task }) => task)).toEqual([
       "transcribe",
+      "align",
       "vad",
     ]);
+    expect(hello.value.capabilities.find(({ task }) => task === "align")).toEqual({
+      task: "align",
+      engine: "torchaudio-wav2vec2-ctc-forced-align",
+      engineVersion: "2.10.0+cpu",
+      models: ["wav2vec2-base-960h"],
+    });
 
-    const disabled = realSupervisor("transcribe");
+    const disabled = realSupervisor("align");
     const degraded = await disabled.start();
     expect(degraded.ok).toBe(true);
     if (!degraded.ok) throw new Error(degraded.error.message);
-    expect(degraded.value.capabilities.map(({ task }) => task)).toEqual(["vad"]);
+    expect(degraded.value.capabilities.map(({ task }) => task)).toEqual([
+      "transcribe",
+      "vad",
+    ]);
     console.info(`mlworker contract handshake ${(performance.now() - startedAt).toFixed(0)} ms`);
   });
 
@@ -144,6 +160,68 @@ describe.skipIf(!AVAILABLE)(suiteName, () => {
       }
     }
     console.info(`mlworker contract transcribe ${elapsed.toFixed(0)} ms`);
+  }, 600_000);
+
+  it("returns monotonic bounded timings for the synthetic transcript fixture", async () => {
+    const fixture = JSON.parse(await readFile(TRANSCRIPT_FIXTURE, "utf8")) as {
+      language: string;
+      segments: Array<{
+        start: SampleTime;
+        end: SampleTime;
+        words: string[];
+      }>;
+      words: Record<string, { text: string }>;
+    };
+    const atAnalysisRate = ({ samples, rate }: SampleTime): SampleTime => ({
+      samples: Number((BigInt(samples) * 16_000n + BigInt(rate) / 2n) / BigInt(rate)),
+      rate: 16_000,
+    });
+    const segments = fixture.segments.map((segment, index) => ({
+      index,
+      start: { ...atAnalysisRate(segment.start) },
+      end: { ...atAnalysisRate(segment.end) },
+      tokens: segment.words.map((wordId) => fixture.words[wordId]!.text),
+    }));
+    const supervisor = realSupervisor();
+    const startedAt = performance.now();
+    const response = await supervisor.runTask("align", {
+      taskId: "job_aligncase2",
+      audioPath: FIXTURE,
+      language: fixture.language,
+      model: "wav2vec2-base-960h",
+      segments,
+    });
+    const elapsed = performance.now() - startedAt;
+    expect(response.ok).toBe(true);
+    if (!response.ok) throw new Error(response.error.message);
+    const result = response.value as unknown as MlworkerAlignResult;
+    expect(result.engine).toMatchObject({
+      name: "torchaudio-wav2vec2-ctc-forced-align",
+      model: "wav2vec2-base-960h",
+    });
+    expect(result.tokens).toHaveLength(
+      fixture.segments.reduce((count, segment) => count + segment.words.length, 0),
+    );
+    let previousEnd = 0;
+    for (const token of result.tokens) {
+      expect(token.start.rate).toBe(16_000);
+      expect(token.end.rate).toBe(16_000);
+      expect(token.start.samples).toBeGreaterThanOrEqual(previousEnd);
+      expect(token.end.samples).toBeGreaterThan(token.start.samples);
+      expect(token.end.samples).toBeLessThanOrEqual(20 * 16_000);
+      expect(token.score).toBeGreaterThanOrEqual(0);
+      expect(token.score).toBeLessThanOrEqual(1);
+      expect(token.aligned).toEqual(expect.any(Boolean));
+      previousEnd = token.end.samples;
+    }
+    const first = result.tokens[0]!;
+    const last = result.tokens.at(-1)!;
+    const alignedCount = result.tokens.filter(({ aligned }) => aligned).length;
+    console.info(
+      `mlworker contract align ${elapsed.toFixed(0)} ms; ${String(result.tokens.length)} tokens, ` +
+      `${String(alignedCount)} CTC / ${String(result.tokens.length - alignedCount)} interpolated, ` +
+      `${sampleSeconds(first.start).toFixed(3)}-${sampleSeconds(last.end).toFixed(3)} s`,
+    );
   }, 600_000);
 
   it("acknowledges cancel within two seconds and accepts the next task", async () => {

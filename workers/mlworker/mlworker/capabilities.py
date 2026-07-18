@@ -27,6 +27,17 @@ def _package_version(package: str) -> str:
         return "unknown"
 
 
+def _alignment_available() -> bool:
+    if util.find_spec("torch") is None or util.find_spec("torchaudio") is None:
+        return False
+    try:
+        from torchaudio.functional import forced_align
+
+        return callable(forced_align)
+    except (ImportError, OSError):
+        return False
+
+
 def advertised_capabilities() -> list[dict[str, Any]]:
     disabled = disabled_tasks()
     if util.find_spec("faster_whisper") is None:
@@ -41,6 +52,18 @@ def advertised_capabilities() -> list[dict[str, Any]]:
                 "engine": "faster-whisper",
                 "engineVersion": version,
                 "models": ["tiny", "base", "small", "medium", "large-v3"],
+            }
+        )
+    if (
+        "align" not in disabled
+        and _alignment_available()
+    ):
+        capabilities.append(
+            {
+                "task": "align",
+                "engine": "torchaudio-wav2vec2-ctc-forced-align",
+                "engineVersion": _package_version("torchaudio"),
+                "models": ["wav2vec2-base-960h"],
             }
         )
     if "vad" not in disabled:
@@ -64,4 +87,3 @@ def hello_params() -> dict[str, Any]:
         "device": {"type": "cpu"},
         "capabilities": advertised_capabilities(),
     }
-

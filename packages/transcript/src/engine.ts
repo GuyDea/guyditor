@@ -12,6 +12,9 @@ import {
 import type {
   GuyditorProject,
   IdPrefix,
+  JobQueue,
+  JobRecord,
+  JsonValue,
   OperationCommitter,
   OperationDispatcher,
   OperationInput,
@@ -30,11 +33,14 @@ import {
 } from "./lookup.js";
 import { serializeTranscriptSidecar } from "./sidecar.js";
 import type {
+  AlignResult,
+  AlignedToken,
   RawTranscriptionSegment,
   RawTranscriptionWord,
   SampleTime,
   TranscribeResult,
   TranscriptSegment,
+  TranscriptRealignRequest,
   TranscriptSidecar,
   TranscriptWord,
   WordLocation,
@@ -42,6 +48,9 @@ import type {
 } from "./types.js";
 
 const TRANSCRIPT_SCHEMA = "guyditor.transcript/v1";
+export const ALIGNMENT_CONFIDENCE_THRESHOLD = 0.35;
+const ANALYSIS_RATE = 16_000;
+const DEFAULT_ALIGNMENT_MODEL = "wav2vec2-base-960h";
 const BASE32_ALPHABET = "abcdefghijklmnopqrstuvwxyz234567";
 let temporaryOrdinal = 0;
 
@@ -50,11 +59,20 @@ export interface TranscriptEngineOptions {
   now?: () => Date;
   appVersion?: string;
   project?: ProjectStore;
+  alignmentJobs?: TranscriptAlignmentJobs;
+}
+
+export interface TranscriptAlignmentJobs {
+  queue: JobQueue;
+  hasAlignCapability: () => boolean;
+  audioPath: (assetId: string) => string;
+  model?: string;
 }
 
 export interface TranscriptMutationResult {
   sidecar: TranscriptSidecar;
   transactionId?: string;
+  alignmentJobId?: string;
 }
 
 function transcriptFailure(
@@ -324,17 +342,216 @@ function createDispatcher(
   };
 }
 
+function alignmentSegmentsFromTranscription(
+  result: TranscribeResult,
+): JsonValue[] {
+  return result.segments.map((segment) => ({
+    index: segment.index,
+    start: { ...nativeTime(segment.start, ANALYSIS_RATE) },
+    end: { ...nativeTime(segment.end, ANALYSIS_RATE) },
+    tokens: segment.words.map(({ text }) => tokenParts(text).text),
+  }));
+}
+
+function alignmentPayload(
+  jobs: TranscriptAlignmentJobs,
+  assetId: string,
+  language: string,
+  segments: JsonValue[],
+): JsonValue {
+  return {
+    audioPath: jobs.audioPath(assetId),
+    language,
+    model: jobs.model ?? DEFAULT_ALIGNMENT_MODEL,
+    segments,
+  };
+}
+
+function terminalJob(queue: JobQueue, jobId: string): Promise<JobRecord> {
+  const terminal = (job: JobRecord | undefined): job is JobRecord =>
+    job !== undefined &&
+    (job.state === "done" || job.state === "failed" || job.state === "cancelled");
+  const current = queue.get(jobId);
+  if (terminal(current)) return Promise.resolve(current);
+  return new Promise((resolve) => {
+    const stop = queue.onChange(({ job }) => {
+      if (job.jobId !== jobId || !terminal(job)) return;
+      stop();
+      resolve(job);
+    });
+    const afterSubscribe = queue.get(jobId);
+    if (terminal(afterSubscribe)) {
+      stop();
+      resolve(afterSubscribe);
+    }
+  });
+}
+
+function jsonObject(value: JsonValue, path: string): { [key: string]: JsonValue } {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new TypeError(`${path} must be an object.`);
+  }
+  return value;
+}
+
+function finiteNumber(value: JsonValue | undefined, path: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new TypeError(`${path} must be a finite number.`);
+  }
+  return value;
+}
+
+function integer(value: JsonValue | undefined, path: string): number {
+  const parsed = finiteNumber(value, path);
+  if (!Number.isSafeInteger(parsed)) throw new TypeError(`${path} must be a safe integer.`);
+  return parsed;
+}
+
+function sampleTime(value: JsonValue | undefined, path: string): SampleTime {
+  if (value === undefined) throw new TypeError(`${path} is required.`);
+  const source = jsonObject(value, path);
+  const samples = integer(source["samples"], `${path}.samples`);
+  const rate = integer(source["rate"], `${path}.rate`);
+  if (samples < 0 || rate <= 0) throw new RangeError(`${path} is not a valid sample time.`);
+  return { samples, rate };
+}
+
+function engineIdentity(value: JsonValue | undefined, path: string) {
+  if (value === undefined) throw new TypeError(`${path} is required.`);
+  const source = jsonObject(value, path);
+  const name = source["name"];
+  const version = source["version"];
+  const model = source["model"];
+  if (
+    typeof name !== "string" || name.length === 0 ||
+    typeof version !== "string" || version.length === 0 ||
+    typeof model !== "string" || model.length === 0
+  ) {
+    throw new TypeError(`${path} must contain non-empty name, version, and model strings.`);
+  }
+  return { name, version, model };
+}
+
+function parseAlignResult(value: JsonValue): AlignResult {
+  const source = jsonObject(value, "align result");
+  const rawTokens = source["tokens"];
+  if (!Array.isArray(rawTokens)) throw new TypeError("align result.tokens must be an array.");
+  const tokens: AlignedToken[] = rawTokens.map((value, index) => {
+    const token = jsonObject(value, `align result.tokens[${String(index)}]`);
+    const score = finiteNumber(token["score"], `align result.tokens[${String(index)}].score`);
+    if (score < 0 || score > 1 || typeof token["aligned"] !== "boolean") {
+      throw new RangeError(`align result.tokens[${String(index)}] has invalid confidence fields.`);
+    }
+    return {
+      segmentIndex: integer(
+        token["segmentIndex"],
+        `align result.tokens[${String(index)}].segmentIndex`,
+      ),
+      tokenIndex: integer(
+        token["tokenIndex"],
+        `align result.tokens[${String(index)}].tokenIndex`,
+      ),
+      start: sampleTime(token["start"], `align result.tokens[${String(index)}].start`),
+      end: sampleTime(token["end"], `align result.tokens[${String(index)}].end`),
+      score,
+      aligned: token["aligned"],
+    };
+  });
+  return { tokens, engine: engineIdentity(source["engine"], "align result.engine") };
+}
+
+interface ScopedAlignmentSegment {
+  request: JsonValue;
+  wordIds: string[];
+  start: SampleTime;
+  end: SampleTime;
+}
+
+function scopedAlignmentSegments(
+  sidecar: TranscriptSidecar,
+  request: TranscriptRealignRequest,
+): ScopedAlignmentSegment[] {
+  const orderedActive = sidecar.segments.flatMap((segment, segmentIndex) =>
+    segment.words.flatMap((wordId) => {
+      const word = sidecar.words[wordId];
+      return word?.state === "active" ? [{ wordId, word, segmentIndex }] : [];
+    }));
+  let selected = orderedActive;
+  if (request.wordRange !== undefined) {
+    const from = orderedActive.findIndex(({ wordId }) => wordId === request.wordRange?.fromWord);
+    const to = orderedActive.findIndex(({ wordId }) => wordId === request.wordRange?.toWord);
+    if (from === -1 || to < from) {
+      throw new RangeError(
+        `Realignment word range ${request.wordRange.fromWord}..${request.wordRange.toWord} is invalid.`,
+      );
+    }
+    selected = orderedActive.slice(from, to + 1);
+  }
+  if (selected.length === 0) throw new RangeError(`Asset ${request.assetId} has no active words to align.`);
+  const bySegment = new Map<number, typeof selected>();
+  for (const entry of selected) {
+    const group = bySegment.get(entry.segmentIndex) ?? [];
+    group.push(entry);
+    bySegment.set(entry.segmentIndex, group);
+  }
+  return [...bySegment].map(([segmentIndex, entries]) => {
+    const first = entries[0]!.word.start;
+    const last = entries.at(-1)!.word.end;
+    const start = nativeTime(first, ANALYSIS_RATE);
+    const end = nativeTime(last, ANALYSIS_RATE);
+    return {
+      request: {
+        index: segmentIndex,
+        start: { ...start },
+        end: { ...end },
+        tokens: entries.map(({ word }) => word.text),
+      },
+      wordIds: entries.map(({ wordId }) => wordId),
+      start,
+      end,
+    };
+  });
+}
+
 export class TranscriptEngine {
   readonly #idFactory: (prefix: "seg" | "spk" | "txn") => string;
   readonly #now: () => Date;
   readonly #appVersion: string;
   readonly #project: ProjectStore | undefined;
+  readonly #alignmentJobs: TranscriptAlignmentJobs | undefined;
 
   public constructor(options: TranscriptEngineOptions = {}) {
     this.#idFactory = options.idFactory ?? randomDomainId;
     this.#now = options.now ?? (() => new Date());
     this.#appVersion = options.appVersion ?? "0.0.0";
     this.#project = options.project;
+    this.#alignmentJobs = options.alignmentJobs;
+  }
+
+  #enqueueInsufficientAlignment(
+    assetId: string,
+    result: TranscribeResult,
+  ): string | undefined {
+    const jobs = this.#alignmentJobs;
+    if (
+      jobs === undefined ||
+      !jobs.hasAlignCapability() ||
+      !result.segments.some(({ words }) =>
+        words.some(({ probability }) => probability < ALIGNMENT_CONFIDENCE_THRESHOLD))
+    ) {
+      return undefined;
+    }
+    return jobs.queue.enqueue({
+      kind: "align",
+      title: `Align transcript for ${assetId}`,
+      cancellable: true,
+      payload: alignmentPayload(
+        jobs,
+        assetId,
+        result.language,
+        alignmentSegmentsFromTranscription(result),
+      ),
+    }).jobId;
   }
 
   public async createFromTranscription(
@@ -452,17 +669,143 @@ export class TranscriptEngine {
         dryRun: false,
       });
       if (!committed.ok) return committed;
+      const alignmentJobId = this.#enqueueInsufficientAlignment(assetId, transcribeResult);
       return success({
         sidecar,
         ...(committed.value.transactionId === undefined
           ? {}
           : { transactionId: committed.value.transactionId }),
+        ...(alignmentJobId === undefined ? {} : { alignmentJobId }),
       });
     } catch (error: unknown) {
       return transcriptFailure(
         "E_TRANSCRIPT_CREATE",
         `Could not create canonical transcript for ${assetId}: ${errorMessage(error)}`,
         [assetId],
+      );
+    }
+  }
+
+  public async realign(
+    project: ProjectStore,
+    request: TranscriptRealignRequest,
+  ): Promise<Result<OperationBatchResult>> {
+    const jobs = this.#alignmentJobs;
+    if (jobs === undefined || !jobs.hasAlignCapability()) {
+      return transcriptFailure(
+        "E_ALIGN_CAPABILITY_UNAVAILABLE",
+        "Forced alignment is unavailable in the configured mlworker.",
+        [request.assetId],
+      );
+    }
+    try {
+      const workspace = await loadTranscriptWorkspace(
+        project,
+        (prefix) => this.#idFactory(prefix),
+      );
+      if (!workspace.ok) return workspace;
+      const sidecar = workspace.value.sidecars.find(({ assetId }) => assetId === request.assetId);
+      if (sidecar === undefined) {
+        return transcriptFailure(
+          "E_TRANSCRIPT_ASSET_NOT_FOUND",
+          `Asset ${request.assetId} has no canonical transcript.`,
+          [request.assetId],
+        );
+      }
+      const scoped = scopedAlignmentSegments(sidecar, request);
+      const job = jobs.queue.enqueue({
+        kind: "align",
+        title: `Realign transcript for ${request.assetId}`,
+        cancellable: true,
+        payload: alignmentPayload(
+          jobs,
+          request.assetId,
+          sidecar.language,
+          scoped.map(({ request }) => request),
+        ),
+      });
+      const completed = await terminalJob(jobs.queue, job.jobId);
+      if (completed.state === "failed" && completed.error !== undefined) {
+        return failure(completed.error);
+      }
+      if (completed.state !== "done") {
+        return transcriptFailure(
+          "E_ALIGN_JOB_CANCELLED",
+          `Alignment job ${job.jobId} was cancelled before producing timings.`,
+          [request.assetId, job.jobId],
+        );
+      }
+      const aligned = parseAlignResult(completed.payload);
+      const expectedCount = scoped.reduce((count, segment) => count + segment.wordIds.length, 0);
+      if (aligned.tokens.length !== expectedCount) {
+        throw new RangeError(
+          `Alignment returned ${String(aligned.tokens.length)} tokens for ${String(expectedCount)} words.`,
+        );
+      }
+      const resultByPosition = new Map<string, AlignedToken>();
+      for (const token of aligned.tokens) {
+        const key = `${String(token.segmentIndex)}:${String(token.tokenIndex)}`;
+        if (resultByPosition.has(key)) throw new RangeError(`Alignment returned duplicate token ${key}.`);
+        resultByPosition.set(key, token);
+      }
+      const updates: Array<{
+        wordId: string;
+        start: SampleTime;
+        end: SampleTime;
+        confidence: number | null;
+        alignment: "ctc" | "interpolated";
+      }> = [];
+      for (const segment of scoped) {
+        const requestSource = jsonObject(segment.request, "alignment request segment");
+        const segmentIndex = integer(requestSource["index"], "alignment request segment.index");
+        let previousEnd = segment.start;
+        for (const [tokenIndex, wordId] of segment.wordIds.entries()) {
+          const token = resultByPosition.get(`${String(segmentIndex)}:${String(tokenIndex)}`);
+          if (token === undefined) {
+            throw new RangeError(`Alignment omitted segment ${String(segmentIndex)} token ${String(tokenIndex)}.`);
+          }
+          if (
+            token.start.rate !== ANALYSIS_RATE ||
+            token.end.rate !== ANALYSIS_RATE ||
+            compareSampleTime(token.start, token.end) >= 0 ||
+            compareSampleTime(token.start, previousEnd) < 0 ||
+            compareSampleTime(token.start, segment.start) < 0 ||
+            compareSampleTime(token.end, segment.end) > 0
+          ) {
+            throw new RangeError(`Alignment returned invalid timing for ${wordId}.`);
+          }
+          previousEnd = token.end;
+          if (token.aligned && token.score < ALIGNMENT_CONFIDENCE_THRESHOLD) continue;
+          const word = sidecar.words[wordId]!;
+          updates.push({
+            wordId,
+            start: nativeTime(token.start, sidecar.audio.rate),
+            end: nativeTime(token.end, sidecar.audio.rate),
+            confidence: token.aligned
+              ? word.confidence === null ? token.score : word.confidence * token.score
+              : word.confidence,
+            alignment: token.aligned ? "ctc" : "interpolated",
+          });
+        }
+      }
+      return this.execute(
+        project,
+        [{
+          op: "transcript.realign",
+          params: {
+            assetId: request.assetId,
+            ...(request.wordRange === undefined ? {} : { wordRange: request.wordRange }),
+            updates,
+            alignment: aligned.engine,
+            jobId: job.jobId,
+          },
+        }],
+      );
+    } catch (error: unknown) {
+      return transcriptFailure(
+        "E_TRANSCRIPT_REALIGN",
+        `Could not realign transcript for ${request.assetId}: ${errorMessage(error)}`,
+        [request.assetId],
       );
     }
   }

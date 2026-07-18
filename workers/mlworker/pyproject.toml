@@ -11,6 +11,8 @@ requires-python = ">=3.11"
 dependencies = [
   "faster-whisper>=1.1,<2",
   "pytest>=8,<10",
+  "torch>=2.10,<2.11",
+  "torchaudio>=2.10,<2.11",
 ]
 
 [tool.pytest.ini_options]
@@ -21,6 +23,15 @@ markers = [
 
 [tool.uv]
 cache-dir = ".uv-cache"
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+torchaudio = { index = "pytorch-cpu" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["mlworker"]

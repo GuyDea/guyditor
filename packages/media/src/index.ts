@@ -85,6 +85,8 @@ export { MlworkerSupervisor } from "./mlworker/supervisor.js";
 export type { MlworkerSupervisorOptions } from "./mlworker/supervisor.js";
 export type {
   MlworkerCapability,
+  MlworkerAlignedToken,
+  MlworkerAlignResult,
   MlworkerDevice,
   MlworkerError,
   MlworkerHello,

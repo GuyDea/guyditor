@@ -19,7 +19,7 @@ export function registerMlworkerJobExecutors(
   queue: JobQueue,
   runner: MlworkerTaskRunner,
 ): void {
-  for (const method of ["transcribe", "vad"] as const satisfies readonly MlworkerTaskMethod[]) {
+  for (const method of ["transcribe", "align", "vad"] as const satisfies readonly MlworkerTaskMethod[]) {
     queue.registerExecutor(method, async (job, { reportProgress, signal }) => {
       const result = await runner.runTask(
         method,
@@ -34,4 +34,3 @@ export function registerMlworkerJobExecutors(
     });
   }
 }
-

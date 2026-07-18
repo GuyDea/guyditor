@@ -15,6 +15,7 @@ import transcriptWordRetimeSchema from "./schemas/transcript.word.retime.json" w
 import transcriptSegmentSplitSchema from "./schemas/transcript.segment.split.json" with { type: "json" };
 import transcriptSegmentMergeSchema from "./schemas/transcript.segment.merge.json" with { type: "json" };
 import transcriptSpeakerAssignSchema from "./schemas/transcript.speaker.assign.json" with { type: "json" };
+import transcriptRealignSchema from "./schemas/transcript.realign.json" with { type: "json" };
 import {
   failure,
   makeGuyditorError,
@@ -155,6 +156,12 @@ const catalog = new Map<string, CatalogEntry>([
     "low",
     "shift",
     "Assign {speaker}",
+  )],
+  ["transcript.realign", catalogEntry(
+    transcriptRealignSchema,
+    "normal",
+    "realign",
+    "Realign {wordRange}",
   )],
 ]);
 

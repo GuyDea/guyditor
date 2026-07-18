@@ -4,7 +4,7 @@ import type {
   Result,
 } from "../../../core/src/index.js";
 
-export type MlworkerTaskMethod = "transcribe" | "vad";
+export type MlworkerTaskMethod = "align" | "transcribe" | "vad";
 
 export interface MlworkerCapability {
   task: string;
@@ -87,6 +87,20 @@ export interface MlworkerTranscribeResult {
   languageProbability: number;
   duration: SampleTime;
   segments: MlworkerSegment[];
+  engine: { name: string; version: string; model: string };
+}
+
+export interface MlworkerAlignedToken {
+  segmentIndex: number;
+  tokenIndex: number;
+  start: SampleTime;
+  end: SampleTime;
+  score: number;
+  aligned: boolean;
+}
+
+export interface MlworkerAlignResult {
+  tokens: MlworkerAlignedToken[];
   engine: { name: string; version: string; model: string };
 }
 

@@ -92,6 +92,30 @@ export interface TranscribeResult {
   jobId: string;
 }
 
+export interface AlignedToken {
+  segmentIndex: number;
+  tokenIndex: number;
+  start: SampleTime;
+  end: SampleTime;
+  score: number;
+  aligned: boolean;
+}
+
+export interface AlignResult {
+  tokens: AlignedToken[];
+  engine: TranscriptEngineIdentity;
+}
+
+export interface TranscriptWordRange {
+  fromWord: string;
+  toWord: string;
+}
+
+export interface TranscriptRealignRequest {
+  assetId: string;
+  wordRange?: TranscriptWordRange;
+}
+
 export interface WordLocation {
   assetId: string;
   segmentId: string;
