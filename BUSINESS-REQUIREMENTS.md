@@ -1,6 +1,6 @@
 # Guyditor Business Requirements
 
-**Document status:** Draft for product-owner review  
+**Document status:** Draft v2 for product-owner review — incorporates the 2026-07-17 gap-analysis amendments  
 **Date:** 2026-07-17  
 **Product:** Guyditor  
 **Document purpose:** Define the business outcomes, product behavior, scope, and acceptance criteria for an agent-native, local-first video-editing platform.
@@ -129,6 +129,9 @@ The first complete product workflow must include:
 - Short-form TikTok, Instagram Reels, and YouTube Shorts derivatives.
 - Optional generative or externally sourced B-roll through provider adapters.
 - Versioning, provenance, reproducibility, and restoration of older edits.
+- Capture-tool integration, record-time take markers, and pickup recording.
+- Publish packaging: metadata drafting, chapter lists, thumbnails, and per-platform upload kits.
+- Operational safeguards: backup, cost visibility, and an agent activity audit log.
 
 ### 6.2 Explicit non-goals for the initial release
 
@@ -142,6 +145,21 @@ The initial release is not required to provide:
 - Direct publishing or social-account management.
 - Full interchange fidelity with every external editor.
 - Fully autonomous publication without creator review.
+
+Direct publishing and social-account management are deferred from the initial release, not permanently excluded: review-gated upload assistance is recorded in Section 6.3 for reconsideration once the export workflow is proven in real use. Fully autonomous publication without creator review remains permanently out of scope.
+
+### 6.3 Deferred capabilities under consideration
+
+A structured gap analysis (2026-07-17) identified the following capabilities as valuable but consciously deferred. They are recorded here so their absence is a decision rather than an oversight, and each should be revisited once the initial workflow is proven on real episodes:
+
+- Review-gated upload assistance to YouTube, TikTok, Instagram Reels, and YouTube Shorts: authenticated draft upload of an approved deliverable with its metadata, always gated on explicit creator review.
+- A channel-level episode library with per-deliverable publish-status tracking and cross-episode transcript search.
+- Project templates carrying timeline structure, and a shared cross-project brand media library with controlled update propagation.
+- License-aware music and sound-effect sourcing adapters with per-platform rights validation at export.
+- Import of platform analytics (retention curves, hook metrics) to calibrate the editorial rubrics of FR-700/FR-702.
+- Script authoring and teleprompter support integrated with FR-202 script reconciliation.
+- Verified camera-card offload and automatic session grouping beyond the watch-folder ingestion required by FR-009.
+- Localization: translated subtitle deliverables and optional dubbed or synthesized audio tracks.
 
 ## 7. Core workflow requirements
 
@@ -185,6 +203,18 @@ If an asset moves or becomes unavailable, the system must preserve the edit and 
 ### FR-008 — Audio and camera synchronization
 
 The system must support synchronizing separately recorded audio and video using embedded time information, waveform analysis, or a manual synchronization point. The original tracks and synchronization decision must remain traceable.
+
+### FR-009 — Capture integration and automated ingest
+
+The system must define a documented integration contract with external recording tools rather than require in-app recording for the initial release. The contract must include recommended capture settings per source type, file and session naming conventions, and watch folders: when new session media appears in a configured location, the system must ingest it (FR-002) and trigger proxy, transcription, and analysis jobs automatically as visible background work. The contract must be usable with common tools such as OBS and camera-card copies without custom code.
+
+### FR-010 — Record-time take markers
+
+The system must be able to import take markers created during recording — for example marker files, timestamped notes, or hotkey logs following the documented convention — and attach them to ingested assets as structured take metadata such as take boundaries, quality flags, and noted mistakes. The system should also be able to detect spoken marker phrases in the transcript. Take metadata must be available to draft generation (FR-005) and take comparison (FR-304).
+
+### FR-011 — Pickup recording and flubbed-line repair
+
+The creator must be able to repair a misspoken word, number, or name inside an otherwise good take without leaving the workflow. The system must provide a guided pickup flow that captures or imports a short corrective recording, transcribes and force-aligns it (FR-200, FR-201), and splices it under the audio-continuity rules of FR-305 while updating word timing and captions (FR-208). Synthetic voice correction of the creator's own voice may be offered later through a provider adapter; it must be consent-gated, clearly disclosed in provenance, and reviewable like any other proposal.
 
 ## 8. Master project and versioning requirements
 
@@ -353,6 +383,10 @@ The creator must be able to add music, room tone, ambience, and sound effects on
 ### FR-310 — Transition control
 
 The system must support cuts, crossfades, audio crossfades, and reusable visual transitions. Transition duration and intent must be visible in the project state, and an agent should prefer restrained creator-approved presets unless instructed otherwise.
+
+### FR-311 — Jump-cut concealment
+
+Because pause and filler removal (FR-303) produces frequent cuts in continuous presenter footage, the system must offer remediation for visible jump cuts: automatic alternation of punch-in framing levels at cut points derived from a single high-resolution source, reusable smooth-cut transition presets, and, where synchronized alternate angles exist, angle switching. Remediation must be proposed as reviewable edits (FR-105), be configurable through editorial skills (FR-700), and never be silently applied.
 
 ## 11. Frame-accurate review and annotation requirements
 
@@ -561,7 +595,7 @@ Short-form outputs must use the canonical word timing while allowing platform-ap
 
 ### FR-805 — Platform profiles
 
-TikTok, Instagram Reels, and YouTube Shorts must be represented by configurable and versioned export profiles. Aspect ratio, resolution, duration constraints, codec settings, safe areas, and other platform requirements must not be irreversibly hard-coded.
+TikTok, Instagram Reels, and YouTube Shorts must be represented by configurable and versioned export profiles. Aspect ratio, resolution, duration constraints, codec settings, safe areas, audio loudness and true-peak targets, and other platform requirements must not be irreversibly hard-coded.
 
 ### FR-806 — Required short-form outputs
 
@@ -580,6 +614,26 @@ When an accepted change to the long-form project affects a derived short, the sy
 ### FR-808 — Batch export
 
 The creator must be able to validate and export several approved short-form deliverables as a batch while preserving individual status and errors.
+
+### FR-809 — Publish metadata drafting
+
+For each deliverable, the agent must be able to draft platform-appropriate titles, descriptions, tags, hashtags, and calls to action from the transcript, story beats, and brand-voice skills. Drafts must be creator-editable, stored with the deliverable, and validated against platform-profile metadata constraints such as length and count limits (FR-805).
+
+### FR-810 — Chapter generation
+
+The system must derive a YouTube chapter list from named story beats and semantic anchors. Chapter timestamps must update automatically when accepted edits shift the timeline, follow the staleness rules of FR-807 rather than silently diverge, and be exportable as paste-ready text.
+
+### FR-811 — Long-form thumbnails
+
+The system must support producing candidate thumbnails for long-form deliverables using existing capabilities — frame selection, keyed presenter cutouts (FR-502), and graphics templates (FR-600) — exported at platform specification. This extends the cover-frame support of FR-806 to long-form outputs.
+
+### FR-812 — Upload kit
+
+For each approved deliverable, the system must produce a consolidated per-platform upload kit: video variants (burned-in and clean), thumbnail or cover, subtitle sidecars, chapter text, drafted metadata in a documented file format, and the export report. The kit must pass export validation (FR-1004) plus metadata validation so that manual upload requires no further file gathering or checking.
+
+### FR-813 — Text exports
+
+The system must export the corrected transcript as plain text, and chapters and metadata as text blocks, for use in descriptions, show notes, and reuse outside Guyditor.
 
 ## 16. User-interface requirements
 
@@ -616,6 +670,10 @@ Direct UI actions must support undo and redo. Agent proposals must support accep
 
 The project must remain understandable without the UI. A technically capable user must be able to inspect the master file and semantic history in ordinary text tools.
 
+### FR-906 — Audio visibility
+
+The editing interface must render audio waveforms on timeline clips and provide level and loudness metering during preview, sufficient to align cuts to speech and music, verify ducking (FR-309), and confirm platform loudness targets (FR-805) before export.
+
 ## 17. Rendering and export requirements
 
 ### FR-1000 — Local rendering
@@ -643,6 +701,7 @@ Final export must validate:
 - Stale transcripts or sidecars.
 - Unresolved render-blocking annotations.
 - Caption overflow and safe-area problems.
+- Loudness or true-peak deviations from the platform profile target, clipping, and unintended silence.
 - Invalid output settings.
 - Known compositing or media errors.
 
@@ -690,6 +749,14 @@ The system must allow the creator to record the source, license, and usage restr
 
 Asset hashes and project validation must detect unintended file replacement or corruption. The system must not delete original source media as a side effect of editing.
 
+### NFR-006 — Cost visibility and budgets
+
+The system must show estimated and actual spend for external model, critic, and generation calls at task, episode, and cumulative levels. The creator must be able to set budget caps or warning thresholds, and the system must warn before starting operations expected to be expensive. Spend records must be part of the audit log (NFR-007).
+
+### NFR-007 — Agent activity audit log
+
+The system must keep a durable, inspectable log of agent activity per session: instructions received, tools invoked, proposals made, accepted, and rejected, and every external call actually issued with provider, data classes sent (NFR-001), token or unit counts, cost, and outcome. The audit log is operational history, remains separate from project state (R-007), and must have configurable retention.
+
 ## 20. Performance and operational requirements
 
 ### NFR-100 — Responsive editing
@@ -715,6 +782,22 @@ Errors must identify the affected asset, project operation, or deliverable; expl
 ### NFR-105 — Extensibility
 
 Transcription engines, renderers, model providers, B-roll generators, analysis tools, and exporters must connect through documented boundaries so they can evolve without changing the business-level project semantics.
+
+### NFR-106 — Verifiable backup
+
+The system must support an automated, verifiable backup strategy — built in or through documented integration with external backup tools — covering the master file, sidecars, skills, presets, accepted generated assets, and source media. Backup configuration must distinguish load-bearing state from disposable caches (NFR-102), and restores must be testable without disturbing the working project.
+
+### NFR-107 — Archival and media offlining
+
+The system must support archiving finished projects by moving heavy source media to offline or cold storage while keeping the master file, transcripts, and lightweight previews searchable. Archived media must be restorable through existing hashes and relinking (FR-007).
+
+### NFR-108 — Cross-machine restore
+
+A documented path must exist to rebuild a project and the full working environment — global skills, brand profiles, and provider configuration excluding secrets (NFR-003) — on a replacement machine from backups, with integrity verification.
+
+### NFR-109 — Schema migration
+
+When the project schema evolves beyond guyditor/v1, older projects must be migratable through an explicit, reviewable migration step. Migration must never alter editorial content silently, and the pre-migration project must remain recoverable.
 
 ## 21. Business rules
 
@@ -775,6 +858,14 @@ Restore an older accepted revision and rebuild it from the recorded project stat
 
 Apply a versioned local style or editorial skill to a new project and obtain the same subtitle, motion, framing, and review rules without manually recreating them.
 
+### AC-011 — Package an upload kit
+
+After final export, generate upload kits for the long-form video and one short: thumbnail, chapter list, metadata within platform limits, subtitle sidecars, and both video variants; then trim the long-form edit and receive a stale-chapter warning instead of silently outdated timestamps.
+
+### AC-012 — Survive machine loss
+
+Back up a project, restore it on a clean machine, verify integrity, and continue editing with skills, presets, and provider configuration intact except for re-entered secrets.
+
 ## 23. Product success indicators
 
 The product should be evaluated against these outcomes after real episode use:
@@ -800,6 +891,7 @@ These indicators should be measured using real projects before setting numerical
 - Basic video and audio editing.
 - Agent proposal, diff, preview, and approval loop.
 - Long-form render and export.
+- Agent activity audit log, cost visibility, and backup foundations (NFR-006, NFR-007, NFR-106).
 
 ### Priority B — Creator presentation workflow
 
@@ -808,6 +900,7 @@ These indicators should be measured using real projects before setting numerical
 - Picture-in-picture layouts, transitions, and collision avoidance.
 - Per-word caption rendering and reusable styles.
 - Graphics and animation templates.
+- Audio waveforms and metering, jump-cut concealment, capture integration, and pickup recording (FR-906, FR-311, FR-009, FR-010, FR-011).
 
 ### Priority C — Multi-format publishing workflow
 
@@ -816,6 +909,7 @@ These indicators should be measured using real projects before setting numerical
 - Platform profiles and safe areas.
 - Burned-in and sidecar subtitles.
 - Derivative dependency tracking and batch export.
+- Publish packaging: metadata drafting, chapters, thumbnails, and upload kits (FR-809 to FR-813).
 
 ### Priority D — Editorial leverage
 
@@ -824,6 +918,7 @@ These indicators should be measured using real projects before setting numerical
 - B-roll provider adapters and generation provenance.
 - Specialist video-critic integration.
 - Advanced matting and additional interchange formats.
+- Archival and media offlining, schema migration tooling, and evaluation of the Section 6.3 deferred capabilities.
 
 These priorities describe dependency order, not permission to postpone the promised end-to-end product scope indefinitely. Product development should exercise each completed layer on real video work as early as practical.
 
@@ -861,6 +956,12 @@ These priorities describe dependency order, not permission to postpone the promi
 
 **Mitigation:** Prioritize the documented creator workflow and structured agent operations. Add general-purpose editing functions when they support real production requirements rather than pursuing feature parity for its own sake.
 
+### R-009 — Data loss in a local-first product
+
+A single disk failure, theft, or ransomware event could destroy unrepeatable source footage and every project's history, making the reproducibility guarantees of FR-107 hollow.
+
+**Mitigation:** Verifiable backups (NFR-106), managed archival (NFR-107), cross-machine restore (NFR-108), integrity hashes, and clear separation of load-bearing state from disposable caches.
+
 ## 26. Technical-design constraints derived from the business requirements
 
 The later technical design must preserve these constraints:
@@ -884,9 +985,11 @@ The implementation plan may select concrete libraries and deployment architectur
 **Canonical master:** The authoritative human-readable edit description.  
 **Derivative:** A deliverable, such as a Short, based on the canonical source project but allowed its own editorial overrides.  
 **Generated asset:** Media produced by a generative model and frozen as an ordinary project asset after acceptance.  
+**Pickup:** A short corrective recording used to repair a misspoken word or phrase inside an otherwise good take.  
 **Proxy:** Lower-cost media used for responsive preview while retaining the full-resolution source for final output.  
 **Semantic diff:** A human-understandable description of project operations rather than a low-level serialization change.  
 **Sidecar:** A referenced text or data file containing detailed information such as per-word timing.  
 **Source time:** A position within original media.  
 **Timeline time:** A position in an assembled sequence.  
+**Upload kit:** The consolidated per-platform bundle of video variants, thumbnail, subtitles, chapters, and metadata produced for manual upload.  
 **Word ID:** A stable identifier for a transcript word used to anchor captions, edits, graphics, and derivatives.
