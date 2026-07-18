@@ -160,7 +160,7 @@ test("m0 uses the Windows pnpm executable without changing command displays", ()
   assert.match(output[0], /^==> pnpm fixtures$/);
 });
 
-test("m1 extends the M0 checks with setup, Python tests, and real contracts", () => {
+test("m1 extends the M0 checks with setup, contracts, and the Electron smoke", () => {
   const commands = [];
 
   const status = runGate("m1", {
@@ -173,10 +173,11 @@ test("m1 extends the M0 checks with setup, Python tests, and real contracts", ()
   });
 
   assert.equal(status, 0);
-  assert.deepEqual(commands.slice(-3), [
+  assert.deepEqual(commands.slice(-4), [
     ["bash", "workers/mlworker/setup.sh"],
     ["uv", "run", "--project", "workers/mlworker", "pytest", "workers/mlworker/tests"],
     ["pnpm", "exec", "vitest", "run", "--project", "contract"],
+    ["pnpm", "test:e2e"],
   ]);
 });
 

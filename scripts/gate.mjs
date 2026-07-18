@@ -42,6 +42,7 @@ export const M1_COMMANDS = Object.freeze([
     args: ["exec", "vitest", "run", "--project", "contract"],
     command: "pnpm",
   }),
+  Object.freeze({ args: ["test:e2e"], command: "pnpm" }),
 ]);
 
 const DEFERRED_M0_STEPS = Object.freeze([
