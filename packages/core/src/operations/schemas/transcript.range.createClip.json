@@ -1,0 +1,21 @@
+{
+  "$id": "guyditor:op/transcript.range.createClip",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["wordRange", "targetLayerId", "targetIndex"],
+  "additionalProperties": false,
+  "properties": {
+    "wordRange": {
+      "type": "object",
+      "required": ["fromWord", "toWord"],
+      "additionalProperties": false,
+      "properties": {
+        "fromWord": { "type": "string", "pattern": "^w[0-9]{6}$" },
+        "toWord": { "type": "string", "pattern": "^w[0-9]{6}$" }
+      }
+    },
+    "targetLayerId": { "type": "string", "pattern": "^lyr_[a-z2-7]{10}$" },
+    "targetIndex": { "type": "integer", "minimum": 0 },
+    "createdClipId": { "type": "string", "pattern": "^clp_[a-z2-7]{10}$" }
+  }
+}

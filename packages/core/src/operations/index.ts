@@ -1,4 +1,5 @@
 export { OperationEngine } from "./engine.js";
+export { applyClipOperation } from "./clip.js";
 export type {
   DispatchedOperationApplication,
   IdFactory,
@@ -11,6 +12,8 @@ export type {
   AutomationPolicy,
   CaptionImpact,
   ContinuityWarning,
+  ContinuityGuard,
+  ContinuityGuardRequest,
   CreateProposalRequest,
   OperationBatchResult,
   OperationContext,

@@ -41,10 +41,10 @@
 | FR-208 | Part 4 | todo | | |
 | FR-300 | Part 5 | todo | | |
 | FR-301 | Part 5 | partial | `packages/core/src/operations/engine.test.ts`; `packages/core/src/operations/operations.prop.test.ts`; `packages/core/src/anchors/engine.test.ts` | `clip.trim`, `clip.split`, and `clip.join` are implemented, and `OperationEngine.resolveNavigation` now resolves frame, timecode, clip-edge, word, annotation, and beat targets to `{ sequenceId, frame: FrameTime }`; the remaining timeline operation catalog is pending. |
-| FR-302 | Part 5 | todo | | |
-| FR-303 | Part 5 | todo | | |
-| FR-304 | Part 5 | todo | | |
-| FR-305 | Part 5 | todo | | |
+| FR-302 | Part 5 | implemented | `packages/transcript/src/range-mapping.test.ts`; `packages/transcript/src/range-operations.test.ts`; `packages/core/src/operations/engine.test.ts` | Inclusive canonical word-ID ranges map to exact native samples with integer-ms padding and source-edge clamping. All four transcript range operations are schema-catalogued with declared risk, semantic summaries, inverses, and transcript-required envelopes; range removal internally compiles through split/remove while journaling one semantic operation, and post-edit word anchors recompute against changed clip source ranges without captions. Zero-crossing/word-boundary refinement remains under FR-305. |
+| FR-303 | Part 5 | implemented | `packages/transcript/src/fillers.test.ts`; `packages/transcript/src/filler-job.test.ts`; `packages/media/src/mlworker/mlworker.contract.test.ts` | `assist.fillers.detect` runs through `JobQueue` and the existing VAD executor, applies the version-1 pause/filler/repeat/false-start rules and protections, pre-assesses continuity, density-flags crowded windows, and emits disposable candidates only. `compileFillerProposal` converts a confirmed subset into normal semantic operations through the persisted proposal machinery; the fixture test proves the result stays review-gated and accepted state is untouched. |
+| FR-304 | Part 5 | deferred | | Take comparison requires the take/session metadata owned by FR-010, which is scheduled for M2. Implementing comparison before that canonical metadata would create a parallel provisional model, so §5.6 is explicitly deferred to M2. |
+| FR-305 | Part 5 | partial | `packages/core/src/operations/engine.test.ts`; `packages/transcript/src/continuity.test.ts`; `packages/media/src/peaks.test.ts` | Pipeline step 5 now evaluates every created/moved cut boundary without blocking: canonical word timing emits inside/±40 ms clipped-phoneme evidence, peaks caches emit click-level and 300 ms ambience-envelope warnings with suggested fixes, same-source skips emit jump-cut information, and missing peaks degrade quietly. Decoded-PCM zero-crossing snap and spectral-centroid refinement remain. |
 | FR-306 | Part 6 | todo | | |
 | FR-307 | Part 6 | todo | | |
 | FR-308 | Part 5 | todo | | |
@@ -84,7 +84,7 @@
 | FR-704 | Part 9 | todo | | |
 | FR-705 | Part 9 | todo | | |
 | FR-800 | Part 11 | todo | | |
-| FR-801 | Part 11 | todo | | |
+| FR-801 | Part 11 | partial | `packages/transcript/src/range-operations.test.ts` | Manual transcript selection creates a minimal `dlv_` short candidate in `draft` status without modifying any sequence, with a reversible semantic operation. Automatic candidate discovery, scoring, and full Part 11 derivation remain. |
 | FR-802 | Part 11 | todo | | |
 | FR-803 | Part 11 | todo | | |
 | FR-804 | Part 11 | todo | | |

@@ -497,6 +497,118 @@ function applyJoin(
   });
 }
 
+function applyRemove(
+  project: GuyditorProject,
+  input: OperationInput,
+): Result<ClipApplication> {
+  const clipId = input.params["clipId"] as string;
+  const found = locateClip(project, clipId);
+  if (!found.ok) return found;
+  const unlocked = ensureUnlocked(project, found.value);
+  if (!unlocked.ok) return unlocked;
+  const located = unlocked.value;
+  const clips = located.sequence.clips.slice();
+  clips.splice(located.clipIndex, 1);
+  const removed = structuredClone(located.clip);
+  const mutations: EntityMutation[] = [
+    {
+      entityId: removed.id,
+      entityType: "clip",
+      change: "removed",
+      fields: [{ field: "$entity", before: removed }],
+    },
+    ...(removed.effects ?? []).map((effect) => ({
+      entityId: effect.id,
+      entityType: "effect" as const,
+      change: "removed" as const,
+      fields: [{ field: "$entity", before: effect }],
+    })),
+  ];
+  return success({
+    model: replaceClips(project, located, clips),
+    inverse: [{
+      op: "clip.restore",
+      params: {
+        sequenceId: located.sequence.id,
+        targetIndex: located.clipIndex,
+        clips: [removed],
+      },
+    }],
+    affected: mutations.map(({ entityId }) => entityId),
+    summary: `Remove ${humanClip(located)}`,
+    mutations,
+  });
+}
+
+function applyRestore(
+  project: GuyditorProject,
+  input: OperationInput,
+): Result<ClipApplication> {
+  const sequenceId = input.params["sequenceId"] as string;
+  const targetIndex = input.params["targetIndex"] as number;
+  const restored = structuredClone(input.params["clips"] as Clip[]);
+  const sequenceIndex = project.sequences.findIndex(({ id }) => id === sequenceId);
+  const sequence = project.sequences[sequenceIndex];
+  if (sequence === undefined) {
+    return opFailure("E_OP_NOT_FOUND", `Sequence ${sequenceId} does not exist.`, [sequenceId]);
+  }
+  const lockedLayer = project.layers.find((layer) => layer.sequence === sequenceId && layer.locked);
+  if (lockedLayer !== undefined) {
+    return opFailure(
+      "E_OP_LAYER_LOCKED",
+      `Layer ${lockedLayer.id} is locked.`,
+      [lockedLayer.id, sequenceId],
+    );
+  }
+  if (targetIndex > sequence.clips.length) {
+    return opFailure(
+      "E_OP_RANGE_OUT_OF_BOUNDS",
+      `Restore index ${String(targetIndex)} is outside sequence ${sequenceId}.`,
+      [sequenceId],
+    );
+  }
+  const existingIds = new Set(project.sequences.flatMap(({ clips }) => clips.map(({ id }) => id)));
+  for (const clip of restored) {
+    if (existingIds.has(clip.id)) {
+      return opFailure("E_OP_ID_CONFLICT", `Clip ${clip.id} already exists.`, [clip.id]);
+    }
+    const asset = project.assets.find(({ id }) => id === clip.asset);
+    if (asset === undefined) {
+      return opFailure("E_OP_NOT_FOUND", `Asset ${clip.asset} does not exist.`, [clip.id, clip.asset]);
+    }
+    const range = validRange(clip.source, asset);
+    if (!range.ok) return range;
+    existingIds.add(clip.id);
+  }
+  const clips = sequence.clips.slice();
+  clips.splice(targetIndex, 0, ...restored);
+  const model = replaceSequence(project, sequenceIndex, { ...sequence, clips });
+  const mutations: EntityMutation[] = restored.flatMap((clip) => [
+    {
+      entityId: clip.id,
+      entityType: "clip" as const,
+      change: "added" as const,
+      fields: [{ field: "$entity", after: clip }],
+    },
+    ...(clip.effects ?? []).map((effect) => ({
+      entityId: effect.id,
+      entityType: "effect" as const,
+      change: "added" as const,
+      fields: [{ field: "$entity", after: effect }],
+    })),
+  ]);
+  return success({
+    model,
+    inverse: restored.slice().reverse().map(({ id }) => ({
+      op: "clip.remove",
+      params: { clipId: id },
+    })),
+    affected: mutations.map(({ entityId }) => entityId),
+    summary: `Restore ${String(restored.length)} clip${restored.length === 1 ? "" : "s"} in ${sequence.name}`,
+    mutations,
+  });
+}
+
 export function applyClipOperation(
   project: GuyditorProject,
   input: OperationInput,
@@ -504,6 +616,8 @@ export function applyClipOperation(
 ): Result<ClipApplication> {
   if (input.op === "clip.trim") return applyTrim(project, input);
   if (input.op === "clip.split") return applySplit(project, input, idFactory);
+  if (input.op === "clip.remove") return applyRemove(project, input);
+  if (input.op === "clip.restore") return applyRestore(project, input);
   return applyJoin(project, input);
 }
 

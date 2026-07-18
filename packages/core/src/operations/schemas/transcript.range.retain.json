@@ -1,0 +1,49 @@
+{
+  "$id": "guyditor:op/transcript.range.retain",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["scope", "wordRanges"],
+  "additionalProperties": false,
+  "properties": {
+    "scope": {
+      "type": "object",
+      "required": ["sequenceId"],
+      "additionalProperties": false,
+      "properties": {
+        "sequenceId": { "type": "string", "pattern": "^seq_[a-z2-7]{10}$" }
+      }
+    },
+    "wordRanges": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/wordRange" }
+    },
+    "compiledSplits": { "$ref": "#/$defs/compiledSplits" }
+  },
+  "$defs": {
+    "wordRange": {
+      "type": "object",
+      "required": ["fromWord", "toWord"],
+      "additionalProperties": false,
+      "properties": {
+        "fromWord": { "type": "string", "pattern": "^w[0-9]{6}$" },
+        "toWord": { "type": "string", "pattern": "^w[0-9]{6}$" }
+      }
+    },
+    "compiledSplits": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["newClipId"],
+        "additionalProperties": false,
+        "properties": {
+          "newClipId": { "type": "string", "pattern": "^clp_[a-z2-7]{10}$" },
+          "newEffectIds": {
+            "type": "array",
+            "items": { "type": "string", "pattern": "^fx_[a-z2-7]{10}$" }
+          }
+        }
+      }
+    }
+  }
+}

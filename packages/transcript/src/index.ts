@@ -13,6 +13,18 @@ export {
   registerTranscriptWordLookup,
 } from "./anchor-lookup.js";
 export { createAnnotationTranscriptSource } from "./annotation-context.js";
+export { mapWordRangeToSourceRange } from "./range-mapping.js";
+export * from "./fillers.js";
+export {
+  assessSourceRangeContinuity,
+  continuityEvidenceOperation,
+  createTranscriptContinuityGuard,
+} from "./continuity.js";
+export type {
+  ContinuityPeaks,
+  ContinuityPeaksTier,
+  TranscriptContinuityOptions,
+} from "./continuity.js";
 export type {
   TranscriptEngineOptions,
   TranscriptAlignmentJobs,
@@ -37,3 +49,8 @@ export type {
   WordLocation,
   WordResolution,
 } from "./types.js";
+export type {
+  TranscriptRangeSnapPolicy,
+  WordRangeMappingOptions,
+  WordSourceRange,
+} from "./range-mapping.js";

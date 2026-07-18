@@ -1,0 +1,32 @@
+{
+  "$id": "guyditor:op/transcript.range.shortCandidate",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": ["wordRange"],
+      "additionalProperties": false,
+      "properties": {
+        "wordRange": {
+          "type": "object",
+          "required": ["fromWord", "toWord"],
+          "additionalProperties": false,
+          "properties": {
+            "fromWord": { "type": "string", "pattern": "^w[0-9]{6}$" },
+            "toWord": { "type": "string", "pattern": "^w[0-9]{6}$" }
+          }
+        },
+        "title": { "type": "string", "minLength": 1 },
+        "createdCandidateId": { "type": "string", "pattern": "^dlv_[a-z2-7]{10}$" }
+      }
+    },
+    {
+      "type": "object",
+      "required": ["removeCandidateId"],
+      "additionalProperties": false,
+      "properties": {
+        "removeCandidateId": { "type": "string", "pattern": "^dlv_[a-z2-7]{10}$" }
+      }
+    }
+  ]
+}

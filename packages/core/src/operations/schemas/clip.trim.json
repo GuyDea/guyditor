@@ -19,6 +19,7 @@
     "snapPolicy": {
       "enum": ["none", "zero-crossing", "word-boundary"],
       "default": "zero-crossing"
-    }
+    },
+    "evidence": { "type": "string", "minLength": 1 }
   }
 }

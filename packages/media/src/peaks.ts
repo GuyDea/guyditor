@@ -1,5 +1,6 @@
 import {
   mkdir,
+  readFile,
   rename,
   writeFile,
 } from "node:fs/promises";
@@ -117,6 +118,54 @@ export function peaksCachePaths(projectRoot: string, asset: Asset): PeaksCachePa
     `${asset.id}.${asset.sha256.slice(0, 8)}.peaks.json`,
   );
   return { file, part: `${file}.part` };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parsePeaks(value: unknown, asset: Asset): PeaksFile {
+  if (!isRecord(value) ||
+      value["format"] !== "guyditor.peaks/v1" ||
+      value["assetId"] !== asset.id ||
+      value["sourceHash"] !== asset.sha256 ||
+      value["sampleRate"] !== PEAK_SAMPLE_RATE ||
+      !Array.isArray(value["tiers"])) {
+    throw new TypeError(`Invalid or stale peaks cache for ${asset.id}.`);
+  }
+  const tiers = value["tiers"].map((entry) => {
+    if (!isRecord(entry) || !Number.isSafeInteger(entry["samplesPerPeak"]) ||
+        Number(entry["samplesPerPeak"]) <= 0 || !Array.isArray(entry["data"]) ||
+        entry["data"].some((sample) =>
+          !Number.isInteger(sample) || Number(sample) < -127 || Number(sample) > 127)) {
+      throw new TypeError(`Invalid peaks tier for ${asset.id}.`);
+    }
+    return {
+      samplesPerPeak: Number(entry["samplesPerPeak"]),
+      data: entry["data"].map(Number),
+    };
+  });
+  return {
+    format: "guyditor.peaks/v1",
+    assetId: asset.id,
+    sourceHash: asset.sha256,
+    sampleRate: PEAK_SAMPLE_RATE,
+    tiers,
+  };
+}
+
+/** Read the derived peaks cache when present; absence is a supported degraded mode. */
+export async function loadPeaks(
+  projectRoot: string,
+  asset: Asset,
+): Promise<PeaksFile | undefined> {
+  try {
+    const content = await readFile(peaksCachePaths(projectRoot, asset).file, "utf8");
+    return parsePeaks(JSON.parse(content) as unknown, asset);
+  } catch (error: unknown) {
+    if (isRecord(error) && error["code"] === "ENOENT") return undefined;
+    throw error;
+  }
 }
 
 function resolvedAsset(projectRoot: string, asset: Asset): Asset {

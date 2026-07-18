@@ -46,6 +46,7 @@ export {
   PEAK_SAMPLE_RATE,
   PEAK_SAMPLES_PER_PEAK,
   PcmPeakAccumulator,
+  loadPeaks,
   peaksCachePaths,
 } from "./peaks.js";
 export type {

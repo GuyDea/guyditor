@@ -28,6 +28,8 @@ import type {
 } from "../../core/src/index.js";
 
 import { loadTranscriptWorkspace } from "./operations.js";
+import { createTranscriptContinuityGuard } from "./continuity.js";
+import type { ContinuityPeaks } from "./continuity.js";
 import {
   findWord as findProjectWord,
   resolveWord as resolveProjectWord,
@@ -57,11 +59,14 @@ const BASE32_ALPHABET = "abcdefghijklmnopqrstuvwxyz234567";
 let temporaryOrdinal = 0;
 
 export interface TranscriptEngineOptions {
-  idFactory?: (prefix: "seg" | "spk" | "txn") => string;
+  idFactory?: (prefix: IdPrefix | "seg" | "spk") => string;
   now?: () => Date;
   appVersion?: string;
   project?: ProjectStore;
   alignmentJobs?: TranscriptAlignmentJobs;
+  loadPeaks?: (
+    assetId: string,
+  ) => ContinuityPeaks | undefined | Promise<ContinuityPeaks | undefined>;
 }
 
 export interface TranscriptAlignmentJobs {
@@ -163,7 +168,7 @@ class SidecarCommitter implements OperationCommitter {
   }
 }
 
-function randomDomainId(prefix: "seg" | "spk" | "txn"): string {
+function randomDomainId(prefix: IdPrefix | "seg" | "spk"): string {
   const bytes = randomBytes(10);
   let suffix = "";
   for (const byte of bytes) suffix += BASE32_ALPHABET[byte & 31];
@@ -516,11 +521,12 @@ function scopedAlignmentSegments(
 }
 
 export class TranscriptEngine {
-  readonly #idFactory: (prefix: "seg" | "spk" | "txn") => string;
+  readonly #idFactory: (prefix: IdPrefix | "seg" | "spk") => string;
   readonly #now: () => Date;
   readonly #appVersion: string;
   readonly #project: ProjectStore | undefined;
   readonly #alignmentJobs: TranscriptAlignmentJobs | undefined;
+  readonly #loadPeaks: TranscriptEngineOptions["loadPeaks"];
 
   public constructor(options: TranscriptEngineOptions = {}) {
     this.#idFactory = options.idFactory ?? randomDomainId;
@@ -528,6 +534,7 @@ export class TranscriptEngine {
     this.#appVersion = options.appVersion ?? "0.0.0";
     this.#project = options.project;
     this.#alignmentJobs = options.alignmentJobs;
+    this.#loadPeaks = options.loadPeaks;
   }
 
   #enqueueInsufficientAlignment(
@@ -661,9 +668,7 @@ export class TranscriptEngine {
       const engine = new OperationEngine(project.currentProject, {
         appVersion: this.#appVersion,
         committer: new SidecarCommitter(project, new Map([[reference.path, content]])),
-        idFactory: (prefix: IdPrefix) => prefix === "txn"
-          ? this.#idFactory("txn")
-          : randomDomainId("txn"),
+        idFactory: (prefix: IdPrefix) => this.#idFactory(prefix),
         now: this.#now,
         operationDispatcher: createDispatcher(operation, nextOrdinal, reference),
         anchorResolvers,
@@ -836,12 +841,14 @@ export class TranscriptEngine {
     const engine = new OperationEngine(project.currentProject, {
       appVersion: this.#appVersion,
       committer: new SidecarCommitter(project, workspace.value.writes),
-      idFactory: (prefix: IdPrefix) => prefix === "txn"
-        ? this.#idFactory("txn")
-        : randomDomainId("txn"),
+      idFactory: (prefix: IdPrefix) => this.#idFactory(prefix),
       now: this.#now,
       operationDispatcher: workspace.value.dispatcher,
       anchorResolvers,
+      continuityGuard: createTranscriptContinuityGuard({
+        sidecars: workspace.value.sidecars,
+        ...(this.#loadPeaks === undefined ? {} : { loadPeaks: this.#loadPeaks }),
+      }),
     });
     return engine.execute(operations, {
       ...context,

@@ -1,0 +1,11 @@
+{
+  "language": "en",
+  "entries": [
+    { "phrase": "um", "tag": "filler" },
+    { "phrase": "uh", "tag": "filler" },
+    { "phrase": "erm", "tag": "filler" },
+    { "phrase": "you know", "tag": "filler" },
+    { "phrase": "like", "tag": "discourse" },
+    { "phrase": "so", "tag": "discourse" }
+  ]
+}

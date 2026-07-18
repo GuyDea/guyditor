@@ -10,6 +10,7 @@ import {
 } from "../../core/src/index.js";
 import type {
   GuyditorProject,
+  IdPrefix,
   OperationDispatcher,
   OperationInput,
   ProjectStore,
@@ -29,6 +30,7 @@ import type {
   TranscriptSidecar,
   TranscriptWord,
 } from "./types.js";
+import { applyTranscriptRangeOperation } from "./range-operations.js";
 
 const TRANSCRIPT_SCHEMA = "guyditor.transcript/v1";
 
@@ -58,7 +60,9 @@ interface LocatedSegment {
   segmentIndex: number;
 }
 
-type TranscriptIdFactory = (prefix: "seg" | "spk") => string;
+type TranscriptIdFactory = (
+  prefix: IdPrefix | "seg" | "spk",
+) => string;
 
 function operationFailure(
   code: `E_${Uppercase<string>}`,
@@ -908,6 +912,13 @@ function dispatcher(
 ): OperationDispatcher {
   return (project, input) => {
     try {
+      const rangeOperation = applyTranscriptRangeOperation(
+        project,
+        input,
+        documents.map(({ sidecar }) => sidecar),
+        idFactory,
+      );
+      if (rangeOperation !== undefined) return rangeOperation;
       switch (input.op) {
         case "transcript.word.correct":
           return correction(documents, project, input, writes);

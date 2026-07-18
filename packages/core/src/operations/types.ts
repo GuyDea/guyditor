@@ -50,6 +50,16 @@ export interface ContinuityWarning {
   autoFix?: OperationInput;
 }
 
+export interface ContinuityGuardRequest {
+  before: GuyditorProject;
+  after: GuyditorProject;
+  operation: OperationInput;
+}
+
+export type ContinuityGuard = (
+  request: ContinuityGuardRequest,
+) => readonly ContinuityWarning[] | Promise<readonly ContinuityWarning[]>;
+
 export interface AppliedOperation {
   op: string;
   params: Record<string, unknown>;
@@ -157,6 +167,7 @@ export interface CreateProposalRequest {
   sessionId?: string;
   reason: ProposalReason;
   addresses: string[];
+  warnings?: ContinuityWarning[];
 }
 
 export interface AutomationPolicy {

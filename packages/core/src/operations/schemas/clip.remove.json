@@ -1,0 +1,11 @@
+{
+  "$id": "guyditor:op/clip.remove",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["clipId"],
+  "additionalProperties": false,
+  "properties": {
+    "clipId": { "type": "string", "pattern": "^clp_[a-z2-7]{10}$" },
+    "evidence": { "type": "string", "minLength": 1 }
+  }
+}

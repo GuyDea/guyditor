@@ -3,7 +3,11 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+// Full project + sidecar + journal setup per test is disk-heavy; the vitest
+// 5 s default flakes under parallel full-suite load.
+vi.setConfig({ testTimeout: 30_000 });
 
 import * as corePackage from "../index.js";
 import type {

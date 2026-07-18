@@ -4,6 +4,8 @@ import type { ErrorObject, ValidateFunction } from "ajv";
 import trimSchema from "./schemas/clip.trim.json" with { type: "json" };
 import splitSchema from "./schemas/clip.split.json" with { type: "json" };
 import joinSchema from "./schemas/clip.join.json" with { type: "json" };
+import removeClipSchema from "./schemas/clip.remove.json" with { type: "json" };
+import restoreClipSchema from "./schemas/clip.restore.json" with { type: "json" };
 import assetIngestSchema from "./schemas/asset.ingest.json" with { type: "json" };
 import assetRemoveSchema from "./schemas/asset.remove.json" with { type: "json" };
 import transcriptCreateSchema from "./schemas/transcript.create.json" with { type: "json" };
@@ -16,6 +18,10 @@ import transcriptSegmentSplitSchema from "./schemas/transcript.segment.split.jso
 import transcriptSegmentMergeSchema from "./schemas/transcript.segment.merge.json" with { type: "json" };
 import transcriptSpeakerAssignSchema from "./schemas/transcript.speaker.assign.json" with { type: "json" };
 import transcriptRealignSchema from "./schemas/transcript.realign.json" with { type: "json" };
+import transcriptRangeRemoveSchema from "./schemas/transcript.range.remove.json" with { type: "json" };
+import transcriptRangeRetainSchema from "./schemas/transcript.range.retain.json" with { type: "json" };
+import transcriptRangeCreateClipSchema from "./schemas/transcript.range.createClip.json" with { type: "json" };
+import transcriptRangeShortCandidateSchema from "./schemas/transcript.range.shortCandidate.json" with { type: "json" };
 import anchorRebindSchema from "./schemas/anchor.rebind.json" with { type: "json" };
 import annotationCreateSchema from "./schemas/annotation.create.json" with { type: "json" };
 import annotationUpdateSchema from "./schemas/annotation.update.json" with { type: "json" };
@@ -62,6 +68,8 @@ import type {
   AppliedOperation,
   AutomationPolicy,
   CreateProposalRequest,
+  ContinuityGuard,
+  ContinuityWarning,
   OperationBatchResult,
   OperationContext,
   OperationInput,
@@ -106,6 +114,7 @@ export interface OperationEngineOptions {
   proposalStore?: ProposalStore;
   automationPolicy?: AutomationPolicy;
   approvedTransitionPresets?: readonly string[];
+  continuityGuard?: ContinuityGuard;
 }
 
 const ajv = new Ajv2020({ allErrors: true, strict: true });
@@ -136,6 +145,8 @@ const catalog = new Map<string, CatalogEntry>([
   ["clip.trim", catalogEntry(trimSchema, "normal", "none", "Trim {clip}")],
   ["clip.split", catalogEntry(splitSchema, "normal", "none", "Split {clip}")],
   ["clip.join", catalogEntry(joinSchema, "normal", "none", "Join {clips}")],
+  ["clip.remove", catalogEntry(removeClipSchema, "normal", "shift", "Remove {clip}")],
+  ["clip.restore", catalogEntry(restoreClipSchema, "normal", "shift", "Restore {n} clips")],
   ["transcript.create", catalogEntry(
     transcriptCreateSchema,
     "low",
@@ -195,6 +206,30 @@ const catalog = new Map<string, CatalogEntry>([
     "normal",
     "realign",
     "Realign {wordRange}",
+  )],
+  ["transcript.range.remove", catalogEntry(
+    transcriptRangeRemoveSchema,
+    "normal",
+    "shift",
+    "Remove {wordRange} ({duration})",
+  )],
+  ["transcript.range.retain", catalogEntry(
+    transcriptRangeRetainSchema,
+    "consequential",
+    "shift",
+    "Retain only {n} passages ({duration}) in {sequence}",
+  )],
+  ["transcript.range.createClip", catalogEntry(
+    transcriptRangeCreateClipSchema,
+    "normal",
+    "shift",
+    "Create clip from {wordRange}",
+  )],
+  ["transcript.range.shortCandidate", catalogEntry(
+    transcriptRangeShortCandidateSchema,
+    "low",
+    "none",
+    "Mark {wordRange} as short-form candidate",
   )],
   ["anchor.rebind", catalogEntry(
     anchorRebindSchema,
@@ -296,6 +331,7 @@ export class OperationEngine {
   readonly #proposalStore: ProposalStore | undefined;
   readonly #automationPolicy: AutomationPolicy | undefined;
   readonly #approvedTransitionPresets: ReadonlySet<string>;
+  readonly #continuityGuard: ContinuityGuard | undefined;
   readonly #autoAcceptsBySession = new Map<string, number>();
   readonly #undoStack: Array<{
     transactionId: string;
@@ -324,6 +360,7 @@ export class OperationEngine {
     this.#proposalStore = options.proposalStore;
     this.#automationPolicy = options.automationPolicy;
     this.#approvedTransitionPresets = new Set(options.approvedTransitionPresets ?? []);
+    this.#continuityGuard = options.continuityGuard;
   }
 
   public get currentProject(): GuyditorProject {
@@ -365,6 +402,7 @@ export class OperationEngine {
     const applied: AppliedOperation[] = [];
     const applications: ClipApplication[] = [];
     for (const requested of batch) {
+      const beforeOperation = working;
       const definition = catalog.get(requested.op);
       if (definition === undefined) {
         return operationFailure("E_OP_UNKNOWN", `Unknown operation ${requested.op}.`);
@@ -412,14 +450,26 @@ export class OperationEngine {
       if (!application.ok) return application;
       working = application.value.model;
       applications.push(application.value);
+      let warnings: ContinuityWarning[] = [];
+      if (this.#continuityGuard !== undefined) {
+        try {
+          warnings = [...await this.#continuityGuard({
+            before: beforeOperation,
+            after: working,
+            operation: normalized,
+          })];
+        } catch {
+          // Continuity evidence is advisory: unavailable/corrupt derived inputs
+          // degrade to no warning and never block an otherwise valid edit.
+        }
+      }
       applied.push({
         op: requested.op,
         params: application.value.redo?.params ?? params,
         summary: application.value.summary,
         inverse: application.value.inverse,
         captionImpact: definition.captionImpact,
-        // TODO(Part 5 §5.7): run audio-continuity guards at moved cut boundaries.
-        warnings: [],
+        warnings,
         affected: application.value.affected,
       });
     }
@@ -691,6 +741,9 @@ export class OperationEngine {
       reason: structuredClone(request.reason),
       riskClass: "normal",
       addresses: [...request.addresses],
+      ...(request.warnings === undefined
+        ? {}
+        : { warnings: structuredClone(request.warnings) }),
       orphanedAnchors: [],
       createdAt,
     };
@@ -732,7 +785,13 @@ export class OperationEngine {
       );
     }
     const proposedProject: GuyditorProject = proposed;
-    const warnings = dryRun.value.applied.flatMap(({ warnings: entries }) => entries);
+    const warnings = [...new Map([
+      ...(request.warnings ?? []),
+      ...dryRun.value.applied.flatMap(({ warnings: entries }) => entries),
+    ].map((warning) => [
+      `${warning.code}:${warning.boundary.beforeClip ?? "-"}:${warning.boundary.afterClip ?? "-"}:${warning.evidence}`,
+      warning,
+    ])).values()];
     const proposal: Proposal = {
       id,
       baseRevision: dryRun.value.base,

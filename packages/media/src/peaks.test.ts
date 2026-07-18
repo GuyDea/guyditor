@@ -1,9 +1,11 @@
 import { existsSync } from "node:fs";
 import {
   access,
+  mkdir,
   mkdtemp,
   readFile,
   rm,
+  writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -25,6 +27,7 @@ import {
   PEAK_SAMPLE_RATE,
   PEAK_SAMPLES_PER_PEAK,
   PcmPeakAccumulator,
+  loadPeaks,
   peaksCachePaths,
 } from "./peaks.js";
 import type { PeaksFile } from "./peaks.js";
@@ -214,6 +217,34 @@ describe("peaks cache paths", () => {
         "/project/.guyditor/cache/peaks",
         "ast_aaaaaaaaaa.01234567.peaks.json.part",
       ),
+    });
+  });
+});
+
+describe("loadPeaks", () => {
+  it("returns undefined for a missing cache and validates a matching peaks file", async () => {
+    const root = await sandbox();
+    const asset: Asset = {
+      id: "ast_aaaaaaaaaa",
+      kind: "audio",
+      path: "speech.wav",
+      sha256: "a".repeat(64),
+      probe: {},
+    };
+    await expect(loadPeaks(root, asset)).resolves.toBeUndefined();
+    const cache = peaksCachePaths(root, asset);
+    await mkdir(path.dirname(cache.file), { recursive: true });
+    await writeFile(cache.file, JSON.stringify({
+      format: "guyditor.peaks/v1",
+      assetId: asset.id,
+      sourceHash: asset.sha256,
+      sampleRate: 48_000,
+      tiers: [{ samplesPerPeak: 960, data: [-4, 5] }],
+    }));
+
+    await expect(loadPeaks(root, asset)).resolves.toMatchObject({
+      assetId: asset.id,
+      tiers: [{ samplesPerPeak: 960, data: [-4, 5] }],
     });
   });
 });
