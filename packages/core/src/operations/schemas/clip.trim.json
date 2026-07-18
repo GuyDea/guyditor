@@ -1,0 +1,24 @@
+{
+  "$id": "guyditor:op/clip.trim",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["clipId", "edge", "delta"],
+  "additionalProperties": false,
+  "properties": {
+    "clipId": { "type": "string", "pattern": "^clp_[a-z2-7]{10}$" },
+    "edge": { "enum": ["head", "tail"] },
+    "delta": {
+      "type": "object",
+      "required": ["frames", "fps"],
+      "properties": {
+        "frames": { "type": "integer" },
+        "fps": { "type": "string", "pattern": "^[0-9]+/[0-9]+$" }
+      },
+      "additionalProperties": false
+    },
+    "snapPolicy": {
+      "enum": ["none", "zero-crossing", "word-boundary"],
+      "default": "zero-crossing"
+    }
+  }
+}

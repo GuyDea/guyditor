@@ -12,6 +12,11 @@ export {
 } from "./ids.js";
 export type { GuyditorId, IdPrefix } from "./ids.js";
 export { canonicalizeYaml, parseProjectYaml } from "./canonical.js";
+export { deriveTimeline } from "./derive.js";
+export type {
+  DerivedTimelineClip,
+  TimelineDerivation,
+} from "./derive.js";
 export type {
   AnchorRange,
   AnnotationIndex,

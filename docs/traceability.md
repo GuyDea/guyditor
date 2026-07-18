@@ -22,10 +22,10 @@
 | FR-010 | Part 3 | todo | | |
 | FR-011 | Part 3 | todo | | |
 | FR-100 | Part 2 | partial | `packages/core/src/project/project.test.ts`; `packages/core/src/project/project.prop.test.ts` | Master model, closed JSON Schema, semantic validation, and canonical YAML complete; ProjectStore load/save remains. |
-| FR-101 | Part 2 | todo | | |
+| FR-101 | Part 2 | implemented | `packages/core/src/project/derive.test.ts`; `packages/core/src/project/derive.prop.test.ts`; `packages/core/src/operations/operations.prop.test.ts`; `packages/core/src/project/project.prop.test.ts` | Exact derived timeline positions and stable canonicalization complete; P-T5 and P-D1 cover prefix sums and entity-local stored diffs. |
 | FR-102 | Part 2 | partial | `packages/core/src/time/time.test.ts`; `packages/core/src/time/time.prop.test.ts`; `packages/core/src/project/project.test.ts` | Exact rational time model and anchor string/schema validation complete; anchor resolution remains. |
 | FR-103 | Part 2 | todo | | |
-| FR-104 | Part 5 | todo | | |
+| FR-104 | Part 5 | partial | `packages/core/src/store/store.test.ts`; `packages/core/src/operations/engine.test.ts` | Canonical transaction journal and crash-reconcilable commit algorithm complete; proposal linkage remains. |
 | FR-105 | Part 5 | todo | | |
 | FR-106 | Part 2 | todo | | |
 | FR-107 | Part 2 | todo | | |
@@ -40,7 +40,7 @@
 | FR-207 | Part 4 | todo | | |
 | FR-208 | Part 4 | todo | | |
 | FR-300 | Part 5 | todo | | |
-| FR-301 | Part 5 | todo | | |
+| FR-301 | Part 5 | partial | `packages/core/src/operations/engine.test.ts`; `packages/core/src/operations/operations.prop.test.ts` | `clip.trim`, `clip.split`, and `clip.join` implemented; remaining timeline operation catalog is pending. |
 | FR-302 | Part 5 | todo | | |
 | FR-303 | Part 5 | todo | | |
 | FR-304 | Part 5 | todo | | |
@@ -101,7 +101,7 @@
 | FR-901 | Part 5 | todo | | |
 | FR-902 | Part 10 | todo | | |
 | FR-903 | Part 10 | todo | | |
-| FR-904 | Part 5 | todo | | |
+| FR-904 | Part 5 | partial | `packages/core/src/operations/engine.test.ts`; `packages/core/src/store/store.test.ts` | Applied operations and journal records carry inverse metadata; undo-stack orchestration remains UI work. |
 | FR-905 | Part 2 | todo | | |
 | FR-906 | Part 10 | todo | | |
 | FR-1000 | Part 12 | todo | | |
