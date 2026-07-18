@@ -1,0 +1,664 @@
+{
+  "$id": "https://guyditor.dev/schema/guyditor-v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "revision",
+    "project",
+    "settings",
+    "transcript",
+    "assets",
+    "beats",
+    "sequences",
+    "layers",
+    "captions",
+    "annotations",
+    "deliverables",
+    "presets",
+    "skills",
+    "sidecars"
+  ],
+  "properties": {
+    "format": { "const": "guyditor/v1" },
+    "revision": { "type": "string", "pattern": "^rev_[0-9]{5}$" },
+    "project": { "$ref": "#/$defs/projectIdentity" },
+    "settings": { "$ref": "#/$defs/projectSettings" },
+    "transcript": { "$ref": "#/$defs/transcriptIndex" },
+    "assets": { "type": "array", "items": { "$ref": "#/$defs/asset" } },
+    "beats": { "type": "array", "items": { "$ref": "#/$defs/beat" } },
+    "sequences": { "type": "array", "items": { "$ref": "#/$defs/sequence" } },
+    "layers": { "type": "array", "items": { "$ref": "#/$defs/layer" } },
+    "captions": { "type": "array", "items": { "$ref": "#/$defs/captionTrack" } },
+    "annotations": { "$ref": "#/$defs/annotationIndex" },
+    "deliverables": { "type": "array", "items": { "$ref": "#/$defs/deliverable" } },
+    "templates": {
+      "type": "object",
+      "patternProperties": {
+        "^tpl_[a-z2-7]{10}$": { "$ref": "#/$defs/templatePin" }
+      },
+      "additionalProperties": false
+    },
+    "avoidRegions": true,
+    "watchFolders": true,
+    "presets": { "type": "array", "items": { "$ref": "#/$defs/presetPin" } },
+    "skills": { "type": "array", "items": { "$ref": "#/$defs/skillPin" } },
+    "sidecars": { "type": "array", "items": { "$ref": "#/$defs/sidecarRef" } }
+  },
+  "$defs": {
+    "rational": {
+      "type": "string",
+      "pattern": "^[0-9]+/[1-9][0-9]*$"
+    },
+    "frameTime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["frames", "fps"],
+      "properties": {
+        "frames": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "fps": { "$ref": "#/$defs/rational" }
+      }
+    },
+    "sampleTime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["samples", "rate"],
+      "properties": {
+        "samples": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "rate": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 }
+      }
+    },
+    "timeValue": {
+      "oneOf": [
+        { "$ref": "#/$defs/frameTime" },
+        { "$ref": "#/$defs/sampleTime" }
+      ]
+    },
+    "anchor": {
+      "type": "string",
+      "pattern": "^(ann:ann_[a-z2-7]{10}|(word:w[0-9]{6}(#(start|end))?|beat:beat_[a-z2-7]{10}|clip:clp_[a-z2-7]{10}@[0-9]+|timeline:(seq_[a-z2-7]{10}@[0-9]+|[0-9]+@[0-9]+/[1-9][0-9]*))([+-][0-9]+)?)$"
+    },
+    "anchorRange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "end"],
+      "properties": {
+        "start": { "$ref": "#/$defs/anchor" },
+        "end": { "$ref": "#/$defs/anchor" }
+      }
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^(ast|clp|seq|lyr|trn|cts|ann|dlv|pre|tpl|skl|beat|mrk|tak|fx|prj|job|adp|gfx|ses|msk|kfr|avr)_[a-z2-7]{10}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "isoUtc": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]+)?Z$"
+    },
+    "iso8601": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]+)?(?:Z|[+-][0-9]{2}:[0-9]{2})$"
+    },
+    "wordId": {
+      "type": "string",
+      "pattern": "^w[0-9]{6}$"
+    },
+    "unknownRecord": {
+      "type": "object",
+      "patternProperties": { ".*": true },
+      "additionalProperties": false
+    },
+    "projectIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "created"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^prj_[a-z2-7]{10}$" },
+        "name": { "type": "string" },
+        "created": { "$ref": "#/$defs/isoUtc" }
+      }
+    },
+    "projectSettings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["timeline", "audio", "primaryDeliverable"],
+      "properties": {
+        "timeline": { "$ref": "#/$defs/timelineSettings" },
+        "audio": { "$ref": "#/$defs/audioSettings" },
+        "primaryDeliverable": { "type": "string", "pattern": "^dlv_[a-z2-7]{10}$" },
+        "automation": true
+      }
+    },
+    "timelineSettings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fps", "width", "height"],
+      "properties": {
+        "fps": { "$ref": "#/$defs/rational" },
+        "width": { "type": "integer", "minimum": 1 },
+        "height": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "audioSettings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sampleRate", "channels"],
+      "properties": {
+        "sampleRate": { "type": "integer", "minimum": 1 },
+        "channels": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "transcriptIndex": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["nextWordOrdinal"],
+      "properties": {
+        "nextWordOrdinal": { "type": "integer", "minimum": 0, "maximum": 999999 }
+      }
+    },
+    "asset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "path", "sha256", "probe"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^ast_[a-z2-7]{10}$" },
+        "kind": { "enum": ["video", "audio", "image", "animation", "subtitle", "generated", "other"] },
+        "path": { "type": "string" },
+        "knownPaths": { "type": "array", "items": { "type": "string" } },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "bytes": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "container": { "type": "string" },
+        "probe": { "$ref": "#/$defs/assetProbe" },
+        "video": { "$ref": "#/$defs/videoStream" },
+        "audio": { "type": "array", "items": { "$ref": "#/$defs/audioStream" } },
+        "image": { "$ref": "#/$defs/imageStream" },
+        "captureTime": { "$ref": "#/$defs/captureTime" },
+        "timecode": { "$ref": "#/$defs/timecode" },
+        "session": { "type": "string", "pattern": "^ses_[a-z2-7]{10}$" },
+        "takes": { "type": "array", "items": { "type": "string", "pattern": "^tak_[a-z2-7]{10}$" } },
+        "markers": { "type": "array", "items": { "type": "string", "pattern": "^mrk_[a-z2-7]{10}$" } },
+        "analyses": { "$ref": "#/$defs/unknownRecord" },
+        "sync": true,
+        "integrity": { "enum": ["ok", "missing", "mismatch"] },
+        "ingest": { "$ref": "#/$defs/ingest" },
+        "provenance": { "$ref": "#/$defs/provenance" },
+        "rights": { "$ref": "#/$defs/rights" }
+      }
+    },
+    "assetProbe": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "duration": { "$ref": "#/$defs/timeValue" },
+        "width": { "type": "integer", "minimum": 1 },
+        "height": { "type": "integer", "minimum": 1 },
+        "fps": { "$ref": "#/$defs/rational" },
+        "audio": { "$ref": "#/$defs/probeAudio" },
+        "capturedAt": { "$ref": "#/$defs/iso8601" }
+      }
+    },
+    "probeAudio": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rate", "channels"],
+      "properties": {
+        "rate": { "type": "integer", "minimum": 1 },
+        "channels": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "videoStream": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["codec", "width", "height", "fps", "pixFmt", "hasAlpha", "rotation"],
+      "properties": {
+        "codec": { "type": "string" },
+        "width": { "type": "integer", "minimum": 1 },
+        "height": { "type": "integer", "minimum": 1 },
+        "fps": { "$ref": "#/$defs/rational" },
+        "pixFmt": { "type": "string" },
+        "hasAlpha": { "type": "boolean" },
+        "rotation": { "enum": [0, 90, 180, 270] },
+        "colorSpace": { "type": "string" },
+        "bitrate": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "audioStream": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["index", "codec", "sampleRate", "channels", "layout"],
+      "properties": {
+        "index": { "type": "integer", "minimum": 0 },
+        "codec": { "type": "string" },
+        "sampleRate": { "type": "integer", "minimum": 1 },
+        "channels": { "type": "integer", "minimum": 1 },
+        "layout": { "type": "string" },
+        "bitrate": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "imageStream": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["width", "height", "hasAlpha"],
+      "properties": {
+        "width": { "type": "integer", "minimum": 1 },
+        "height": { "type": "integer", "minimum": 1 },
+        "hasAlpha": { "type": "boolean" }
+      }
+    },
+    "captureTime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value", "source"],
+      "properties": {
+        "value": { "$ref": "#/$defs/iso8601" },
+        "source": { "enum": ["container", "file-mtime"] }
+      }
+    },
+    "timecode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "fps"],
+      "properties": {
+        "start": { "type": "string" },
+        "fps": { "$ref": "#/$defs/rational" }
+      }
+    },
+    "ingest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["at", "ffprobeVersion", "via"],
+      "properties": {
+        "at": { "$ref": "#/$defs/iso8601" },
+        "ffprobeVersion": { "type": "string" },
+        "via": { "enum": ["manual", "watch", "pickup", "agent", "generated"] }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sidecar"],
+      "properties": { "sidecar": { "type": "string" } }
+    },
+    "rights": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "license"],
+      "properties": {
+        "source": { "type": "string" },
+        "license": { "type": "string" },
+        "restrictions": { "type": "string" }
+      }
+    },
+    "beat": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "anchor"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^beat_[a-z2-7]{10}$" },
+        "name": { "type": "string" },
+        "anchor": { "$ref": "#/$defs/anchor" },
+        "chapter": { "$ref": "#/$defs/chapter" }
+      }
+    },
+    "chapter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title"],
+      "properties": { "title": { "type": "string" } }
+    },
+    "sequence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "clips"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^seq_[a-z2-7]{10}$" },
+        "name": { "type": "string" },
+        "clips": { "type": "array", "items": { "$ref": "#/$defs/clip" } },
+        "audio": { "$ref": "#/$defs/sequenceAudio" }
+      }
+    },
+    "sequenceAudio": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["targetLufs", "truePeakDb"],
+      "properties": {
+        "targetLufs": { "type": "number" },
+        "truePeakDb": { "type": "number" }
+      }
+    },
+    "clip": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "asset", "source"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^clp_[a-z2-7]{10}$" },
+        "asset": { "type": "string", "pattern": "^ast_[a-z2-7]{10}$" },
+        "source": { "$ref": "#/$defs/frameRange" },
+        "gapBefore": { "$ref": "#/$defs/frameTime" },
+        "overlapPrevious": { "$ref": "#/$defs/frameTime" },
+        "transitionAfter": { "$ref": "#/$defs/transition" },
+        "effects": { "type": "array", "items": { "$ref": "#/$defs/effect" } },
+        "audio": { "$ref": "#/$defs/clipAudio" },
+        "loop": { "$ref": "#/$defs/clipLoop" },
+        "anchor": { "$ref": "#/$defs/anchor" },
+        "punchIn": { "$ref": "#/$defs/punchIn" }
+      }
+    },
+    "frameRange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["in", "out"],
+      "properties": {
+        "in": { "$ref": "#/$defs/frameTime" },
+        "out": { "$ref": "#/$defs/frameTime" }
+      }
+    },
+    "transition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "preset", "duration"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^trn_[a-z2-7]{10}$" },
+        "preset": { "type": "string" },
+        "duration": { "$ref": "#/$defs/frameTime" },
+        "params": { "$ref": "#/$defs/unknownRecord" },
+        "intent": { "type": "string" }
+      }
+    },
+    "effect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "params"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^fx_[a-z2-7]{10}$" },
+        "kind": { "type": "string" },
+        "params": { "$ref": "#/$defs/unknownRecord" }
+      }
+    },
+    "clipAudio": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "gainDb": { "type": "number" },
+        "fadeIn": { "$ref": "#/$defs/frameTime" },
+        "fadeOut": { "$ref": "#/$defs/frameTime" },
+        "mute": { "type": "boolean" },
+        "offset": { "$ref": "#/$defs/sampleTime" },
+        "channels": {
+          "oneOf": [
+            { "enum": ["left", "right", "mix"] },
+            { "type": "array", "items": { "type": "number" } }
+          ]
+        },
+        "chain": true
+      }
+    },
+    "clipLoop": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "crossfade": { "$ref": "#/$defs/frameTime" }
+      }
+    },
+    "punchIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["level", "anchor"],
+      "properties": {
+        "level": { "type": "number" },
+        "anchor": {
+          "oneOf": [
+            { "const": "face-track" },
+            { "$ref": "#/$defs/point" }
+          ]
+        }
+      }
+    },
+    "point": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y"],
+      "properties": {
+        "x": { "type": "number" },
+        "y": { "type": "number" }
+      }
+    },
+    "layer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "name", "order", "enabled", "locked"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^lyr_[a-z2-7]{10}$" },
+        "kind": { "enum": ["video", "image", "animation", "text", "caption", "matte", "adjustment", "audio", "music", "ambience", "sfx"] },
+        "name": { "type": "string" },
+        "order": { "type": "number" },
+        "enabled": { "type": "boolean" },
+        "locked": { "type": "boolean" },
+        "opacity": { "type": "number", "minimum": 0, "maximum": 1 },
+        "blend": { "type": "string" },
+        "transform": true,
+        "matte": { "$ref": "#/$defs/matte" },
+        "pip": true,
+        "adjustment": true,
+        "ducking": true,
+        "sequence": { "type": "string", "pattern": "^seq_[a-z2-7]{10}$" },
+        "items": { "type": "array", "items": { "$ref": "#/$defs/placedItem" } }
+      }
+    },
+    "matte": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["layerId", "source"],
+      "properties": {
+        "layerId": { "type": "string", "pattern": "^lyr_[a-z2-7]{10}$" },
+        "source": { "enum": ["alpha", "luma"] },
+        "invert": { "type": "boolean" }
+      }
+    },
+    "placedItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "at", "duration"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^(clp|gfx)_[a-z2-7]{10}$" },
+        "asset": { "type": "string", "pattern": "^ast_[a-z2-7]{10}$" },
+        "template": { "type": "string", "pattern": "^tpl_[a-z2-7]{10}$" },
+        "at": { "$ref": "#/$defs/anchor" },
+        "duration": {
+          "oneOf": [
+            { "$ref": "#/$defs/frameTime" },
+            { "$ref": "#/$defs/untilDuration" },
+            { "const": "intrinsic" }
+          ]
+        },
+        "source": { "$ref": "#/$defs/frameRange" },
+        "effects": { "type": "array", "items": { "$ref": "#/$defs/effect" } },
+        "params": { "$ref": "#/$defs/unknownRecord" },
+        "seed": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+        "layout": { "$ref": "#/$defs/unknownRecord" }
+      }
+    },
+    "untilDuration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["until"],
+      "properties": { "until": { "$ref": "#/$defs/anchor" } }
+    },
+    "captionTrack": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "sourceLayerIds", "preset", "enabled"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^cts_[a-z2-7]{10}$" },
+        "name": { "type": "string" },
+        "sourceLayerIds": { "type": "array", "items": { "type": "string", "pattern": "^lyr_[a-z2-7]{10}$" } },
+        "preset": { "$ref": "#/$defs/captionPreset" },
+        "styleOverrides": { "$ref": "#/$defs/unknownRecord" },
+        "breakOverrides": true,
+        "emphasisOverrides": { "type": "array", "items": { "$ref": "#/$defs/emphasisOverride" } },
+        "timingOffsets": { "type": "array", "items": { "$ref": "#/$defs/timingOffset" } },
+        "enabled": { "type": "boolean" }
+      }
+    },
+    "captionPreset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["presetId", "version"],
+      "properties": {
+        "presetId": { "type": "string", "pattern": "^pre_[a-z2-7]{10}$" },
+        "version": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "emphasisOverride": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["wordId", "emphasis"],
+      "properties": {
+        "wordId": { "$ref": "#/$defs/wordId" },
+        "emphasis": { "type": "boolean" }
+      }
+    },
+    "timingOffset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["firstWordId"],
+      "properties": {
+        "firstWordId": { "$ref": "#/$defs/wordId" },
+        "startMs": { "type": "number" },
+        "endMs": { "type": "number" }
+      }
+    },
+    "annotationIndex": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sidecar", "summary"],
+      "properties": {
+        "sidecar": { "type": "string" },
+        "summary": { "$ref": "#/$defs/annotationSummary" }
+      }
+    },
+    "annotationSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["open", "resolved", "rejected", "reopened"],
+      "properties": {
+        "open": { "type": "integer", "minimum": 0 },
+        "resolved": { "type": "integer", "minimum": 0 },
+        "rejected": { "type": "integer", "minimum": 0 },
+        "reopened": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "deliverable": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "name", "profile", "sequenceId", "status"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^dlv_[a-z2-7]{10}$" },
+        "kind": { "enum": ["longform", "short"] },
+        "name": { "type": "string" },
+        "profile": { "type": "string" },
+        "profileOverrides": { "$ref": "#/$defs/unknownRecord" },
+        "sequenceId": { "type": "string", "pattern": "^seq_[a-z2-7]{10}$" },
+        "captionsTrackId": { "type": "string", "pattern": "^cts_[a-z2-7]{10}$" },
+        "status": { "enum": ["draft", "in-review", "approved", "stale"] },
+        "approvedRevision": { "type": "string", "pattern": "^rev_[0-9]{5}$" },
+        "dependencies": true,
+        "divergences": { "type": "array", "items": { "$ref": "#/$defs/divergence" } },
+        "staleReasons": true,
+        "publishFiles": { "type": "array", "items": { "$ref": "#/$defs/publishFile" } }
+      }
+    },
+    "divergence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["class", "transactionIds"],
+      "properties": {
+        "class": { "type": "string" },
+        "transactionIds": { "type": "array", "items": { "type": "string", "pattern": "^txn_[a-z2-7]{10}$" } }
+      }
+    },
+    "publishFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": { "type": "string" },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "templatePin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "contentHash"],
+      "properties": {
+        "version": { "type": "string" },
+        "contentHash": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "presetPin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "kind", "version", "path", "sha256"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^pre_[a-z2-7]{10}$" },
+        "name": { "type": "string" },
+        "kind": { "enum": ["caption", "transition", "look", "motion", "layout", "graphic"] },
+        "version": { "type": "integer", "minimum": 0 },
+        "path": { "type": "string" },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "skillPin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "version", "path", "contentHash"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^skl_[a-z2-7]{10}$" },
+        "name": { "type": "string" },
+        "version": { "type": "string" },
+        "path": { "type": "string" },
+        "contentHash": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "sidecarRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "path", "schema", "sha256", "inputs"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "path": { "type": "string" },
+        "schema": { "type": "string" },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "generatedBy": { "$ref": "#/$defs/generatedBy" },
+        "inputs": { "type": "array", "items": { "$ref": "#/$defs/sidecarInput" } }
+      }
+    },
+    "generatedBy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tool", "version"],
+      "properties": {
+        "tool": { "type": "string" },
+        "version": { "type": "string" },
+        "job": { "type": "string", "pattern": "^job_[a-z2-7]{10}$" }
+      }
+    },
+    "sidecarInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sha256"],
+      "properties": {
+        "asset": { "type": "string", "pattern": "^ast_[a-z2-7]{10}$" },
+        "sidecar": { "type": "string" },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    }
+  }
+}

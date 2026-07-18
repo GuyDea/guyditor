@@ -1,0 +1,99 @@
+format: guyditor/v1
+revision: rev_00021
+project: { id: prj_ep4rust7ab, name: "EP-014 Rust borrow checker", created: "2026-07-12T09:14:03Z" }
+settings:                                    # ---- project settings ----
+  timeline: { fps: 30000/1001, width: 3840, height: 2160 }
+  audio: { sampleRate: 48000, channels: 2 }
+  primaryDeliverable: dlv_lf7h2n6s4d
+transcript: { nextWordOrdinal: 232 }          # required by the 2.5 schema; omitted by the annotated example
+assets:                                      # ---- assets, immutable IDs (business rules 1, 3) ----
+  - { id: ast_camera4a2b, kind: video, path: media/cam-a/EP014_A_take3.mov,
+      sha256: 7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069,
+      probe: { duration: { frames: 41890, fps: 30000/1001 }, width: 3840, height: 2160, fps: 30000/1001,
+               audio: { rate: 48000, channels: 2 }, capturedAt: "2026-07-11T14:02:11Z" } }
+  - { id: ast_scrn5e6f7g, kind: video, path: media/screen/EP014_screen.mkv,
+      sha256: 2c624232cdd221771294dfbb310aca000a0df6ac8b66b696d90ef06fdefb64a3,
+      probe: { duration: { frames: 54000, fps: 60/1 }, width: 2560, height: 1440, fps: 60/1 } }
+  - { id: ast_music6h7j2, kind: audio, path: media/music/calm-loop.flac,
+      sha256: 19581e27de7ced00ff1ce50b2047e7a567c76b1cbaebabe5ef03f7c3017bb5b7,
+      probe: { duration: { samples: 8640000, rate: 48000 }, audio: { rate: 48000, channels: 2 } },
+      rights: { source: "artlist.io", license: "Artlist Unlimited 2026" } }
+  - { id: ast_broll3k4l5, kind: generated, path: media/generated/ast_broll3k4l5.mp4,   # frozen generated B-roll (rule 8, FR-605)
+      sha256: 4b227777d4dd1fc61c6f884f48641d02b4d121d3fd328cb08b5531fcacdabf8a,
+      probe: {},
+      provenance: { sidecar: provenance-broll } }         # full record in the provenance sidecar (Part 7 §7.10)
+beats:                                       # ---- named story beats (anchor targets) ----
+  - { id: beat_hk3m2p6qa4, name: hook, anchor: "word:w000012" }
+  - { id: beat_dm4n5q7rb2, name: demo, anchor: "clip:clp_scr2n3m4o5@0" }
+sequences:                                   # ---- ordered sequences with source ranges ----
+  - id: seq_main4a2b3c
+    name: main
+    clips:                                   # timeline positions DERIVED from order (FR-101)
+      - { id: clp_hook6x5y7z, asset: ast_camera4a2b,
+          source: { in: { frames: 1204, fps: 30000/1001 }, out: { frames: 3421, fps: 30000/1001 } },
+          transitionAfter: { id: trn_xf2g3h4j5k, preset: pre_smoothcut2, duration: { frames: 6, fps: 30000/1001 } } }   # boundary transition
+      - { id: clp_scr2n3m4o5, asset: ast_scrn5e6f7g,
+          source: { in: { frames: 600, fps: 60/1 }, out: { frames: 9000, fps: 60/1 } },
+          effects: [ { id: fx_spd6a2b3c4, kind: speed, params: { rate: 5/4 } } ] }    # exact rational speed-up
+      - { id: clp_body7q6r5s, asset: ast_camera4a2b,
+          source: { in: { frames: 9800, fps: 30000/1001 }, out: { frames: 22004, fps: 30000/1001 } },
+          gapBefore: { frames: 15, fps: 30000/1001 },                                 # explicit gap (2.7)
+          audio: { gainDb: -1, fadeIn: { frames: 4, fps: 30000/1001 } } }
+  - id: seq_shrt4d5e6f                       # independent short-form edit (FR-802, Part 11)
+    name: short-hook
+    clips:
+      - { id: clp_sh6t2u3v4w, asset: ast_camera4a2b,
+          source: { in: { frames: 1204, fps: 30000/1001 }, out: { frames: 2010, fps: 30000/1001 } } }
+layers:                                      # ---- audio and video layers ----
+  - { id: lyr_base5a4b2c, kind: video, name: main-video, order: 0,
+      enabled: true, locked: false, sequence: seq_main4a2b3c }
+  - { id: lyr_broll3d4e5, kind: video, name: b-roll, order: 10, enabled: true, locked: false,
+      items: [ { id: clp_brol6g7h2m, asset: ast_broll3k4l5, at: "word:w000231",   # anchor-placed, not order-derived
+                 duration: { frames: 240, fps: 30000/1001 },
+                 source: { in: { frames: 0, fps: 24/1 }, out: { frames: 192, fps: 24/1 } } } ] }
+  - { id: lyr_music6j7k2, kind: audio, name: music, order: 0, enabled: true, locked: false,
+      items: [ { id: clp_mus7m2n3p4, asset: ast_music6h7j2, at: "beat:beat_hk3m2p6qa4",
+                 duration: { until: "beat:beat_dm4n5q7rb2" } } ] }
+captions:                                    # ---- caption tracks: pinned preset + sparse overrides (Part 4 §4.8) ----
+  - { id: cts_main2q3r4s, name: main-captions, sourceLayerIds: [lyr_base5a4b2c],
+      preset: { presetId: pre_capstyle77, version: 7 },          # versioned caption preset pin
+      styleOverrides: { wordsPerLine: 5 }, enabled: true }
+annotations:                                 # ---- sidecar reference + state summary; records live in the sidecar (Part 8 §8.1) ----
+  sidecar: annotations
+  summary: { open: 1, resolved: 1, rejected: 0, reopened: 0 }
+deliverables:                                # ---- long-form and short-form deliverables (Part 11 §11.1) ----
+  - { id: dlv_lf7h2n6s4d, kind: longform, name: episode, profile: youtube-longform@1.0.0,
+      sequenceId: seq_main4a2b3c, status: approved, approvedRevision: rev_00019 }
+  - { id: dlv_sh3c7k4m6t, kind: short, name: hook-short, profile: tiktok@1.0.0,
+      sequenceId: seq_shrt4d5e6f, status: stale, approvedRevision: rev_00017,
+      dependencies: [ { derivativeClipId: clp_sh6t2u3v4w,
+                        source: { assetId: ast_camera4a2b,
+                                  range: { start: { frames: 1204, fps: 30000/1001 }, end: { frames: 2010, fps: 30000/1001 } },
+                                  words: { from: w000012, to: w000094 },
+                                  longformClipId: clp_hook6x5y7z } } ] }
+presets:                                     # ---- preset pins: version + snapshot hash ----
+  - { id: pre_capstyle77, name: brand-captions, kind: caption, version: 7, path: presets/pre_capstyle77@7.yaml,
+      sha256: 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08 }
+  - { id: pre_smoothcut2, name: smooth-cut, kind: transition, version: 1, path: presets/pre_smoothcut2@1.yaml,
+      sha256: 60303ae22b998861bce3b28f33eec1be758a213c86c93c076dbe9f558c11c752 }
+skills:                                      # ---- skill version pins (FR-705, Part 9 §9.5) ----
+  - { id: skl_pacing24ab, name: pacing-preferences, version: "1.3.0", path: skills/pacing-preferences/1.3.0/,
+      contentHash: fd61a03af4f77d870fc21e05e7e80678095c92d808cfb3b5c279ee04c74aca13 }
+sidecars:                                    # ---- sidecar registry: schema id + integrity hash ----
+  - { name: transcript-cam-a, path: sidecars/transcripts/ast_camera4a2b.transcript.json,
+      schema: guyditor.transcript/v1,
+      sha256: a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3,
+      generatedBy: { tool: mlworker/faster-whisper, version: "1.1.0", job: job_w2rd5al4gn },
+      inputs: [ { asset: ast_camera4a2b, sha256: 7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069 } ] }
+  - { name: annotations, path: sidecars/annotations.yaml, schema: guyditor.annotations/v1,
+      sha256: 6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b, inputs: [] }
+  - { name: provenance-broll, path: sidecars/provenance/ast_broll3k4l5.provenance.json,
+      schema: guyditor.provenance/v1,
+      sha256: ef2d127de37b942baad06145e54b0c619a1f22327b2ebbcfbec78f5564afe39d,
+      generatedBy: { tool: guyditor/generation, version: "1.0.0", job: job_gen6b4c2xq },
+      inputs: [ { asset: ast_broll3k4l5, sha256: 4b227777d4dd1fc61c6f884f48641d02b4d121d3fd328cb08b5531fcacdabf8a } ] }
+  - { name: analysis-cam-a-shots, path: sidecars/analysis/ast_camera4a2b.scene.shots.json,
+      schema: guyditor.analysis/v1,
+      sha256: d4735e3a265e16eee03f59718b9b5d03019c07d8b6c51f90da3a666eec13ab35,
+      generatedBy: { tool: mlworker/scenedetect, version: "0.6.4", job: job_ana6ys4s22 },
+      inputs: [ { asset: ast_camera4a2b, sha256: 7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069 } ] }
