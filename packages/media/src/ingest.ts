@@ -32,8 +32,17 @@ import {
   formatSupportTier,
 } from "./formats.js";
 import type { FormatSupportTier } from "./formats.js";
+import { estimateProjectCacheUse } from "./cache.js";
+import type { CacheUseEstimate } from "./cache.js";
 import { probeMedia } from "./probe.js";
 import type { ProbedAssetMedia } from "./probe.js";
+import { generatePeaks } from "./peaks.js";
+import {
+  generateProxy,
+  proxyCachePaths,
+  proxyIsStale,
+} from "./proxy.js";
+import type { ProxyTier } from "./commands.js";
 
 const HASH_CHUNK_BYTES = 4 * 1024 * 1024;
 
@@ -103,6 +112,17 @@ interface ClassifiedSource {
 interface IngestJobPayload {
   projectRoot: string;
   request: Required<Pick<IngestRequest, "sources" | "via">>;
+}
+
+interface ProxyGeneratePayload {
+  assetId: string;
+  projectRoot: string;
+  tier: ProxyTier;
+}
+
+interface PeaksGeneratePayload {
+  assetId: string;
+  projectRoot: string;
 }
 
 function jsonValue(value: unknown): JsonValue {
@@ -348,6 +368,17 @@ function jobAssetId(payload: JsonValue): string | undefined {
     : undefined;
 }
 
+function proxyJobMatches(
+  payload: JsonValue,
+  projectRoot: string,
+  assetId: string,
+  tier: ProxyTier,
+): boolean {
+  return typeof payload === "object" && payload !== null && !Array.isArray(payload) &&
+    payload["projectRoot"] === projectRoot && payload["assetId"] === assetId &&
+    payload["tier"] === tier;
+}
+
 export class MediaEngine {
   readonly #queue: JobQueue;
   readonly #followUpJobs: readonly FollowUpJobKind[];
@@ -377,6 +408,48 @@ export class MediaEngine {
       }
       return jsonValue(await this.#execute(project, payload.request, reportProgress));
     });
+    this.#queue.registerExecutor("proxy.generate", async (job, { signal }) => {
+      const payload = job.payload as unknown as ProxyGeneratePayload;
+      const project = this.#projects.get(payload.projectRoot);
+      const asset = project?.currentProject.assets.find(
+        ({ id }) => id === payload.assetId,
+      );
+      if (project === undefined || asset === undefined || payload.tier !== "edit") {
+        throw new MediaError(
+          "E_MEDIA_INGEST_INVALID_SOURCE",
+          `Proxy job ${job.jobId} does not reference an attached asset.`,
+          "safe",
+          { affected: [payload.assetId] },
+        );
+      }
+      return jsonValue(await generateProxy(
+        project.root,
+        asset,
+        payload.tier,
+        project.currentProject.settings.timeline.fps,
+        signal,
+        this.#now,
+      ));
+    });
+    this.#queue.registerExecutor("peaks.generate", async (job, { signal }) => {
+      const payload = job.payload as unknown as PeaksGeneratePayload;
+      const project = this.#projects.get(payload.projectRoot);
+      const asset = project?.currentProject.assets.find(
+        ({ id }) => id === payload.assetId,
+      );
+      if (
+        project === undefined || asset === undefined ||
+        (asset.audio?.length ?? 0) === 0
+      ) {
+        throw new MediaError(
+          "E_MEDIA_INGEST_INVALID_SOURCE",
+          `Peaks job ${job.jobId} does not reference an attached audio asset.`,
+          "safe",
+          { affected: [payload.assetId] },
+        );
+      }
+      return jsonValue(await generatePeaks(project.root, asset, signal));
+    });
   }
 
   public ingest(project: ProjectStore, request: IngestRequest): JobRecord {
@@ -397,6 +470,51 @@ export class MediaEngine {
       payload: jsonValue(payload),
       cancellable: false,
     });
+  }
+
+  public async ensureProxy(
+    project: ProjectStore,
+    assetId: string,
+    tier: ProxyTier,
+  ): Promise<JobRecord | undefined> {
+    const asset = project.currentProject.assets.find(({ id }) => id === assetId);
+    if (asset === undefined) {
+      throw new MediaError(
+        "E_MEDIA_INGEST_INVALID_SOURCE",
+        `Asset ${assetId} does not exist in project ${project.root}.`,
+        "none",
+        { affected: [assetId] },
+      );
+    }
+    this.#projects.set(project.root, project);
+    if (proxyCachePaths(project.root, asset, tier) === undefined) return undefined;
+    if (!await proxyIsStale(
+      project.root,
+      asset,
+      tier,
+      project.currentProject.settings.timeline.fps,
+    )) {
+      return undefined;
+    }
+    const active = this.#queue.list({ state: ["queued", "running"] }).find(
+      (job) => job.kind === "proxy.generate" &&
+        proxyJobMatches(job.payload, project.root, assetId, tier),
+    );
+    if (active !== undefined) return active;
+    return this.#queue.enqueue({
+      kind: "proxy.generate",
+      title: followUpTitle("proxy.generate", assetId),
+      payload: { assetId, projectRoot: project.root, tier },
+      cancellable: true,
+    });
+  }
+
+  public estimateCacheUse(project: ProjectStore): Promise<CacheUseEstimate> {
+    return estimateProjectCacheUse(
+      project.root,
+      project.currentProject.assets,
+      project.currentProject.settings.timeline.fps,
+    );
   }
 
   async #execute(
@@ -498,20 +616,29 @@ export class MediaEngine {
       const sourceRequests = sourceByAsset.get(assetId) ?? [];
       const speechBearing = sourceRequests.some((source) => source.speechBearing !== false);
       for (const kind of this.#followUpJobs) {
-        const applicable = kind === "proxy.generate"
-          ? asset.video !== undefined || asset.image !== undefined
-          : kind === "peaks.generate"
-            ? (asset.audio?.length ?? 0) > 0
-            : (asset.audio?.length ?? 0) > 0 && speechBearing;
+        if (kind === "proxy.generate") {
+          const followUp = await this.ensureProxy(project, assetId, "edit");
+          if (followUp !== undefined) followUpJobIds.push(followUp.jobId);
+          continue;
+        }
+        const applicable = kind === "peaks.generate"
+          ? (asset.audio?.length ?? 0) > 0
+          : (asset.audio?.length ?? 0) > 0 && speechBearing;
         if (!applicable) continue;
         const alreadyQueued = this.#queue.list({ state: ["queued", "running"] }).some(
-          (job) => job.kind === kind && jobAssetId(job.payload) === assetId,
+          (job) => job.kind === kind && jobAssetId(job.payload) === assetId &&
+            (kind !== "peaks.generate" ||
+              (typeof job.payload === "object" && job.payload !== null &&
+                !Array.isArray(job.payload) &&
+                job.payload["projectRoot"] === project.root)),
         );
         if (alreadyQueued) continue;
         const followUp = this.#queue.enqueue({
           kind,
           title: followUpTitle(kind, assetId),
-          payload: { assetId },
+          payload: kind === "peaks.generate"
+            ? { assetId, projectRoot: project.root }
+            : { assetId },
           cancellable: true,
         });
         followUpJobIds.push(followUp.jobId);

@@ -12,7 +12,7 @@
 | BR-008 | Part 14 | todo | | |
 | FR-001 | Part 3 | implemented | `packages/core/src/store/create-project.test.ts`; `packages/core/src/store/store.test.ts` | Request-based `ProjectStore.createProject` enforces empty/new, non-nested, non-cache locations; loads a versioned primary profile; records skill/watch-folder pins; scaffolds canonical/operational directories; and writes creation transaction 1 with `rev_00001` snapshot, lock, journal, and HEAD. |
 | FR-002 | Part 3 | implemented | `packages/media/src/ingest.test.ts`; `packages/media/src/probe.test.ts`; `packages/core/src/operations/asset.test.ts` | Batch `MediaEngine.ingest` runs through `JobQueue`, validates sources, hashes and probes concurrently, classifies and registers assets through one `asset.ingest` transaction, deduplicates known paths, protects in-use removals, and queues configurable follow-up records. |
-| FR-003 | Part 3 | todo | | |
+| FR-003 | Part 3 | implemented | `packages/media/src/commands.test.ts`; `packages/media/src/proxy.test.ts`; `packages/media/src/peaks.test.ts`; `packages/media/src/cache.test.ts` | `proxy.generate` and `MediaEngine.ensureProxy` implement the hashed edit-proxy ladder, five-check staleness contract, deduplicated jobs, atomic media/metadata publication, and small-image exemption. `peaks.generate` streams mono 48 kHz s16le into fixed int8 tiers. Cache use scans and missing-proxy projections are available through `MediaEngine.estimateCacheUse`. |
 | FR-004 | Part 3 | todo | | |
 | FR-005 | Part 3 | todo | | |
 | FR-006 | Part 3 | todo | | |
@@ -103,7 +103,7 @@
 | FR-903 | Part 10 | todo | | |
 | FR-904 | Part 5 | partial | `packages/core/src/operations/engine.test.ts`; `packages/core/src/store/store.test.ts` | Applied operations and journal records carry inverse metadata; undo-stack orchestration remains UI work. |
 | FR-905 | Part 2 | todo | | |
-| FR-906 | Part 10 | todo | | |
+| FR-906 | Part 10 | partial | `packages/media/src/peaks.test.ts` | `guyditor.peaks/v1` cache production is implemented with the three fixed zoom tiers and fixture-grounded silence coverage; timeline waveform rendering, metering, and UI controls remain Part 10 work. |
 | FR-1000 | Part 12 | partial | `packages/render/src/graph.test.ts`; `packages/render/src/filtergraph.test.ts`; `packages/render/src/videozero.test.ts`; `scripts/video-zero.mjs` | M0 local-only subset: one sequence-bound video layer; cuts, exact trims, `gapBefore` as black+silence, speed effects, same-clip audio/silence concat, and H.264/AAC MP4 export through `RenderService` + `JobQueue`. Package-local lint forbids HTTP/socket imports and `fetch`; non-file FFmpeg paths are rejected. Transitions, overlaps, multi-layer/items composition, keying, transforms, captions/overlays, freeze, proposals, and proxy quality return `E_RENDER_UNSUPPORTED` with the owning spec part. |
 | FR-1001 | Part 12 | todo | | |
 | FR-1002 | Part 12 | partial | `packages/render/src/graph.test.ts`; `packages/render/src/videozero.test.ts` | Render graphs embed the minimal pinned toolchain manifest (FFmpeg/ffprobe versions and binary hashes, render package version, OS, encoder threads); exports verify recorded asset/sidecar hashes and tests assert exact stream properties and duration. Full functional-equivalence analysis remains Part 12 work. |
@@ -123,7 +123,7 @@
 | NFR-007 | Part 9 | todo | | |
 | NFR-100 | Part 1 | todo | | |
 | NFR-101 | Part 1 | todo | | |
-| NFR-102 | Part 13 | todo | | |
+| NFR-102 | Part 13 | partial | `packages/media/src/cache.test.ts`; `packages/media/src/proxy.test.ts` | Proxy/peaks cache byte accounting, per-asset proxy projections, disposable hash-keyed paths, and atomic partial-file safety are implemented. Storage preflight, the full category accountant, cleanup planning/execution, and cleanup UI remain Part 13 work. |
 | NFR-103 | Part 12 | partial | `packages/core/src/jobs/queue.test.ts` | Startup recovery safely fails interrupted jobs with retry metadata; render/analysis integration and partial-artifact cleanup remain. |
 | NFR-104 | Part 12 | todo | | |
 | NFR-105 | Part 1 | todo | | |

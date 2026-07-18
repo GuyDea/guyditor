@@ -1,5 +1,20 @@
 export { resolveFfmpeg, resolveFfprobe } from "./binaries.js";
 export type { ResolvedBinary } from "./binaries.js";
+export { estimateProjectCacheUse } from "./cache.js";
+export type {
+  CacheUseEstimate,
+  ProjectedProxySize,
+} from "./cache.js";
+export {
+  peaksDecodeCommand,
+  proxyCommand,
+  proxyProfile,
+} from "./commands.js";
+export type {
+  ProxyProfile,
+  ProxyProfileKind,
+  ProxyTier,
+} from "./commands.js";
 export { FfmpegError } from "./errors.js";
 export type {
   FfmpegErrorCode,
@@ -27,6 +42,18 @@ export type {
   IngestWarning,
   MediaEngineOptions,
 } from "./ingest.js";
+export {
+  PEAK_SAMPLE_RATE,
+  PEAK_SAMPLES_PER_PEAK,
+  PcmPeakAccumulator,
+  peaksCachePaths,
+} from "./peaks.js";
+export type {
+  PeaksCachePaths,
+  PeaksFile,
+  PeaksGenerateResult,
+  PeaksTier,
+} from "./peaks.js";
 export { probeMedia } from "./probe.js";
 export type {
   AssetAudioShape,
@@ -40,5 +67,16 @@ export type {
   Rational,
   SampleTime,
 } from "./probe.js";
+export {
+  PROXY_PROFILE_VERSION,
+  proxyCachePaths,
+  proxyIsStale,
+  sourceDurationFrames,
+} from "./proxy.js";
+export type {
+  ProxyCachePaths,
+  ProxyGenerateResult,
+  ProxyMetadata,
+} from "./proxy.js";
 export { runFfmpeg, runFfprobe } from "./run.js";
 export type { FfmpegRunResult, RunFfmpegOptions } from "./run.js";

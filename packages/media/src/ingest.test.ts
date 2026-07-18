@@ -221,12 +221,14 @@ describe.skipIf(!FIXTURES_AVAILABLE)("MediaEngine fixture ingest", () => {
     }).jobId);
 
     expect(result.followUpJobIds).toHaveLength(4);
-    expect(queue.list({ state: "queued" }).map(({ kind }) => kind)).toEqual([
+    const followUps = result.followUpJobIds.map((jobId) => queue.get(jobId));
+    expect(followUps.map((job) => job?.kind)).toEqual([
       "proxy.generate",
       "peaks.generate",
       "transcribe",
       "proxy.generate",
     ]);
+    expect(followUps.find((job) => job?.kind === "transcribe")?.state).toBe("queued");
   });
 });
 

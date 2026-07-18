@@ -16,4 +16,19 @@ describe("@guyditor/media", () => {
       runFfprobe: expect.any(Function),
     });
   });
+
+  it("exports the FR-003 proxy, peaks, and cache-estimation contracts", () => {
+    expect(packageModule).toMatchObject({
+      PEAK_SAMPLE_RATE: 48_000,
+      PEAK_SAMPLES_PER_PEAK: [960, 9_600, 48_000],
+      PROXY_PROFILE_VERSION: expect.any(Number),
+      PcmPeakAccumulator: expect.any(Function),
+      peaksCachePaths: expect.any(Function),
+      peaksDecodeCommand: expect.any(Function),
+      proxyCachePaths: expect.any(Function),
+      proxyCommand: expect.any(Function),
+      proxyIsStale: expect.any(Function),
+      proxyProfile: expect.any(Function),
+    });
+  });
 });

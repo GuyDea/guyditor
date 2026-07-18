@@ -24,6 +24,31 @@ afterEach(async () => {
 });
 
 describe("runFfmpeg", () => {
+  it("streams binary stdout without retaining the complete payload", async () => {
+    process.env.GUYDITOR_FFMPEG = resolveFfmpeg().path;
+    const chunks: Buffer[] = [];
+
+    const result = await runFfmpeg(
+      [
+        "-nostdin",
+        "-f", "lavfi",
+        "-i", "sine=frequency=1000:sample_rate=48000:duration=0.1",
+        "-ac", "1",
+        "-ar", "48000",
+        "-c:a", "pcm_s16le",
+        "-f", "s16le",
+        "pipe:1",
+      ],
+      {
+        collectStdout: false,
+        onStdoutChunk: (chunk) => chunks.push(Buffer.from(chunk)),
+      },
+    );
+
+    expect(Buffer.concat(chunks)).toHaveLength(9_600);
+    expect(result.stdout).toBe("");
+  });
+
   it("streams machine-readable progress lines from stdout", async () => {
     const directory = await mkdtemp(path.join(tmpdir(), "guyditor-progress-"));
     temporaryDirectories.push(directory);
