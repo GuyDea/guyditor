@@ -1,15 +1,27 @@
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { validateFixtureManifest } from "./fixture-spec.mjs";
+
 export const M0_COMMANDS = Object.freeze([
+  Object.freeze({ args: ["fixtures"], command: "pnpm" }),
   Object.freeze({ args: ["check:conventions"], command: "pnpm" }),
   Object.freeze({ args: ["-r", "typecheck"], command: "pnpm" }),
   Object.freeze({ args: ["exec", "vitest", "run"], command: "pnpm" }),
+  Object.freeze({
+    args: [
+      "--test",
+      "scripts/check-conventions.test.mjs",
+      "scripts/gate.test.mjs",
+      "scripts/make-fixtures.test.mjs",
+    ],
+    command: "node",
+  }),
 ]);
 
 const DEFERRED_M0_STEPS = Object.freeze([
-  "fixtures (`pnpm fixtures`)",
   "dedicated contract, golden, e2e, and AC suites (root Vitest currently selects empty specialized projects)",
   "milestone traceability-status enforcement",
   "dogfood evidence",
@@ -24,12 +36,19 @@ function commandText(command, args) {
   return [command, ...args].join(" ");
 }
 
+function readGeneratedFixtureManifest() {
+  return JSON.parse(
+    readFileSync(path.resolve(".fixtures", "manifest.json"), "utf8"),
+  );
+}
+
 export function runGate(
   milestone,
   {
     error = console.error,
     log = console.log,
     platform = process.platform,
+    readFixtureManifest = readGeneratedFixtureManifest,
     runCommand = spawnCommand,
   } = {},
 ) {
@@ -40,7 +59,8 @@ export function runGate(
 
   for (const { command, args } of M0_COMMANDS) {
     const display = commandText(command, args);
-    const executable = platform === "win32" ? `${command}.cmd` : command;
+    const executable =
+      platform === "win32" && command === "pnpm" ? `${command}.cmd` : command;
     log(`==> ${display}`);
 
     let result;
@@ -66,6 +86,22 @@ export function runGate(
     }
   }
 
+  let manifest;
+  try {
+    manifest = readFixtureManifest();
+  } catch (manifestError) {
+    error(
+      `gate m0: could not read .fixtures/manifest.json: ${manifestError.message}`,
+    );
+    return 1;
+  }
+  const manifestErrors = validateFixtureManifest(manifest);
+  if (manifestErrors.length > 0) {
+    error(`gate m0: invalid fixture manifest: ${manifestErrors.join("; ")}`);
+    return 1;
+  }
+
+  log("gate m0: fixture manifest contains every required entry");
   log("gate m0: implementable scaffold checks passed");
   log("Deferred §14.8 scaffold-era steps:");
   for (const step of DEFERRED_M0_STEPS) {

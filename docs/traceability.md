@@ -110,7 +110,7 @@
 | FR-1003 | Part 12 | partial | `packages/core/src/jobs/queue.test.ts` | Persistent queue, cancellation, retry, progress, and concurrency library complete; main-process/IPC bridging and the UI job panel remain. |
 | FR-1004 | Part 12 | todo | | |
 | FR-1005 | Part 12 | todo | | |
-| FR-1100 | Part 3 | todo | | |
+| FR-1100 | Part 3 | partial | `packages/media/src/binaries.test.ts`; `packages/media/src/probe.test.ts` | FFmpeg/ffprobe resolution, execution, and probe-to-Asset format metadata plumbing are covered; ingest, proxies, tier classification, and the full format matrix remain. |
 | FR-1101 | Part 4 | todo | | |
 | FR-1102 | Part 12 | todo | | |
 | FR-1103 | Part 3 | todo | | |
@@ -131,15 +131,15 @@
 | NFR-107 | Part 13 | todo | | |
 | NFR-108 | Part 13 | todo | | |
 | NFR-109 | Part 13 | todo | | |
-| AC-001 | Part 14 | todo | | |
+| AC-001 | Part 14 | todo | | Required bars, greenscreen, screencast, still, and speech-like media fixtures are generated; the project template and AC suite remain. |
 | AC-002 | Part 14 | todo | | |
-| AC-003 | Part 14 | todo | | |
+| AC-003 | Part 14 | todo | | Exact 2,800-word/20-minute transcript and speech-like audio fixtures are generated; caption compilation, exports, and golden/drift assertions remain. |
 | AC-004 | Part 14 | todo | | |
-| AC-005 | Part 14 | todo | | |
-| AC-006 | Part 14 | todo | | |
+| AC-005 | Part 14 | todo | | Greenscreen, bars, and still fixtures with machine-readable keying/path ground truth are generated; composite implementation and goldens remain. |
+| AC-006 | Part 14 | todo | | Greenscreen, screencast, and exact transcript fixtures are generated; PiP implementation, project template, and AC suite remain. |
 | AC-007 | Part 14 | todo | | |
 | AC-008 | Part 14 | todo | | |
-| AC-009 | Part 14 | todo | | |
+| AC-009 | Part 14 | todo | | Deterministic generated media/sidecar infrastructure and content hashes are available; revision rebuild and render determinism harnesses remain. |
 | AC-010 | Part 14 | todo | | |
 | AC-011 | Part 14 | todo | | |
 | AC-012 | Part 14 | todo | | |
