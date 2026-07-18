@@ -1,6 +1,8 @@
 export { OperationEngine } from "./engine.js";
 export type {
+  DispatchedOperationApplication,
   IdFactory,
+  OperationDispatcher,
   OperationCommitter,
   OperationEngineOptions,
 } from "./engine.js";

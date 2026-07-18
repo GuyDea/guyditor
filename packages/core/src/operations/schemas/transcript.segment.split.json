@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["segmentId", "beforeWordId"],
+  "properties": {
+    "segmentId": { "type": "string", "pattern": "^seg_[a-z2-7]{10}$" },
+    "beforeWordId": { "type": "string", "pattern": "^w[0-9]{6}$" }
+  }
+}

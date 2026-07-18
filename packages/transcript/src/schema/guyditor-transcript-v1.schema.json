@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://guyditor.dev/schema/sidecars/guyditor-transcript-v1.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "assetId", "audio", "language", "languageProbability", "provenance", "speakers", "segments", "words"],
+  "properties": {
+    "schema": { "const": "guyditor.transcript/v1" },
+    "assetId": { "type": "string", "pattern": "^ast_[a-z2-7]{10}$" },
+    "audio": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rate", "channels", "streamIndex"],
+      "properties": {
+        "rate": { "type": "integer", "minimum": 1 },
+        "channels": { "type": "integer", "minimum": 1 },
+        "streamIndex": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "language": { "type": "string" },
+    "languageProbability": { "type": "number", "minimum": 0, "maximum": 1 },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["engine", "alignment", "createdAt", "jobId"],
+      "properties": {
+        "engine": { "$ref": "#/$defs/engine" },
+        "alignment": { "oneOf": [{ "$ref": "#/$defs/engine" }, { "type": "null" }] },
+        "createdAt": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]+)?Z$" },
+        "jobId": { "type": "string", "pattern": "^job_[a-z2-7]{10}$" }
+      }
+    },
+    "speakers": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/speaker" }
+    },
+    "segments": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/segment" }
+    },
+    "words": {
+      "type": "object",
+      "propertyNames": { "pattern": "^w[0-9]{6}$" },
+      "additionalProperties": { "$ref": "#/$defs/word" }
+    }
+  },
+  "$defs": {
+    "sampleTime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["samples", "rate"],
+      "properties": {
+        "samples": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "rate": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 }
+      }
+    },
+    "engine": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "model"],
+      "properties": {
+        "name": { "type": "string" },
+        "version": { "type": "string" },
+        "model": { "type": "string" }
+      }
+    },
+    "speaker": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^spk_[a-z2-7]{10}$" },
+        "label": { "type": "string" }
+      }
+    },
+    "segment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "speaker", "language", "start", "end", "words"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^seg_[a-z2-7]{10}$" },
+        "speaker": { "type": "string", "pattern": "^spk_[a-z2-7]{10}$" },
+        "language": { "type": ["string", "null"] },
+        "start": { "$ref": "#/$defs/sampleTime" },
+        "end": { "$ref": "#/$defs/sampleTime" },
+        "words": { "type": "array", "items": { "type": "string", "pattern": "^w[0-9]{6}$" } }
+      }
+    },
+    "word": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["text", "punctBefore", "punctAfter", "start", "end", "confidence", "alignment", "state", "origin"],
+      "properties": {
+        "text": { "type": "string" },
+        "punctBefore": { "type": "string" },
+        "punctAfter": { "type": "string" },
+        "start": { "$ref": "#/$defs/sampleTime" },
+        "end": { "$ref": "#/$defs/sampleTime" },
+        "confidence": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+        "alignment": { "enum": ["ctc", "asr", "interpolated", "manual", "imported"] },
+        "state": { "enum": ["active", "deleted"] },
+        "origin": { "enum": ["asr", "correction", "script", "pickup", "import"] },
+        "replacedBy": { "type": "array", "items": { "type": "string", "pattern": "^w[0-9]{6}$" } }
+      }
+    }
+  }
+}

@@ -7,6 +7,7 @@ import type {
   OperationBatchResult,
   OperationContext,
   OperationInput,
+  OperationEngineOptions,
   Result,
   TransactionRecord,
 } from "../index.js";
@@ -51,6 +52,71 @@ function moduloGeneratedClipIds(project: GuyditorProject): GuyditorProject {
 }
 
 describe("OperationEngine", () => {
+  it("validates and dispatches catalogued transcript operations at their declared risk", async () => {
+    const original = projectFixture();
+    let dispatched = "";
+    const TranscriptAwareEngine = OperationEngine as unknown as new(
+      project: GuyditorProject,
+      options: OperationEngineOptions & {
+        operationDispatcher: (
+          project: GuyditorProject,
+          input: OperationInput,
+        ) => Result<{
+          model: GuyditorProject;
+          inverse: OperationInput[];
+          affected: string[];
+          summary: string;
+        }>;
+      },
+    ) => OperationEngine;
+    const engine = new TranscriptAwareEngine(original, {
+      idFactory,
+      operationDispatcher(project, input) {
+        dispatched = input.op;
+        return {
+          ok: true,
+          value: {
+            model: {
+              ...project,
+              transcript: { nextWordOrdinal: 3 },
+            },
+            inverse: [{
+              op: "transcript.create.remove",
+              params: { assetId: "ast_aaaaaaaaaa" },
+            }],
+            affected: ["ast_aaaaaaaaaa"],
+            summary: "Register canonical transcript for ast_aaaaaaaaaa",
+          },
+        };
+      },
+    });
+
+    const result = await valueOf(engine.execute([{
+      op: "transcript.create",
+      params: {
+        assetId: "ast_aaaaaaaaaa",
+        sidecar: {
+          path: "sidecars/transcripts/ast_aaaaaaaaaa.transcript.json",
+          sha256: "a".repeat(64),
+        },
+        engine: { name: "faster-whisper", version: "1.1.0", model: "large-v3" },
+        alignment: null,
+        jobId: "job_aaaaaaaaaa",
+      },
+    }], context()));
+
+    expect(dispatched).toBe("transcript.create");
+    expect(result.riskClass).toBe("low");
+    expect(result.applied[0]).toMatchObject({
+      summary: "Register canonical transcript for ast_aaaaaaaaaa",
+      inverse: [{
+        op: "transcript.create.remove",
+        params: { assetId: "ast_aaaaaaaaaa" },
+      }],
+      captionImpact: "shift",
+    });
+  });
+
   it("trims immutably and its inverse restores the model", async () => {
     const original = projectFixture();
     const originalSequence = original.sequences[0]!;
