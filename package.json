@@ -1,0 +1,28 @@
+{
+  "name": "guyditor",
+  "private": true,
+  "packageManager": "pnpm@10.8.0",
+  "type": "module",
+  "scripts": {
+    "fixtures": "node scripts/make-fixtures.mjs",
+    "test": "pnpm -r typecheck && pnpm -r lint && vitest run",
+    "test:golden": "vitest run --project golden",
+    "test:contract": "vitest run --project contract && pytest workers/mlworker/tests",
+    "test:e2e": "node scripts/test-e2e.mjs",
+    "test:ac": "node scripts/test-ac.mjs",
+    "check:conventions": "node scripts/check-conventions.mjs",
+    "gate:m0": "node scripts/gate.mjs m0",
+    "gate:m1": "node scripts/gate.mjs m1",
+    "gate:m2": "node scripts/gate.mjs m2",
+    "gate:m3": "node scripts/gate.mjs m3",
+    "gate:m4": "node scripts/gate.mjs m4"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "eslint": "^10.7.0",
+    "fast-check": "^4.9.0",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.64.0",
+    "vitest": "^4.1.10"
+  }
+}

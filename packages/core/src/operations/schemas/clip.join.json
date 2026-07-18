@@ -1,0 +1,15 @@
+{
+  "$id": "guyditor:op/clip.join",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["clipIds"],
+  "additionalProperties": false,
+  "properties": {
+    "clipIds": {
+      "type": "array",
+      "minItems": 2,
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^clp_[a-z2-7]{10}$" }
+    }
+  }
+}

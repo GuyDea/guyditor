@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.fixtures/
+.guyditor/
+*.tsbuildinfo
+*.log
+.guyditor-demo/

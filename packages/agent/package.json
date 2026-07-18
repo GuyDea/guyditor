@@ -1,0 +1,9 @@
+{
+  "name": "@guyditor/agent",
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src"
+  }
+}
