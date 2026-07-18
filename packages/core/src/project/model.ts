@@ -5,12 +5,17 @@ import type {
   TimeValue,
 } from "../time/index.js";
 
-export type SemanticAnchor = string;
+import type {
+  AnchorLastResolved,
+  SemanticAnchor,
+} from "../anchors/types.js";
 
-export interface AnchorRange {
-  start: SemanticAnchor;
-  end: SemanticAnchor;
-}
+export type { AnchorRange, SemanticAnchor } from "../anchors/types.js";
+
+export type AnchorMetadata = Partial<Record<
+  "/anchor" | "/at" | "/duration/until",
+  { lastResolved: AnchorLastResolved }
+>>;
 
 export interface GuyditorProject {
   format: "guyditor/v1";
@@ -107,6 +112,7 @@ export interface Beat {
   id: string;
   name: string;
   anchor: SemanticAnchor;
+  anchorMetadata?: AnchorMetadata;
   chapter?: { title: string };
 }
 
@@ -136,6 +142,7 @@ export interface Clip {
   };
   loop?: { enabled: boolean; crossfade?: FrameTime };
   anchor?: SemanticAnchor;
+  anchorMetadata?: AnchorMetadata;
   punchIn?: {
     level: number;
     anchor: { x: number; y: number } | "face-track";
@@ -191,6 +198,7 @@ export interface PlacedItem {
   template?: string;
   at: SemanticAnchor;
   duration: FrameTime | { until: SemanticAnchor } | "intrinsic";
+  anchorMetadata?: AnchorMetadata;
   source?: { in: FrameTime; out: FrameTime };
   effects?: Effect[];
   params?: Record<string, unknown>;

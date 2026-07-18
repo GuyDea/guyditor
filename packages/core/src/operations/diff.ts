@@ -41,6 +41,7 @@ export function buildSemanticDiff(
   result: GuyditorProject,
   applications: readonly ClipApplication[],
   applied: readonly AppliedOperation[],
+  orphanedAnchors: SemanticDiff["orphanedAnchors"] = [],
 ): SemanticDiff {
   const mutations = applications.flatMap((application) => application.mutations);
   const affectedClipIds = new Set(
@@ -80,6 +81,7 @@ export function buildSemanticDiff(
         ),
       })),
     ),
+    orphanedAnchors,
     stats: {
       durationDelta: durationDelta(base, result),
       clipsAdded: mutations.filter(({ change, entityType }) =>

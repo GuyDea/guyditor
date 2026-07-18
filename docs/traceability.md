@@ -23,7 +23,7 @@
 | FR-011 | Part 3 | todo | | |
 | FR-100 | Part 2 | partial | `packages/core/src/project/project.test.ts`; `packages/core/src/project/project.prop.test.ts` | Master model, closed JSON Schema, semantic validation, and canonical YAML complete; ProjectStore load/save remains. |
 | FR-101 | Part 2 | implemented | `packages/core/src/project/derive.test.ts`; `packages/core/src/project/derive.prop.test.ts`; `packages/core/src/operations/operations.prop.test.ts`; `packages/core/src/project/project.prop.test.ts` | Exact derived timeline positions and stable canonicalization complete; P-T5 and P-D1 cover prefix sums and entity-local stored diffs. |
-| FR-102 | Part 2 | partial | `packages/core/src/time/time.test.ts`; `packages/core/src/time/time.prop.test.ts`; `packages/core/src/project/project.test.ts` | Exact rational time model and anchor string/schema validation complete; anchor resolution remains. |
+| FR-102 | Part 2 | implemented | `packages/core/src/time/time.test.ts`; `packages/core/src/time/time.prop.test.ts`; `packages/core/src/anchors/parser.test.ts`; `packages/core/src/anchors/resolver.test.ts`; `packages/core/src/anchors/engine.test.ts`; `packages/transcript/src/anchor-lookup.test.ts`; `packages/transcript/src/word-identity.prop.test.ts` | The complete semantic-anchor grammar has structured parsing and exact resolution for timeline, clip, word, beat, and annotation callback forms. Word tombstones reuse the transcript fallback, duplicated footage is deterministic, offsets never clamp, ranges validate at resolution, and accepted transactions journal/persist resolved-to-orphaned transitions repairable through `anchor.rebind`. |
 | FR-103 | Part 2 | todo | | |
 | FR-104 | Part 5 | partial | `packages/core/src/store/store.test.ts`; `packages/core/src/operations/engine.test.ts` | Canonical transaction journal and crash-reconcilable commit algorithm complete; proposal linkage remains. |
 | FR-105 | Part 5 | todo | | |
@@ -34,13 +34,13 @@
 | FR-201 | Part 4 | implemented | `workers/mlworker/tests/test_worker_protocol.py`; `packages/media/src/mlworker/executors.test.ts`; `packages/media/src/mlworker/mlworker.contract.test.ts`; `packages/transcript/src/realign.test.ts` | The CPU-only worker advertises `torchaudio-wav2vec2-ctc-forced-align` with its installed torchaudio version and runs `wav2vec2-base-960h` CTC alignment with progress, cancellation, model-cache, interpolation, and dependency/disable gating. `transcript.realign` scopes by asset/word range, uses the queued `align` executor, and commits explicit native-sample timing/provenance updates without changing ordinals. Following §4.2, aligned CTC output is accepted at score ≥ 0.35; post-transcription auto-enqueue occurs when any ASR word confidence is strictly below 0.35, and never applies the result outside the operation. |
 | FR-202 | Part 4 | todo | | |
 | FR-203 | Part 4 | implemented | `packages/transcript/src/corrections.test.ts`; `packages/core/src/operations/engine.test.ts` | The core catalog validates and dispatches all direct §4.7 correction operations at low risk: correct, replace, insert, delete, retime, segment split/merge, and speaker assignment by segment or word range. Text/punctuation/speaker/segmentation edits preserve word timing; only explicit retime mutates it. Forced `transcript.realign` and reconciliation application remain with their explicitly out-of-scope subsystems. |
-| FR-204 | Part 4 | implemented | `packages/transcript/src/word-identity.prop.test.ts`; `packages/transcript/src/lookup.test.ts`; `packages/transcript/src/engine.test.ts` | P-W1 through P-W4 run with fast-check at 500 cases each: ordinals never renumber/reuse, allocation is monotonic from `nextWordOrdinal`, surviving words retain exact source intervals, and canonical one-record-per-line JSON remains source-time sorted with ≤ k+1 line churn. Lookup follows `replacedBy` chains and applies deterministic same-segment 2000 ms fallback. P-W5 is skipped here because it requires caption cue compilation (later caption task). |
+| FR-204 | Part 4 | implemented | `packages/transcript/src/word-identity.prop.test.ts`; `packages/transcript/src/lookup.test.ts`; `packages/transcript/src/anchor-lookup.test.ts`; `packages/transcript/src/engine.test.ts` | P-W1 through P-W4 run with fast-check at 500 cases each: ordinals never renumber/reuse, allocation is monotonic from `nextWordOrdinal`, surviving words and their semantic anchors retain exact source intervals through transcript edits plus clip split/join/trim sequences, and canonical one-record-per-line JSON remains source-time sorted with ≤ k+1 line churn. Lookup follows `replacedBy` chains and applies deterministic same-segment 2000 ms fallback. P-W5 is skipped here because it requires caption cue compilation (later caption task). |
 | FR-205 | Part 4 | todo | | |
 | FR-206 | Part 4 | todo | | |
 | FR-207 | Part 4 | todo | | |
 | FR-208 | Part 4 | todo | | |
 | FR-300 | Part 5 | todo | | |
-| FR-301 | Part 5 | partial | `packages/core/src/operations/engine.test.ts`; `packages/core/src/operations/operations.prop.test.ts` | `clip.trim`, `clip.split`, and `clip.join` implemented; remaining timeline operation catalog is pending. |
+| FR-301 | Part 5 | partial | `packages/core/src/operations/engine.test.ts`; `packages/core/src/operations/operations.prop.test.ts`; `packages/core/src/anchors/engine.test.ts` | `clip.trim`, `clip.split`, and `clip.join` are implemented, and `OperationEngine.resolveNavigation` now resolves frame, timecode, clip-edge, word, annotation, and beat targets to `{ sequenceId, frame: FrameTime }`; the remaining timeline operation catalog is pending. |
 | FR-302 | Part 5 | todo | | |
 | FR-303 | Part 5 | todo | | |
 | FR-304 | Part 5 | todo | | |
@@ -53,7 +53,7 @@
 | FR-311 | Part 5 | todo | | |
 | FR-400 | Part 8 | todo | | |
 | FR-401 | Part 8 | todo | | |
-| FR-402 | Part 8 | todo | | |
+| FR-402 | Part 8 | partial | `packages/core/src/anchors/parser.test.ts`; `packages/core/src/anchors/resolver.test.ts`; `packages/core/src/anchors/engine.test.ts`; `packages/transcript/src/anchor-lookup.test.ts` | Core semantic anchors, annotation-resolver injection, orphan warnings/bookkeeping, and `anchor.rebind` are implemented. With no Part 8 resolver registered, `ann:` deterministically reports `ann-orphaned`; annotation records and `AnnotationService` remain Part 8 work. |
 | FR-403 | Part 8 | todo | | |
 | FR-404 | Part 8 | todo | | |
 | FR-405 | Part 8 | todo | | |

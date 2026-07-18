@@ -17,6 +17,8 @@ import type {
   PlacedItem,
 } from "./model.js";
 import { isId } from "./ids.js";
+import { parseAnchor } from "../anchors/parser.js";
+import { storedAnchors } from "../anchors/owners.js";
 
 // TODO(part 3/4/5/6/7/9/11): replace the true schemas for fields owned by
 // later parts (automation, sync, chain, transform, pip, adjustment, ducking,
@@ -327,6 +329,14 @@ function validateAnnotationSidecar(project: GuyditorProject): Result<GuyditorPro
       ]);
 }
 
+function validateAnchorSyntax(project: GuyditorProject): Result<GuyditorProject> | undefined {
+  for (const reference of storedAnchors(project)) {
+    const parsed = parseAnchor(reference.anchor);
+    if (!parsed.ok) return failure(parsed.error);
+  }
+  return undefined;
+}
+
 export function validateProject(value: unknown): Result<GuyditorProject> {
   if (!validateShape(value)) return schemaFailure(validateShape.errors);
 
@@ -337,6 +347,7 @@ export function validateProject(value: unknown): Result<GuyditorProject> {
     validateBoundaries,
     validateGeneratedAssets,
     validateAnnotationSidecar,
+    validateAnchorSyntax,
   ] as const;
 
   for (const check of checks) {

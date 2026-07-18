@@ -8,6 +8,10 @@ export {
   TranscriptEngine,
 } from "./engine.js";
 export { findWord, resolveWord } from "./lookup.js";
+export {
+  createTranscriptWordLookup,
+  registerTranscriptWordLookup,
+} from "./anchor-lookup.js";
 export type {
   TranscriptEngineOptions,
   TranscriptAlignmentJobs,

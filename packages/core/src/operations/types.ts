@@ -1,4 +1,5 @@
 import type { FrameTime } from "../time/index.js";
+import type { OrphanedAnchorRecord } from "../anchors/bookkeeping.js";
 
 export type RiskClass = "low" | "normal" | "consequential";
 export type CaptionImpact = "none" | "shift" | "retime" | "realign";
@@ -70,6 +71,7 @@ export interface SemanticDiffEntry {
 export interface SemanticDiff {
   base: string;
   entries: SemanticDiffEntry[];
+  orphanedAnchors: Omit<OrphanedAnchorRecord, "lastResolved">[];
   stats: {
     durationDelta: FrameTime;
     clipsAdded: number;

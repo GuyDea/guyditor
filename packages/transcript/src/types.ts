@@ -127,4 +127,5 @@ export interface WordLocation {
 export interface WordResolution extends WordLocation {
   requestedWordId: string;
   approximate: boolean;
+  context: { wordsBefore: string[]; wordsAfter: string[] };
 }

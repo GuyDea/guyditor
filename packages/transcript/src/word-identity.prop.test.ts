@@ -4,10 +4,14 @@ import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 
 import {
+  AnchorResolverRegistry,
   OperationEngine,
   formatWordId,
+  resolveAnchor,
 } from "../../core/src/index.js";
 import type {
+  AnchorResolution,
+  AnchorResolverDependencies,
   GuyditorProject,
   OperationInput,
   SidecarRef,
@@ -16,6 +20,7 @@ import { projectFixture } from "../../core/src/project/test-fixtures.js";
 import {
   createTranscriptWorkspace,
 } from "./operations.js";
+import { createTranscriptWordLookup } from "./anchor-lookup.js";
 import { serializeTranscriptSidecar } from "./sidecar.js";
 import type {
   SampleTime,
@@ -27,7 +32,15 @@ const RUNS = 500;
 const SEED = 2_004_204;
 const BASE32 = "abcdefghijklmnopqrstuvwxyz234567";
 
-type ActionKind = "correct" | "split" | "merge" | "insert" | "delete";
+type ActionKind =
+  | "correct"
+  | "split"
+  | "merge"
+  | "insert"
+  | "delete"
+  | "clip-split"
+  | "clip-join"
+  | "clip-trim";
 
 interface Action {
   kind: ActionKind;
@@ -39,6 +52,8 @@ interface MemoryTranscript {
   engine: OperationEngine;
   project: GuyditorProject;
   sidecar: TranscriptSidecar;
+  sidecarVersions: TranscriptSidecar[];
+  anchorDependencies: AnchorResolverDependencies;
 }
 
 interface TimingSnapshot {
@@ -111,7 +126,26 @@ function memoryTranscript(): MemoryTranscript {
   const project = projectFixture();
   project.transcript.nextWordOrdinal = 6;
   project.sidecars.push(reference);
+  project.sequences[0]!.clips = [
+    {
+      id: "clp_aaaaaaaaaa",
+      asset: "ast_aaaaaaaaaa",
+      source: {
+        in: { frames: 0, fps: "24/1" },
+        out: { frames: 240, fps: "24/1" },
+      },
+    },
+    {
+      id: "clp_bbbbbbbbbb",
+      asset: "ast_aaaaaaaaaa",
+      source: {
+        in: { frames: 0, fps: "24/1" },
+        out: { frames: 240, fps: "24/1" },
+      },
+    },
+  ];
   let segmentOrdinal = 1;
+  let clipOrdinal = 0;
   const workspace = createTranscriptWorkspace(
     [sidecar],
     [reference],
@@ -120,12 +154,26 @@ function memoryTranscript(): MemoryTranscript {
       return `seg_${suffix(segmentOrdinal)}`;
     },
   );
+  const sidecarVersions = [structuredClone(sidecar), sidecar];
+  const registry = new AnchorResolverRegistry();
+  registry.registerWordLookup(createTranscriptWordLookup(sidecarVersions));
+  const anchorDependencies = registry.dependencies();
   return {
     project,
     sidecar,
+    sidecarVersions,
+    anchorDependencies,
     engine: new OperationEngine(project, {
-      idFactory: () => "txn_aaaaaaaaaa",
+      idFactory: (prefix) => {
+        if (prefix === "clp") {
+          clipOrdinal += 1;
+          return ["clp", suffix(100 + clipOrdinal)].join("_");
+        }
+        if (prefix === "fx") return `fx_${suffix(100 + clipOrdinal)}`;
+        return "txn_aaaaaaaaaa";
+      },
       operationDispatcher: workspace.dispatcher,
+      anchorResolvers: registry,
     }),
   };
 }
@@ -152,13 +200,65 @@ function insertablePositions(sidecar: TranscriptSidecar): Array<{
   });
 }
 
-function operationFor(sidecar: TranscriptSidecar, action: Action): OperationInput | undefined {
+function operationFor(
+  sidecar: TranscriptSidecar,
+  action: Action,
+  project?: GuyditorProject,
+): OperationInput | undefined {
+  if (action.kind === "clip-split") {
+    const clips = project?.sequences[0]?.clips.filter(({ source }) =>
+      source.out.frames - source.in.frames >= 2) ?? [];
+    const clip = clips[action.selector % clips.length];
+    if (clip === undefined) return undefined;
+    const length = clip.source.out.frames - clip.source.in.frames;
+    return {
+      op: "clip.split",
+      params: { clipId: clip.id, at: 1 + action.selector % (length - 1) },
+    };
+  }
+  if (action.kind === "clip-join") {
+    const clips = project?.sequences[0]?.clips ?? [];
+    const pairs = clips.flatMap((clip, index) => {
+      const next = clips[index + 1];
+      return next !== undefined &&
+        clip.asset === next.asset &&
+        clip.source.out.fps === next.source.in.fps &&
+        clip.source.out.frames === next.source.in.frames
+        ? [[clip.id, next.id] as const]
+        : [];
+    });
+    const pair = pairs[action.selector % pairs.length];
+    return pair === undefined
+      ? undefined
+      : { op: "clip.join", params: { clipIds: [...pair] } };
+  }
+  if (action.kind === "clip-trim") {
+    const clips = project?.sequences[0]?.clips.filter(({ source }) =>
+      source.out.frames - source.in.frames >= 2) ?? [];
+    const clip = clips[action.selector % clips.length];
+    return clip === undefined
+      ? undefined
+      : {
+          op: "clip.trim",
+          params: {
+            clipId: clip.id,
+            edge: action.selector % 2 === 0 ? "head" : "tail",
+            delta: { frames: 1, fps: clip.source.in.fps },
+            snapPolicy: "none",
+          },
+        };
+  }
   const active = activeWordIds(sidecar);
   if (action.kind === "correct") {
-    const wordId = active[action.selector % active.length]!;
     return active.length === 0
       ? undefined
-      : { op: "transcript.word.correct", params: { wordId, text: action.token } };
+      : {
+          op: "transcript.word.correct",
+          params: {
+            wordId: active[action.selector % active.length]!,
+            text: action.token,
+          },
+        };
   }
   if (action.kind === "delete") {
     return active.length === 0
@@ -231,7 +331,16 @@ function expectIdentityProperties(
 }
 
 const actionArbitrary: fc.Arbitrary<Action> = fc.record({
-  kind: fc.constantFrom<ActionKind>("correct", "split", "merge", "insert", "delete"),
+  kind: fc.constantFrom<ActionKind>(
+    "correct",
+    "split",
+    "merge",
+    "insert",
+    "delete",
+    "clip-split",
+    "clip-join",
+    "clip-trim",
+  ),
   selector: fc.nat(),
   token: fc.string({ unit: fc.constantFrom(..."abcdefghijklmnopqrstuvwxyz"), minLength: 1, maxLength: 8 }),
 });
@@ -246,10 +355,22 @@ describe("FR-204 word-identity properties", () => {
           async (actions) => {
             const memory = memoryTranscript();
             for (const action of actions) {
-              const operation = operationFor(memory.sidecar, action);
+              const operation = operationFor(
+                memory.sidecar,
+                action,
+                memory.engine.currentProject,
+              );
               if (operation === undefined) continue;
+              const anchoredWord = await firstResolvedActiveWord(memory);
               const before = snapshot(memory.sidecar);
               const nextBefore = memory.engine.currentProject.transcript.nextWordOrdinal;
+              if (operation.op.startsWith("transcript.")) {
+                memory.sidecarVersions.splice(
+                  memory.sidecarVersions.length - 1,
+                  0,
+                  structuredClone(memory.sidecar),
+                );
+              }
               const result = await memory.engine.execute([operation], {
                 baseRevision: memory.engine.currentProject.revision,
                 origin: "ui",
@@ -260,6 +381,23 @@ describe("FR-204 word-identity properties", () => {
               }
               const nextAfter = memory.engine.currentProject.transcript.nextWordOrdinal;
               expectIdentityProperties(memory.sidecar, before, nextBefore, nextAfter);
+              if (
+                anchoredWord !== undefined &&
+                memory.sidecar.words[anchoredWord.wordId]?.state === "active"
+              ) {
+                const afterStart = await anchorResolution(
+                  memory,
+                  `word:${anchoredWord.wordId}`,
+                );
+                const afterEnd = await anchorResolution(
+                  memory,
+                  `word:${anchoredWord.wordId}#end`,
+                );
+                if (afterStart.status === "resolved" && afterEnd.status === "resolved") {
+                  expect(afterStart.source).toEqual(anchoredWord.start.source);
+                  expect(afterEnd.source).toEqual(anchoredWord.end.source);
+                }
+              }
             }
           },
         ),
@@ -340,6 +478,36 @@ describe("FR-204 word-identity properties", () => {
     30_000,
   );
 });
+
+async function anchorResolution(
+  memory: MemoryTranscript,
+  anchor: string,
+): Promise<AnchorResolution> {
+  const result = await resolveAnchor(
+    memory.engine.currentProject,
+    anchor,
+    "seq_aaaaaaaaaa",
+    memory.anchorDependencies,
+  );
+  expect(result.ok).toBe(true);
+  if (!result.ok) throw new Error(result.error.message);
+  return result.value;
+}
+
+async function firstResolvedActiveWord(memory: MemoryTranscript): Promise<{
+  wordId: string;
+  start: AnchorResolution;
+  end: AnchorResolution;
+} | undefined> {
+  for (const wordId of activeWordIds(memory.sidecar)) {
+    const start = await anchorResolution(memory, `word:${wordId}`);
+    const end = await anchorResolution(memory, `word:${wordId}#end`);
+    if (start.status === "resolved" && end.status === "resolved") {
+      return { wordId, start, end };
+    }
+  }
+  return undefined;
+}
 
 function wordRecordIds(serialized: string): string[] {
   return serialized.split("\n").flatMap((line) => {

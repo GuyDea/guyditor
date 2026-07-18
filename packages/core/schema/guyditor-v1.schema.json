@@ -88,6 +88,38 @@
         "end": { "$ref": "#/$defs/anchor" }
       }
     },
+    "anchorMetadata": {
+      "type": "object",
+      "propertyNames": { "enum": ["/anchor", "/at", "/duration/until"] },
+      "additionalProperties": { "$ref": "#/$defs/anchorMetadataEntry" }
+    },
+    "anchorMetadataEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["lastResolved"],
+      "properties": {
+        "lastResolved": { "$ref": "#/$defs/anchorLastResolved" }
+      }
+    },
+    "anchorLastResolved": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["timeline", "revision"],
+      "properties": {
+        "timeline": { "$ref": "#/$defs/frameTime" },
+        "revision": { "type": "string", "pattern": "^rev_[0-9]{5}$" },
+        "context": { "$ref": "#/$defs/anchorWordContext" }
+      }
+    },
+    "anchorWordContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["wordsBefore", "wordsAfter"],
+      "properties": {
+        "wordsBefore": { "type": "array", "maxItems": 5, "items": { "type": "string" } },
+        "wordsAfter": { "type": "array", "maxItems": 5, "items": { "type": "string" } }
+      }
+    },
     "id": {
       "type": "string",
       "pattern": "^(ast|clp|seq|lyr|trn|cts|ann|dlv|pre|tpl|skl|beat|mrk|tak|fx|prj|job|adp|gfx|ses|msk|kfr|avr)_[a-z2-7]{10}$"
@@ -302,6 +334,7 @@
         "id": { "type": "string", "pattern": "^beat_[a-z2-7]{10}$" },
         "name": { "type": "string" },
         "anchor": { "$ref": "#/$defs/anchor" },
+        "anchorMetadata": { "$ref": "#/$defs/anchorMetadata" },
         "chapter": { "$ref": "#/$defs/chapter" }
       }
     },
@@ -346,6 +379,7 @@
         "audio": { "$ref": "#/$defs/clipAudio" },
         "loop": { "$ref": "#/$defs/clipLoop" },
         "anchor": { "$ref": "#/$defs/anchor" },
+        "anchorMetadata": { "$ref": "#/$defs/anchorMetadata" },
         "punchIn": { "$ref": "#/$defs/punchIn" }
       }
     },
@@ -478,6 +512,7 @@
             { "const": "intrinsic" }
           ]
         },
+        "anchorMetadata": { "$ref": "#/$defs/anchorMetadata" },
         "source": { "$ref": "#/$defs/frameRange" },
         "effects": { "type": "array", "items": { "$ref": "#/$defs/effect" } },
         "params": { "$ref": "#/$defs/unknownRecord" },

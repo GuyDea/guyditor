@@ -16,6 +16,19 @@ import transcriptSegmentSplitSchema from "./schemas/transcript.segment.split.jso
 import transcriptSegmentMergeSchema from "./schemas/transcript.segment.merge.json" with { type: "json" };
 import transcriptSpeakerAssignSchema from "./schemas/transcript.speaker.assign.json" with { type: "json" };
 import transcriptRealignSchema from "./schemas/transcript.realign.json" with { type: "json" };
+import anchorRebindSchema from "./schemas/anchor.rebind.json" with { type: "json" };
+import {
+  AnchorResolverRegistry,
+  computeAnchorTransitions,
+  resolveNavigationTarget,
+  validateProjectAnchors,
+} from "../anchors/index.js";
+import type {
+  AnchorValidationReport,
+  AnchorResolverDependencies,
+  NavigationTarget,
+  TimelinePosition,
+} from "../anchors/index.js";
 import {
   failure,
   makeGuyditorError,
@@ -36,6 +49,7 @@ import type { TransactionRecord } from "../store/types.js";
 import { applyClipOperation } from "./clip.js";
 import type { ClipApplication } from "./clip.js";
 import { applyAssetOperation } from "./asset.js";
+import { applyAnchorOperation } from "./anchor.js";
 import { buildSemanticDiff } from "./diff.js";
 import type {
   AppliedOperation,
@@ -73,6 +87,7 @@ export interface OperationEngineOptions {
   appVersion?: string;
   now?: () => Date;
   operationDispatcher?: OperationDispatcher;
+  anchorResolvers?: AnchorResolverRegistry | AnchorResolverDependencies;
 }
 
 const ajv = new Ajv2020({ allErrors: true, strict: true });
@@ -163,6 +178,12 @@ const catalog = new Map<string, CatalogEntry>([
     "realign",
     "Realign {wordRange}",
   )],
+  ["anchor.rebind", catalogEntry(
+    anchorRebindSchema,
+    "normal",
+    "none",
+    "Rebind anchor on {owner} to {anchor}",
+  )],
 ]);
 
 const RISK_RANK: Record<RiskClass, number> = {
@@ -211,6 +232,7 @@ export class OperationEngine {
   readonly #appVersion: string;
   readonly #now: () => Date;
   readonly #operationDispatcher: OperationDispatcher | undefined;
+  readonly #anchorDependencies: AnchorResolverDependencies;
   #project: GuyditorProject;
 
   public constructor(project: GuyditorProject, options: OperationEngineOptions = {}) {
@@ -220,6 +242,9 @@ export class OperationEngine {
     this.#appVersion = options.appVersion ?? "0.0.0";
     this.#now = options.now ?? (() => new Date());
     this.#operationDispatcher = options.operationDispatcher;
+    this.#anchorDependencies = options.anchorResolvers instanceof AnchorResolverRegistry
+      ? options.anchorResolvers.dependencies()
+      : options.anchorResolvers ?? {};
   }
 
   public get currentProject(): GuyditorProject {
@@ -276,6 +301,8 @@ export class OperationEngine {
       let application: Result<ClipApplication>;
       if (requested.op.startsWith("asset.")) {
         application = applyAssetOperation(working, normalized);
+      } else if (requested.op === "anchor.rebind") {
+        application = applyAnchorOperation(working, normalized);
       } else if (requested.op.startsWith("clip.")) {
         application = applyClipOperation(working, normalized, this.#idFactory);
       } else if (this.#operationDispatcher === undefined) {
@@ -305,9 +332,22 @@ export class OperationEngine {
       });
     }
 
+    const transitions = await computeAnchorTransitions(
+      base,
+      working,
+      this.#anchorDependencies,
+    );
+    if (!transitions.ok) return transitions;
+    working = transitions.value.project;
     const valid = validateProject(working);
     if (!valid.ok) return valid;
-    const diff = buildSemanticDiff(base, working, applications, applied);
+    const diffOrphans = transitions.value.orphanedAnchors.map((orphan) => ({
+      owner: orphan.owner,
+      anchor: orphan.anchor,
+      anchorPath: orphan.anchorPath,
+      reason: orphan.reason,
+    }));
+    const diff = buildSemanticDiff(base, working, applications, applied, diffOrphans);
     const result: OperationBatchResult = {
       base: base.revision,
       applied,
@@ -351,7 +391,10 @@ export class OperationEngine {
           ? {}
           : { proposal: context.proposalId }),
       },
-      orphanedAnchors: [],
+      orphanedAnchors: transitions.value.orphanedAnchors.map(({ owner, anchor }) => ({
+        owner,
+        anchor,
+      })),
       addresses: [],
     };
     const committed = this.#committer === undefined
@@ -360,5 +403,32 @@ export class OperationEngine {
     if (!committed.ok) return committed;
     this.#project = committed.value;
     return success({ ...result, transactionId });
+  }
+
+  public resolveNavigation(
+    project: GuyditorProject,
+    target: NavigationTarget,
+    scope?: string,
+  ): Promise<Result<TimelinePosition>> {
+    return resolveNavigationTarget(
+      project,
+      target,
+      this.#anchorDependencies,
+      scope,
+    );
+  }
+
+  public validateProject(
+    project: GuyditorProject = this.#project,
+    scope?: string,
+  ): Promise<Result<AnchorValidationReport>> {
+    const valid = validateProject(project);
+    return valid.ok
+      ? validateProjectAnchors(
+          project,
+          scope,
+          this.#anchorDependencies,
+        )
+      : Promise.resolve(valid);
   }
 }

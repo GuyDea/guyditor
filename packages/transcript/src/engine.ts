@@ -3,6 +3,7 @@ import { mkdir, open, readFile, rename, unlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import {
+  AnchorResolverRegistry,
   OperationEngine,
   failure,
   formatWordId,
@@ -31,6 +32,7 @@ import {
   findWord as findProjectWord,
   resolveWord as resolveProjectWord,
 } from "./lookup.js";
+import { createTranscriptWordLookup } from "./anchor-lookup.js";
 import { serializeTranscriptSidecar } from "./sidecar.js";
 import type {
   AlignResult,
@@ -654,6 +656,8 @@ export class TranscriptEngine {
           jobId: transcribeResult.jobId,
         },
       };
+      const anchorResolvers = new AnchorResolverRegistry();
+      anchorResolvers.registerWordLookup(createTranscriptWordLookup([sidecar]));
       const engine = new OperationEngine(project.currentProject, {
         appVersion: this.#appVersion,
         committer: new SidecarCommitter(project, new Map([[reference.path, content]])),
@@ -662,6 +666,7 @@ export class TranscriptEngine {
           : randomDomainId("txn"),
         now: this.#now,
         operationDispatcher: createDispatcher(operation, nextOrdinal, reference),
+        anchorResolvers,
       });
       const committed = await engine.execute([operation], {
         baseRevision: project.currentProject.revision,
@@ -823,6 +828,11 @@ export class TranscriptEngine {
       (prefix) => this.#idFactory(prefix),
     );
     if (!workspace.ok) return workspace;
+    const anchorResolvers = new AnchorResolverRegistry();
+    anchorResolvers.registerWordLookup(createTranscriptWordLookup([
+      ...workspace.value.sidecars.map((sidecar) => structuredClone(sidecar)),
+      ...workspace.value.sidecars,
+    ]));
     const engine = new OperationEngine(project.currentProject, {
       appVersion: this.#appVersion,
       committer: new SidecarCommitter(project, workspace.value.writes),
@@ -831,6 +841,7 @@ export class TranscriptEngine {
         : randomDomainId("txn"),
       now: this.#now,
       operationDispatcher: workspace.value.dispatcher,
+      anchorResolvers,
     });
     return engine.execute(operations, {
       ...context,

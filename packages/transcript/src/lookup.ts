@@ -21,6 +21,11 @@ interface IndexedTranscript {
   sidecars: Map<string, TranscriptSidecar>;
 }
 
+export interface LoadedTranscriptSidecar {
+  name: string;
+  sidecar: TranscriptSidecar;
+}
+
 function lookupFailure(
   code: `E_${Uppercase<string>}`,
   message: string,
@@ -33,9 +38,37 @@ function contentHash(content: string): string {
   return createHash("sha256").update(content).digest("hex");
 }
 
-async function indexTranscripts(project: ProjectStore): Promise<Result<IndexedTranscript>> {
+function indexLoadedTranscripts(
+  loaded: readonly LoadedTranscriptSidecar[],
+): Result<IndexedTranscript> {
   const locations = new Map<string, WordLocation>();
   const sidecars = new Map<string, TranscriptSidecar>();
+  for (const { name, sidecar } of loaded) {
+    sidecars.set(name, sidecar);
+    for (const segment of sidecar.segments) {
+      for (const wordId of segment.words) {
+        if (locations.has(wordId)) {
+          return lookupFailure(
+            "E_TRANSCRIPT_WORD_ID_CONFLICT",
+            `Project-global word ID ${wordId} occurs in more than one transcript.`,
+            [wordId],
+          );
+        }
+        locations.set(wordId, {
+          assetId: sidecar.assetId,
+          segmentId: segment.id,
+          sidecarName: name,
+          wordId,
+          word: sidecar.words[wordId]!,
+        });
+      }
+    }
+  }
+  return success({ locations, sidecars });
+}
+
+async function indexTranscripts(project: ProjectStore): Promise<Result<IndexedTranscript>> {
+  const loaded: LoadedTranscriptSidecar[] = [];
   try {
     for (const reference of project.currentProject.sidecars) {
       if (reference.schema !== "guyditor.transcript/v1") continue;
@@ -48,27 +81,9 @@ async function indexTranscripts(project: ProjectStore): Promise<Result<IndexedTr
         );
       }
       const sidecar = parseTranscriptSidecar(content);
-      sidecars.set(reference.name, sidecar);
-      for (const segment of sidecar.segments) {
-        for (const wordId of segment.words) {
-          if (locations.has(wordId)) {
-            return lookupFailure(
-              "E_TRANSCRIPT_WORD_ID_CONFLICT",
-              `Project-global word ID ${wordId} occurs in more than one transcript.`,
-              [wordId],
-            );
-          }
-          locations.set(wordId, {
-            assetId: sidecar.assetId,
-            segmentId: segment.id,
-            sidecarName: reference.name,
-            wordId,
-            word: sidecar.words[wordId]!,
-          });
-        }
-      }
+      loaded.push({ name: reference.name, sidecar });
     }
-    return success({ locations, sidecars });
+    return indexLoadedTranscripts(loaded);
   } catch (error: unknown) {
     return lookupFailure(
       "E_TRANSCRIPT_LOAD",
@@ -129,21 +144,66 @@ export async function resolveWord(
 ): Promise<Result<WordResolution | undefined>> {
   const indexed = await indexTranscripts(project);
   if (!indexed.ok) return indexed;
-  const requested = indexed.value.locations.get(wordId);
+  return resolveIndexedWord(indexed.value, wordId);
+}
+
+function contextFor(
+  indexed: IndexedTranscript,
+  location: WordLocation,
+): WordResolution["context"] {
+  const sidecar = indexed.sidecars.get(location.sidecarName);
+  const segment = sidecar?.segments.find(({ id }) => id === location.segmentId);
+  const index = segment?.words.indexOf(location.wordId) ?? -1;
+  if (segment === undefined || index < 0) return { wordsBefore: [], wordsAfter: [] };
+  const text = (candidateId: string): string | undefined => {
+    const candidate = indexed.locations.get(candidateId)?.word;
+    return candidate?.state === "active" ? candidate.text : undefined;
+  };
+  return {
+    wordsBefore: segment.words
+      .slice(0, index)
+      .flatMap((candidateId) => text(candidateId) ?? [])
+      .slice(-5),
+    wordsAfter: segment.words
+      .slice(index + 1)
+      .flatMap((candidateId) => text(candidateId) ?? [])
+      .slice(0, 5),
+  };
+}
+
+function activeResolution(
+  indexed: IndexedTranscript,
+  location: WordLocation,
+  requestedWordId: string,
+  approximate: boolean,
+): WordResolution {
+  return {
+    ...location,
+    requestedWordId,
+    approximate,
+    context: contextFor(indexed, location),
+  };
+}
+
+function resolveIndexedWord(
+  indexed: IndexedTranscript,
+  wordId: string,
+): Result<WordResolution | undefined> {
+  const requested = indexed.locations.get(wordId);
   if (requested === undefined) return success(undefined);
   if (requested.word.state === "active") {
-    return success({ ...requested, requestedWordId: wordId, approximate: false });
+    return success(activeResolution(indexed, requested, wordId, false));
   }
-  const descendant = firstActiveDescendant(wordId, indexed.value.locations, new Set());
+  const descendant = firstActiveDescendant(wordId, indexed.locations, new Set());
   if (descendant !== undefined) {
-    return success({ ...descendant, requestedWordId: wordId, approximate: false });
+    return success(activeResolution(indexed, descendant, wordId, false));
   }
 
-  const sidecar = indexed.value.sidecars.get(requested.sidecarName);
+  const sidecar = indexed.sidecars.get(requested.sidecarName);
   const segment = sidecar?.segments.find(({ id }) => id === requested.segmentId);
   const nearest = segment?.words
     .flatMap((candidateId) => {
-      const candidate = indexed.value.locations.get(candidateId);
+      const candidate = indexed.locations.get(candidateId);
       return candidate?.word.state === "active" && isWithinTwoSeconds(requested, candidate)
         ? [candidate]
         : [];
@@ -159,5 +219,13 @@ export async function resolveWord(
     })[0];
   return nearest === undefined
     ? success(undefined)
-    : success({ ...nearest, requestedWordId: wordId, approximate: true });
+    : success(activeResolution(indexed, nearest, wordId, true));
+}
+
+export function resolveWordFromSidecars(
+  sidecars: readonly LoadedTranscriptSidecar[],
+  wordId: string,
+): Result<WordResolution | undefined> {
+  const indexed = indexLoadedTranscripts(sidecars);
+  return indexed.ok ? resolveIndexedWord(indexed.value, wordId) : indexed;
 }
