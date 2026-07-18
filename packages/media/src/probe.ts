@@ -33,9 +33,27 @@ export interface ProbedAssetMedia {
   container?: string;
   ffprobeVersion: string;
   image?: { width: number; height: number; hasAlpha: boolean };
+  metadata: ProbeTechnicalMetadata;
   probe: AssetProbeShape;
   sources: ProbeFieldSources;
   video?: AssetVideoShape;
+}
+
+export interface ProbeStreamMetadata {
+  attachedPicture: boolean;
+  codecName?: string;
+  codecTag?: string;
+  codecType?: string;
+  frameCount?: number;
+  frameRate?: Rational;
+  index: number;
+  tags: Record<string, string>;
+}
+
+export interface ProbeTechnicalMetadata {
+  chapterCount: number;
+  formatTags: Record<string, string>;
+  streams: ProbeStreamMetadata[];
 }
 
 interface JsonRecord {
@@ -66,6 +84,19 @@ function integerField(record: JsonRecord, key: string): number | undefined {
         ? Number(value)
         : Number.NaN;
   return Number.isSafeInteger(parsed) ? parsed : undefined;
+}
+
+function stringRecord(value: unknown): Record<string, string> {
+  if (!isRecord(value)) return {};
+  return Object.fromEntries(
+    Object.entries(value).filter((entry): entry is [string, string] =>
+      typeof entry[1] === "string"),
+  );
+}
+
+function attachedPicture(stream: JsonRecord): boolean {
+  const disposition = isRecord(stream.disposition) ? stream.disposition : {};
+  return integerField(disposition, "attached_pic") === 1;
 }
 
 function greatestCommonDivisor(left: bigint, right: bigint): bigint {
@@ -283,13 +314,15 @@ export async function probeMedia(mediaPath: string): Promise<ProbedAssetMedia> {
     "json",
     "-show_format",
     "-show_streams",
+    "-show_chapters",
     mediaPath,
   ]);
   const root = parseProbeJson(run.stdout);
   const streams = streamsFrom(root);
   const format = formatFrom(root);
   const videoStreamIndex = streams.findIndex(
-    (stream) => stringField(stream, "codec_type") === "video",
+    (stream) =>
+      stringField(stream, "codec_type") === "video" && !attachedPicture(stream),
   );
   const videoStream = streams[videoStreamIndex];
   const audioStreams = streams
@@ -297,8 +330,33 @@ export async function probeMedia(mediaPath: string): Promise<ProbedAssetMedia> {
     .filter(({ stream }) => stringField(stream, "codec_type") === "audio");
   const probe: AssetProbeShape = {};
   const sources: ProbeFieldSources = {};
+  const formatTags = stringRecord(format.tags);
+  const metadata: ProbeTechnicalMetadata = {
+    chapterCount: Array.isArray(root.chapters) ? root.chapters.length : 0,
+    formatTags,
+    streams: streams.map((stream, index) => {
+      const streamIndex = integerField(stream, "index") ?? index;
+      const rate = streamRate(stream, index)?.fps;
+      const metadataStream: ProbeStreamMetadata = {
+        attachedPicture: attachedPicture(stream),
+        index: streamIndex,
+        tags: stringRecord(stream.tags),
+      };
+      const codecName = stringField(stream, "codec_name");
+      const codecTag = stringField(stream, "codec_tag_string");
+      const codecType = stringField(stream, "codec_type");
+      const frameCount = integerField(stream, "nb_frames");
+      if (codecName !== undefined) metadataStream.codecName = codecName;
+      if (codecTag !== undefined) metadataStream.codecTag = codecTag;
+      if (codecType !== undefined) metadataStream.codecType = codecType;
+      if (frameCount !== undefined) metadataStream.frameCount = frameCount;
+      if (rate !== undefined) metadataStream.frameRate = rate;
+      return metadataStream;
+    }),
+  };
   const result: ProbedAssetMedia = {
     ffprobeVersion: run.binary.version,
+    metadata,
     probe,
     sources,
   };
@@ -444,13 +502,12 @@ export async function probeMedia(mediaPath: string): Promise<ProbedAssetMedia> {
     }
   }
 
-  const formatTags = isRecord(format.tags) ? format.tags : {};
   const capturedAt =
-    stringField(formatTags, "creation_time") ??
-    stringField(formatTags, "com.apple.quicktime.creationdate");
+    formatTags["creation_time"] ??
+    formatTags["com.apple.quicktime.creationdate"];
   if (capturedAt !== undefined) {
     probe.capturedAt = capturedAt;
-    sources.capturedAt = stringField(formatTags, "creation_time")
+    sources.capturedAt = formatTags["creation_time"] !== undefined
       ? "format.tags.creation_time"
       : "format.tags.com.apple.quicktime.creationdate";
   }

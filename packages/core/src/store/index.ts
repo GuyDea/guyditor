@@ -6,6 +6,10 @@ export {
 } from "./store.js";
 export type { ProjectStoreOptions } from "./store.js";
 export type {
+  CreateProjectRequest,
+  WatchFolderConfig,
+} from "./store.js";
+export type {
   RevisionLock,
   SemanticOperation,
   TransactionRecord,

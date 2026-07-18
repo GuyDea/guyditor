@@ -23,7 +23,7 @@ import type {
 
 export interface EntityMutation {
   entityId: string;
-  entityType: "clip" | "effect";
+  entityType: "asset" | "clip" | "effect";
   change: "added" | "removed" | "modified";
   fields: SemanticFieldDelta[];
 }

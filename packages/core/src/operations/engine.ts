@@ -4,6 +4,8 @@ import type { ErrorObject, ValidateFunction } from "ajv";
 import trimSchema from "./schemas/clip.trim.json" with { type: "json" };
 import splitSchema from "./schemas/clip.split.json" with { type: "json" };
 import joinSchema from "./schemas/clip.join.json" with { type: "json" };
+import assetIngestSchema from "./schemas/asset.ingest.json" with { type: "json" };
+import assetRemoveSchema from "./schemas/asset.remove.json" with { type: "json" };
 import {
   failure,
   makeGuyditorError,
@@ -23,6 +25,7 @@ import type {
 import type { TransactionRecord } from "../store/types.js";
 import { applyClipOperation } from "./clip.js";
 import type { ClipApplication } from "./clip.js";
+import { applyAssetOperation } from "./asset.js";
 import { buildSemanticDiff } from "./diff.js";
 import type {
   AppliedOperation,
@@ -49,6 +52,8 @@ export interface OperationEngineOptions {
 
 const ajv = new Ajv2020({ allErrors: true, strict: true });
 const schemas = new Map<string, ValidateFunction<Record<string, unknown>>>([
+  ["asset.ingest", ajv.compile<Record<string, unknown>>(assetIngestSchema)],
+  ["asset.remove", ajv.compile<Record<string, unknown>>(assetRemoveSchema)],
   ["clip.trim", ajv.compile<Record<string, unknown>>(trimSchema)],
   ["clip.split", ajv.compile<Record<string, unknown>>(splitSchema)],
   ["clip.join", ajv.compile<Record<string, unknown>>(joinSchema)],
@@ -145,11 +150,10 @@ export class OperationEngine {
         );
       }
 
-      const application = applyClipOperation(
-        working,
-        { op: requested.op, params },
-        this.#idFactory,
-      );
+      const normalized = { op: requested.op, params };
+      const application = requested.op.startsWith("asset.")
+        ? applyAssetOperation(working, normalized)
+        : applyClipOperation(working, normalized, this.#idFactory);
       if (!application.ok) return application;
       working = application.value.model;
       applications.push(application.value);

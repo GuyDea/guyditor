@@ -43,7 +43,11 @@ export function buildSemanticDiff(
   applied: readonly AppliedOperation[],
 ): SemanticDiff {
   const mutations = applications.flatMap((application) => application.mutations);
-  const affectedClipIds = new Set(mutations.map(({ entityId }) => entityId));
+  const affectedClipIds = new Set(
+    mutations
+      .filter(({ entityType }) => entityType === "clip")
+      .map(({ entityId }) => entityId),
+  );
   const affectedSequenceIds = new Set<string>();
   for (const project of [base, result]) {
     for (const sequence of project.sequences) {

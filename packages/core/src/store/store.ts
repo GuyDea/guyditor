@@ -4,10 +4,14 @@ import {
   mkdir,
   open,
   readFile,
+  realpath,
+  readdir,
   rename,
   unlink,
 } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
+
+import { parse as parseYaml } from "yaml";
 
 import {
   failure,
@@ -17,11 +21,17 @@ import {
 import type { Result } from "../errors.js";
 import {
   canonicalizeYaml,
+  makeId,
   parseProjectYaml,
   parseRevision,
   validateProject,
 } from "../project/index.js";
-import type { GuyditorProject } from "../project/index.js";
+import type {
+  GuyditorProject,
+  IdPrefix,
+  SkillPin,
+} from "../project/index.js";
+import type { Rational } from "../time/index.js";
 import type { RevisionLock, TransactionRecord } from "./types.js";
 
 const MASTER_FILE = "episode.guyditor.yaml";
@@ -32,15 +42,40 @@ const SKELETON_DIRECTORIES = [
   "history/revisions",
   "history/proposals",
   "media/generated",
+  "media/pickups",
   "presets",
   "skills",
   ".guyditor/cache",
 ] as const;
+const DEFAULT_PRIMARY_OUTPUT_FORMAT = "youtube-longform@1.0.0";
+const EMPTY_ANNOTATIONS = "format: guyditor.annotations/v1\nannotations: []\n";
 
 let temporaryOrdinal = 0;
 
 export interface ProjectStoreOptions {
   appVersion?: string;
+  idFactory?: (prefix: IdPrefix) => string;
+  now?: () => Date;
+  profilesDirectory?: string;
+}
+
+export interface WatchFolderConfig {
+  path: string;
+  convention: "guyditor" | "flat";
+  ignore?: string[];
+  autoIngest: boolean;
+  autoJobs: {
+    proxy: boolean;
+    analysis: boolean;
+    transcription: boolean;
+  };
+}
+
+export interface CreateProjectRequest {
+  name: string;
+  primaryOutputFormat?: string;
+  skills?: SkillPin[];
+  watchFolders?: WatchFolderConfig[];
 }
 
 function storeFailure(code: `E_${Uppercase<string>}`, message: string) {
@@ -54,6 +89,247 @@ function errorMessage(error: unknown): string {
 function isMissing(error: unknown): boolean {
   return typeof error === "object" && error !== null &&
     "code" in error && error.code === "ENOENT";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function positiveInteger(value: unknown): number | undefined {
+  return Number.isSafeInteger(value) && Number(value) > 0
+    ? Number(value)
+    : undefined;
+}
+
+function rationalValue(value: unknown): Rational | undefined {
+  return typeof value === "string" && /^\d+\/[1-9]\d*$/u.test(value)
+    ? value
+    : undefined;
+}
+
+interface CreationProfileSettings {
+  audio: { channels: number; sampleRate: number };
+  fps: Rational;
+  height: number;
+  id: string;
+  kind: "longform" | "short";
+  version: string;
+  width: number;
+}
+
+function versionedProfileId(profile: string): { id: string; version: string } | undefined {
+  const match = /^([a-z0-9]+(?:-[a-z0-9]+)*)@(\d+\.\d+\.\d+)$/u.exec(profile);
+  return match === null ? undefined : { id: match[1]!, version: match[2]! };
+}
+
+function legacyProfileDefaults(
+  id: string,
+  version: string,
+): Omit<CreationProfileSettings, "id" | "version"> | undefined {
+  return id === "youtube-longform" && version === "1.0.0"
+    ? {
+        audio: { channels: 2, sampleRate: 48_000 },
+        fps: "30000/1001",
+        height: 2160,
+        kind: "longform",
+        width: 3840,
+      }
+    : undefined;
+}
+
+async function loadCreationProfile(
+  profileId: string,
+  options: ProjectStoreOptions,
+): Promise<Result<CreationProfileSettings>> {
+  const pin = versionedProfileId(profileId);
+  if (pin === undefined) {
+    return storeFailure(
+      "E_PROJECT_PROFILE_INVALID",
+      `Primary output format ${profileId} must be a versioned profile ID.`,
+    );
+  }
+  const profilesDirectory = options.profilesDirectory ?? resolve("profiles");
+  let parsed: unknown;
+  try {
+    parsed = parseYaml(await readFile(
+      join(profilesDirectory, pin.id, `${pin.version}.yaml`),
+      "utf8",
+    )) as unknown;
+  } catch (error: unknown) {
+    return storeFailure(
+      "E_PROJECT_PROFILE_INVALID",
+      `Could not load profile ${profileId}: ${errorMessage(error)}`,
+    );
+  }
+  if (!isRecord(parsed) || parsed["id"] !== pin.id || parsed["version"] !== pin.version) {
+    return storeFailure(
+      "E_PROJECT_PROFILE_INVALID",
+      `Profile ${profileId} does not match its file identity.`,
+    );
+  }
+
+  const video = isRecord(parsed["video"]) ? parsed["video"] : {};
+  const resolution = isRecord(video["resolution"]) ? video["resolution"] : {};
+  const fps = isRecord(video["fps"]) ? video["fps"] : {};
+  const audio = isRecord(parsed["audio"]) ? parsed["audio"] : {};
+  const fallback = legacyProfileDefaults(pin.id, pin.version);
+  const width = positiveInteger(resolution["width"]) ?? fallback?.width;
+  const height = positiveInteger(resolution["height"]) ?? fallback?.height;
+  const defaultFps = rationalValue(fps["default"]) ?? fallback?.fps;
+  const sampleRate = positiveInteger(audio["sampleRate"]) ?? fallback?.audio.sampleRate;
+  const channels = positiveInteger(audio["channels"]) ?? fallback?.audio.channels;
+  const kindValue = typeof parsed["kind"] === "string" ? parsed["kind"] : fallback?.kind;
+  if (
+    width === undefined || height === undefined || defaultFps === undefined ||
+    sampleRate === undefined || channels === undefined ||
+    (kindValue !== "longform" && kindValue !== "short")
+  ) {
+    return storeFailure(
+      "E_PROJECT_PROFILE_INVALID",
+      `Profile ${profileId} is missing creation defaults for video resolution, fps, or audio.`,
+    );
+  }
+  return success({
+    audio: { channels, sampleRate },
+    fps: defaultFps,
+    height,
+    id: pin.id,
+    kind: kindValue,
+    version: pin.version,
+    width,
+  });
+}
+
+function isInsideCache(path: string): boolean {
+  return /(?:^|[\\/])\.guyditor[\\/]cache(?:[\\/]|$)/u.test(path);
+}
+
+async function canonicalTargetPath(root: string): Promise<string> {
+  let cursor = resolve(root);
+  const missingSegments: string[] = [];
+  while (true) {
+    try {
+      return resolve(await realpath(cursor), ...missingSegments);
+    } catch (error: unknown) {
+      if (!isMissing(error)) throw error;
+    }
+    const parent = dirname(cursor);
+    if (parent === cursor) return resolve(root);
+    missingSegments.unshift(basename(cursor));
+    cursor = parent;
+  }
+}
+
+async function validateCreationLocation(
+  root: string,
+  allowPreassembledLegacyModel: boolean,
+): Promise<Result<string>> {
+  const target = await canonicalTargetPath(root);
+  if (isInsideCache(target)) {
+    return storeFailure(
+      "E_PROJECT_LOCATION_INVALID",
+      `Project location ${target} is inside .guyditor/cache.`,
+    );
+  }
+
+  let cursor = target;
+  while (true) {
+    try {
+      await access(join(cursor, MASTER_FILE));
+      return cursor === target
+        ? storeFailure("E_PROJECT_EXISTS", `A Guyditor project already exists at ${target}.`)
+        : storeFailure(
+            "E_PROJECT_LOCATION_INVALID",
+            `Project location ${target} is inside the project at ${cursor}.`,
+          );
+    } catch (error: unknown) {
+      if (!isMissing(error)) throw error;
+    }
+    const parent = dirname(cursor);
+    if (parent === cursor) break;
+    cursor = parent;
+  }
+
+  if (allowPreassembledLegacyModel) return success(target);
+  try {
+    if ((await readdir(target)).length > 0) {
+      return storeFailure(
+        "E_PROJECT_LOCATION_INVALID",
+        `Project location ${target} must be empty or not yet exist.`,
+      );
+    }
+  } catch (error: unknown) {
+    if (!isMissing(error)) throw error;
+  }
+  return success(target);
+}
+
+function isInitialModel(
+  value: GuyditorProject | CreateProjectRequest,
+): value is GuyditorProject {
+  return "format" in value && value.format === "guyditor/v1";
+}
+
+function buildInitialModel(
+  request: CreateProjectRequest,
+  profile: CreationProfileSettings,
+  options: ProjectStoreOptions,
+): GuyditorProject {
+  const makeProjectId = options.idFactory ?? makeId;
+  const created = (options.now ?? (() => new Date()))().toISOString();
+  const projectId = makeProjectId("prj");
+  const deliverableId = makeProjectId("dlv");
+  const sequenceId = makeProjectId("seq");
+  const layerId = makeProjectId("lyr");
+  const annotationHash = createHash("sha256").update(EMPTY_ANNOTATIONS).digest("hex");
+  return {
+    format: "guyditor/v1",
+    revision: "rev_00001",
+    project: { id: projectId, name: request.name, created },
+    settings: {
+      timeline: { fps: profile.fps, width: profile.width, height: profile.height },
+      audio: profile.audio,
+      primaryDeliverable: deliverableId,
+    },
+    transcript: { nextWordOrdinal: 1 },
+    assets: [],
+    beats: [],
+    sequences: [{ id: sequenceId, name: "main", clips: [] }],
+    layers: [{
+      id: layerId,
+      kind: "video",
+      name: "main",
+      order: 0,
+      enabled: true,
+      locked: false,
+      sequence: sequenceId,
+    }],
+    captions: [],
+    annotations: {
+      sidecar: "annotations",
+      summary: { open: 0, resolved: 0, rejected: 0, reopened: 0 },
+    },
+    deliverables: [{
+      id: deliverableId,
+      kind: profile.kind,
+      name: "master",
+      profile: `${profile.id}@${profile.version}`,
+      sequenceId,
+      status: "draft",
+    }],
+    ...(request.watchFolders === undefined
+      ? {}
+      : { watchFolders: structuredClone(request.watchFolders) }),
+    presets: [],
+    skills: structuredClone(request.skills ?? []),
+    sidecars: [{
+      name: "annotations",
+      path: "sidecars/annotations.yaml",
+      schema: "guyditor.annotations/v1",
+      sha256: annotationHash,
+      inputs: [],
+    }],
+  };
 }
 
 function sortedJsonValue(value: unknown): unknown {
@@ -214,6 +490,7 @@ export class ProjectStore {
   readonly #appVersion: string;
   #project: GuyditorProject;
   #head: string;
+  #commitTail: Promise<void> = Promise.resolve();
 
   public constructor(
     root: string,
@@ -230,11 +507,40 @@ export class ProjectStore {
     return this.#project;
   }
 
+  public get root(): string {
+    return this.#root;
+  }
+
+  public static createProject(
+    root: string,
+    request: CreateProjectRequest,
+    options: ProjectStoreOptions = {},
+  ): Promise<Result<ProjectStore>> {
+    return createProject(root, request, options);
+  }
+
   public get head(): string {
     return this.#head;
   }
 
   public async commit(
+    model: GuyditorProject,
+    transaction: TransactionRecord,
+  ): Promise<Result<GuyditorProject>> {
+    const previous = this.#commitTail;
+    let release: (() => void) | undefined;
+    this.#commitTail = new Promise<void>((resolveCommit) => {
+      release = resolveCommit;
+    });
+    await previous;
+    try {
+      return await this.#commitUnlocked(model, transaction);
+    } finally {
+      release?.();
+    }
+  }
+
+  async #commitUnlocked(
     model: GuyditorProject,
     transaction: TransactionRecord,
   ): Promise<Result<GuyditorProject>> {
@@ -287,39 +593,94 @@ export class ProjectStore {
   }
 }
 
-export async function createProject(
+export function createProject(
   root: string,
   initialModel: GuyditorProject,
+  options?: ProjectStoreOptions,
+): Promise<Result<ProjectStore>>;
+export function createProject(
+  root: string,
+  request: CreateProjectRequest,
+  options?: ProjectStoreOptions,
+): Promise<Result<ProjectStore>>;
+export async function createProject(
+  root: string,
+  modelOrRequest: GuyditorProject | CreateProjectRequest,
   options: ProjectStoreOptions = {},
 ): Promise<Result<ProjectStore>> {
   try {
-    const masterPath = join(root, MASTER_FILE);
-    try {
-      await access(masterPath);
-      return storeFailure(
-        "E_PROJECT_EXISTS",
-        `A Guyditor project already exists at ${root}.`,
+    const legacyModel = isInitialModel(modelOrRequest);
+    const location = await validateCreationLocation(root, legacyModel);
+    if (!location.ok) return location;
+    const projectRoot = location.value;
+    const masterPath = join(projectRoot, MASTER_FILE);
+
+    let initialModel: GuyditorProject;
+    let writesInitialAnnotations = false;
+    if (legacyModel) {
+      initialModel = modelOrRequest;
+    } else {
+      const profile = await loadCreationProfile(
+        modelOrRequest.primaryOutputFormat ?? DEFAULT_PRIMARY_OUTPUT_FORMAT,
+        options,
       );
-    } catch (error: unknown) {
-      if (!isMissing(error)) throw error;
+      if (!profile.ok) return profile;
+      initialModel = buildInitialModel(modelOrRequest, profile.value, options);
+      writesInitialAnnotations = true;
     }
 
     const valid = validateProject(initialModel);
     if (!valid.ok) return valid;
-    await mkdir(root, { recursive: true });
+    await mkdir(projectRoot, { recursive: true });
     await Promise.all(
       SKELETON_DIRECTORIES.map((relative) =>
-        mkdir(join(root, relative), { recursive: true }),
+        mkdir(join(projectRoot, relative), { recursive: true }),
       ),
     );
     const canonicalMaster = canonicalizeYaml(initialModel);
     const appVersion = options.appVersion ?? "0.0.0";
     await atomicWrite(masterPath, canonicalMaster);
-    await atomicWrite(join(root, ".gitignore"), GITIGNORE);
-    await atomicWrite(join(root, "history/transactions.jsonl"), "");
-    await writeRevisionArtifacts(root, initialModel, canonicalMaster, appVersion);
-    await atomicWrite(join(root, "history/HEAD"), `${initialModel.revision}\n`);
-    return success(new ProjectStore(root, initialModel, options));
+    if (writesInitialAnnotations) {
+      await atomicWrite(join(projectRoot, "sidecars/annotations.yaml"), EMPTY_ANNOTATIONS);
+    }
+    await atomicWrite(join(projectRoot, ".gitignore"), GITIGNORE);
+
+    const actor = { kind: "tool" as const, id: "system" };
+    const createdAt = (options.now ?? (() => new Date()))().toISOString();
+    const creationTransaction: TransactionRecord = {
+      id: (options.idFactory ?? makeId)("txn"),
+      baseRevision: "rev_00000",
+      resultRevision: "rev_00001",
+      operations: [{
+        op: "project.create",
+        params: {
+          name: initialModel.project.name,
+          primaryOutputFormat: initialModel.deliverables.find(
+            ({ id }) => id === initialModel.settings.primaryDeliverable,
+          )?.profile ?? DEFAULT_PRIMARY_OUTPUT_FORMAT,
+        },
+        summary: `Create project ${initialModel.project.name}`,
+      }],
+      instruction: { kind: "ui-direct" },
+      actor,
+      versions: {
+        app: appVersion,
+        schema: "guyditor/v1",
+        skills: initialModel.skills.map(({ id, version }) => ({ id, version })),
+        presets: initialModel.presets.map(({ id, version }) => ({ id, version })),
+        tools: [],
+      },
+      acceptance: { status: "accepted", by: actor.id, at: createdAt },
+      orphanedAnchors: [],
+      addresses: [],
+    };
+    await atomicWrite(
+      join(projectRoot, "history/transactions.jsonl"),
+      `${canonicalJson(creationTransaction)}\n`,
+    );
+    await writeRevisionArtifacts(projectRoot, initialModel, canonicalMaster, appVersion);
+    await atomicWrite(join(projectRoot, "history/HEAD"), `${initialModel.revision}\n`);
+    return success(new ProjectStore(projectRoot, initialModel, options));
   } catch (error: unknown) {
     return storeFailure(
       "E_PROJECT_CREATE",

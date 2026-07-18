@@ -10,8 +10,8 @@
 | BR-006 | Part 0 | todo | | |
 | BR-007 | Part 9 | todo | | |
 | BR-008 | Part 14 | todo | | |
-| FR-001 | Part 3 | todo | | |
-| FR-002 | Part 3 | todo | | |
+| FR-001 | Part 3 | implemented | `packages/core/src/store/create-project.test.ts`; `packages/core/src/store/store.test.ts` | Request-based `ProjectStore.createProject` enforces empty/new, non-nested, non-cache locations; loads a versioned primary profile; records skill/watch-folder pins; scaffolds canonical/operational directories; and writes creation transaction 1 with `rev_00001` snapshot, lock, journal, and HEAD. |
+| FR-002 | Part 3 | implemented | `packages/media/src/ingest.test.ts`; `packages/media/src/probe.test.ts`; `packages/core/src/operations/asset.test.ts` | Batch `MediaEngine.ingest` runs through `JobQueue`, validates sources, hashes and probes concurrently, classifies and registers assets through one `asset.ingest` transaction, deduplicates known paths, protects in-use removals, and queues configurable follow-up records. |
 | FR-003 | Part 3 | todo | | |
 | FR-004 | Part 3 | todo | | |
 | FR-005 | Part 3 | todo | | |
@@ -110,15 +110,15 @@
 | FR-1003 | Part 12 | partial | `packages/core/src/jobs/queue.test.ts` | Persistent queue, cancellation, retry, progress, and concurrency library complete; main-process/IPC bridging and the UI job panel remain. |
 | FR-1004 | Part 12 | todo | | |
 | FR-1005 | Part 12 | partial | `packages/render/src/videozero.test.ts`; `scripts/video-zero.mjs` | Minimal adjacent export report records accepted revision, deliverable/variant, profile hash, toolchain, per-source and sidecar SHA-256, resolved encode settings, validation/warnings, and output SHA-256/bytes/stream duration. Deliverable-directory copies, loudness measurements, and cache accounting remain. |
-| FR-1100 | Part 3 | partial | `packages/media/src/binaries.test.ts`; `packages/media/src/probe.test.ts` | FFmpeg/ffprobe resolution, execution, and probe-to-Asset format metadata plumbing are covered; ingest, proxies, tier classification, and the full format matrix remain. |
+| FR-1100 | Part 3 | partial | `packages/media/src/binaries.test.ts`; `packages/media/src/probe.test.ts`; `packages/media/src/ingest.test.ts` | FFmpeg/ffprobe plumbing and the Tier-1/2/3 ingest table/classifier are implemented; Tier-3 registers as `other` with a best-effort warning. Proxy/transcode behavior and broad golden coverage remain. |
 | FR-1101 | Part 4 | todo | | |
 | FR-1102 | Part 12 | todo | | |
-| FR-1103 | Part 3 | todo | | |
+| FR-1103 | Part 3 | partial | `packages/media/src/ingest.test.ts`; `packages/core/src/store/create-project.test.ts` | Originals remain ordinary path-referenced files and ingest preserves source bytes/mtime; broader interchange/export guarantees land in later parts. |
 | NFR-001 | Part 9 | todo | | |
 | NFR-002 | Part 9 | todo | | |
 | NFR-003 | Part 9 | todo | | |
 | NFR-004 | Part 7 | todo | | |
-| NFR-005 | Part 3 | todo | | |
+| NFR-005 | Part 3 | partial | `packages/media/src/ingest.test.ts` | Ingest records a streaming 4 MiB-chunk SHA-256 and has a source write-guard regression test; ongoing quick/full verification and export-time integrity enforcement remain. |
 | NFR-006 | Part 9 | todo | | |
 | NFR-007 | Part 9 | todo | | |
 | NFR-100 | Part 1 | todo | | |

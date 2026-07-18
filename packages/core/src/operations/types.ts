@@ -62,7 +62,7 @@ export interface SemanticDiffEntry {
   after?: unknown;
   /** M0 entity-level extension used by trim/split/join. */
   entityId: string;
-  entityType: "clip" | "effect";
+  entityType: "asset" | "clip" | "effect";
   change: "added" | "removed" | "modified";
   fields: SemanticFieldDelta[];
 }
