@@ -1,5 +1,5 @@
 ---
-status: proposed        # proposed | accepted | rejected
+status: accepted        # proposed | accepted | rejected — accepted 2026-07-18 by the project owner (conversation)
 affects: ["BRD §13 (FR-600..606)", "BRD §10 (FR-311)", "BRD §19 (NFR-006)", "Part 7 §7.8–7.10", "Part 5 §5.3 (operation catalog)", "Part 11 (staleness)"]
 brd_ids: [FR-603, FR-604, FR-605, FR-311, NFR-006]
 author: Claude Fable 5 (coordinator), from creator requirements 2026-07-18
