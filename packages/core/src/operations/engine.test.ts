@@ -261,7 +261,12 @@ describe("OperationEngine", () => {
     expect(result.applied[0]!.inverse).toEqual([
       {
         op: "clip.split",
-        params: { clipId: "clp_aaaaaaaaaa", at: 24 },
+        params: {
+          clipId: "clp_aaaaaaaaaa",
+          at: 24,
+          newClipId: "clp_bbbbbbbbbb",
+          newEffectIds: ["fx_cccccccccc"],
+        },
       },
     ]);
     expect(result.applied[0]!.affected).toEqual([
@@ -284,7 +289,10 @@ describe("OperationEngine", () => {
     expect(restored.map(({ source }) => source)).toEqual(
       original.sequences[0]!.clips.map(({ source }) => source),
     );
-    expect(restored.map(({ id }) => id)).toEqual(["clp_aaaaaaaaaa", CLIP_ID]);
+    expect(restored.map(({ id }) => id)).toEqual([
+      "clp_aaaaaaaaaa",
+      "clp_bbbbbbbbbb",
+    ]);
     expect(moduloGeneratedClipIds(engine.currentProject)).toEqual(
       moduloGeneratedClipIds(original),
     );

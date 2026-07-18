@@ -50,12 +50,16 @@ import { applyClipOperation } from "./clip.js";
 import type { ClipApplication } from "./clip.js";
 import { applyAssetOperation } from "./asset.js";
 import { applyAnchorOperation } from "./anchor.js";
-import { buildSemanticDiff } from "./diff.js";
+import { assessBatchRisk, buildSemanticDiff } from "./diff.js";
 import type {
   AppliedOperation,
+  AutomationPolicy,
+  CreateProposalRequest,
   OperationBatchResult,
   OperationContext,
   OperationInput,
+  Proposal,
+  ProposalStore,
   RiskClass,
 } from "./types.js";
 
@@ -66,11 +70,15 @@ export interface OperationCommitter {
     model: GuyditorProject,
     transaction: TransactionRecord,
   ): Promise<Result<GuyditorProject>>;
+  readTransaction?(id: string): Promise<Result<TransactionRecord>>;
+  readAcceptedRevision?(): Promise<Result<string>>;
+  restore?(targetRevision: string): Promise<Result<GuyditorProject>>;
 }
 
 export interface DispatchedOperationApplication {
   model: GuyditorProject;
   inverse: OperationInput[];
+  redo?: OperationInput;
   affected: string[];
   summary: string;
 }
@@ -88,6 +96,9 @@ export interface OperationEngineOptions {
   now?: () => Date;
   operationDispatcher?: OperationDispatcher;
   anchorResolvers?: AnchorResolverRegistry | AnchorResolverDependencies;
+  proposalStore?: ProposalStore;
+  automationPolicy?: AutomationPolicy;
+  approvedTransitionPresets?: readonly string[];
 }
 
 const ajv = new Ajv2020({ allErrors: true, strict: true });
@@ -233,6 +244,22 @@ export class OperationEngine {
   readonly #now: () => Date;
   readonly #operationDispatcher: OperationDispatcher | undefined;
   readonly #anchorDependencies: AnchorResolverDependencies;
+  readonly #proposalStore: ProposalStore | undefined;
+  readonly #automationPolicy: AutomationPolicy | undefined;
+  readonly #approvedTransitionPresets: ReadonlySet<string>;
+  readonly #autoAcceptsBySession = new Map<string, number>();
+  readonly #undoStack: Array<{
+    transactionId: string;
+    inverse: OperationInput[];
+    redo: OperationInput[];
+    expectedHead: string;
+  }> = [];
+  readonly #redoStack: Array<{
+    originalTransactionId: string;
+    inverse: OperationInput[];
+    redo: OperationInput[];
+    expectedHead: string;
+  }> = [];
   #project: GuyditorProject;
 
   public constructor(project: GuyditorProject, options: OperationEngineOptions = {}) {
@@ -245,6 +272,9 @@ export class OperationEngine {
     this.#anchorDependencies = options.anchorResolvers instanceof AnchorResolverRegistry
       ? options.anchorResolvers.dependencies()
       : options.anchorResolvers ?? {};
+    this.#proposalStore = options.proposalStore;
+    this.#automationPolicy = options.automationPolicy;
+    this.#approvedTransitionPresets = new Set(options.approvedTransitionPresets ?? []);
   }
 
   public get currentProject(): GuyditorProject {
@@ -255,6 +285,15 @@ export class OperationEngine {
     batch: OperationInput[],
     context: OperationContext,
   ): Promise<Result<OperationBatchResult>> {
+    return this.#execute(batch, context, false);
+  }
+
+  async #execute(
+    batch: OperationInput[],
+    context: OperationContext,
+    allowProposalCommit: boolean,
+    captureDryRun?: (project: GuyditorProject) => void,
+  ): Promise<Result<OperationBatchResult>> {
     const base = this.#project;
     if (context.baseRevision !== base.revision) {
       return operationFailure(
@@ -262,10 +301,14 @@ export class OperationEngine {
         `Operation base ${context.baseRevision} does not match accepted revision ${base.revision}.`,
       );
     }
-    if (context.origin === "agent" && !context.dryRun && context.proposalId === undefined) {
+    if (
+      !context.dryRun && !allowProposalCommit &&
+      (context.origin === "agent" || context.actor?.kind === "agent" ||
+        context.proposalId !== undefined)
+    ) {
       return operationFailure(
         "E_OP_AGENT_DIRECT",
-        "Agent operations must be committed through a proposal or automation policy.",
+        "Agent and proposal-linked operations must be committed through proposal acceptance.",
       );
     }
 
@@ -322,7 +365,7 @@ export class OperationEngine {
       applications.push(application.value);
       applied.push({
         op: requested.op,
-        params,
+        params: application.value.redo?.params ?? params,
         summary: application.value.summary,
         inverse: application.value.inverse,
         captionImpact: definition.captionImpact,
@@ -351,15 +394,26 @@ export class OperationEngine {
     const result: OperationBatchResult = {
       base: base.revision,
       applied,
-      riskClass: maximumRisk(applied.map(({ op }) => catalog.get(op)!.riskClass)),
+      riskClass: assessBatchRisk(
+        base,
+        applied,
+        diff,
+        context.origin,
+        [...this.#approvedTransitionPresets],
+        maximumRisk(applied.map(({ op }) => catalog.get(op)!.riskClass)),
+        working,
+      ),
       diff,
     };
-    if (context.dryRun) return success(result);
+    if (context.dryRun) {
+      captureDryRun?.(working);
+      return success(result);
+    }
 
     const resultRevision = formatRevision(parseRevision(base.revision) + 1);
     const committedCandidate = { ...working, revision: resultRevision };
     const transactionId = this.#idFactory("txn");
-    const actor = actorFor(context);
+    const actor = context.actor ?? actorFor(context);
     const transaction: TransactionRecord = {
       id: transactionId,
       baseRevision: base.revision,
@@ -368,13 +422,15 @@ export class OperationEngine {
         op: operation.op,
         params: operation.params,
         summary: operation.summary,
-        // TODO(Part 5 §5.13): TransactionRecord's v1 envelope has one inverse
-        // slot; persist multi-step inverses when the undo-record format lands.
-        ...(operation.inverse.length === 1
-          ? { inverse: operation.inverse[0] }
-          : {}),
+        ...(operation.inverse.length === 0
+          ? {}
+          : {
+              inverse: operation.inverse.length === 1
+                ? operation.inverse[0]
+                : operation.inverse,
+            }),
       })),
-      instruction: instructionFor(context),
+      instruction: context.instruction ?? instructionFor(context),
       actor,
       versions: {
         app: this.#appVersion,
@@ -383,7 +439,7 @@ export class OperationEngine {
         presets: base.presets.map(({ id, version }) => ({ id, version })),
         tools: [],
       },
-      acceptance: {
+      acceptance: context.acceptance ?? {
         status: "accepted",
         by: actor.id,
         at: this.#now().toISOString(),
@@ -391,18 +447,481 @@ export class OperationEngine {
           ? {}
           : { proposal: context.proposalId }),
       },
+      ...(context.reason === undefined ? {} : { reason: context.reason }),
       orphanedAnchors: transitions.value.orphanedAnchors.map(({ owner, anchor }) => ({
         owner,
         anchor,
       })),
-      addresses: [],
+      addresses: [...(context.addresses ?? [])],
+      ...(context.undoOf === undefined ? {} : { undoOf: context.undoOf }),
+      ...(context.redoOf === undefined ? {} : { redoOf: context.redoOf }),
     };
     const committed = this.#committer === undefined
       ? success(committedCandidate)
       : await this.#committer.commit(committedCandidate, transaction);
     if (!committed.ok) return committed;
     this.#project = committed.value;
+    if (
+      context.origin === "ui" &&
+      context.recordUndo !== false &&
+      context.undoOf === undefined &&
+      context.redoOf === undefined
+    ) {
+      this.#undoStack.push({
+        transactionId,
+        inverse: applied.slice().reverse().flatMap(({ inverse }) => inverse),
+        redo: applied.map(({ op, params }) => ({ op, params })),
+        expectedHead: committed.value.revision,
+      });
+      this.#redoStack.splice(0);
+    }
     return success({ ...result, transactionId });
+  }
+
+  public async undo(): Promise<Result<OperationBatchResult>> {
+    const entry = this.#undoStack.at(-1);
+    if (entry === undefined) {
+      return operationFailure("E_OP_UNDO_EMPTY", "There is no direct UI transaction to undo.");
+    }
+    const acceptedRevision = this.#committer?.readAcceptedRevision === undefined
+      ? success(this.#project.revision)
+      : await this.#committer.readAcceptedRevision();
+    if (!acceptedRevision.ok) return acceptedRevision;
+    if (
+      entry.expectedHead !== this.#project.revision ||
+      entry.expectedHead !== acceptedRevision.value
+    ) {
+      this.#undoStack.pop();
+      return operationFailure(
+        "E_OP_UNDO_STALE",
+        `Transaction ${entry.transactionId} is no longer at HEAD; use revert instead.`,
+        [entry.transactionId],
+      );
+    }
+    const undone = await this.execute(entry.inverse, {
+      baseRevision: this.#project.revision,
+      origin: "ui",
+      dryRun: false,
+      undoOf: entry.transactionId,
+      recordUndo: false,
+    });
+    if (!undone.ok) return undone;
+    this.#undoStack.pop();
+    this.#redoStack.push({
+      originalTransactionId: entry.transactionId,
+      inverse: entry.inverse,
+      redo: entry.redo,
+      expectedHead: this.#project.revision,
+    });
+    return undone;
+  }
+
+  public async redo(): Promise<Result<OperationBatchResult>> {
+    const entry = this.#redoStack.at(-1);
+    if (entry === undefined) {
+      return operationFailure("E_OP_REDO_EMPTY", "There is no undone UI transaction to redo.");
+    }
+    const acceptedRevision = this.#committer?.readAcceptedRevision === undefined
+      ? success(this.#project.revision)
+      : await this.#committer.readAcceptedRevision();
+    if (!acceptedRevision.ok) return acceptedRevision;
+    if (
+      entry.expectedHead !== this.#project.revision ||
+      entry.expectedHead !== acceptedRevision.value
+    ) {
+      this.#redoStack.pop();
+      return operationFailure(
+        "E_OP_REDO_STALE",
+        `The redo for ${entry.originalTransactionId} is no longer based at HEAD.`,
+        [entry.originalTransactionId],
+      );
+    }
+    const redone = await this.execute(entry.redo, {
+      baseRevision: this.#project.revision,
+      origin: "ui",
+      dryRun: false,
+      redoOf: entry.originalTransactionId,
+      recordUndo: false,
+    });
+    if (!redone.ok) return redone;
+    this.#redoStack.pop();
+    if (redone.value.transactionId !== undefined) {
+      this.#undoStack.push({
+        transactionId: redone.value.transactionId,
+        inverse: entry.inverse,
+        redo: entry.redo,
+        expectedHead: this.#project.revision,
+      });
+    }
+    return redone;
+  }
+
+  public async revertTransaction(id: string): Promise<Result<OperationBatchResult>> {
+    const reader = this.#committer?.readTransaction;
+    if (reader === undefined) {
+      return operationFailure(
+        "E_OP_HISTORY_UNAVAILABLE",
+        "Transaction history is not configured for this operation engine.",
+        [id],
+      );
+    }
+    const loaded = await reader.call(this.#committer, id);
+    if (!loaded.ok) return loaded;
+    const inverse: OperationInput[] = [];
+    for (const operation of loaded.value.operations.slice().reverse()) {
+      if (operation.inverse === undefined) {
+        return operationFailure(
+          "E_OP_REVERT_CONFLICT",
+          `Transaction ${id} has no complete inverse; restore its base revision instead.`,
+          [id],
+        );
+      }
+      inverse.push(...(Array.isArray(operation.inverse)
+        ? operation.inverse
+        : [operation.inverse]));
+    }
+    const reverted = await this.execute(inverse, {
+      baseRevision: this.#project.revision,
+      origin: "ui",
+      dryRun: false,
+      instruction: { kind: "ui-direct" },
+      reason: `Revert transaction ${id}`,
+      recordUndo: false,
+    });
+    return reverted.ok
+      ? reverted
+      : operationFailure(
+          "E_OP_REVERT_CONFLICT",
+          `Transaction ${id} cannot be reverted cleanly (${reverted.error.message}); restore a revision instead.`,
+          [id],
+        );
+  }
+
+  public async restoreRevision(targetRevision: string): Promise<Result<GuyditorProject>> {
+    const restore = this.#committer?.restore;
+    if (restore === undefined) {
+      return operationFailure(
+        "E_PROJECT_RESTORE",
+        "Revision restore is not configured for this operation engine.",
+        [targetRevision],
+      );
+    }
+    const restored = await restore.call(this.#committer, targetRevision);
+    if (!restored.ok) return restored;
+    this.#project = restored.value;
+    this.#undoStack.splice(0);
+    this.#redoStack.splice(0);
+    return restored;
+  }
+
+  public async createProposal(
+    request: CreateProposalRequest,
+  ): Promise<Result<Proposal>> {
+    const store = this.#proposalStore;
+    if (store === undefined) {
+      return operationFailure(
+        "E_PROPOSAL_STORE_UNAVAILABLE",
+        "Proposal persistence is not configured for this operation engine.",
+      );
+    }
+    const id = this.#idFactory("prp");
+    const createdAt = this.#now().toISOString();
+    const proposedRevision = formatRevision(parseRevision(this.#project.revision) + 1);
+    const draft: Proposal = {
+      id,
+      baseRevision: this.#project.revision,
+      status: "draft",
+      operations: request.operations.map(({ op, params }) => ({
+        op,
+        params: structuredClone(params),
+        summary: `Pending ${op}`,
+      })),
+      instruction: structuredClone(request.instruction),
+      actor: structuredClone(request.actor),
+      ...(request.sessionId === undefined ? {} : { sessionId: request.sessionId }),
+      reason: structuredClone(request.reason),
+      riskClass: "normal",
+      addresses: [...request.addresses],
+      orphanedAnchors: [],
+      createdAt,
+    };
+    const savedDraft = await store.saveProposal(draft, {
+      ...structuredClone(this.#project),
+      revision: proposedRevision,
+    });
+    if (!savedDraft.ok) return savedDraft;
+    let capturedProject: GuyditorProject | undefined;
+    const dryRun = await this.#execute(
+      request.operations,
+      {
+        baseRevision: draft.baseRevision,
+        origin: request.actor.kind === "agent" ? "agent" : "system",
+        ...(request.sessionId === undefined ? {} : { sessionId: request.sessionId }),
+        dryRun: true,
+      },
+      false,
+      (project) => {
+        capturedProject = project;
+      },
+    );
+    if (!dryRun.ok) return dryRun;
+    if (
+      request.actor.kind === "agent" &&
+      dryRun.value.riskClass !== "low" &&
+      request.reason.text.trim() === ""
+    ) {
+      return operationFailure(
+        "E_OP_REASON_REQUIRED",
+        "Normal and consequential agent proposals require a concise reason.",
+      );
+    }
+    const proposed = capturedProject;
+    if (proposed === undefined) {
+      return operationFailure(
+        "E_PROPOSAL_DRY_RUN",
+        "Proposal dry-run did not produce a proposed project.",
+      );
+    }
+    const proposedProject: GuyditorProject = proposed;
+    const warnings = dryRun.value.applied.flatMap(({ warnings: entries }) => entries);
+    const proposal: Proposal = {
+      id,
+      baseRevision: dryRun.value.base,
+      status: "ready",
+      operations: dryRun.value.applied.map((operation) => ({
+        op: operation.op,
+        params: operation.params,
+        summary: operation.summary,
+        ...(operation.inverse.length === 0
+          ? {}
+          : { inverse: operation.inverse.length === 1 ? operation.inverse[0] : operation.inverse }),
+      })),
+      instruction: structuredClone(request.instruction),
+      actor: structuredClone(request.actor),
+      ...(request.sessionId === undefined ? {} : { sessionId: request.sessionId }),
+      reason: structuredClone(request.reason),
+      riskClass: dryRun.value.riskClass,
+      addresses: [...request.addresses],
+      applied: dryRun.value.applied,
+      diff: dryRun.value.diff,
+      warnings,
+      orphanedAnchors: dryRun.value.diff.orphanedAnchors.map(({ owner, anchor }) => ({
+        owner,
+        anchor,
+      })),
+      createdAt,
+    };
+    const saved = await store.saveProposal(proposal, {
+      ...proposedProject,
+      revision: proposedRevision,
+    });
+    if (!saved.ok) return saved;
+    return this.#shouldAutoAccept(proposal)
+      ? this.#acceptProposal(proposal.id, "auto", true)
+      : saved;
+  }
+
+  public acceptProposal(id: string, resolvedBy: string): Promise<Result<Proposal>> {
+    return this.#acceptProposal(id, resolvedBy, false);
+  }
+
+  async #acceptProposal(
+    id: string,
+    resolvedBy: string,
+    automatic: boolean,
+  ): Promise<Result<Proposal>> {
+    const store = this.#proposalStore;
+    if (store === undefined) {
+      return operationFailure(
+        "E_PROPOSAL_STORE_UNAVAILABLE",
+        "Proposal persistence is not configured for this operation engine.",
+      );
+    }
+    const loaded = await store.readProposal(id);
+    if (!loaded.ok) return loaded;
+    const proposal = loaded.value;
+    if (proposal.status !== "ready") {
+      return operationFailure(
+        "E_PROPOSAL_STATE",
+        `Proposal ${id} cannot be accepted from status ${proposal.status}.`,
+        [id],
+      );
+    }
+    const acceptedRevision = await store.readAcceptedRevision();
+    if (!acceptedRevision.ok) return acceptedRevision;
+    if (
+      proposal.baseRevision !== acceptedRevision.value ||
+      proposal.baseRevision !== store.head ||
+      proposal.baseRevision !== this.#project.revision
+    ) {
+      const stale: Proposal = { ...proposal, staleBase: true };
+      const updated = await store.updateProposal(stale);
+      if (!updated.ok) return updated;
+      return operationFailure(
+        "E_PROPOSAL_STALE",
+        `Proposal base ${proposal.baseRevision} does not match accepted revision ${acceptedRevision.value}.`,
+        [id],
+      );
+    }
+    const acceptedAt = this.#now().toISOString();
+    const executed = await this.#execute(
+      proposal.operations.map(({ op, params }) => ({ op, params })),
+      {
+        baseRevision: proposal.baseRevision,
+        origin: proposal.actor.kind === "agent" ? "agent" : "system",
+        ...(proposal.sessionId === undefined ? {} : { sessionId: proposal.sessionId }),
+        proposalId: proposal.id,
+        dryRun: false,
+        actor: proposal.actor,
+        instruction: proposal.instruction,
+        acceptance: {
+          status: automatic ? "auto-accepted-low-risk" : "accepted",
+          by: automatic ? "automation-policy" : resolvedBy,
+          at: acceptedAt,
+          proposal: proposal.id,
+        },
+        reason: proposal.reason.text,
+        addresses: proposal.addresses,
+        recordUndo: false,
+      },
+      true,
+    );
+    if (!executed.ok) {
+      if (executed.error.code !== "E_OP_STALE_BASE") return executed;
+      const stale: Proposal = { ...proposal, staleBase: true };
+      const updated = await store.updateProposal(stale);
+      if (!updated.ok) return updated;
+      return operationFailure(
+        "E_PROPOSAL_STALE",
+        `Proposal ${id} became stale before its commit reached HEAD.`,
+        [id],
+      );
+    }
+    const resolved: Proposal = {
+      ...proposal,
+      status: "accepted",
+      resolvedAt: acceptedAt,
+      resolvedBy,
+      ...(executed.value.transactionId === undefined
+        ? {}
+        : { resultTransaction: executed.value.transactionId }),
+    };
+    const updated = await store.updateProposal(resolved);
+    if (!updated.ok) return this.#proposalFinalizationFailure(id, updated.error.message);
+    const archived = await store.archiveProposal(id);
+    if (!archived.ok) return this.#proposalFinalizationFailure(id, archived.error.message);
+    if (automatic) {
+      const session = proposal.sessionId ?? proposal.actor.id;
+      this.#autoAcceptsBySession.set(
+        session,
+        (this.#autoAcceptsBySession.get(session) ?? 0) + 1,
+      );
+    }
+    return success(resolved);
+  }
+
+  #proposalFinalizationFailure(id: string, detail: string): Result<never> {
+    return failure(makeGuyditorError(
+      "E_PROPOSAL_FINALIZE",
+      `Accepted state changed, but proposal ${id} could not be finalized: ${detail}`,
+      {
+        affected: [id],
+        acceptedStateChanged: true,
+        retry: "unsafe",
+        suggestion: "Reopen the project to reconcile the proposal from its journal transaction.",
+      },
+    ));
+  }
+
+  public rejectProposal(id: string, resolvedBy: string): Promise<Result<Proposal>> {
+    return this.#resolveProposal(id, "rejected", resolvedBy);
+  }
+
+  public withdrawProposal(id: string, resolvedBy: string): Promise<Result<Proposal>> {
+    return this.#resolveProposal(id, "withdrawn", resolvedBy);
+  }
+
+  async #resolveProposal(
+    id: string,
+    status: "rejected" | "withdrawn",
+    resolvedBy: string,
+  ): Promise<Result<Proposal>> {
+    const store = this.#proposalStore;
+    if (store === undefined) {
+      return operationFailure(
+        "E_PROPOSAL_STORE_UNAVAILABLE",
+        "Proposal persistence is not configured for this operation engine.",
+      );
+    }
+    const loaded = await store.readProposal(id);
+    if (!loaded.ok) return loaded;
+    if (loaded.value.status !== "ready") {
+      return operationFailure(
+        "E_PROPOSAL_STATE",
+        `Proposal ${id} cannot be ${status} from status ${loaded.value.status}.`,
+        [id],
+      );
+    }
+    const resolved: Proposal = {
+      ...loaded.value,
+      status,
+      resolvedAt: this.#now().toISOString(),
+      resolvedBy,
+    };
+    const updated = await store.updateProposal(resolved);
+    if (!updated.ok) return updated;
+    const archived = await store.archiveProposal(id);
+    return archived.ok ? success(resolved) : archived;
+  }
+
+  public async supersedeProposal(
+    id: string,
+    replacement: CreateProposalRequest,
+  ): Promise<Result<Proposal>> {
+    const store = this.#proposalStore;
+    if (store === undefined) {
+      return operationFailure(
+        "E_PROPOSAL_STORE_UNAVAILABLE",
+        "Proposal persistence is not configured for this operation engine.",
+      );
+    }
+    const current = await store.readProposal(id);
+    if (!current.ok) return current;
+    if (current.value.status !== "ready") {
+      return operationFailure(
+        "E_PROPOSAL_STATE",
+        `Proposal ${id} cannot be superseded from status ${current.value.status}.`,
+        [id],
+      );
+    }
+    const created = await this.createProposal(replacement);
+    if (!created.ok) return created;
+    const superseded: Proposal = {
+      ...current.value,
+      status: "superseded",
+      supersededBy: created.value.id,
+      resolvedAt: this.#now().toISOString(),
+      resolvedBy: replacement.actor.id,
+    };
+    const updated = await store.updateProposal(superseded);
+    if (!updated.ok) return updated;
+    const archived = await store.archiveProposal(id);
+    return archived.ok ? created : archived;
+  }
+
+  #shouldAutoAccept(proposal: Proposal): boolean {
+    const policy = this.#automationPolicy;
+    if (
+      policy === undefined || !policy.enabled || proposal.actor.kind !== "agent" ||
+      proposal.riskClass !== "low"
+    ) return false;
+    if (proposal.operations.length > policy.maxOpsPerProposal) return false;
+    if (
+      policy.allowedOperations.length > 0 &&
+      proposal.operations.some(({ op }) => !policy.allowedOperations.includes(op))
+    ) return false;
+    const session = proposal.sessionId ?? proposal.actor.id;
+    return (this.#autoAcceptsBySession.get(session) ?? 0) < policy.maxAutoAcceptsPerSession;
   }
 
   public resolveNavigation(

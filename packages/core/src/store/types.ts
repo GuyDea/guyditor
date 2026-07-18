@@ -1,10 +1,12 @@
 import type { SemanticAnchor } from "../project/index.js";
+import type { FrameTime } from "../time/index.js";
 
 export interface SemanticOperation {
   op: string;
   params: Record<string, unknown>;
   summary: string;
-  inverse?: { op: string; params: Record<string, unknown> };
+  inverse?: { op: string; params: Record<string, unknown> } |
+    Array<{ op: string; params: Record<string, unknown> }>;
 }
 
 export interface TransactionRecord {
@@ -48,4 +50,29 @@ export interface RevisionLock {
   skills: { id: string; version: string; contentHash: string }[];
   profiles: { id: string; version: string }[];
   tools: { name: string; version: string }[];
+}
+
+export interface ChangedTimelineRange {
+  start: FrameTime;
+  end: FrameTime;
+  affectedObjects: string[];
+}
+
+export interface RevisionComparison {
+  a: string;
+  b: string;
+  lineal: boolean;
+  summary: Array<{
+    objectId?: string;
+    text: string;
+    transaction?: string;
+    instruction?: TransactionRecord["instruction"];
+    actor?: TransactionRecord["actor"];
+    reason?: string;
+  }>;
+  changedRanges: ChangedTimelineRange[];
+  previews: Array<{
+    range: { start: FrameTime; end: FrameTime };
+    framePairs: Array<{ at: FrameTime; aImage?: string; bImage?: string }>;
+  }>;
 }

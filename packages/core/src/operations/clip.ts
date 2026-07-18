@@ -18,12 +18,13 @@ import type {
 import type { IdFactory } from "./engine.js";
 import type {
   OperationInput,
+  SemanticEntityType,
   SemanticFieldDelta,
 } from "./types.js";
 
 export interface EntityMutation {
   entityId: string;
-  entityType: "asset" | "clip" | "effect";
+  entityType: SemanticEntityType;
   change: "added" | "removed" | "modified";
   fields: SemanticFieldDelta[];
 }
@@ -31,6 +32,7 @@ export interface EntityMutation {
 export interface ClipApplication {
   model: GuyditorProject;
   inverse: OperationInput[];
+  redo?: OperationInput;
   affected: string[];
   summary: string;
   mutations: EntityMutation[];
@@ -219,11 +221,22 @@ function applyTrim(
   });
 }
 
-function duplicateEffects(clip: Clip, idFactory: IdFactory): Clip["effects"] {
-  return clip.effects?.map((effect) => ({
+function duplicateEffects(
+  clip: Clip,
+  idFactory: IdFactory,
+  restoredIds?: readonly string[],
+): Result<Clip["effects"]> {
+  if (restoredIds !== undefined && restoredIds.length !== (clip.effects?.length ?? 0)) {
+    return opFailure(
+      "E_OP_SCHEMA",
+      "A replayed split must supply one restored effect ID per duplicated effect.",
+      [clip.id],
+    );
+  }
+  return success(clip.effects?.map((effect, index) => ({
     ...structuredClone(effect),
-    id: idFactory("fx"),
-  }));
+    id: restoredIds?.[index] ?? idFactory("fx"),
+  })));
 }
 
 function applySplit(
@@ -258,11 +271,20 @@ function applySplit(
   delete first.transitionAfter;
   const second: Clip = {
     ...located.clip,
-    id: idFactory("clp"),
+    id: typeof input.params["newClipId"] === "string"
+      ? input.params["newClipId"]
+      : idFactory("clp"),
     source: { in: boundary, out: located.clip.source.out },
   };
-  const effects = duplicateEffects(located.clip, idFactory);
-  if (effects !== undefined) second.effects = effects;
+  const effects = duplicateEffects(
+    located.clip,
+    idFactory,
+    Array.isArray(input.params["newEffectIds"])
+      ? input.params["newEffectIds"] as string[]
+      : undefined,
+  );
+  if (!effects.ok) return effects;
+  if (effects.value !== undefined) second.effects = effects.value;
   delete second.gapBefore;
   delete second.overlapPrevious;
 
@@ -300,6 +322,16 @@ function applySplit(
       op: "clip.join",
       params: { clipIds: [first.id, second.id] },
     }],
+    redo: {
+      op: "clip.split",
+      params: {
+        ...input.params,
+        newClipId: second.id,
+        ...(second.effects === undefined
+          ? {}
+          : { newEffectIds: second.effects.map(({ id }) => id) }),
+      },
+    },
     affected: mutations.map(({ entityId }) => entityId),
     summary: `Split ${humanClip(located)} at ${String(at)} frames (effects duplicated)`,
     mutations,
@@ -421,6 +453,10 @@ function applyJoin(
       params: {
         clipId: joined.id,
         at: found.value.clips[index]!.source.in.frames - first.source.in.frames,
+        newClipId: found.value.clips[index]!.id,
+        ...(found.value.clips[index]!.effects === undefined
+          ? {}
+          : { newEffectIds: found.value.clips[index]!.effects!.map(({ id }) => id) }),
       },
     });
   }

@@ -10,7 +10,10 @@ export type {
   WatchFolderConfig,
 } from "./store.js";
 export type {
+  ChangedTimelineRange,
+  RevisionComparison,
   RevisionLock,
   SemanticOperation,
   TransactionRecord,
 } from "./types.js";
+export { computeChangedRanges } from "./history.js";
