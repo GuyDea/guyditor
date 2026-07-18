@@ -107,7 +107,7 @@
 | FR-1000 | Part 12 | todo | | |
 | FR-1001 | Part 12 | todo | | |
 | FR-1002 | Part 12 | todo | | |
-| FR-1003 | Part 12 | todo | | |
+| FR-1003 | Part 12 | partial | `packages/core/src/jobs/queue.test.ts` | Persistent queue, cancellation, retry, progress, and concurrency library complete; main-process/IPC bridging and the UI job panel remain. |
 | FR-1004 | Part 12 | todo | | |
 | FR-1005 | Part 12 | todo | | |
 | FR-1100 | Part 3 | todo | | |
@@ -124,7 +124,7 @@
 | NFR-100 | Part 1 | todo | | |
 | NFR-101 | Part 1 | todo | | |
 | NFR-102 | Part 13 | todo | | |
-| NFR-103 | Part 12 | todo | | |
+| NFR-103 | Part 12 | partial | `packages/core/src/jobs/queue.test.ts` | Startup recovery safely fails interrupted jobs with retry metadata; render/analysis integration and partial-artifact cleanup remain. |
 | NFR-104 | Part 12 | todo | | |
 | NFR-105 | Part 1 | todo | | |
 | NFR-106 | Part 13 | todo | | |
