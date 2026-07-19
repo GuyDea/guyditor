@@ -2,11 +2,13 @@ import { describe, expect, it } from "vitest";
 
 import { OperationEngine } from "../index.js";
 import type {
+  AuditSinkEvent,
   GuyditorProject,
   IdPrefix,
   OperationBatchResult,
   OperationContext,
   OperationInput,
+  OperationEngineOptions,
   Result,
   TransactionRecord,
 } from "../index.js";
@@ -51,6 +53,108 @@ function moduloGeneratedClipIds(project: GuyditorProject): GuyditorProject {
 }
 
 describe("OperationEngine", () => {
+  it("emits a session-linked audit event after a commit succeeds", async () => {
+    const events: AuditSinkEvent[] = [];
+    const engine = new OperationEngine(projectFixture(), {
+      idFactory,
+      auditSink: {
+        record(event) {
+          events.push(event);
+        },
+      },
+    });
+
+    await valueOf(engine.execute([{
+      op: "clip.trim",
+      params: {
+        clipId: "clp_aaaaaaaaaa",
+        edge: "tail",
+        delta: { frames: 1, fps: "24/1" },
+        snapPolicy: "none",
+      },
+    }], {
+      baseRevision: "rev_00001",
+      origin: "system",
+      sessionId: "ses_aaaaaaaaaa",
+      dryRun: false,
+    }));
+
+    expect(events).toEqual([{
+      type: "operation.committed",
+      sessionId: "ses_aaaaaaaaaa",
+      projectId: "prj_aaaaaaaaaa",
+      transactionId: TXN_ID,
+      revision: "rev_00002",
+      origin: "system",
+      operationCount: 1,
+    }]);
+  });
+
+  it("validates and dispatches catalogued transcript operations at their declared risk", async () => {
+    const original = projectFixture();
+    let dispatched = "";
+    const TranscriptAwareEngine = OperationEngine as unknown as new(
+      project: GuyditorProject,
+      options: OperationEngineOptions & {
+        operationDispatcher: (
+          project: GuyditorProject,
+          input: OperationInput,
+        ) => Result<{
+          model: GuyditorProject;
+          inverse: OperationInput[];
+          affected: string[];
+          summary: string;
+        }>;
+      },
+    ) => OperationEngine;
+    const engine = new TranscriptAwareEngine(original, {
+      idFactory,
+      operationDispatcher(project, input) {
+        dispatched = input.op;
+        return {
+          ok: true,
+          value: {
+            model: {
+              ...project,
+              transcript: { nextWordOrdinal: 3 },
+            },
+            inverse: [{
+              op: "transcript.create.remove",
+              params: { assetId: "ast_aaaaaaaaaa" },
+            }],
+            affected: ["ast_aaaaaaaaaa"],
+            summary: "Register canonical transcript for ast_aaaaaaaaaa",
+          },
+        };
+      },
+    });
+
+    const result = await valueOf(engine.execute([{
+      op: "transcript.create",
+      params: {
+        assetId: "ast_aaaaaaaaaa",
+        sidecar: {
+          path: "sidecars/transcripts/ast_aaaaaaaaaa.transcript.json",
+          sha256: "a".repeat(64),
+        },
+        engine: { name: "faster-whisper", version: "1.1.0", model: "large-v3" },
+        alignment: null,
+        jobId: "job_aaaaaaaaaa",
+      },
+    }], context()));
+
+    expect(dispatched).toBe("transcript.create");
+    expect(result.riskClass).toBe("low");
+    expect(result.applied[0]).toMatchObject({
+      summary: "Register canonical transcript for ast_aaaaaaaaaa",
+      inverse: [{
+        op: "transcript.create.remove",
+        params: { assetId: "ast_aaaaaaaaaa" },
+      }],
+      captionImpact: "shift",
+    });
+  });
+
   it("trims immutably and its inverse restores the model", async () => {
     const original = projectFixture();
     const originalSequence = original.sequences[0]!;
@@ -195,7 +299,12 @@ describe("OperationEngine", () => {
     expect(result.applied[0]!.inverse).toEqual([
       {
         op: "clip.split",
-        params: { clipId: "clp_aaaaaaaaaa", at: 24 },
+        params: {
+          clipId: "clp_aaaaaaaaaa",
+          at: 24,
+          newClipId: "clp_bbbbbbbbbb",
+          newEffectIds: ["fx_cccccccccc"],
+        },
       },
     ]);
     expect(result.applied[0]!.affected).toEqual([
@@ -218,10 +327,88 @@ describe("OperationEngine", () => {
     expect(restored.map(({ source }) => source)).toEqual(
       original.sequences[0]!.clips.map(({ source }) => source),
     );
-    expect(restored.map(({ id }) => id)).toEqual(["clp_aaaaaaaaaa", CLIP_ID]);
+    expect(restored.map(({ id }) => id)).toEqual([
+      "clp_aaaaaaaaaa",
+      "clp_bbbbbbbbbb",
+    ]);
     expect(moduloGeneratedClipIds(engine.currentProject)).toEqual(
       moduloGeneratedClipIds(original),
     );
+  });
+
+  it("removes one clip and restores its complete payload at the captured index", async () => {
+    const original = projectFixture();
+    original.sequences[0]!.clips[0]!.audio = { gainDb: -3 };
+    const engine = new OperationEngine(original, { idFactory });
+
+    const removed = await valueOf(engine.execute([{
+      op: "clip.remove",
+      params: { clipId: "clp_aaaaaaaaaa", closeGap: true },
+    }], context()));
+
+    expect(engine.currentProject.sequences[0]!.clips.map(({ id }) => id)).toEqual([
+      "clp_bbbbbbbbbb",
+    ]);
+    expect(removed.applied[0]!.inverse).toEqual([{
+      op: "clip.insert",
+      params: {
+        sequenceId: "seq_aaaaaaaaaa",
+        index: 0,
+        layerId: "lyr_aaaaaaaaaa",
+        clipId: "clp_aaaaaaaaaa",
+        source: {
+          assetId: "ast_aaaaaaaaaa",
+          in: { frames: 0, fps: "24/1" },
+          out: { frames: 24, fps: "24/1" },
+        },
+        restore: original.sequences[0]!.clips[0],
+      },
+    }]);
+
+    await valueOf(engine.execute(removed.applied[0]!.inverse, context("rev_00002")));
+    expect(withoutRevision(engine.currentProject)).toEqual(withoutRevision(original));
+  });
+
+  it("attaches non-blocking continuity guard warnings to the operation that moved a cut", async () => {
+    const warning = {
+      code: "clipped-phoneme-risk" as const,
+      severity: "warning" as const,
+      boundary: { beforeClip: "clp_aaaaaaaaaa", afterClip: CLIP_ID },
+      evidence: "Cut lies inside the word hello.",
+    };
+    const engine = new OperationEngine(projectFixture(), {
+      idFactory,
+      continuityGuard: async ({ operation }) =>
+        operation.op === "clip.split" ? [warning] : [],
+    });
+
+    const result = await valueOf(engine.execute([{
+      op: "clip.split",
+      params: { clipId: "clp_aaaaaaaaaa", at: 12 },
+    }], context()));
+
+    expect(result.applied[0]!.warnings).toEqual([warning]);
+    expect(engine.currentProject.sequences[0]!.clips).toHaveLength(3);
+  });
+
+  it("does not block an edit when a continuity evidence provider fails", async () => {
+    const engine = new OperationEngine(projectFixture(), {
+      continuityGuard: async () => {
+        throw new Error("stale peaks cache");
+      },
+    });
+
+    const result = await valueOf(engine.execute([{
+      op: "clip.trim",
+      params: {
+        clipId: "clp_aaaaaaaaaa",
+        edge: "tail",
+        delta: { frames: 1, fps: "24/1" },
+        snapPolicy: "none",
+      },
+    }], context()));
+
+    expect(result.applied[0]!.warnings).toEqual([]);
   });
 
   it.each([

@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["wordIds", "tokens"],
+  "properties": {
+    "wordIds": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/wordId" } },
+    "tokens": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } }
+  },
+  "$defs": { "wordId": { "type": "string", "pattern": "^w[0-9]{6}$" } }
+}

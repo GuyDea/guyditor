@@ -31,7 +31,7 @@ function suffix(index: number): string {
   return `${"a".repeat(9)}${ALPHABET[index % ALPHABET.length]}`;
 }
 
-function id(prefix: "clp" | "fx", index: number): string {
+function id(prefix: "clp" | "fx" | "lyr" | "seq" | "trn", index: number): string {
   return `${prefix}_${suffix(index)}`;
 }
 
@@ -121,7 +121,7 @@ function scenario(
   lengths: readonly number[],
   sourceStart: number,
   withEffects: boolean,
-  kind: "trim" | "split" | "join",
+  kind: OperationKind,
   rawIndex: number,
   rawAmount: number,
 ): Scenario {
@@ -149,6 +149,15 @@ function scenario(
         : {}),
     };
   });
+  project.layers.push({
+    id: id("lyr", 1),
+    kind: "audio",
+    name: "empty audio",
+    order: 1,
+    enabled: true,
+    locked: false,
+    items: [],
+  });
 
   if (kind === "join") {
     const index = rawIndex % (lengths.length - 1);
@@ -164,31 +173,217 @@ function scenario(
   }
   const index = rawIndex % lengths.length;
   const amount = 1 + rawAmount % (lengths[index]! - 1);
+  const clipId = id("clp", index);
+  if (kind === "trim") {
+    return {
+      project,
+      operation: {
+        op: "clip.trim",
+        params: {
+          clipId,
+          edge: rawAmount % 2 === 0 ? "head" : "tail",
+          delta: { frames: amount, fps: "24/1" },
+          snapPolicy: "none",
+        },
+      },
+    };
+  }
+  if (kind === "split") {
+    return { project, operation: { op: "clip.split", params: { clipId, at: amount } } };
+  }
+  if (kind === "remove") {
+    return {
+      project,
+      operation: { op: "clip.remove", params: { clipId, closeGap: true } },
+    };
+  }
+  if (kind === "insert") {
+    return {
+      project,
+      operation: {
+        op: "clip.insert",
+        params: {
+          sequenceId: project.sequences[0]!.id,
+          index,
+          layerId: project.layers[0]!.id,
+          source: {
+            assetId: project.assets[0]!.id,
+            in: { frames: 9_000, fps: "24/1" },
+            out: { frames: 9_024, fps: "24/1" },
+          },
+        },
+      },
+    };
+  }
+  if (kind === "move" || kind === "moveAcross") {
+    if (kind === "moveAcross") {
+      project.sequences.push({ id: id("seq", 1), name: "alternate", clips: [] });
+      project.layers.push({
+        id: id("lyr", 2),
+        kind: "video",
+        name: "alternate video",
+        order: 2,
+        enabled: true,
+        locked: false,
+        sequence: id("seq", 1),
+      });
+    }
+    return {
+      project,
+      operation: {
+        op: "clip.move",
+        params: kind === "move"
+          ? { clipId, toIndex: rawAmount % lengths.length }
+          : {
+              clipId,
+              toSequenceId: id("seq", 1),
+              toLayerId: id("lyr", 2),
+              toIndex: 0,
+            },
+      },
+    };
+  }
+  if (kind === "duplicate") {
+    return {
+      project,
+      operation: {
+        op: "clip.duplicate",
+        params: { clipId, toIndex: rawAmount % (lengths.length + 1) },
+      },
+    };
+  }
+  if (kind === "gap") {
+    return {
+      project,
+      operation: {
+        op: "clip.gap.set",
+        params: { clipId, leadingGap: { frames: amount, fps: "24/1" } },
+      },
+    };
+  }
+  if (kind === "overlap") {
+    const overlapIndex = 1 + rawIndex % (lengths.length - 1);
+    return {
+      project,
+      operation: {
+        op: "clip.overlap.set",
+        params: {
+          clipId: id("clp", overlapIndex),
+          overlapWithPrevious: {
+            frames: 1 + rawAmount % Math.min(lengths[overlapIndex - 1]!, lengths[overlapIndex]!),
+            fps: "24/1",
+          },
+        },
+      },
+    };
+  }
+  if (kind === "layerAdd") {
+    return {
+      project,
+      operation: { op: "layer.add", params: { kind: "music", name: "music", index: 1 } },
+    };
+  }
+  if (kind === "layerRemove") {
+    return {
+      project,
+      operation: { op: "layer.remove", params: { layerId: id("lyr", 1) } },
+    };
+  }
+  if (kind === "layerReorder") {
+    return {
+      project,
+      operation: { op: "layer.reorder", params: { layerId: id("lyr", 1), toIndex: 0 } },
+    };
+  }
+  if (["layerEnable", "layerDisable", "layerLock", "layerUnlock"].includes(kind)) {
+    if (kind === "layerEnable") project.layers[1]!.enabled = false;
+    if (kind === "layerUnlock") project.layers[1]!.locked = true;
+    const action = kind.slice("layer".length).toLowerCase();
+    return {
+      project,
+      operation: { op: `layer.${action}`, params: { layerId: id("lyr", 1) } },
+    };
+  }
+  if (kind === "gain") {
+    return {
+      project,
+      operation: { op: "clip.audio.gain.set", params: { clipId, gainDb: -amount } },
+    };
+  }
+  if (kind === "fade") {
+    return {
+      project,
+      operation: {
+        op: "clip.audio.fade.set",
+        params: {
+          clipId,
+          fadeIn: { t: { frames: amount, fps: "24/1" }, curve: "linear" },
+          fadeOut: { t: { frames: amount, fps: "24/1" }, curve: "equal-power" },
+        },
+      },
+    };
+  }
+  const boundaryIndex = rawIndex % (lengths.length - 1);
+  const before = project.sequences[0]!.clips[boundaryIndex]!;
+  const after = project.sequences[0]!.clips[boundaryIndex + 1]!;
+  if (kind === "transitionRemove") {
+    before.transitionAfter = {
+      id: id("trn", 0),
+      preset: "crossfade",
+      duration: { frames: 1, fps: "24/1" },
+    };
+    return {
+      project,
+      operation: { op: "transition.remove", params: { transitionId: id("trn", 0) } },
+    };
+  }
   return {
     project,
-    operation: kind === "trim"
-      ? {
-          op: "clip.trim",
-          params: {
-            clipId: id("clp", index),
-            edge: rawAmount % 2 === 0 ? "head" : "tail",
-            delta: { frames: amount, fps: "24/1" },
-            snapPolicy: "none",
-          },
-        }
-      : {
-          op: "clip.split",
-          params: { clipId: id("clp", index), at: amount },
-        },
+    operation: {
+      op: "transition.set",
+      params: {
+        boundary: { beforeClipId: before.id, afterClipId: after.id },
+        kind: "crossfade",
+        duration: { frames: 1, fps: "24/1" },
+      },
+    },
   };
 }
+
+type OperationKind =
+  | "trim" | "split" | "join" | "remove" | "insert" | "move" | "moveAcross"
+  | "duplicate" | "gap" | "overlap" | "layerAdd" | "layerRemove" | "layerReorder"
+  | "layerEnable" | "layerDisable" | "layerLock" | "layerUnlock" | "gain" | "fade"
+  | "transitionSet" | "transitionRemove";
 
 const scenarioArbitrary: fc.Arbitrary<Scenario> = fc
   .tuple(
     fc.array(fc.integer({ min: 2, max: 120 }), { minLength: 2, maxLength: 8 }),
     fc.integer({ min: 0, max: 100 }),
     fc.boolean(),
-    fc.constantFrom("trim", "split", "join"),
+    fc.constantFrom<OperationKind>(
+      "trim",
+      "split",
+      "join",
+      "remove",
+      "insert",
+      "move",
+      "moveAcross",
+      "duplicate",
+      "gap",
+      "overlap",
+      "layerAdd",
+      "layerRemove",
+      "layerReorder",
+      "layerEnable",
+      "layerDisable",
+      "layerLock",
+      "layerUnlock",
+      "gain",
+      "fade",
+      "transitionSet",
+      "transitionRemove",
+    ),
     fc.nat(),
     fc.nat(),
   )
@@ -197,6 +392,8 @@ const scenarioArbitrary: fc.Arbitrary<Scenario> = fc
 function deterministicId(prefix: IdPrefix): string {
   if (prefix === "clp") return "clp_zzzzzzzzzz";
   if (prefix === "fx") return "fx_zzzzzzzzzz";
+  if (prefix === "lyr") return "lyr_zzzzzzzzzz";
+  if (prefix === "trn") return "trn_zzzzzzzzzz";
   return "txn_zzzzzzzzzz";
 }
 

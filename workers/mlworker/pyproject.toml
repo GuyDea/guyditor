@@ -1,0 +1,37 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "guyditor-mlworker"
+version = "1.0.0"
+description = "Guyditor local machine-learning JSON-RPC worker"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "faster-whisper>=1.1,<2",
+  "pytest>=8,<10",
+  "torch>=2.10,<2.11",
+  "torchaudio>=2.10,<2.11",
+]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+markers = [
+  "slow: downloads or runs a speech-recognition model",
+]
+
+[tool.uv]
+cache-dir = ".uv-cache"
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+torchaudio = { index = "pytorch-cpu" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["mlworker"]

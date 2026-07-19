@@ -1,0 +1,231 @@
+{
+  "$id": "https://guyditor.dev/schema/sidecars/guyditor-annotations-v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "annotations"],
+  "properties": {
+    "format": { "const": "guyditor.annotations/v1" },
+    "annotations": { "type": "array", "items": { "$ref": "#/$defs/annotation" } }
+  },
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[a-z]+_[a-z2-7]{10}$" },
+    "frameTime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["frames", "fps"],
+      "properties": {
+        "frames": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "fps": { "type": "string", "pattern": "^[0-9]+/[1-9][0-9]*$" }
+      }
+    },
+    "coord": { "type": "number", "minimum": -0.25, "maximum": 1.25 },
+    "size": { "type": "number", "minimum": 0, "maximum": 1.25 },
+    "point": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y"],
+      "properties": { "x": { "$ref": "#/$defs/coord" }, "y": { "$ref": "#/$defs/coord" } }
+    },
+    "sizePoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y"],
+      "properties": { "x": { "$ref": "#/$defs/size" }, "y": { "$ref": "#/$defs/size" } }
+    },
+    "pinGeometry": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "at"],
+      "properties": { "kind": { "const": "pin" }, "at": { "$ref": "#/$defs/point" } }
+    },
+    "rectGeometry": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "origin", "size"],
+      "properties": {
+        "kind": { "const": "rect" }, "origin": { "$ref": "#/$defs/point" },
+        "size": { "$ref": "#/$defs/sizePoint" }, "rotationDeg": { "type": "number" }
+      }
+    },
+    "ellipseGeometry": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "center", "radii"],
+      "properties": {
+        "kind": { "const": "ellipse" }, "center": { "$ref": "#/$defs/point" },
+        "radii": { "$ref": "#/$defs/sizePoint" }, "rotationDeg": { "type": "number" }
+      }
+    },
+    "arrowGeometry": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "from", "to"],
+      "properties": {
+        "kind": { "const": "arrow" }, "from": { "$ref": "#/$defs/point" },
+        "to": { "$ref": "#/$defs/point" }
+      }
+    },
+    "freehandGeometry": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "points", "closed"],
+      "properties": {
+        "kind": { "const": "freehand" },
+        "points": { "type": "array", "minItems": 2, "maxItems": 512, "items": { "$ref": "#/$defs/point" } },
+        "closed": { "type": "boolean" }
+      }
+    },
+    "spotlightGeometry": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "region", "dimOpacity"],
+      "properties": {
+        "kind": { "const": "spotlight" },
+        "dimOpacity": { "type": "number", "minimum": 0, "maximum": 1 },
+        "region": {
+          "oneOf": [
+            {
+              "type": "object", "additionalProperties": false, "required": ["rect"],
+              "properties": { "rect": {
+                "type": "object", "additionalProperties": false, "required": ["origin", "size"],
+                "properties": { "origin": { "$ref": "#/$defs/point" }, "size": { "$ref": "#/$defs/sizePoint" } }
+              } }
+            },
+            {
+              "type": "object", "additionalProperties": false, "required": ["ellipse"],
+              "properties": { "ellipse": {
+                "type": "object", "additionalProperties": false, "required": ["center", "radii"],
+                "properties": { "center": { "$ref": "#/$defs/point" }, "radii": { "$ref": "#/$defs/sizePoint" } }
+              } }
+            }
+          ]
+        }
+      }
+    },
+    "geometry": {
+      "oneOf": [
+        { "$ref": "#/$defs/pinGeometry" }, { "$ref": "#/$defs/rectGeometry" },
+        { "$ref": "#/$defs/ellipseGeometry" }, { "$ref": "#/$defs/arrowGeometry" },
+        { "$ref": "#/$defs/freehandGeometry" }, { "$ref": "#/$defs/spotlightGeometry" }
+      ]
+    },
+    "anchor": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "clipId", "assetId", "sourceFrame"],
+          "properties": {
+            "kind": { "const": "clip" }, "clipId": { "type": "string", "pattern": "^clp_[a-z2-7]{10}$" },
+            "assetId": { "type": "string", "pattern": "^ast_[a-z2-7]{10}$" }, "sourceFrame": { "$ref": "#/$defs/frameTime" }
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false, "required": ["kind", "wordId"],
+          "properties": {
+            "kind": { "const": "word" }, "wordId": { "type": "string", "pattern": "^w[0-9]{6}$" },
+            "offset": { "$ref": "#/$defs/frameTime" }
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "trackId", "assetId", "sourceFrame"],
+          "properties": {
+            "kind": { "const": "object" }, "trackId": { "type": "string", "minLength": 1 },
+            "assetId": { "type": "string", "pattern": "^ast_[a-z2-7]{10}$" }, "sourceFrame": { "$ref": "#/$defs/frameTime" }
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false, "required": ["kind", "beatId"],
+          "properties": {
+            "kind": { "const": "beat" }, "beatId": { "type": "string", "pattern": "^beat_[a-z2-7]{10}$" },
+            "offset": { "$ref": "#/$defs/frameTime" }
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false, "required": ["kind", "sequenceId", "frame"],
+          "properties": {
+            "kind": { "const": "timeline" }, "sequenceId": { "type": "string", "pattern": "^seq_[a-z2-7]{10}$" },
+            "frame": { "$ref": "#/$defs/frameTime" }
+          }
+        }
+      ]
+    },
+    "actor": {
+      "type": "object", "additionalProperties": false, "required": ["kind", "id"],
+      "properties": { "kind": { "enum": ["human", "agent"] }, "id": { "type": "string", "minLength": 1 } }
+    },
+    "history": {
+      "type": "object", "additionalProperties": false, "required": ["at", "from", "to", "actor"],
+      "properties": {
+        "at": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$" },
+        "from": { "enum": ["open", "addressed", "resolved", "rejected", "reopened"] },
+        "to": { "enum": ["open", "addressed", "resolved", "rejected", "reopened"] },
+        "actor": { "$ref": "#/$defs/actor" },
+        "txnId": { "type": "string", "pattern": "^txn_[a-z2-7]{10}$" }, "reason": { "type": "string", "minLength": 1 }
+      }
+    },
+    "annotation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id", "shape", "body", "geometry", "anchor", "extent", "canvasRef", "state",
+        "blocking", "author", "createdAt", "history"
+      ],
+      "properties": {
+        "id": { "type": "string", "pattern": "^ann_[a-z2-7]{10}$" },
+        "shape": { "enum": ["note", "pin", "rect", "ellipse", "arrow", "freehand", "spotlight", "range"] },
+        "body": { "type": "string" },
+        "style": {
+          "type": "object", "additionalProperties": false, "required": ["color", "strokeWidth"],
+          "properties": {
+            "color": { "type": "string", "pattern": "^#[0-9a-f]{6}$" },
+            "strokeWidth": { "type": "number", "exclusiveMinimum": 0, "maximum": 1.25 }
+          }
+        },
+        "geometry": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/geometry" }] },
+        "anchor": { "$ref": "#/$defs/anchor" },
+        "extent": { "$ref": "#/$defs/frameTime" },
+        "canvasRef": {
+          "type": "object", "additionalProperties": false, "required": ["sequenceId", "aspect"],
+          "properties": {
+            "sequenceId": { "type": "string", "pattern": "^seq_[a-z2-7]{10}$" },
+            "deliverableId": { "type": "string", "pattern": "^dlv_[a-z2-7]{10}$" },
+            "aspect": { "type": "string", "pattern": "^[1-9][0-9]*:[1-9][0-9]*$" }
+          }
+        },
+        "sourceProjection": {
+          "type": "object", "additionalProperties": false, "required": ["assetId", "clipId", "geometry"],
+          "properties": {
+            "assetId": { "type": "string", "pattern": "^ast_[a-z2-7]{10}$" }, "clipId": { "type": "string", "pattern": "^clp_[a-z2-7]{10}$" },
+            "geometry": { "$ref": "#/$defs/geometry" }
+          }
+        },
+        "state": { "enum": ["open", "resolved", "rejected", "reopened"] },
+        "blocking": { "type": "boolean" }, "author": { "$ref": "#/$defs/actor" },
+        "createdAt": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?Z$" },
+        "history": { "type": "array", "items": { "$ref": "#/$defs/history" } },
+        "context": {
+          "type": "object", "additionalProperties": false,
+          "properties": { "nearestWordId": { "type": "string", "pattern": "^w[0-9]{6}$" }, "beatId": { "type": "string", "pattern": "^beat_[a-z2-7]{10}$" } }
+        },
+        "resolvedBy": {
+          "type": "object", "additionalProperties": false, "required": ["txnId", "revision"],
+          "properties": { "txnId": { "type": "string", "pattern": "^txn_[a-z2-7]{10}$" }, "revision": { "type": "string", "pattern": "^rev_[0-9]{5}$" } }
+        },
+        "orphan": {
+          "type": "object", "additionalProperties": false, "required": ["detectedAtRevision", "lastResolved"],
+          "properties": {
+            "detectedAtRevision": { "type": "string", "pattern": "^rev_[0-9]{5}$" },
+            "lastResolved": {
+              "type": "object", "additionalProperties": false, "required": ["sequenceId", "timelineFrame"],
+              "properties": { "sequenceId": { "type": "string", "pattern": "^seq_[a-z2-7]{10}$" }, "timelineFrame": { "$ref": "#/$defs/frameTime" } }
+            }
+          }
+        },
+        "convertedTo": {
+          "type": "object", "additionalProperties": false, "required": ["itemId", "txnId"],
+          "properties": { "itemId": { "type": "string", "pattern": "^(gfx|clp)_[a-z2-7]{10}$" }, "txnId": { "type": "string", "pattern": "^txn_[a-z2-7]{10}$" } }
+        }
+      },
+      "allOf": [
+        { "if": { "properties": { "shape": { "const": "note" } } }, "then": { "properties": { "body": { "type": "string", "minLength": 1 }, "geometry": { "type": "null" }, "style": false } } },
+        { "if": { "properties": { "shape": { "const": "range" } } }, "then": { "properties": { "geometry": { "type": "null" }, "extent": { "type": "object", "properties": { "frames": { "type": "integer", "minimum": 1 } } }, "style": false } } },
+        { "if": { "properties": { "shape": { "const": "pin" } } }, "then": { "required": ["style"], "properties": { "style": true, "geometry": { "$ref": "#/$defs/pinGeometry" } } } },
+        { "if": { "properties": { "shape": { "const": "rect" } } }, "then": { "required": ["style"], "properties": { "style": true, "geometry": { "$ref": "#/$defs/rectGeometry" } } } },
+        { "if": { "properties": { "shape": { "const": "ellipse" } } }, "then": { "required": ["style"], "properties": { "style": true, "geometry": { "$ref": "#/$defs/ellipseGeometry" } } } },
+        { "if": { "properties": { "shape": { "const": "arrow" } } }, "then": { "required": ["style"], "properties": { "style": true, "geometry": { "$ref": "#/$defs/arrowGeometry" } } } },
+        { "if": { "properties": { "shape": { "const": "freehand" } } }, "then": { "required": ["style"], "properties": { "style": true, "geometry": { "$ref": "#/$defs/freehandGeometry" } } } },
+        { "if": { "properties": { "shape": { "const": "spotlight" } } }, "then": { "required": ["style"], "properties": { "style": true, "geometry": { "$ref": "#/$defs/spotlightGeometry" } } } }
+      ]
+    }
+  }
+}

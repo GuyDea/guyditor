@@ -5,9 +5,11 @@ import {
   access,
   mkdtemp,
   mkdir,
+  readdir,
   readFile,
   rm,
   stat,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -16,6 +18,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
   FIXTURE_GENERATOR_VERSION,
+  REQUIRED_PROJECT_TEMPLATES,
   REQUIRED_FIXTURE_PATHS,
   validateFixtureManifest,
 } from "./fixture-spec.mjs";
@@ -149,11 +152,18 @@ async function buildMediaRuntime() {
       }`,
     );
   }
-  const media = await import(
-    pathToFileURL(path.join(buildRoot, "media", "src", "index.js")).href
+  await symlink(
+    path.join(SCRIPT_ROOT, "node_modules"),
+    path.join(buildRoot, "node_modules"),
+    process.platform === "win32" ? "junction" : "dir",
   );
+  const [media, core] = await Promise.all([
+    import(pathToFileURL(path.join(buildRoot, "media", "src", "index.js")).href),
+    import(pathToFileURL(path.join(buildRoot, "core", "src", "index.js")).href),
+  ]);
   return {
     cleanup: () => rm(buildRoot, { force: true, recursive: true }),
+    core,
     runFfmpeg: media.runFfmpeg,
     runFfprobe: media.runFfprobe,
   };
@@ -335,6 +345,19 @@ export async function isFixtureManifestFresh(fixtureRoot = DEFAULT_FIXTURE_ROOT)
       }
     } catch {
       return false;
+    }
+  }
+  for (const projectName of REQUIRED_PROJECT_TEMPLATES) {
+    const entries = manifest.projects[projectName].files;
+    for (const [projectPath, entry] of Object.entries(entries)) {
+      try {
+        const absolutePath = path.join(fixtureRoot, "projects", projectName, projectPath);
+        const projectStat = await stat(absolutePath);
+        if (!projectStat.isFile() || projectStat.size !== entry.bytes) return false;
+        if ((await sha256(absolutePath)) !== entry.sha256) return false;
+      } catch {
+        return false;
+      }
     }
   }
   return true;
@@ -576,6 +599,28 @@ async function createDiscTrack(runFfmpeg, fixtureRoot) {
   );
 }
 
+async function createFrozenOverlay(runFfmpeg, fixtureRoot) {
+  const outputPath = path.join(fixtureRoot, "generated", "frozen-overlay.png");
+  await mkdir(path.dirname(outputPath), { recursive: true });
+  await runFfmpeg(
+    ffmpegArgs([
+      "-f",
+      "lavfi",
+      "-i",
+      "color=c=0x14202B:size=640x360:rate=1:duration=1",
+      "-vf",
+      "drawbox=x=48:y=48:w=544:h=264:c=0xF2B84B:t=10,drawtext=font=monospace:text='FROZEN GENERATED ASSET':fontcolor=white:fontsize=34:x=(w-text_w)/2:y=(h-text_h)/2",
+      "-frames:v",
+      "1",
+      "-threads",
+      "1",
+      "-map_metadata",
+      "-1",
+      outputPath,
+    ]),
+  );
+}
+
 async function createTranscripts(fixtureRoot) {
   await writeJson(
     path.join(fixtureRoot, "transcripts", "short-exact.json"),
@@ -731,6 +776,7 @@ function groundTruthByPath() {
       },
       radius: 48,
     },
+    "generated/frozen-overlay.png": { frozen: true, height: 360, width: 640 },
     "transcripts/short-exact.json": {
       duration: { rate: SAMPLE_RATE, samples: 12 * SAMPLE_RATE },
       seed: 0x53_48_4f_52,
@@ -766,6 +812,9 @@ async function buildManifest(ffmpeg, fixtureRoot) {
       sha256: await sha256(absolutePath),
     };
   }
+  const projects = await buildProjectManifest(fixtureRoot);
+  totalBytes += Object.values(projects).flatMap(({ files: entries }) =>
+    Object.values(entries)).reduce((total, entry) => total + entry.bytes, 0);
   if (totalBytes >= MAX_FIXTURE_BYTES) {
     throw new Error(
       `Fixture outputs total ${totalBytes} bytes; limit is ${MAX_FIXTURE_BYTES - 1}.`,
@@ -775,7 +824,219 @@ async function buildManifest(ffmpeg, fixtureRoot) {
     ffmpegVersion: ffmpeg.version,
     files,
     generatorVersion: FIXTURE_GENERATOR_VERSION,
+    projects,
   };
+}
+
+async function listFiles(root, relative = "") {
+  const entries = await readdir(path.join(root, relative), { withFileTypes: true });
+  const files = [];
+  for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+    const child = path.join(relative, entry.name);
+    if (entry.isDirectory()) files.push(...await listFiles(root, child));
+    else if (entry.isFile()) files.push(child.split(path.sep).join("/"));
+  }
+  return files;
+}
+
+async function buildProjectManifest(fixtureRoot) {
+  const projects = {};
+  for (const name of REQUIRED_PROJECT_TEMPLATES) {
+    const root = path.join(fixtureRoot, "projects", name);
+    const files = {};
+    for (const relativePath of await listFiles(root)) {
+      const absolutePath = path.join(root, relativePath);
+      const fileStat = await stat(absolutePath);
+      files[relativePath] = {
+        bytes: fileStat.size,
+        sha256: await sha256(absolutePath),
+      };
+    }
+    projects[name] = {
+      files,
+      groundTruth: {
+        annotationCount: name === "annotated" ? 1 : 0,
+        exactFrame: name === "annotated" ? { frames: 90, fps: "30/1" } : null,
+        primaryDeliverableId: "dlv_aaaaaaaaaa",
+        revision: "rev_00001",
+        schemaValid: true,
+        sequenceId: "seq_aaaaaaaaaa",
+        transcriptAssetId: "ast_bbbbbbbbbb",
+      },
+    };
+  }
+  return projects;
+}
+
+async function fixtureAsset(fixtureRoot, relativePath, descriptor) {
+  const absolutePath = path.join(fixtureRoot, relativePath);
+  const fileStat = await stat(absolutePath);
+  return {
+    ...descriptor,
+    path: absolutePath,
+    sha256: await sha256(absolutePath),
+    bytes: fileStat.size,
+    integrity: "ok",
+    ingest: {
+      at: FIXED_CREATED_AT,
+      ffprobeVersion: "fixture-validated",
+      via: descriptor.kind === "generated" ? "generated" : "manual",
+    },
+  };
+}
+
+async function projectAssets(fixtureRoot) {
+  return Promise.all([
+    fixtureAsset(fixtureRoot, "bars-1080p30-10s.mp4", {
+      id: "ast_aaaaaaaaaa", kind: "video", container: "mov,mp4,m4a,3gp,3g2,mj2",
+      probe: { duration: { frames: 300, fps: "30/1" }, width: 1920, height: 1080, fps: "30/1", audio: { rate: 48_000, channels: 1 } },
+      video: { codec: "h264", width: 1920, height: 1080, fps: "30/1", pixFmt: "yuv420p", hasAlpha: false, rotation: 0 },
+      audio: [{ index: 1, codec: "aac", sampleRate: 48_000, channels: 1, layout: "mono" }],
+    }),
+    fixtureAsset(fixtureRoot, "speech-48k-20s.wav", {
+      id: "ast_bbbbbbbbbb", kind: "audio", container: "wav",
+      probe: { duration: { samples: 960_000, rate: 48_000 }, audio: { rate: 48_000, channels: 1 } },
+      audio: [{ index: 0, codec: "pcm_s16le", sampleRate: 48_000, channels: 1, layout: "mono" }],
+    }),
+    fixtureAsset(fixtureRoot, "greenscreen-720p30-6s.mp4", {
+      id: "ast_cccccccccc", kind: "video", container: "mov,mp4,m4a,3gp,3g2,mj2",
+      probe: { duration: { frames: 180, fps: "30/1" }, width: 1280, height: 720, fps: "30/1" },
+      video: { codec: "h264", width: 1280, height: 720, fps: "30/1", pixFmt: "yuv420p", hasAlpha: false, rotation: 0 },
+    }),
+    fixtureAsset(fixtureRoot, "screencast-1080p30-15s.mp4", {
+      id: "ast_dddddddddd", kind: "video", container: "mov,mp4,m4a,3gp,3g2,mj2",
+      probe: { duration: { frames: 450, fps: "30/1" }, width: 1920, height: 1080, fps: "30/1" },
+      video: { codec: "h264", width: 1920, height: 1080, fps: "30/1", pixFmt: "yuv420p", hasAlpha: false, rotation: 0 },
+    }),
+    fixtureAsset(fixtureRoot, "avsync-video.mp4", {
+      id: "ast_eeeeeeeeee", kind: "video", container: "mov,mp4,m4a,3gp,3g2,mj2",
+      probe: { duration: { frames: 150, fps: "30/1" }, width: 1280, height: 720, fps: "30/1", audio: { rate: 48_000, channels: 1 } },
+      video: { codec: "h264", width: 1280, height: 720, fps: "30/1", pixFmt: "yuv420p", hasAlpha: false, rotation: 0 },
+      audio: [{ index: 1, codec: "aac", sampleRate: 48_000, channels: 1, layout: "mono" }],
+    }),
+    fixtureAsset(fixtureRoot, "avsync-audio.wav", {
+      id: "ast_ffffffffff", kind: "audio", container: "wav",
+      probe: { duration: { samples: 240_000, rate: 48_000 }, audio: { rate: 48_000, channels: 1 } },
+      audio: [{ index: 0, codec: "pcm_s16le", sampleRate: 48_000, channels: 1, layout: "mono" }],
+    }),
+    fixtureAsset(fixtureRoot, "stills/diagram-1080.png", {
+      id: "ast_gggggggggg", kind: "image", container: "png_pipe",
+      probe: { width: 1920, height: 1080 }, image: { width: 1920, height: 1080, hasAlpha: false },
+    }),
+    fixtureAsset(fixtureRoot, "stills/logo-256.png", {
+      id: "ast_hhhhhhhhhh", kind: "image", container: "png_pipe",
+      probe: { width: 256, height: 256 }, image: { width: 256, height: 256, hasAlpha: false },
+    }),
+    fixtureAsset(fixtureRoot, "disc-track-720p30-8s.mp4", {
+      id: "ast_iiiiiiiiii", kind: "video", container: "mov,mp4,m4a,3gp,3g2,mj2",
+      probe: { duration: { frames: 240, fps: "30/1" }, width: 1280, height: 720, fps: "30/1" },
+      video: { codec: "h264", width: 1280, height: 720, fps: "30/1", pixFmt: "yuv420p", hasAlpha: false, rotation: 0 },
+    }),
+    fixtureAsset(fixtureRoot, "generated/frozen-overlay.png", {
+      id: "ast_jjjjjjjjjj", kind: "generated", container: "png_pipe",
+      probe: { width: 640, height: 360 }, image: { width: 640, height: 360, hasAlpha: false },
+      provenance: { sidecar: "generation-frozen" },
+    }),
+  ]);
+}
+
+function annotationSidecar(annotated) {
+  return {
+    format: "guyditor.annotations/v1",
+    annotations: annotated ? [{
+      id: "ann_aaaaaaaaaa",
+      shape: "rect",
+      body: "Tighten the pacing at this exact frame",
+      style: { color: "#f2b84b", strokeWidth: 0.004 },
+      geometry: { kind: "rect", origin: { x: 0.2, y: 0.2 }, size: { x: 0.35, y: 0.3 } },
+      anchor: { kind: "timeline", sequenceId: "seq_aaaaaaaaaa", frame: { frames: 90, fps: "30/1" } },
+      extent: { frames: 0, fps: "30/1" },
+      canvasRef: { sequenceId: "seq_aaaaaaaaaa", deliverableId: "dlv_aaaaaaaaaa", aspect: "16:9" },
+      state: "open",
+      blocking: false,
+      author: { kind: "human", id: "fixture" },
+      createdAt: FIXED_CREATED_AT,
+      history: [],
+    }] : [],
+  };
+}
+
+async function createProjectTemplate(core, fixtureRoot, name) {
+  const root = path.join(fixtureRoot, "projects", name);
+  const annotated = name === "annotated";
+  const assets = await projectAssets(fixtureRoot);
+  const transcript = makeTranscriptFixture({
+    assetId: "ast_bbbbbbbbbb",
+    durationSamples: 960_000,
+    seed: 0x4d_31,
+    wordCount: 40,
+  });
+  const annotations = core.serializeAnnotationSidecar(annotationSidecar(annotated));
+  const generation = `${JSON.stringify({
+    format: "guyditor.generated-provenance/v1",
+    assetId: "ast_jjjjjjjjjj",
+    frozen: true,
+    generator: { name: "guyditor-fixture-generator", version: FIXTURE_GENERATOR_VERSION },
+  }, null, 2)}\n`;
+  const transcriptText = `${JSON.stringify(transcript, null, 2)}\n`;
+  const model = {
+    format: "guyditor/v1",
+    revision: "rev_00001",
+    project: { id: "prj_aaaaaaaaaa", name: `M1 ${name} template`, created: FIXED_CREATED_AT },
+    settings: {
+      timeline: { fps: "30/1", width: 1920, height: 1080 },
+      audio: { sampleRate: 48_000, channels: 2 },
+      primaryDeliverable: "dlv_aaaaaaaaaa",
+    },
+    transcript: { nextWordOrdinal: 41 },
+    assets,
+    beats: [],
+    sequences: [{
+      id: "seq_aaaaaaaaaa",
+      name: "main",
+      clips: [
+        { id: "clp_aaaaaaaaaa", asset: "ast_aaaaaaaaaa", source: { in: { frames: 0, fps: "30/1" }, out: { frames: 120, fps: "30/1" } } },
+        { id: "clp_bbbbbbbbbb", asset: "ast_dddddddddd", source: { in: { frames: 225, fps: "30/1" }, out: { frames: 345, fps: "30/1" } } },
+        { id: "clp_cccccccccc", asset: "ast_eeeeeeeeee", source: { in: { frames: 0, fps: "30/1" }, out: { frames: 90, fps: "30/1" } } },
+        { id: "clp_dddddddddd", asset: "ast_cccccccccc", source: { in: { frames: 30, fps: "30/1" }, out: { frames: 120, fps: "30/1" } } },
+      ],
+    }],
+    layers: [
+      { id: "lyr_aaaaaaaaaa", kind: "video", name: "Video + source audio", order: 0, enabled: true, locked: false, sequence: "seq_aaaaaaaaaa" },
+      { id: "lyr_bbbbbbbbbb", kind: "audio", name: "Speech reference", order: 1, enabled: false, locked: false, sequence: "seq_aaaaaaaaaa" },
+      { id: "lyr_cccccccccc", kind: "image", name: "Review overlay", order: 2, enabled: false, locked: false, sequence: "seq_aaaaaaaaaa" },
+    ],
+    captions: [],
+    annotations: { sidecar: "annotations", summary: { open: annotated ? 1 : 0, resolved: 0, rejected: 0, reopened: 0 } },
+    deliverables: [{
+      id: "dlv_aaaaaaaaaa", kind: "longform", name: "primary", profile: "youtube-longform@1.0.0",
+      sequenceId: "seq_aaaaaaaaaa", status: "approved", approvedRevision: "rev_00001",
+    }],
+    presets: [],
+    skills: [],
+    sidecars: [
+      { name: "annotations", path: "sidecars/annotations.yaml", schema: "guyditor.annotations/v1", sha256: createHash("sha256").update(annotations).digest("hex"), inputs: [] },
+      { name: "generation-frozen", path: "sidecars/generated-frozen.json", schema: "guyditor.generated-provenance/v1", sha256: createHash("sha256").update(generation).digest("hex"), generatedBy: { tool: "guyditor-fixture-generator", version: FIXTURE_GENERATOR_VERSION }, inputs: [{ asset: "ast_hhhhhhhhhh", sha256: assets.find(({ id }) => id === "ast_hhhhhhhhhh").sha256 }] },
+      { name: "transcript-speech", path: "sidecars/transcript-speech.json", schema: "guyditor.transcript/v1", sha256: createHash("sha256").update(transcriptText).digest("hex"), generatedBy: { tool: "guyditor-fixture-generator", version: FIXTURE_GENERATOR_VERSION, job: "job_fixturezzz" }, inputs: [{ asset: "ast_bbbbbbbbbb", sha256: assets.find(({ id }) => id === "ast_bbbbbbbbbb").sha256 }] },
+    ],
+  };
+  const created = await core.createProject(root, model, {
+    appVersion: "0.0.0-fixtures",
+    idFactory: (prefix) => `${prefix}_fixturezzz`,
+    now: () => new Date(FIXED_CREATED_AT),
+  });
+  if (!created.ok) throw created.error;
+  await Promise.all([
+    writeFile(path.join(root, "sidecars/annotations.yaml"), annotations),
+    writeFile(path.join(root, "sidecars/generated-frozen.json"), generation),
+    writeFile(path.join(root, "sidecars/transcript-speech.json"), transcriptText),
+  ]);
+}
+
+async function createProjectTemplates(core, fixtureRoot) {
+  for (const name of REQUIRED_PROJECT_TEMPLATES) {
+    await createProjectTemplate(core, fixtureRoot, name);
+  }
 }
 
 async function validateOutputs(runFfprobe, fixtureRoot) {
@@ -816,6 +1077,7 @@ async function validateOutputs(runFfprobe, fixtureRoot) {
       height: 720,
       width: 1280,
     },
+    "generated/frozen-overlay.png": { height: 360, width: 640 },
   };
   for (const [relativePath, expected] of Object.entries(expectations)) {
     await validateMedia(runFfprobe, fixtureRoot, relativePath, expected);
@@ -860,7 +1122,7 @@ export async function generateFixtures({
   let mediaRuntime;
   try {
     mediaRuntime = await buildMediaRuntime();
-    const { runFfmpeg, runFfprobe } = mediaRuntime;
+    const { core, runFfmpeg, runFfprobe } = mediaRuntime;
     await rm(fixtureRoot, { force: true, recursive: true });
     await mkdir(fixtureRoot, { recursive: true });
 
@@ -872,6 +1134,7 @@ export async function generateFixtures({
       ["A/V sync pair", () => createAvsync(runFfmpeg, fixtureRoot)],
       ["stills", () => createStills(runFfmpeg, fixtureRoot)],
       ["disc tracking", () => createDiscTrack(runFfmpeg, fixtureRoot)],
+      ["frozen generated overlay", () => createFrozenOverlay(runFfmpeg, fixtureRoot)],
       ["transcripts", () => createTranscripts(fixtureRoot)],
     ];
     for (const [label, create] of steps) {
@@ -881,6 +1144,8 @@ export async function generateFixtures({
 
     log("fixtures: validating media with ffprobe");
     await validateOutputs(runFfprobe, fixtureRoot);
+    log("fixtures: building schema-valid project templates through @guyditor/core");
+    await createProjectTemplates(core, fixtureRoot);
     const manifest = await buildManifest(ffmpeg, fixtureRoot);
     await writeJson(path.join(fixtureRoot, "manifest.json"), manifest);
     const elapsedSeconds = (performance.now() - startedAt) / 1_000;
@@ -897,7 +1162,7 @@ export async function generateFixtures({
       `fixtures: wrote ${Object.keys(manifest.files).length} files (${totalBytes} bytes) in ${elapsedSeconds.toFixed(2)} s`,
     );
     log(
-      "fixtures: projects/ templates deferred until the Part 3 project model is ready",
+      "fixtures: wrote basic and annotated project templates",
     );
     return { manifest, regenerated: true };
   } finally {

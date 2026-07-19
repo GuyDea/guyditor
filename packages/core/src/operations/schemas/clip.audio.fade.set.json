@@ -1,0 +1,37 @@
+{
+  "$id": "guyditor:op/clip.audio.fade.set",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["clipId", "fadeIn", "fadeOut"],
+  "additionalProperties": false,
+  "properties": {
+    "clipId": { "type": "string", "pattern": "^clp_[a-z2-7]{10}$" },
+    "fadeIn": { "$ref": "#/$defs/fade" },
+    "fadeOut": { "$ref": "#/$defs/fade" }
+  },
+  "$defs": {
+    "frameTime": {
+      "type": "object",
+      "required": ["frames", "fps"],
+      "additionalProperties": false,
+      "properties": {
+        "frames": { "type": "integer", "minimum": 0 },
+        "fps": { "type": "string", "pattern": "^[0-9]+/[0-9]+$" }
+      }
+    },
+    "fade": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": ["t", "curve"],
+          "additionalProperties": false,
+          "properties": {
+            "t": { "$ref": "#/$defs/frameTime" },
+            "curve": { "type": "string", "minLength": 1 }
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["annotationId"],
+  "properties": {
+    "annotationId": { "type": "string", "pattern": "^ann_[a-z2-7]{10}$" },
+    "layerId": { "type": "string", "pattern": "^lyr_[a-z2-7]{10}$" },
+    "templateId": { "type": "string", "pattern": "^tpl_[a-z2-7_]+$" },
+    "durationOverride": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["frames", "fps"],
+      "properties": {
+        "frames": { "type": "integer", "minimum": 0 },
+        "fps": { "type": "string", "pattern": "^[0-9]+/[1-9][0-9]*$" }
+      }
+    },
+    "styleOverrides": { "type": "object" },
+    "itemId": { "type": "string", "pattern": "^(gfx|clp)_[a-z2-7]{10}$" },
+    "assetId": { "type": "string", "pattern": "^ast_[a-z2-7]{10}$" },
+    "createdLayerId": { "type": "string", "pattern": "^lyr_[a-z2-7]{10}$" },
+    "revert": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["layerId", "itemId", "createdLayer"],
+      "properties": {
+        "layerId": { "type": "string", "pattern": "^lyr_[a-z2-7]{10}$" },
+        "itemId": { "type": "string", "pattern": "^(gfx|clp)_[a-z2-7]{10}$" },
+        "createdLayer": { "type": "boolean" }
+      }
+    },
+    "forward": { "type": "object" }
+  }
+}

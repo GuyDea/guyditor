@@ -1,0 +1,44 @@
+{
+  "$id": "guyditor:op/clip.restore",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["sequenceId", "targetIndex", "clips"],
+  "additionalProperties": false,
+  "properties": {
+    "sequenceId": { "type": "string", "pattern": "^seq_[a-z2-7]{10}$" },
+    "targetIndex": { "type": "integer", "minimum": 0 },
+    "clips": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "asset", "source"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^clp_[a-z2-7]{10}$" },
+          "asset": { "type": "string", "pattern": "^ast_[a-z2-7]{10}$" },
+          "source": {
+            "type": "object",
+            "required": ["in", "out"],
+            "additionalProperties": false,
+            "properties": {
+              "in": { "$ref": "#/$defs/frameTime" },
+              "out": { "$ref": "#/$defs/frameTime" }
+            }
+          }
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "$defs": {
+    "frameTime": {
+      "type": "object",
+      "required": ["frames", "fps"],
+      "additionalProperties": false,
+      "properties": {
+        "frames": { "type": "integer" },
+        "fps": { "type": "string", "pattern": "^[0-9]+/[0-9]+$" }
+      }
+    }
+  }
+}

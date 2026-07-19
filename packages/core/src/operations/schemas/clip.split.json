@@ -6,6 +6,12 @@
   "additionalProperties": false,
   "properties": {
     "clipId": { "type": "string", "pattern": "^clp_[a-z2-7]{10}$" },
-    "at": { "type": "integer" }
+    "at": { "type": "integer" },
+    "newClipId": { "type": "string", "pattern": "^clp_[a-z2-7]{10}$" },
+    "newEffectIds": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^fx_[a-z2-7]{10}$" }
+    },
+    "evidence": { "type": "string", "minLength": 1 }
   }
 }

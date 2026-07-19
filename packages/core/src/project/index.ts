@@ -19,6 +19,7 @@ export type {
 } from "./derive.js";
 export type {
   AnchorRange,
+  AnchorMetadata,
   AnnotationIndex,
   Asset,
   Beat,

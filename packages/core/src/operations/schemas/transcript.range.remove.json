@@ -1,0 +1,43 @@
+{
+  "$id": "guyditor:op/transcript.range.remove",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["wordRange"],
+  "additionalProperties": false,
+  "properties": {
+    "wordRange": { "$ref": "#/$defs/wordRange" },
+    "paddingMs": { "type": "integer", "minimum": 0, "default": 120 },
+    "snapPolicy": {
+      "enum": ["none", "zero-crossing", "word-boundary"],
+      "default": "none"
+    },
+    "compiledSplits": { "$ref": "#/$defs/compiledSplits" },
+    "evidence": { "type": "string", "minLength": 1 }
+  },
+  "$defs": {
+    "wordRange": {
+      "type": "object",
+      "required": ["fromWord", "toWord"],
+      "additionalProperties": false,
+      "properties": {
+        "fromWord": { "type": "string", "pattern": "^w[0-9]{6}$" },
+        "toWord": { "type": "string", "pattern": "^w[0-9]{6}$" }
+      }
+    },
+    "compiledSplits": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["newClipId"],
+        "additionalProperties": false,
+        "properties": {
+          "newClipId": { "type": "string", "pattern": "^clp_[a-z2-7]{10}$" },
+          "newEffectIds": {
+            "type": "array",
+            "items": { "type": "string", "pattern": "^fx_[a-z2-7]{10}$" }
+          }
+        }
+      }
+    }
+  }
+}

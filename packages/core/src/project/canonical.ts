@@ -57,20 +57,20 @@ const ORDERS = {
   ingest: ["at", "ffprobeVersion", "via"],
   provenance: ["sidecar"],
   rights: ["source", "license", "restrictions"],
-  beat: ["id", "name", "anchor", "chapter"],
+  beat: ["id", "name", "anchor", "anchorMetadata", "chapter"],
   chapter: ["title"],
   sequence: ["id", "name", "clips", "audio"],
   sequenceAudio: ["targetLufs", "truePeakDb"],
   clip: [
     "id", "asset", "source", "gapBefore", "overlapPrevious",
-    "transitionAfter", "effects", "audio", "loop", "anchor", "punchIn",
+    "transitionAfter", "effects", "audio", "loop", "anchor", "anchorMetadata", "punchIn",
   ],
   frameRange: ["in", "out"],
   frameTime: ["frames", "fps"],
   sampleTime: ["samples", "rate"],
   transition: ["id", "preset", "duration", "params", "intent"],
   effect: ["id", "kind", "params"],
-  clipAudio: ["gainDb", "fadeIn", "fadeOut", "mute", "offset", "channels", "chain"],
+  clipAudio: ["gainDb", "fadeIn", "fadeInCurve", "fadeOut", "fadeOutCurve", "mute", "offset", "channels", "chain"],
   loop: ["enabled", "crossfade"],
   punchIn: ["level", "anchor"],
   point: ["x", "y"],
@@ -80,9 +80,12 @@ const ORDERS = {
   ],
   matte: ["layerId", "source", "invert"],
   placedItem: [
-    "id", "asset", "template", "at", "duration", "source", "effects",
+    "id", "asset", "template", "at", "duration", "anchorMetadata", "source", "effects",
     "params", "seed", "layout",
   ],
+  anchorMetadataEntry: ["lastResolved"],
+  anchorLastResolved: ["timeline", "revision", "context"],
+  anchorWordContext: ["wordsBefore", "wordsAfter"],
   until: ["until"],
   caption: [
     "id", "name", "sourceLayerIds", "preset", "styleOverrides",
@@ -173,6 +176,12 @@ function orderFor(
   if (key === "anchor" && "x" in value && "y" in value) return ORDERS.point;
   if (key === "matte") return ORDERS.matte;
   if (key === "duration" && "until" in value) return ORDERS.until;
+  if (key === "anchorMetadata") return undefined;
+  if (key === "lastResolved") return ORDERS.anchorLastResolved;
+  if (key === "context" && "wordsBefore" in value) return ORDERS.anchorWordContext;
+  if ("lastResolved" in value && Object.keys(value).length === 1) {
+    return ORDERS.anchorMetadataEntry;
+  }
   if (key === "preset" && "presetId" in value) return ORDERS.captionPreset;
   if (key === "summary" && includesPath(path, "annotations")) return ORDERS.annotationSummary;
   if (key === "generatedBy") return ORDERS.generatedBy;

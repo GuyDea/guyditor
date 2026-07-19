@@ -5,3 +5,9 @@ dist/
 *.tsbuildinfo
 *.log
 .guyditor-demo/
+workers/mlworker/.venv/
+workers/mlworker/.uv-cache/
+workers/mlworker/.uv-python/
+workers/mlworker/.pytest_cache/
+workers/mlworker/**/__pycache__/
+workers/mlworker/uv.lock

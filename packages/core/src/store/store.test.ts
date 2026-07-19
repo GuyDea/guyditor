@@ -132,8 +132,16 @@ describe("ProjectStore", () => {
       .resolves.toBe(canonicalizeYaml(projectFixture()));
     await expect(readFile(join(root, "history/HEAD"), "utf8"))
       .resolves.toBe("rev_00001\n");
-    await expect(readFile(join(root, "history/transactions.jsonl"), "utf8"))
-      .resolves.toBe("");
+    const creationJournal = await readFile(
+      join(root, "history/transactions.jsonl"),
+      "utf8",
+    );
+    expect(creationJournal.trim().split("\n")).toHaveLength(1);
+    expect(JSON.parse(creationJournal) as Record<string, unknown>).toMatchObject({
+      baseRevision: "rev_00000",
+      resultRevision: "rev_00001",
+      operations: [{ op: "project.create", summary: "Create project Fixture" }],
+    });
     await expect(readFile(join(root, ".gitignore"), "utf8"))
       .resolves.toBe(".guyditor/\nproposals/*/previews/\nmedia/\n");
 
@@ -190,10 +198,10 @@ describe("ProjectStore", () => {
 
     const journal = await readFile(join(root, "history/transactions.jsonl"), "utf8");
     const lines = journal.trimEnd().split("\n");
-    expect(lines).toHaveLength(1);
-    const parsed: unknown = JSON.parse(lines[0]!);
+    expect(lines).toHaveLength(2);
+    const parsed: unknown = JSON.parse(lines[1]!);
     expect(parsed).toEqual(transaction());
-    expect(lines[0]).toBe(JSON.stringify(sortedJson(parsed)));
+    expect(lines[1]).toBe(JSON.stringify(sortedJson(parsed)));
     expect((await allPaths(root)).some((path) => path.includes(".tmp-"))).toBe(false);
 
     const reopened = await valueOf(openProject(root, { appVersion: "0.0.0-test" }));
@@ -204,6 +212,10 @@ describe("ProjectStore", () => {
     const root = await directory();
     const store = await valueOf(createProject(root, projectFixture()));
     const before = await readFile(join(root, "episode.guyditor.yaml"), "utf8");
+    const beforeJournal = await readFile(
+      join(root, "history/transactions.jsonl"),
+      "utf8",
+    );
     const result = await store.commit(
       committedModel(),
       transaction("rev_00000", "rev_00001"),
@@ -216,7 +228,34 @@ describe("ProjectStore", () => {
     await expect(readFile(join(root, "episode.guyditor.yaml"), "utf8"))
       .resolves.toBe(before);
     await expect(readFile(join(root, "history/transactions.jsonl"), "utf8"))
-      .resolves.toBe("");
+      .resolves.toBe(beforeJournal);
+  });
+
+  it("serializes concurrent commits so only one transaction can advance a base revision", async () => {
+    const root = await directory();
+    const store = await valueOf(createProject(root, projectFixture()));
+    const firstModel = committedModel();
+    const secondModel = committedModel();
+    secondModel.sequences[0]!.clips[0]!.source.out.frames = 22;
+    const firstTransaction = transaction();
+    const secondTransaction = transaction();
+    secondTransaction.id = "txn_bbbbbbbbbb";
+
+    const results = await Promise.all([
+      store.commit(firstModel, firstTransaction),
+      store.commit(secondModel, secondTransaction),
+    ]);
+
+    expect(results.filter(({ ok }) => ok)).toHaveLength(1);
+    expect(results.filter(({ ok }) => !ok)).toMatchObject([{
+      ok: false,
+      error: { code: "E_OP_STALE_BASE" },
+    }]);
+    const journalLines = (await readFile(
+      join(root, "history/transactions.jsonl"),
+      "utf8",
+    )).trim().split("\n");
+    expect(journalLines).toHaveLength(2);
   });
 
   it("re-derives missing master, snapshot, and lock artifacts on open", async () => {

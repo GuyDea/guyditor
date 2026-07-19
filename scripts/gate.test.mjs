@@ -3,9 +3,17 @@ import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { test } from "node:test";
 
-import { runGate } from "./gate.mjs";
+import {
+  M1_AC_IDS,
+  M1_SHIP_IDS,
+  runGate,
+  validateDogfoodReport,
+  validateM1Traceability,
+} from "./gate.mjs";
 import {
   REQUIRED_FIXTURE_PATHS,
+  REQUIRED_PROJECT_TEMPLATES,
+  REQUIRED_PROJECT_TEMPLATE_PATHS,
 } from "./fixture-spec.mjs";
 
 function fixtureKind(filePath) {
@@ -51,6 +59,11 @@ function validGroundTruth(filePath) {
       })),
       radius: 48,
     },
+    "generated/frozen-overlay.png": {
+      frozen: true,
+      height: 360,
+      width: 640,
+    },
     "transcripts/short-exact.json": {
       duration: { rate: 48_000, samples: 576_000 },
       wordCount: 24,
@@ -78,7 +91,49 @@ function completeManifest() {
       ]),
     ),
     generatorVersion: "1",
+    projects: Object.fromEntries(REQUIRED_PROJECT_TEMPLATES.map((name) => [
+      name,
+      {
+        files: Object.fromEntries(REQUIRED_PROJECT_TEMPLATE_PATHS.map((filePath) => [
+          filePath,
+          { bytes: 1, sha256: "b".repeat(64) },
+        ])),
+        groundTruth: {
+          annotationCount: name === "annotated" ? 1 : 0,
+          ...(name === "annotated" ? { exactFrame: { frames: 90, fps: "30/1" } } : {}),
+          primaryDeliverableId: "dlv_aaaaaaaaaa",
+          revision: "rev_00001",
+          schemaValid: true,
+          sequenceId: "seq_aaaaaaaaaa",
+          transcriptAssetId: "ast_bbbbbbbbbb",
+        },
+      },
+    ])),
   };
+}
+
+function completeTraceability() {
+  const implemented = new Set(["AC-001", "AC-002", "AC-004"]);
+  return [...M1_SHIP_IDS, ...M1_AC_IDS].map((id) =>
+    `| ${id} | Part | ${implemented.has(id) ? "implemented" : "partial"} | \`test/${id}.test.ts\` | evidence |`
+  ).join("\n");
+}
+
+function completeDogfood() {
+  return `# M1 dogfood
+Episode title: Creator episode
+Date: 2026-07-19
+## Source-footage inventory
+camera.mp4
+## Shipped features used
+ingest, review, export
+## Manual workarounds needed
+none
+## Export report links
+exports/report.json
+## §23 metrics snapshot
+recorded
+`;
 }
 
 test("m0 runs fixtures first, then checks, and prints deferred work", () => {
@@ -100,7 +155,7 @@ test("m0 runs fixtures first, then checks, and prints deferred work", () => {
     ["node", "scripts/video-zero.mjs"],
     ["pnpm", "check:conventions"],
     ["pnpm", "-r", "typecheck"],
-    ["pnpm", "exec", "vitest", "run"],
+    ["pnpm", "exec", "vitest", "run", "--project", "unit", "--project", "golden"],
     [
       "node",
       "--test",
@@ -158,6 +213,79 @@ test("m0 uses the Windows pnpm executable without changing command displays", ()
     ["pnpm.cmd", "node", "pnpm.cmd", "pnpm.cmd", "pnpm.cmd", "node"],
   );
   assert.match(output[0], /^==> pnpm fixtures$/);
+});
+
+test("m1 runs the complete §14.8 command algorithm and milestone AC suite", () => {
+  const commands = [];
+  const reports = [];
+
+  const status = runGate("m1", {
+    log: () => {},
+    readDogfoodReport: completeDogfood,
+    readFixtureManifest: completeManifest,
+    readTraceabilityReport: completeTraceability,
+    runCommand: (command, args) => {
+      commands.push([command, ...args]);
+      return { status: 0 };
+    },
+    writeGateReport: (input) => {
+      reports.push(input);
+      return "/repo/docs/gates/m1-test.md";
+    },
+  });
+
+  assert.equal(status, 0);
+  assert.deepEqual(commands, [
+    ["pnpm", "fixtures"],
+    ["pnpm", "check:conventions"],
+    ["pnpm", "test"],
+    ["pnpm", "test:contract"],
+    ["pnpm", "test:golden"],
+    ["pnpm", "test:e2e"],
+    ["pnpm", "test:ac", "--", "m1"],
+  ]);
+  assert.equal(reports.length, 1);
+  assert.equal(reports[0].traceabilityCount, M1_SHIP_IDS.length + M1_AC_IDS.length);
+});
+
+test("m1 skip-dogfood is explicit, loud, and still emits the automated gate report", () => {
+  const output = [];
+  let emitted = false;
+  const status = runGate("m1", {
+    log: (message) => output.push(message),
+    readFixtureManifest: completeManifest,
+    readTraceabilityReport: completeTraceability,
+    runCommand: () => ({ status: 0 }),
+    skipDogfood: true,
+    writeGateReport: () => {
+      emitted = true;
+      return "/repo/docs/gates/m1-test.md";
+    },
+  });
+  assert.equal(status, 0);
+  assert.equal(emitted, true);
+  assert.match(output.join("\n"), /TODO.*DOGFOOD.*SKIPPED/iu);
+});
+
+test("m1 rejects absent, incomplete, or un-evidenced checklist rows", () => {
+  const missing = validateM1Traceability(completeTraceability().replace(
+    /^\| FR-001 .*$/mu,
+    "| FR-001 | Part | todo | | missing |",
+  ));
+  assert.match(missing.join("\n"), /FR-001.*status.*implemented or partial/iu);
+  assert.match(missing.join("\n"), /FR-001.*evidence/iu);
+
+  const partialAc = validateM1Traceability(completeTraceability().replace(
+    "| AC-004 | Part | implemented |",
+    "| AC-004 | Part | partial |",
+  ));
+  assert.match(partialAc.join("\n"), /AC-004.*must be implemented/iu);
+});
+
+test("m1 dogfood validation enforces every §14.8 field", () => {
+  assert.deepEqual(validateDogfoodReport(completeDogfood()), []);
+  assert.match(validateDogfoodReport("# incomplete").join("\n"), /episode title/iu);
+  assert.match(validateDogfoodReport("# incomplete").join("\n"), /§23 metrics/iu);
 });
 
 test("m0 rejects a fixture manifest missing a required entry", () => {
@@ -226,7 +354,7 @@ test("m0 rejects motion paths with missing coordinates", () => {
   assert.match(errors.join("\n"), /subjectBoundingBoxPath.*x.*y.*width.*height/);
 });
 
-for (const milestone of [undefined, "m1", "m2", "m3", "m4", "unsupported"]) {
+for (const milestone of [undefined, "m2", "m3", "m4", "unsupported"]) {
   test(`gate ${milestone ?? "<missing>"} exits one with a clear message`, () => {
     const gatePath = path.join(import.meta.dirname, "gate.mjs");
     const args = milestone === undefined ? [gatePath] : [gatePath, milestone];

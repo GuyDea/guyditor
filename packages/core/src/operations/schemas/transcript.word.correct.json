@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "minProperties": 2,
+  "required": ["wordId"],
+  "properties": {
+    "wordId": { "$ref": "#/$defs/wordId" },
+    "text": { "type": "string", "minLength": 1 },
+    "punctBefore": { "type": "string" },
+    "punctAfter": { "type": "string" }
+  },
+  "$defs": { "wordId": { "type": "string", "pattern": "^w[0-9]{6}$" } }
+}

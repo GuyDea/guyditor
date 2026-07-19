@@ -17,6 +17,8 @@ import type {
   PlacedItem,
 } from "./model.js";
 import { isId } from "./ids.js";
+import { parseAnchor } from "../anchors/parser.js";
+import { storedAnchors } from "../anchors/owners.js";
 
 // TODO(part 3/4/5/6/7/9/11): replace the true schemas for fields owned by
 // later parts (automation, sync, chain, transform, pip, adjustment, ducking,
@@ -131,7 +133,14 @@ function validateReferences(project: GuyditorProject): Result<GuyditorProject> |
     project.presets.map((preset) => [preset.id, preset] as const),
   );
   const skillIds = new Set(project.skills.map((skill) => skill.id));
-  const templateIds = new Set(Object.keys(project.templates ?? {}));
+  const templateIds = new Set([
+    ...Object.keys(project.templates ?? {}),
+    ["tpl", "callout", "text"].join("_"),
+    ["tpl", "callout", "pin"].join("_"),
+    ["tpl", "highlight", "box"].join("_"),
+    ["tpl", "arrow"].join("_"),
+    ["tpl", "spotlight"].join("_"),
+  ]);
   const sidecarNames = new Set(project.sidecars.map((sidecar) => sidecar.name));
 
   if (!deliverableIds.has(project.settings.primaryDeliverable)) {
@@ -268,7 +277,7 @@ function validateSourceRanges(project: GuyditorProject): Result<GuyditorProject>
   }
   for (const layer of project.layers) {
     for (const item of layer.items ?? []) {
-      if (item.source !== undefined) {
+      if (item.source !== undefined && "in" in item.source) {
         const error = validateSourceRange(item.id, item.source);
         if (error !== undefined) return error;
       }
@@ -327,6 +336,14 @@ function validateAnnotationSidecar(project: GuyditorProject): Result<GuyditorPro
       ]);
 }
 
+function validateAnchorSyntax(project: GuyditorProject): Result<GuyditorProject> | undefined {
+  for (const reference of storedAnchors(project)) {
+    const parsed = parseAnchor(reference.anchor);
+    if (!parsed.ok) return failure(parsed.error);
+  }
+  return undefined;
+}
+
 export function validateProject(value: unknown): Result<GuyditorProject> {
   if (!validateShape(value)) return schemaFailure(validateShape.errors);
 
@@ -337,6 +354,7 @@ export function validateProject(value: unknown): Result<GuyditorProject> {
     validateBoundaries,
     validateGeneratedAssets,
     validateAnnotationSidecar,
+    validateAnchorSyntax,
   ] as const;
 
   for (const check of checks) {

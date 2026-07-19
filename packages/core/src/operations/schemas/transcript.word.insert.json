@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["segmentId", "afterWordId", "tokens"],
+  "properties": {
+    "segmentId": { "type": "string", "pattern": "^seg_[a-z2-7]{10}$" },
+    "afterWordId": { "oneOf": [{ "$ref": "#/$defs/wordId" }, { "type": "null" }] },
+    "tokens": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } }
+  },
+  "$defs": { "wordId": { "type": "string", "pattern": "^w[0-9]{6}$" } }
+}

@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["assetId", "sidecar", "engine", "alignment", "jobId"],
+  "properties": {
+    "assetId": { "type": "string", "pattern": "^ast_[a-z2-7]{10}$" },
+    "sidecar": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": { "type": "string", "pattern": "^sidecars/transcripts/ast_[a-z2-7]{10}\\.transcript\\.json$" },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "engine": { "$ref": "#/$defs/engine" },
+    "alignment": { "oneOf": [{ "$ref": "#/$defs/engine" }, { "type": "null" }] },
+    "jobId": { "type": "string", "pattern": "^job_[a-z2-7]{10}$" }
+  },
+  "$defs": {
+    "engine": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "model"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 },
+        "model": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

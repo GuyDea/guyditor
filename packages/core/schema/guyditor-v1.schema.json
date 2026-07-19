@@ -88,6 +88,38 @@
         "end": { "$ref": "#/$defs/anchor" }
       }
     },
+    "anchorMetadata": {
+      "type": "object",
+      "propertyNames": { "enum": ["/anchor", "/at", "/duration/until"] },
+      "additionalProperties": { "$ref": "#/$defs/anchorMetadataEntry" }
+    },
+    "anchorMetadataEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["lastResolved"],
+      "properties": {
+        "lastResolved": { "$ref": "#/$defs/anchorLastResolved" }
+      }
+    },
+    "anchorLastResolved": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["timeline", "revision"],
+      "properties": {
+        "timeline": { "$ref": "#/$defs/frameTime" },
+        "revision": { "type": "string", "pattern": "^rev_[0-9]{5}$" },
+        "context": { "$ref": "#/$defs/anchorWordContext" }
+      }
+    },
+    "anchorWordContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["wordsBefore", "wordsAfter"],
+      "properties": {
+        "wordsBefore": { "type": "array", "maxItems": 5, "items": { "type": "string" } },
+        "wordsAfter": { "type": "array", "maxItems": 5, "items": { "type": "string" } }
+      }
+    },
     "id": {
       "type": "string",
       "pattern": "^(ast|clp|seq|lyr|trn|cts|ann|dlv|pre|tpl|skl|beat|mrk|tak|fx|prj|job|adp|gfx|ses|msk|kfr|avr)_[a-z2-7]{10}$"
@@ -302,6 +334,7 @@
         "id": { "type": "string", "pattern": "^beat_[a-z2-7]{10}$" },
         "name": { "type": "string" },
         "anchor": { "$ref": "#/$defs/anchor" },
+        "anchorMetadata": { "$ref": "#/$defs/anchorMetadata" },
         "chapter": { "$ref": "#/$defs/chapter" }
       }
     },
@@ -346,6 +379,7 @@
         "audio": { "$ref": "#/$defs/clipAudio" },
         "loop": { "$ref": "#/$defs/clipLoop" },
         "anchor": { "$ref": "#/$defs/anchor" },
+        "anchorMetadata": { "$ref": "#/$defs/anchorMetadata" },
         "punchIn": { "$ref": "#/$defs/punchIn" }
       }
     },
@@ -386,7 +420,9 @@
       "properties": {
         "gainDb": { "type": "number" },
         "fadeIn": { "$ref": "#/$defs/frameTime" },
+        "fadeInCurve": { "type": "string", "minLength": 1 },
         "fadeOut": { "$ref": "#/$defs/frameTime" },
+        "fadeOutCurve": { "type": "string", "minLength": 1 },
         "mute": { "type": "boolean" },
         "offset": { "$ref": "#/$defs/sampleTime" },
         "channels": {
@@ -469,7 +505,10 @@
       "properties": {
         "id": { "type": "string", "pattern": "^(clp|gfx)_[a-z2-7]{10}$" },
         "asset": { "type": "string", "pattern": "^ast_[a-z2-7]{10}$" },
-        "template": { "type": "string", "pattern": "^tpl_[a-z2-7]{10}$" },
+        "template": {
+          "type": "string",
+          "pattern": "^tpl_([a-z2-7]{10}|callout_(text|pin)|highlight_box|arrow|spotlight)$"
+        },
         "at": { "$ref": "#/$defs/anchor" },
         "duration": {
           "oneOf": [
@@ -478,7 +517,13 @@
             { "const": "intrinsic" }
           ]
         },
-        "source": { "$ref": "#/$defs/frameRange" },
+        "anchorMetadata": { "$ref": "#/$defs/anchorMetadata" },
+        "source": {
+          "oneOf": [
+            { "$ref": "#/$defs/frameRange" },
+            { "$ref": "#/$defs/annotationProvenance" }
+          ]
+        },
         "effects": { "type": "array", "items": { "$ref": "#/$defs/effect" } },
         "params": { "$ref": "#/$defs/unknownRecord" },
         "seed": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
@@ -490,6 +535,14 @@
       "additionalProperties": false,
       "required": ["until"],
       "properties": { "until": { "$ref": "#/$defs/anchor" } }
+    },
+    "annotationProvenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["annotationId"],
+      "properties": {
+        "annotationId": { "type": "string", "pattern": "^ann_[a-z2-7]{10}$" }
+      }
     },
     "captionTrack": {
       "type": "object",

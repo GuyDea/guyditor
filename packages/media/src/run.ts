@@ -8,7 +8,9 @@ import type { ResolvedBinary } from "./binaries.js";
 import { FfmpegError } from "./errors.js";
 
 export interface RunFfmpegOptions {
+  collectStdout?: boolean;
   cwd?: string;
+  onStdoutChunk?: (chunk: Buffer) => void;
   onStdoutLine?: (line: string) => void;
   onStderrLine?: (line: string) => void;
   signal?: AbortSignal;
@@ -52,7 +54,8 @@ function runBinary(
     }
 
     child.stdout.on("data", (chunk: Buffer) => {
-      stdoutChunks.push(chunk);
+      if (options.collectStdout !== false) stdoutChunks.push(chunk);
+      options.onStdoutChunk?.(chunk);
       if (options.onStdoutLine === undefined) return;
       stdoutRemainder += chunk.toString("utf8");
       const lines = stdoutRemainder.split("\n");
@@ -109,7 +112,9 @@ function runBinary(
         binary,
         exitCode: 0,
         stderrLines,
-        stdout: Buffer.concat(stdoutChunks).toString("utf8"),
+        stdout: options.collectStdout === false
+          ? ""
+          : Buffer.concat(stdoutChunks).toString("utf8"),
       });
     });
   });

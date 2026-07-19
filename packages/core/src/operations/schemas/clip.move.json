@@ -1,0 +1,13 @@
+{
+  "$id": "guyditor:op/clip.move",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["clipId", "toIndex"],
+  "additionalProperties": false,
+  "properties": {
+    "clipId": { "type": "string", "pattern": "^clp_[a-z2-7]{10}$" },
+    "toSequenceId": { "type": "string", "pattern": "^seq_[a-z2-7]{10}$" },
+    "toLayerId": { "type": "string", "pattern": "^lyr_[a-z2-7]{10}$" },
+    "toIndex": { "type": "integer", "minimum": 0 }
+  }
+}
