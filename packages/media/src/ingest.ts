@@ -412,7 +412,12 @@ export class MediaEngine {
           { affected: [payload.projectRoot] },
         );
       }
-      return jsonValue(await this.#execute(project, payload.request, reportProgress));
+      return jsonValue(await this.#execute(
+        project,
+        payload.request,
+        job.jobId,
+        reportProgress,
+      ));
     });
     this.#queue.registerExecutor("proxy.generate", async (job, { signal }) => {
       const payload = job.payload as unknown as ProxyGeneratePayload;
@@ -482,6 +487,7 @@ export class MediaEngine {
     project: ProjectStore,
     assetId: string,
     tier: ProxyTier,
+    dependsOn: string[] = [],
   ): Promise<JobRecord | undefined> {
     const asset = project.currentProject.assets.find(({ id }) => id === assetId);
     if (asset === undefined) {
@@ -492,6 +498,15 @@ export class MediaEngine {
         { affected: [assetId] },
       );
     }
+    return this.#ensureProxy(project, asset, tier, dependsOn);
+  }
+
+  async #ensureProxy(
+    project: ProjectStore,
+    asset: Asset,
+    tier: ProxyTier,
+    dependsOn: string[],
+  ): Promise<JobRecord | undefined> {
     this.#projects.set(project.root, project);
     if (proxyCachePaths(project.root, asset, tier) === undefined) return undefined;
     if (!await proxyIsStale(
@@ -504,14 +519,15 @@ export class MediaEngine {
     }
     const active = this.#queue.list({ state: ["queued", "running"] }).find(
       (job) => job.kind === "proxy.generate" &&
-        proxyJobMatches(job.payload, project.root, assetId, tier),
+        proxyJobMatches(job.payload, project.root, asset.id, tier),
     );
     if (active !== undefined) return active;
     return this.#queue.enqueue({
       kind: "proxy.generate",
-      title: followUpTitle("proxy.generate", assetId),
-      payload: { assetId, projectRoot: project.root, tier },
+      title: followUpTitle("proxy.generate", asset.id),
+      payload: { assetId: asset.id, projectRoot: project.root, tier },
       cancellable: true,
+      dependsOn,
     });
   }
 
@@ -526,6 +542,7 @@ export class MediaEngine {
   async #execute(
     project: ProjectStore,
     request: IngestJobPayload["request"],
+    ingestJobId: string,
     reportProgress: (progress: number, etaSeconds?: number) => void,
   ): Promise<IngestJobResult> {
     const prepared = await Promise.all(
@@ -593,37 +610,22 @@ export class MediaEngine {
       }
     }
 
-    let transactionId: string | undefined;
-    if (mutations.size > 0) {
-      const engine = new OperationEngine(project.currentProject, {
-        appVersion: "0.0.0",
-        committer: project,
-        idFactory: this.#idFactory,
-        now: this.#now,
-      });
-      const committed = await engine.execute([{
-        op: "asset.ingest",
-        params: { assets: [...mutations.values()] },
-      }], {
-        baseRevision: project.currentProject.revision,
-        dryRun: false,
-        origin: "system",
-      });
-      if (!committed.ok) throw committed.error;
-      transactionId = committed.value.transactionId;
-    }
-    reportProgress(0.9);
-
     const followUpJobIds: string[] = [];
+    const assetsById = new Map([...byHash.values()].map((asset) => [asset.id, asset] as const));
     const assetIds = [...new Set(results.map(({ assetId }) => assetId))];
     for (const assetId of assetIds) {
-      const asset = project.currentProject.assets.find(({ id }) => id === assetId);
+      const asset = assetsById.get(assetId);
       if (asset === undefined) continue;
       const sourceRequests = sourceByAsset.get(assetId) ?? [];
       const speechBearing = sourceRequests.some((source) => source.speechBearing !== false);
       for (const kind of this.#followUpJobs) {
         if (kind === "proxy.generate") {
-          const followUp = await this.ensureProxy(project, assetId, "edit");
+          const followUp = await this.#ensureProxy(
+            project,
+            asset,
+            "edit",
+            [ingestJobId],
+          );
           if (followUp !== undefined) followUpJobIds.push(followUp.jobId);
           continue;
         }
@@ -654,10 +656,32 @@ export class MediaEngine {
                 wordTimestamps: true,
               },
           cancellable: true,
+          dependsOn: [ingestJobId],
         });
         followUpJobIds.push(followUp.jobId);
       }
     }
+
+    let transactionId: string | undefined;
+    if (mutations.size > 0) {
+      const engine = new OperationEngine(project.currentProject, {
+        appVersion: "0.0.0",
+        committer: project,
+        idFactory: this.#idFactory,
+        now: this.#now,
+      });
+      const committed = await engine.execute([{
+        op: "asset.ingest",
+        params: { assets: [...mutations.values()] },
+      }], {
+        baseRevision: project.currentProject.revision,
+        dryRun: false,
+        origin: "system",
+      });
+      if (!committed.ok) throw committed.error;
+      transactionId = committed.value.transactionId;
+    }
+    reportProgress(0.9);
 
     return {
       assets: results,

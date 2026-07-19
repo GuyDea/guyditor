@@ -33,11 +33,56 @@ export interface JobStatus {                  // superset of Part 0's job shape
   jobId: string; kind: string;
   state: "queued" | "running" | "done" | "failed" | "cancelled";
   progress: number;                           // 0..1
+  dependsOn: string[];
   error?: GuyditorError;
   title: string;                              // human-readable, for the job panel
   cancellable: boolean;
   createdAt: string; startedAt?: string; finishedAt?: string; // ISO 8601 UTC
   etaSeconds?: number;
+}
+
+export interface JobDependencyNode {
+  jobId: string;
+  kind: string;
+  title: string;
+  state: JobStatus["state"];
+  dependencies: JobDependencyNode[];
+}
+
+export interface QueuedJobOverview extends JobStatus {
+  dependencyChain: JobDependencyNode[];
+}
+
+export interface JobOverview {
+  running: JobStatus[];
+  queued: QueuedJobOverview[];
+  retryable: JobStatus[];
+  waitingOnCreator: {
+    proposals: Array<{ proposalId: string; title: string; createdAt: string }>;
+    annotations: Array<{
+      annotationId: string;
+      code: string;
+      message: string;
+      sequenceId?: string;
+    }>;
+    confirmations: Array<{
+      confirmToken: string;
+      taskId: string;
+      level: "task" | "episode" | "cumulative";
+      message: string;
+      estimatedUsd: number;
+      createdAt: string;
+    }>;
+  };
+  waitingOnExternal: Array<{
+    callId: string;
+    provider: string;
+    title: string;
+    elapsedSeconds: number;
+    spendUsd: number;
+  }>;
+  aggregateFraction: number;
+  idle: boolean;
 }
 
 export interface CapabilityReport {

@@ -6,6 +6,7 @@ import { join, resolve } from "node:path";
 import {
   AnnotationService,
   createProject,
+  JobQueue,
   OperationEngine,
 } from "../../../core/src/index.js";
 import type { ProjectStore, Result } from "../../../core/src/index.js";
@@ -17,6 +18,7 @@ const EMPTY_ANNOTATIONS = "format: guyditor.annotations/v1\nannotations: []\n";
 export interface WorkspaceProjectOptions {
   transcript?: boolean;
   proposal?: boolean;
+  queuedJob?: boolean;
 }
 
 async function valueOf<Value>(result: Promise<Result<Value>>): Promise<Value> {
@@ -47,6 +49,16 @@ export async function createWorkspaceProject(
 
   if (options.transcript === true) await addTranscript(created);
   if (options.proposal === true) await addProposal(created);
+  if (options.queuedJob === true) {
+    const { queue } = JobQueue.open(join(root, ".guyditor/jobs.sqlite"));
+    queue.enqueue({
+      kind: "manual.wait",
+      title: "Manual cancellable hold",
+      payload: null,
+      cancellable: true,
+    });
+    queue.close();
+  }
   return root;
 }
 

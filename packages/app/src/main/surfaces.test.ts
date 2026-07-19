@@ -25,6 +25,7 @@ describe("workspace IPC surfaces", () => {
         "rejectProposal",
         "supersedeProposal",
       ],
+      JobQueue: ["overview"],
       MediaEngine: ["ingest", "pickAndIngest", "resolveProxy", "readPeaks"],
       TranscriptEngine: ["enqueueFillerDetection"],
       AnnotationService: ["list", "get", "contextPackage"],
@@ -40,5 +41,6 @@ describe("workspace IPC surfaces", () => {
         expect(method?.budgetMs).toBeGreaterThan(0);
       }
     }
+    expect(methods.get("JobQueue")?.get("overview")?.budgetMs).toBe(20);
   });
 });

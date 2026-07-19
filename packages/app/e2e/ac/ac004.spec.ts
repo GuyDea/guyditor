@@ -7,6 +7,7 @@ import { AgentGateway, AuditLog, AC004_GATEWAY_TOOLS } from "../../../agent/src/
 import { runStubDirector } from "../../../agent/test/stub-director/index.js";
 import {
   openProject,
+  JobQueue,
   parseAnnotationSidecar,
 } from "../../../core/src/index.js";
 import type { Result, TransactionRecord } from "../../../core/src/index.js";
@@ -27,6 +28,7 @@ test("AC-004 — reviews an exact-frame visual note through the real gateway", a
     projectTemplate: join(REPOSITORY_ROOT, ".fixtures/projects/annotated"),
   });
   let gateway: AgentGateway | undefined;
+  let gatewayJobs: JobQueue | undefined;
   try {
     await expect(launched.page.getByTestId("revision-indicator")).toHaveText("rev_00001");
 
@@ -83,8 +85,10 @@ test("AC-004 — reviews an exact-frame visual note through the real gateway", a
     const store = await valueOf(openProject(projectPath, { appVersion: "0.0.0-ac004" }));
     const userDirectory = join(launched.userDataDirectory, ".guyditor");
     const audit = new AuditLog({ userDir: userDirectory });
+    gatewayJobs = JobQueue.open(join(projectPath, ".guyditor/jobs.sqlite")).queue;
     gateway = new AgentGateway({
       auditLog: audit,
+      jobQueue: gatewayJobs,
       project: store,
       stateDirectory: join(userDirectory, "state"),
       director: {
@@ -101,6 +105,7 @@ test("AC-004 — reviews an exact-frame visual note through the real gateway", a
       trimFrames: 2,
     });
     expect(stub.tools).toEqual([...AC004_GATEWAY_TOOLS].sort());
+    expect(stub.progress).toMatchObject({ idle: true, aggregateFraction: 1 });
     expect(stub.context).toMatchObject({
       annotation: { id: rectangle.id, body: "Trim this annotated ending" },
       position: { timelineFrame: { frames: 90, fps: "30/1" } },
@@ -113,6 +118,8 @@ test("AC-004 — reviews an exact-frame visual note through the real gateway", a
     });
     await gateway.close();
     gateway = undefined;
+    gatewayJobs.close();
+    gatewayJobs = undefined;
 
     expect(await readFile(join(projectPath, "episode.guyditor.yaml")))
       .toEqual(acceptedBeforeProposal);
@@ -160,7 +167,7 @@ test("AC-004 — reviews an exact-frame visual note through the real gateway", a
     expect(auditReplay.warnings).toEqual([]);
     expect(auditReplay.records.filter(({ type }) => type === "tool.call").map((record) =>
       record.type === "tool.call" ? record.tool : ""
-    )).toEqual(["context_package", "proposal_create", "proposal_get"]);
+    )).toEqual(["progress_overview", "context_package", "proposal_create", "proposal_get"]);
     expect(auditReplay.records).toEqual(expect.arrayContaining([
       expect.objectContaining({ type: "proposal.created", proposalId: stub.proposal.id }),
       expect.objectContaining({
@@ -172,6 +179,7 @@ test("AC-004 — reviews an exact-frame visual note through the real gateway", a
     ]));
   } finally {
     await gateway?.close();
+    gatewayJobs?.close();
     await launched.electronApp.close();
   }
 });

@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   AnnotationService,
   createProject,
+  JobQueue,
 } from "../../core/src/index.js";
 import type {
   IdPrefix,
@@ -111,8 +112,10 @@ describe("AgentGateway", () => {
         return () => new Date(`2026-07-19T08:02:${String(second++).padStart(2, "0")}.000Z`);
       })(),
     });
+    const { queue: jobs } = JobQueue.open(":memory:");
     const gateway = new AgentGateway({
       auditLog: audit,
+      jobQueue: jobs,
       project: store,
       stateDirectory,
       director: {
@@ -161,9 +164,11 @@ describe("AgentGateway", () => {
 
       expect(result.tools).toEqual([
         "context_package",
+        "progress_overview",
         "proposal_create",
         "proposal_get",
       ]);
+      expect(result.progress).toMatchObject({ idle: true, aggregateFraction: 1 });
       expect(result.context.requestedFor.annotationId).toBe("ann_bbbbbbbbbb");
       expect(result.context.position.timelineFrame).toEqual({ frames: 8, fps: "24/1" });
       expect(result.proposal.id).toMatch(/^prp_[a-z2-7]{10}$/u);
@@ -180,12 +185,15 @@ describe("AgentGateway", () => {
       expect(persisted.status).toBe("ready");
     } finally {
       await gateway.close();
+      jobs.close();
     }
 
     const replay = audit.readSession("ses_bbbbbbbbbb");
     expect(replay.warnings).toEqual([]);
     expect(replay.records.filter(({ type }) => type === "tool.call" || type === "tool.result")
       .map((record) => `${record.type}:${"tool" in record ? record.tool : ""}`)).toEqual([
+      "tool.call:progress_overview",
+      "tool.result:progress_overview",
       "tool.call:context_package",
       "tool.result:context_package",
       "tool.call:proposal_create",

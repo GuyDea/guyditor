@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { AnnotationService, createProject, OperationEngine } from "../../../core/src/index.js";
-import type { Proposal, Result } from "../../../core/src/index.js";
+import type { JobOverview, Proposal, Result } from "../../../core/src/index.js";
 import { projectFixture } from "../../../core/src/project/test-fixtures.js";
 import { TranscriptEngine } from "../../../transcript/src/index.js";
 import { describe, expect, it } from "vitest";
@@ -205,7 +205,7 @@ describe("AppServiceHost", () => {
           extent: { frames: 0, fps: "24/1" },
           canvasRef: { sequenceId: "seq_aaaaaaaaaa", aspect: "16:9" },
           state: "open",
-          blocking: false,
+          blocking: true,
           author: { kind: "human", id: "creator" },
           createdAt: "2026-07-19T00:00:00.000Z",
           history: [],
@@ -246,6 +246,23 @@ describe("AppServiceHost", () => {
     expect(await Reflect.apply(list, projectService, [{}])).toEqual([
       expect.objectContaining({ id: proposal.id, status: "ready" }),
     ]);
+    const overviewMethod = windowHost.resolveService("JobQueue")?.["overview"];
+    if (typeof overviewMethod !== "function") throw new Error("overview is unavailable");
+    const overview = await Reflect.apply(overviewMethod, undefined, []) as JobOverview;
+    expect(overview.waitingOnCreator).toMatchObject({
+      proposals: [{
+        proposalId: proposal.id,
+        title: "Tighten the ending",
+        createdAt: proposal.createdAt,
+      }],
+      annotations: [{
+        annotationId: "ann_bbbbbbbbbb",
+        code: "VAL-400",
+        message: "Tighten the annotated ending",
+        sequenceId: "seq_aaaaaaaaaa",
+      }],
+    });
+    expect(overview.idle).toBe(false);
     const accept = windowHost.resolveService("OperationEngine")?.["acceptProposal"];
     if (typeof accept !== "function") throw new Error("acceptProposal is unavailable");
     const accepted = await Reflect.apply(accept, undefined, [{ proposalId: proposal.id }]) as Proposal;

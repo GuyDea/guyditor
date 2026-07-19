@@ -6,6 +6,7 @@ import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 
 import type {
   AnnotationContextPackage,
+  JobOverview,
   Proposal,
 } from "../../../core/src/index.js";
 
@@ -23,6 +24,7 @@ export interface StubDirectorOptions {
 
 export interface StubDirectorResult {
   tools: string[];
+  progress: JobOverview;
   context: AnnotationContextPackage;
   proposal: Proposal;
   status: Proposal;
@@ -76,6 +78,10 @@ export async function runStubDirector(
   await client.connect(transport as unknown as Transport);
   try {
     const tools = (await client.listTools()).tools.map(({ name }) => name).sort();
+    const progress = toolValue<JobOverview>(await client.callTool({
+      name: "progress_overview",
+      arguments: {},
+    }));
     const context = toolValue<AnnotationContextPackage>(await client.callTool({
       name: "context_package",
       arguments: { annotationId: options.annotationId },
@@ -103,7 +109,7 @@ export async function runStubDirector(
       name: "proposal_get",
       arguments: { proposalId: proposal.id },
     }));
-    return { tools, context, proposal, status };
+    return { tools, progress, context, proposal, status };
   } finally {
     await client.close();
   }

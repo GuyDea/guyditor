@@ -213,12 +213,13 @@ describe.skipIf(!FIXTURES_AVAILABLE)("MediaEngine fixture ingest", () => {
       jobQueue: queue,
       followUpJobs: ["proxy.generate", "peaks.generate", "transcribe"],
     });
-    const result = await completedResult(queue, engine.ingest(store, {
+    const ingest = engine.ingest(store, {
       sources: [
         { path: path.join(FIXTURE_ROOT, "bars-1080p30-10s.mp4") },
         { path: path.join(FIXTURE_ROOT, "screencast-1080p30-15s.mp4") },
       ],
-    }).jobId);
+    });
+    const result = await completedResult(queue, ingest.jobId);
 
     expect(result.followUpJobIds).toHaveLength(4);
     const followUps = result.followUpJobIds.map((jobId) => queue.get(jobId));
@@ -228,6 +229,9 @@ describe.skipIf(!FIXTURES_AVAILABLE)("MediaEngine fixture ingest", () => {
       "transcribe",
       "proxy.generate",
     ]);
+    expect(followUps.every((job) =>
+      job?.dependsOn.length === 1 && job.dependsOn[0] === ingest.jobId
+    )).toBe(true);
     expect(followUps.find((job) => job?.kind === "transcribe")).toMatchObject({
       state: "queued",
       payload: {

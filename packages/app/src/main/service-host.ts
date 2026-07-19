@@ -14,6 +14,7 @@ import {
 } from "../../../core/src/index.js";
 import type {
   JobFilter,
+  JobOverview,
   JobRecord,
   OperationBatchResult,
   OperationCommitter,
@@ -117,6 +118,7 @@ function publicJobStatus(job: JobRecord): JobStatus {
     kind: job.kind,
     state: job.state,
     progress: job.progress,
+    dependsOn: [...job.dependsOn],
     ...(job.error === undefined ? {} : { error: job.error }),
     title: job.title,
     cancellable: job.cancellable,
@@ -124,6 +126,18 @@ function publicJobStatus(job: JobRecord): JobStatus {
     ...(job.startedAt === undefined ? {} : { startedAt: job.startedAt }),
     ...(job.finishedAt === undefined ? {} : { finishedAt: job.finishedAt }),
     ...(job.etaSeconds === undefined ? {} : { etaSeconds: job.etaSeconds }),
+  };
+}
+
+function emptyJobOverview(): JobOverview {
+  return {
+    running: [],
+    queued: [],
+    retryable: [],
+    waitingOnCreator: { proposals: [], annotations: [], confirmations: [] },
+    waitingOnExternal: [],
+    aggregateFraction: 1,
+    idle: true,
   };
 }
 
@@ -259,8 +273,37 @@ export class WindowServiceHost {
     const opened = await openCoreProject(resolve(projectPath), { appVersion: this.#app.appVersion });
     const store = resultValue(opened);
     this.#closeProject();
+    const annotations = new AnnotationService({ appVersion: this.#app.appVersion });
     const { queue: jobs } = JobQueue.open(join(store.root, ".guyditor/jobs.sqlite"), {
       concurrency: this.#app.maxConcurrentJobs,
+      overviewSources: {
+        proposals: async () => (await activeProposals(store))
+          .filter(({ status }) => status === "ready")
+          .map((proposal) => ({
+            proposalId: proposal.id,
+            title: proposal.reason.text,
+            createdAt: proposal.createdAt,
+          })),
+        annotations: async () => resultValue(await annotations.list(store))
+          .filter((annotation) => annotation.blocking &&
+            (annotation.state === "open" || annotation.state === "reopened"))
+          .map((annotation) => ({
+            annotationId: annotation.id,
+            code: "VAL-400",
+            message: annotation.body,
+            sequenceId: annotation.canvasRef.sequenceId,
+          })),
+        confirmations: () => this.#app.costMeter
+          .outstandingConfirmations(store.currentProject.project.id)
+          .map((confirmation) => ({
+            confirmToken: confirmation.confirmToken,
+            taskId: confirmation.taskId,
+            level: confirmation.level,
+            message: confirmation.message,
+            estimatedUsd: confirmation.estimatedUsd,
+            createdAt: confirmation.createdAt,
+          })),
+      },
     });
     const media = new MediaEngine({ jobQueue: jobs, mlworker: this.#app.mlworker });
     const transcript = new TranscriptEngine({
@@ -274,7 +317,6 @@ export class WindowServiceHost {
         audioPath: (assetId) => projectAudioPath(store, assetId),
       },
     });
-    const annotations = new AnnotationService({ appVersion: this.#app.appVersion });
     const render = new RenderService({
       projectRoot: store.root,
       store,
@@ -377,6 +419,7 @@ export class WindowServiceHost {
       case "JobQueue":
         return {
           list: (filter: JobFilter) => project?.jobs.list(filter).map(publicJobStatus) ?? [],
+          overview: () => project?.jobs.overview() ?? Promise.resolve(emptyJobOverview()),
           cancel: ({ jobId }: { jobId: string }) =>
             publicJobStatus(resultValue(this.#requireProject().jobs.cancel(jobId))),
           retry: ({ jobId }: { jobId: string }) =>

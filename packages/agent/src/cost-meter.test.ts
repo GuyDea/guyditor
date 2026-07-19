@@ -217,4 +217,36 @@ describe("CostMeter", () => {
     )).toThrow(/units/u);
     meter.close();
   });
+
+  it("lists warning confirmation tokens until the matching task is recorded", () => {
+    const userDir = userDirectory();
+    const audit = new AuditLog({ userDir, now: () => NOW });
+    const meter = CostMeter.open({
+      userDir,
+      auditLog: audit,
+      budgets: { ...NO_BUDGETS, task: { warnUsd: 1, capUsd: null } },
+      now: () => NOW,
+      confirmTokenFactory: () => "confirm-pending",
+    });
+    const callContext = context("ses_aaaaaaaaaa", "prj_aaaaaaaaaa", "task-a");
+    const projected = estimate(1.5);
+
+    expect(meter.preflight(projected, callContext)).toMatchObject({
+      verdict: "warn",
+      confirmToken: "confirm-pending",
+    });
+    expect(meter.outstandingConfirmations(callContext.projectId)).toEqual([{
+      confirmToken: "confirm-pending",
+      projectId: callContext.projectId,
+      taskId: callContext.taskId,
+      level: "task",
+      message: "task projected spend $1.50 exceeds warning $1.00.",
+      estimatedUsd: 1.5,
+      createdAt: NOW.toISOString(),
+    }]);
+
+    meter.record(actual(callContext, projected, 1.4));
+    expect(meter.outstandingConfirmations(callContext.projectId)).toEqual([]);
+    meter.close();
+  });
 });

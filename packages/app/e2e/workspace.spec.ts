@@ -11,16 +11,68 @@ test("imports media and surfaces completed proxy work", async () => {
   const launched = await launchApp({ projectTemplate: template });
   try {
     await launched.page.getByTestId("ingest-path-input").fill(
-      resolve(import.meta.dirname, "../../../.fixtures/avsync-video.mp4"),
+      resolve(import.meta.dirname, "../../../.fixtures/disc-track-720p30-8s.mp4"),
     );
     await launched.page.getByTestId("ingest-path-submit").click();
+    await launched.page.getByTestId("global-progress").click();
+    await expect(launched.page.getByTestId("global-progress-queued")).toContainText(
+      "Generate proxy for",
+      { timeout: 10_000 },
+    );
+    await expect(launched.page.getByTestId("global-progress-queued")).toContainText(
+      "Blocked on",
+    );
+    await expect(launched.page.getByTestId("global-progress-queued")).toContainText(
+      "Ingest 1 assets",
+    );
+    await launched.page.getByTestId("global-progress").click();
     await expect(launched.page.getByTestId("job-state-ingest")).toHaveText("done", {
       timeout: 30_000,
     });
     await expect(launched.page.getByTestId("job-state-proxy-generate")).toHaveText("done", {
       timeout: 30_000,
     });
-    await expect(launched.page.getByTestId("asset-list")).toContainText("avsync-video.mp4");
+    await expect(launched.page.getByTestId("asset-list")).toContainText("disc-track-720p30-8s.mp4");
+    await expect(launched.page.getByTestId("global-progress-status")).toHaveText(
+      "idle — no background work, nothing awaiting review",
+      { timeout: 30_000 },
+    );
+  } finally {
+    await launched.electronApp.close();
+    await rm(template, { recursive: true, force: true });
+  }
+});
+
+test("shows a ready proposal as waiting on the creator and jumps to review", async () => {
+  const template = await createWorkspaceProject({ proposal: true });
+  const launched = await launchApp({ projectTemplate: template });
+  try {
+    await expect(launched.page.getByTestId("global-progress-waiting-count"))
+      .toHaveText("1 waiting on you");
+    await launched.page.getByTestId("global-progress").click();
+    await launched.page.getByTestId("global-proposal-jump-prp_bbbbbbbbbb").click();
+    await expect(launched.page.getByTestId("agent-panel")).toBeFocused();
+    await expect(launched.page.getByTestId("proposal-diff-prp_bbbbbbbbbb")).toBeVisible();
+    await expect(launched.page.getByTestId("global-progress-popover")).toHaveCount(0);
+  } finally {
+    await launched.electronApp.close();
+    await rm(template, { recursive: true, force: true });
+  }
+});
+
+test("cancels queued work from the global progress popover", async () => {
+  const template = await createWorkspaceProject({ queuedJob: true });
+  const launched = await launchApp({ projectTemplate: template });
+  try {
+    await expect(launched.page.getByTestId("global-progress-status")).toHaveText("1 active · 0%");
+    await launched.page.getByTestId("global-progress").click();
+    const queued = launched.page.getByTestId("global-progress-queued");
+    await expect(queued).toContainText("Manual cancellable hold");
+    await queued.getByRole("button", { name: "Cancel" }).click();
+    await expect(launched.page.getByTestId("job-state-manual-wait")).toHaveText("cancelled");
+    await expect(launched.page.getByTestId("global-progress-status")).toHaveText(
+      "idle — no background work, nothing awaiting review",
+    );
   } finally {
     await launched.electronApp.close();
     await rm(template, { recursive: true, force: true });

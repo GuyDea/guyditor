@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import { projectFixture } from "../../../../core/src/project/test-fixtures.js";
+import type { JobOverview } from "../../shared/ipc.js";
+import {
+  overviewStatusText,
+  overviewWaitingCount,
+  useJobsStore,
+} from "./jobs.js";
 import { useProjectMirror } from "./project-mirror.js";
 import { useUndoStore } from "./undo.js";
 import {
@@ -10,6 +16,70 @@ import {
 } from "./view-state.js";
 
 describe("workspace renderer state", () => {
+  it("mirrors the global overview and derives active, waiting, and idle copy", () => {
+    const overview: JobOverview = {
+      running: [{
+        jobId: "job_aaaaaaaaaa",
+        kind: "proxy.generate",
+        state: "running",
+        progress: 0.4,
+        dependsOn: [],
+        title: "Generate proxy",
+        cancellable: true,
+        createdAt: "2026-07-19T10:00:00.000Z",
+      }],
+      queued: [],
+      retryable: [],
+      waitingOnCreator: {
+        proposals: [{
+          proposalId: "prp_aaaaaaaaaa",
+          title: "Review proposal",
+          createdAt: "2026-07-19T10:01:00.000Z",
+        }],
+        annotations: [{
+          annotationId: "ann_aaaaaaaaaa",
+          code: "VAL-400",
+          message: "Resolve annotation",
+        }],
+        confirmations: [],
+      },
+      waitingOnExternal: [],
+      aggregateFraction: 0.4,
+      idle: false,
+    };
+    useJobsStore.getState().replaceOverview(overview);
+
+    expect(useJobsStore.getState().overview).toEqual(overview);
+    expect(overviewWaitingCount(overview)).toBe(2);
+    expect(overviewStatusText(overview)).toBe("1 active · 40%");
+
+    const idle = {
+      ...overview,
+      running: [],
+      waitingOnCreator: { proposals: [], annotations: [], confirmations: [] },
+      aggregateFraction: 1,
+      idle: true,
+    };
+    expect(overviewStatusText(idle)).toBe(
+      "idle — no background work, nothing awaiting review",
+    );
+
+    expect(overviewStatusText({
+      ...idle,
+      retryable: [{
+        jobId: "job_bbbbbbbbbb",
+        kind: "proxy.generate",
+        state: "failed",
+        progress: 0.4,
+        dependsOn: [],
+        title: "Failed proxy",
+        cancellable: true,
+        createdAt: "2026-07-19T10:02:00.000Z",
+      }],
+      idle: false,
+    })).toBe("1 job needs attention");
+  });
+
   it("replaces the read-only project mirror as a whole snapshot", () => {
     const master = projectFixture();
     useProjectMirror.getState().replace({

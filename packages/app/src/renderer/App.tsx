@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { Annotation, Proposal } from "../../../core/src/index.js";
 import type { ExportReport } from "../../../render/src/index.js";
 import type { TranscriptSidecar } from "../../../transcript/src/index.js";
-import type { JobStatus, ProjectSnapshot } from "../shared/ipc.js";
+import type { JobOverview, JobStatus, ProjectSnapshot } from "../shared/ipc.js";
+import { GlobalProgress } from "./GlobalProgress.js";
 import { errorMessage, getSnapshot, redoLast, undoLast } from "./ipc.js";
 import { InspectorPanel } from "./panels/InspectorPanel.js";
 import { MediaBrowserPanel } from "./panels/MediaBrowserPanel.js";
@@ -29,6 +30,8 @@ function isTypingTarget(target: EventTarget | null): boolean {
     target instanceof HTMLElement && target.isContentEditable;
 }
 
+const OVERVIEW_CONFIRMATION_POLL_MS = 2_000;
+
 export function App(): React.JSX.Element {
   const snapshot = useProjectMirror((state) => state.snapshot);
   const replaceSnapshot = useProjectMirror((state) => state.replace);
@@ -37,9 +40,10 @@ export function App(): React.JSX.Element {
   const [proposals, setProposals] = useState<Proposal[]>([]);
   const [exportReport, setExportReport] = useState<ExportReport | null>(null);
   const [notice, setNotice] = useState("Open a project directory to connect the edit journal.");
+  const overviewGeneration = useRef(0);
   const replaceJobs = useJobsStore((state) => state.replace);
+  const replaceOverview = useJobsStore((state) => state.replaceOverview);
   const applyJobEvent = useJobsStore((state) => state.applyEvent);
-  const jobs = useJobsStore((state) => state.jobs);
   const leftWidth = useWorkspaceStore((state) => state.leftWidth);
   const rightWidth = useWorkspaceStore((state) => state.rightWidth);
   const focusPanel = useWorkspaceStore((state) => state.focusPanel);
@@ -80,17 +84,32 @@ export function App(): React.JSX.Element {
     }
   }, []);
 
+  const refreshOverview = useCallback(async (): Promise<void> => {
+    const generation = ++overviewGeneration.current;
+    try {
+      const next = await window.guyditor.call<JobOverview>("JobQueue", "overview", {});
+      if (generation === overviewGeneration.current) replaceOverview(next);
+    } catch {
+      // Keep the most recent re-queryable snapshot during project transitions.
+    }
+  }, [replaceOverview]);
+
   const hydrate = useCallback(async (next: ProjectSnapshot): Promise<void> => {
+    const generation = ++overviewGeneration.current;
     replaceSnapshot(next);
-    const [nextTranscripts, nextJobs] = await Promise.all([
+    const [nextTranscripts, nextJobs, nextOverview] = await Promise.all([
       window.guyditor.call<TranscriptSidecar[]>("ProjectStore", "readTranscript", {})
         .catch(() => []),
       window.guyditor.call<JobStatus[]>("JobQueue", "list", {}).catch(() => []),
+      window.guyditor.call<JobOverview>("JobQueue", "overview", {}).catch(() => null),
     ]);
     setTranscripts(nextTranscripts);
     replaceJobs(nextJobs);
+    if (nextOverview !== null && generation === overviewGeneration.current) {
+      replaceOverview(nextOverview);
+    }
     await Promise.all([refreshAnnotations(), refreshProposals(), refreshExportReport()]);
-  }, [refreshAnnotations, refreshExportReport, refreshProposals, replaceJobs, replaceSnapshot]);
+  }, [refreshAnnotations, refreshExportReport, refreshProposals, replaceJobs, replaceOverview, replaceSnapshot]);
 
   const refreshProject = useCallback(async (): Promise<void> => {
     const next = await getSnapshot();
@@ -105,6 +124,7 @@ export function App(): React.JSX.Element {
     }).catch(() => undefined);
     const offState = window.guyditor.on("job.state", (event) => {
       applyJobEvent(event);
+      void refreshOverview();
       if (event.job.state === "done" && event.job.kind === "render.export") {
         void refreshExportReport();
       }
@@ -112,12 +132,19 @@ export function App(): React.JSX.Element {
         void refreshProject();
       }
     });
-    const offProgress = window.guyditor.on("job.progress", applyJobEvent);
+    const offProgress = window.guyditor.on("job.progress", (event) => {
+      applyJobEvent(event);
+      void refreshOverview();
+    });
     const offRevision = window.guyditor.on("project.revision", (event) => {
       void refreshProject().then(() => setNotice(`Accepted ${event.revision}`));
     });
-    const offProposal = window.guyditor.on("proposal.updated", () => void refreshProposals());
-    const offAnnotation = window.guyditor.on("annotation.updated", () => void refreshAnnotations());
+    const offProposal = window.guyditor.on("proposal.updated", () => {
+      void Promise.all([refreshProposals(), refreshOverview()]);
+    });
+    const offAnnotation = window.guyditor.on("annotation.updated", () => {
+      void Promise.all([refreshAnnotations(), refreshOverview()]);
+    });
     return () => {
       active = false;
       offState();
@@ -126,7 +153,15 @@ export function App(): React.JSX.Element {
       offProposal();
       offAnnotation();
     };
-  }, [applyJobEvent, hydrate, refreshAnnotations, refreshExportReport, refreshProject, refreshProposals, replaceJobs]);
+  }, [applyJobEvent, hydrate, refreshAnnotations, refreshExportReport, refreshOverview, refreshProject, refreshProposals, replaceJobs]);
+
+  useEffect(() => {
+    if (snapshot === null) return undefined;
+    const interval = window.setInterval(() => {
+      void refreshOverview();
+    }, OVERVIEW_CONFIRMATION_POLL_MS);
+    return () => window.clearInterval(interval);
+  }, [refreshOverview, snapshot]);
 
   useEffect(() => {
     const keydown = (event: KeyboardEvent): void => {
@@ -240,7 +275,7 @@ export function App(): React.JSX.Element {
           <span data-testid="revision-indicator">{snapshot?.revision ?? "— no revision"}</span>
         </div>
         <div className="title-actions">
-          <span className="background-badge" data-testid="background-job-badge">{jobs.filter(({ state }) => state === "running" || state === "queued").length} active</span>
+          <GlobalProgress refreshOverview={refreshOverview} setNotice={setNotice} />
           <button type="button" data-testid="undo-action" disabled={undoCount === 0} onClick={() => void undoLast().then(() => refreshProject()).catch((error: unknown) => setNotice(errorMessage(error)))}>Undo</button>
           <button type="button" data-testid="redo-action" disabled={redoCount === 0} onClick={() => void redoLast().then(() => refreshProject()).catch((error: unknown) => setNotice(errorMessage(error)))}>Redo</button>
           <button type="button" className="open-button" onClick={() => void openProject()} data-testid="open-project">Open project</button>

@@ -127,6 +127,7 @@ export const IPC_SURFACES: readonly IpcSurface[] = Object.freeze([
         resultSchema: { type: "array" },
         budgetMs: 20,
       },
+      overview: { paramsSchema: emptyParams, resultSchema: anyResult, budgetMs: 20 },
       cancel: { paramsSchema: jobIdParams, resultSchema: anyResult, budgetMs: 20 },
       retry: { paramsSchema: jobIdParams, resultSchema: anyResult, budgetMs: 20 },
     },
