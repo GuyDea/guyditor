@@ -20,6 +20,7 @@ export interface WorkspaceProjectOptions {
   proposal?: boolean;
   queuedJob?: boolean;
   audioPost?: boolean;
+  jumpCut?: boolean;
 }
 
 async function valueOf<Value>(result: Promise<Result<Value>>): Promise<Value> {
@@ -45,6 +46,20 @@ export async function createWorkspaceProject(
   model.assets[0]!.probe.audio = { rate: 48_000, channels: 1 };
   model.sidecars[0]!.inputs = [];
   model.sidecars[0]!.sha256 = createHash("sha256").update(EMPTY_ANNOTATIONS).digest("hex");
+  if (options.jumpCut === true) {
+    model.sequences[0]!.clips[1]!.source = {
+      in: { frames: 48, fps: "24/1" },
+      out: { frames: 72, fps: "24/1" },
+    };
+    model.presets.push({
+      id: "pre_smoothcut2",
+      name: "smooth-cut",
+      kind: "transition",
+      version: 1,
+      path: "presets/pre_smoothcut2@1.yaml",
+      sha256: "b".repeat(64),
+    });
+  }
   if (options.audioPost === true) {
     model.sequences[0]!.audio = { targetLufs: -16, truePeakDb: -1.5 };
     model.layers.push({

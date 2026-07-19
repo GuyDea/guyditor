@@ -1,0 +1,26 @@
+{
+  "$id": "guyditor:op/clip.punchin.set",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["clipId", "level", "anchor"],
+  "properties": {
+    "clipId": { "type": "string", "pattern": "^clp_[a-z2-7]{10}$" },
+    "level": { "type": ["number", "null"], "minimum": 1 },
+    "anchor": {
+      "oneOf": [
+        { "type": "null" },
+        { "const": "face-track" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["x", "y"],
+          "properties": {
+            "x": { "type": "number", "minimum": 0, "maximum": 1 },
+            "y": { "type": "number", "minimum": 0, "maximum": 1 }
+          }
+        }
+      ]
+    }
+  }
+}

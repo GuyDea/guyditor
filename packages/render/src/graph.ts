@@ -77,6 +77,8 @@ export interface CompileRenderGraphOptions {
   speechIntervals?: readonly SpeechInterval[];
   /** Exact resolved samples for persisted semantic manual-ducking anchors. */
   duckingOverrideSamples?: Readonly<Record<string, number>>;
+  /** Smoothed normalized face centers derived from tracking sidecars for punch-in crops. */
+  faceTrackAnchors?: Readonly<Record<string, { x: number; y: number }>>;
 }
 
 interface VisualInput {
@@ -337,6 +339,34 @@ function transformEffectParams(effect: Effect): TransformNodeParams {
   };
 }
 
+function punchInTransformParams(
+  clip: Clip,
+  options: CompileRenderGraphOptions,
+): TransformNodeParams {
+  const punchIn = clip.punchIn;
+  if (punchIn === undefined) graphInvalid(`Clip ${clip.id} has no punch-in.`, [clip.id]);
+  const center = punchIn.anchor === "face-track"
+    ? options.faceTrackAnchors?.[clip.id]
+    : punchIn.anchor;
+  if (center === undefined) {
+    graphInvalid(`Punch-in ${clip.id} requires a resolved face-track anchor.`, [clip.id]);
+  }
+  const cropSize = 1 / punchIn.level;
+  const round = (value: number): number => Math.round(value * 1_000_000_000_000) / 1_000_000_000_000;
+  const x = round(Math.min(1 - cropSize, Math.max(0, center.x - cropSize / 2)));
+  const y = round(Math.min(1 - cropSize, Math.max(0, center.y - cropSize / 2)));
+  return {
+    keyframes: [{
+      atOutputFrame: 0,
+      crop: [x, y, round(cropSize), round(cropSize)],
+      scale: punchIn.level,
+      pos: [0.5, 0.5],
+      anchor: [0.5, 0.5],
+    }],
+    interpolation: "linear",
+  };
+}
+
 function layerTransformParams(transform: Transform2D): TransformNodeParams {
   return {
     keyframes: [{
@@ -429,7 +459,6 @@ function assertSupportedSubset(
   for (const candidate of project.sequences) {
     for (const clip of candidate.clips) {
       if (clip.overlapPrevious !== undefined) unsupported(`overlap before ${clip.id}`, "Part 5", [clip.id]);
-      if (clip.punchIn !== undefined) unsupported(`punch-in transform on ${clip.id}`, "Part 6", [clip.id]);
       for (const effect of clip.effects ?? []) {
         if (effect.kind === "freeze") unsupported(`freeze effect ${effect.id}`, "Part 6", [effect.id]);
         if (
@@ -516,6 +545,9 @@ export function compileRenderGraph(options: CompileRenderGraphOptions): RenderGr
       } satisfies ColorNodeParams);
     }
     const transform = owner.effects?.find(({ kind }) => kind === "transform");
+    if ("punchIn" in owner && owner.punchIn !== undefined) {
+      root = pushNode(nodes, nextId, "transform", [root.id], punchInTransformParams(owner, options));
+    }
     if (transform !== undefined) {
       root = pushNode(nodes, nextId, "transform", [root.id], transformEffectParams(transform));
     }

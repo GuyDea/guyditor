@@ -70,6 +70,55 @@ describe("AppServiceHost", () => {
     await appHost.close();
   });
 
+  it("creates jump-cut concealment as a ready proposal without changing accepted state", async () => {
+    const root = await mkdtemp(join(tmpdir(), "guyditor-host-jumpcut-"));
+    const userDirectory = await mkdtemp(join(tmpdir(), "guyditor-host-user-"));
+    const model = projectFixture();
+    model.assets[0]!.probe.height = 2160;
+    model.assets[0]!.probe.width = 3840;
+    model.assets[0]!.video = {
+      codec: "h264",
+      width: 3840,
+      height: 2160,
+      fps: "24/1",
+      pixFmt: "yuv420p",
+      hasAlpha: false,
+      rotation: 0,
+    };
+    model.sequences[0]!.clips[1]!.source = {
+      in: { frames: 48, fps: "24/1" },
+      out: { frames: 72, fps: "24/1" },
+    };
+    const created = await createProject(root, model);
+    if (!created.ok) throw created.error;
+    const appHost = testAppHost(userDirectory);
+    const windowHost = appHost.createWindowHost({
+      publisher: new WindowEventPublisher(() => undefined),
+    });
+    await windowHost.openProject(root);
+    const propose = windowHost.resolveService("OperationEngine")?.["proposeJumpCutConcealment"];
+    if (typeof propose !== "function") throw new Error("concealment proposal service is unavailable");
+
+    const planned = await Reflect.apply(propose, undefined, [{
+      sequenceId: "seq_aaaaaaaaaa",
+      faceTracks: { ast_aaaaaaaaaa: { usable: true, framingStatic: true } },
+    }]) as { kind: string; proposal?: Proposal };
+
+    expect(planned.kind).toBe("proposal");
+    expect(planned.proposal).toMatchObject({
+      status: "ready",
+      operations: [{
+        op: "clip.punchin.set",
+        params: { clipId: "clp_bbbbbbbbbb", level: 1.12, anchor: "face-track" },
+      }],
+    });
+    expect(windowHost.snapshot().revision).toBe("rev_00001");
+    expect(windowHost.snapshot().master.sequences[0]!.clips[1]!.punchIn).toBeUndefined();
+
+    await windowHost.close();
+    await appHost.close();
+  });
+
   it("routes transcript corrections and annotation creation through semantic operations", async () => {
     const root = await mkdtemp(join(tmpdir(), "guyditor-host-domains-"));
     const userDirectory = await mkdtemp(join(tmpdir(), "guyditor-host-user-"));

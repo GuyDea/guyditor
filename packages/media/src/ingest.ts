@@ -5,6 +5,8 @@ import {
 } from "node:fs";
 import {
   access,
+  copyFile,
+  mkdir,
   realpath,
   stat,
 } from "node:fs/promises";
@@ -49,7 +51,7 @@ import type { MlworkerTaskRunner } from "./mlworker/types.js";
 const HASH_CHUNK_BYTES = 4 * 1024 * 1024;
 
 export type AssetRecord = Asset;
-export type FollowUpJobKind = "proxy.generate" | "peaks.generate" | "transcribe";
+export type FollowUpJobKind = "proxy.generate" | "peaks.generate" | "vad" | "transcribe";
 
 export interface IngestSource {
   path: string;
@@ -65,6 +67,7 @@ export interface IngestSource {
 export interface IngestRequest {
   sources: IngestSource[];
   via?: NonNullable<Asset["ingest"]>["via"];
+  followUpJobs?: readonly FollowUpJobKind[];
 }
 
 export interface MediaEngineOptions {
@@ -96,6 +99,11 @@ export interface IngestJobResult {
   warnings: IngestWarning[];
 }
 
+export interface PickupImportResult {
+  path: string;
+  job: JobRecord;
+}
+
 interface PreparedSource {
   absolutePath: string;
   bytes: number;
@@ -114,7 +122,7 @@ interface ClassifiedSource {
 
 interface IngestJobPayload {
   projectRoot: string;
-  request: Required<Pick<IngestRequest, "sources" | "via">>;
+  request: Required<Pick<IngestRequest, "sources" | "via" | "followUpJobs">>;
 }
 
 interface ProxyGeneratePayload {
@@ -151,6 +159,19 @@ function storedProjectPath(projectRoot: string, absolutePath: string): string {
       !path.isAbsolute(relative)
     ? relative.split(path.sep).join("/")
     : absolutePath;
+}
+
+function pickupTimestamp(date: Date): string {
+  return date.toISOString().replace(/[-:]/gu, "").replace("T", "-").slice(0, 15);
+}
+
+function pickupSlug(value: string): string {
+  const slug = value.toLocaleLowerCase("en")
+    .normalize("NFKD")
+    .replace(/[^a-z0-9]+/gu, "-")
+    .replace(/^-+|-+$/gu, "")
+    .slice(0, 64);
+  return slug === "" ? "pickup" : slug;
 }
 
 async function streamingSha256(sourcePath: string): Promise<string> {
@@ -361,6 +382,7 @@ function buildAsset(
 function followUpTitle(kind: FollowUpJobKind, assetId: string): string {
   if (kind === "proxy.generate") return `Generate proxy for ${assetId}`;
   if (kind === "peaks.generate") return `Generate peaks for ${assetId}`;
+  if (kind === "vad") return `Analyze speech for ${assetId}`;
   return `Transcribe ${assetId}`;
 }
 
@@ -463,7 +485,11 @@ export class MediaEngine {
     });
   }
 
-  public ingest(project: ProjectStore, request: IngestRequest): JobRecord {
+  public ingest(
+    project: ProjectStore,
+    request: IngestRequest,
+    dependsOn: string[] = [],
+  ): JobRecord {
     if (request.sources.length === 0) {
       throw new TypeError("Ingest requires at least one source.");
     }
@@ -473,6 +499,7 @@ export class MediaEngine {
       request: {
         sources: structuredClone(request.sources),
         via: request.via ?? "manual",
+        followUpJobs: [...(request.followUpJobs ?? this.#followUpJobs)],
       },
     };
     return this.#queue.enqueue({
@@ -480,7 +507,33 @@ export class MediaEngine {
       title: `Ingest ${String(request.sources.length)} assets`,
       payload: jsonValue(payload),
       cancellable: false,
+      dependsOn,
     });
+  }
+
+  public async importPickup(
+    project: ProjectStore,
+    sourcePath: string,
+    slug: string,
+  ): Promise<PickupImportResult> {
+    const source = path.resolve(sourcePath);
+    const extension = path.extname(source).toLocaleLowerCase("en");
+    if (extension === "") throw invalidSource(sourcePath, "pickup recording has no file extension");
+    const directory = path.join(project.root, "media", "pickups");
+    await mkdir(directory, { recursive: true });
+    const destination = path.join(
+      directory,
+      `${pickupTimestamp(this.#now())}_${pickupSlug(slug)}${extension}`,
+    );
+    await copyFile(source, destination, constants.COPYFILE_EXCL);
+    return {
+      path: destination,
+      job: this.ingest(project, {
+        sources: [{ path: destination, speechBearing: true }],
+        via: "pickup",
+        followUpJobs: ["proxy.generate", "peaks.generate", "transcribe"],
+      }),
+    };
   }
 
   public async ensureProxy(
@@ -618,7 +671,7 @@ export class MediaEngine {
       if (asset === undefined) continue;
       const sourceRequests = sourceByAsset.get(assetId) ?? [];
       const speechBearing = sourceRequests.some((source) => source.speechBearing !== false);
-      for (const kind of this.#followUpJobs) {
+      for (const kind of request.followUpJobs) {
         if (kind === "proxy.generate") {
           const followUp = await this.#ensureProxy(
             project,
@@ -651,9 +704,9 @@ export class MediaEngine {
                 audioPath: path.isAbsolute(asset.path)
                   ? asset.path
                   : path.resolve(project.root, asset.path),
-                language: null,
-                model: "large-v3",
-                wordTimestamps: true,
+                ...(kind === "transcribe"
+                  ? { language: null, model: "large-v3", wordTimestamps: true }
+                  : {}),
               },
           cancellable: true,
           dependsOn: [ingestJobId],

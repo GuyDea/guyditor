@@ -1,0 +1,10 @@
+{
+  "format": "guyditor.take-markers-intake/v1",
+  "session": "ep12-hooks",
+  "clock": "recording",
+  "markers": [
+    { "at": 0.0625, "type": "take-start", "take": 3 },
+    { "at": 1.5, "type": "mistake", "note": "said 2019, meant 2016" },
+    { "at": 2, "type": "take-end", "take": 3, "quality": "good" }
+  ]
+}

@@ -12,6 +12,7 @@ import {
 } from "../../core/src/index.js";
 import type {
   Asset,
+  CreateProposalRequest,
   GuyditorProject,
   IdPrefix,
   JobQueue,
@@ -23,6 +24,7 @@ import type {
   OperationBatchResult,
   OperationContext,
   ProjectStore,
+  Proposal,
   Result,
   SidecarRef,
   TransactionRecord,
@@ -965,6 +967,61 @@ export class TranscriptEngine {
       ...context,
       baseRevision: project.currentProject.revision,
     });
+  }
+
+  public async createProposal(
+    project: ProjectStore,
+    request: CreateProposalRequest,
+  ): Promise<Result<Proposal>> {
+    const workspace = await loadTranscriptWorkspace(
+      project,
+      (prefix) => this.#idFactory(prefix),
+    );
+    if (!workspace.ok) return workspace;
+    const anchorResolvers = new AnchorResolverRegistry();
+    anchorResolvers.registerWordLookup(createTranscriptWordLookup(workspace.value.sidecars));
+    const engine = new OperationEngine(project.currentProject, {
+      appVersion: this.#appVersion,
+      committer: new SidecarCommitter(project, workspace.value.writes),
+      proposalStore: project,
+      idFactory: (prefix: IdPrefix) => this.#idFactory(prefix),
+      now: this.#now,
+      operationDispatcher: workspace.value.dispatcher,
+      anchorResolvers,
+      continuityGuard: createTranscriptContinuityGuard({
+        sidecars: workspace.value.sidecars,
+        ...(this.#loadPeaks === undefined ? {} : { loadPeaks: this.#loadPeaks }),
+      }),
+    });
+    return engine.createProposal(request);
+  }
+
+  public async acceptProposal(
+    project: ProjectStore,
+    proposalId: string,
+    resolvedBy: string,
+  ): Promise<Result<Proposal>> {
+    const workspace = await loadTranscriptWorkspace(
+      project,
+      (prefix) => this.#idFactory(prefix),
+    );
+    if (!workspace.ok) return workspace;
+    const anchorResolvers = new AnchorResolverRegistry();
+    anchorResolvers.registerWordLookup(createTranscriptWordLookup(workspace.value.sidecars));
+    const engine = new OperationEngine(project.currentProject, {
+      appVersion: this.#appVersion,
+      committer: new SidecarCommitter(project, workspace.value.writes),
+      proposalStore: project,
+      idFactory: (prefix: IdPrefix) => this.#idFactory(prefix),
+      now: this.#now,
+      operationDispatcher: workspace.value.dispatcher,
+      anchorResolvers,
+      continuityGuard: createTranscriptContinuityGuard({
+        sidecars: workspace.value.sidecars,
+        ...(this.#loadPeaks === undefined ? {} : { loadPeaks: this.#loadPeaks }),
+      }),
+    });
+    return engine.acceptProposal(proposalId, resolvedBy);
   }
 
   public findWord(wordId: string): Promise<Result<WordLocation | undefined>> {

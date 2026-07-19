@@ -61,7 +61,9 @@ export type {
   SidecarRef,
   ShapeMask,
   SkillPin,
+  SyncDecision,
   Transition,
   Transform2D,
+  WatchFolderConfig,
 } from "./model.js";
 export { validateProject } from "./validate.js";

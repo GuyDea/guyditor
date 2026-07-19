@@ -7,10 +7,12 @@ import {
   formatWordId,
   makeGuyditorError,
   success,
+  convertTimeRounding,
 } from "../../core/src/index.js";
 import type {
   GuyditorProject,
   IdPrefix,
+  Layer,
   OperationDispatcher,
   OperationInput,
   ProjectStore,
@@ -546,6 +548,166 @@ function retime(
   });
 }
 
+interface PickupRestore {
+  words: Array<{ wordId: string; word: TranscriptWord }>;
+  layers: Layer[];
+}
+
+function sampleFrame(
+  time: SampleTime,
+  fps: string,
+): Result<number> {
+  const converted = convertTimeRounding(
+    { frames: time.samples, fps: `${String(time.rate)}/1` },
+    fps,
+  );
+  return converted.ok ? success(converted.value.time.frames) : converted;
+}
+
+function pickupSplice(
+  documents: readonly TranscriptDocument[],
+  project: GuyditorProject,
+  input: OperationInput,
+  writes: Map<string, string>,
+  idFactory: TranscriptIdFactory,
+) {
+  const repairedWordIds = input.params["repairedWordIds"] as string[];
+  const located = repairedWordIds.map((wordId) => findWord(documents, wordId));
+  if (located.some((word) => word === undefined)) {
+    return operationFailure(
+      "E_TRANSCRIPT_WORD_NOT_FOUND",
+      "A pickup repair word does not exist.",
+      repairedWordIds,
+    );
+  }
+  const selected = located as LocatedWord[];
+  const document = selected[0]!.document;
+  if (selected.some((word) => word.document !== document)) {
+    return operationFailure(
+      "E_TRANSCRIPT_WORD_RANGE",
+      "Pickup repair words must belong to one canonical transcript.",
+      repairedWordIds,
+    );
+  }
+  const restore = input.params["restore"] as PickupRestore | undefined;
+  if (restore !== undefined) {
+    for (const { wordId, word } of restore.words) {
+      document.sidecar.words[wordId] = structuredClone(word);
+    }
+    return success({
+      model: updateReference(
+        { ...project, layers: structuredClone(restore.layers) },
+        document,
+        writes,
+      ),
+      inverse: [],
+      affected: repairedWordIds,
+      summary: `Restore ${String(repairedWordIds.length)} words before pickup splice`,
+    });
+  }
+  const pickupAssetId = input.params["pickupAssetId"] as string;
+  const pickupAsset = project.assets.find(({ id }) => id === pickupAssetId);
+  if (pickupAsset === undefined) {
+    return operationFailure(
+      "E_OP_NOT_FOUND",
+      `Pickup asset ${pickupAssetId} does not exist.`,
+      [pickupAssetId],
+    );
+  }
+  if (pickupAsset.kind !== "audio" && pickupAsset.kind !== "video") {
+    return operationFailure(
+      "E_PICKUP_MEDIA_KIND",
+      `Pickup asset ${pickupAssetId} has no playable audio source.`,
+      [pickupAssetId],
+    );
+  }
+  const updates = input.params["wordUpdates"] as Array<{ wordId: string; word: TranscriptWord }>;
+  if (
+    updates.length !== repairedWordIds.length ||
+    updates.some(({ wordId }, index) => wordId !== repairedWordIds[index])
+  ) {
+    return operationFailure(
+      "E_PICKUP_WORD_MISMATCH",
+      "Pickup word updates must exactly match the repaired word range.",
+      repairedWordIds,
+    );
+  }
+  const priorWords = selected.map(({ wordId, word }) => ({
+    wordId,
+    word: structuredClone(word),
+  }));
+  for (const { wordId, word } of updates) {
+    if (word.origin !== "pickup" || word.state !== "active") {
+      return operationFailure(
+        "E_PICKUP_WORD_MISMATCH",
+        `Pickup update ${wordId} must be an active pickup-origin word.`,
+        [wordId],
+      );
+    }
+    document.sidecar.words[wordId] = structuredClone(word);
+  }
+  const pickupRange = input.params["pickupRange"] as { in: SampleTime; out: SampleTime };
+  const fps = project.settings.timeline.fps;
+  const sourceIn = sampleFrame(pickupRange.in, fps);
+  if (!sourceIn.ok) return sourceIn;
+  const sourceOut = sampleFrame(pickupRange.out, fps);
+  if (!sourceOut.ok) return sourceOut;
+  if (sourceIn.value >= sourceOut.value) {
+    return operationFailure(
+      "E_PICKUP_RANGE",
+      "Pickup range must have positive exact duration.",
+      [pickupAssetId],
+    );
+  }
+  const existingLayer = project.layers.find(({ kind, name }) => kind === "audio" && name === "Pickups");
+  const layerId = existingLayer?.id ?? idFactory("lyr");
+  const itemId = idFactory("clp");
+  const item = {
+    id: itemId,
+    asset: pickupAssetId,
+    at: `word:${repairedWordIds[0]!}` as const,
+    duration: { frames: sourceOut.value - sourceIn.value, fps },
+    source: {
+      in: { frames: sourceIn.value, fps },
+      out: { frames: sourceOut.value, fps },
+    },
+    params: {
+      pickup: {
+        repairedWordIds: [...repairedWordIds],
+        roomTonePaddingMs: input.params["roomTonePaddingMs"],
+        ...(input.params["trigger"] === undefined
+          ? {}
+          : { trigger: structuredClone(input.params["trigger"]) }),
+      },
+    },
+  };
+  const layers = existingLayer === undefined
+    ? [...project.layers, {
+        id: layerId,
+        kind: "audio" as const,
+        name: "Pickups",
+        order: project.layers.filter(({ kind }) => kind === "audio").length,
+        enabled: true,
+        locked: false,
+        items: [item],
+      }]
+    : project.layers.map((layer) => layer.id === layerId
+      ? { ...layer, items: [...(layer.items ?? []), item] }
+      : layer);
+  return success({
+    model: updateReference({ ...project, layers }, document, writes),
+    inverse: [{
+      op: input.op,
+      params: {
+        ...structuredClone(input.params),
+        restore: { words: priorWords, layers: structuredClone(project.layers) },
+      },
+    }],
+    affected: [pickupAssetId, itemId, layerId, ...repairedWordIds],
+    summary: `Replace ${repairedWordIds[0]}..${repairedWordIds.at(-1)} with pickup ${pickupAssetId}`,
+  });
+}
+
 function segmentSplit(
   documents: readonly TranscriptDocument[],
   project: GuyditorProject,
@@ -946,6 +1108,8 @@ function dispatcher(
           return speakerAssign(documents, project, input, writes, idFactory);
         case "transcript.realign":
           return realign(documents, project, input, writes);
+        case "pickup.splice":
+          return pickupSplice(documents, project, input, writes, idFactory);
         default:
           return operationFailure(
             "E_TRANSCRIPT_DISPATCH",

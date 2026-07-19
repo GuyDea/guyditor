@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { deriveTimeline } from "../../../../core/src/project/derive.js";
 import { convertTimeRounding } from "../../../../core/src/time/index.js";
+import { findJumpCutWarnings } from "../../../../core/src/assist/jumpcuts.js";
 import type { Clip, Layer } from "../../../../core/src/index.js";
 import type { PeaksFile } from "../../../../media/src/index.js";
 import { errorMessage, executeDirect } from "../ipc.js";
@@ -25,6 +26,7 @@ export function TimelinePanel({
   snapshot,
   annotations,
   refreshProject,
+  refreshProposals,
   setNotice,
 }: WorkspacePanelProps): React.JSX.Element {
   const viewportRef = useRef<HTMLDivElement>(null);
@@ -61,6 +63,9 @@ export function TimelinePanel({
   const visibleClips = derived?.clips.filter(({ start, duration }) =>
     start.frames + duration.frames >= visibleStart && start.frames <= visibleEnd) ?? [];
   const layers = snapshot?.master.layers.filter(({ sequence: id }) => id === sequence?.id) ?? [];
+  const jumpCuts = snapshot === null || sequence === undefined
+    ? []
+    : findJumpCutWarnings(snapshot.master, sequence.id);
 
   useEffect(() => {
     const viewport = viewportRef.current;
@@ -157,6 +162,26 @@ export function TimelinePanel({
       op: `layer.${action}`,
       params: { layerId: layer.id },
     }], `${action} ${layer.id}`, `${action}d ${layer.name}.`);
+  }
+
+  async function proposeConcealment(beforeClipId: string): Promise<void> {
+    if (sequence === undefined) return;
+    try {
+      const result = await window.guyditor.call<{
+        kind: "proposal" | "no-proposal";
+        proposal?: { id: string };
+        report: string;
+      }>("OperationEngine", "proposeJumpCutConcealment", {
+        sequenceId: sequence.id,
+        beforeClipId,
+      });
+      await refreshProposals();
+      setNotice(result.proposal === undefined
+        ? result.report
+        : `Prepared review proposal ${result.proposal.id} for the flagged cut.`);
+    } catch (error: unknown) {
+      setNotice(errorMessage(error));
+    }
   }
 
   return (
@@ -292,6 +317,26 @@ export function TimelinePanel({
                   </button>
                 );
               })}
+              {jumpCuts.map((warning) => {
+                const after = derived?.clips.find(({ clipId }) =>
+                  clipId === warning.boundary.afterClip);
+                const beforeClipId = warning.boundary.beforeClip;
+                if (after === undefined || beforeClipId === undefined) return null;
+                return (
+                  <button
+                    key={`${beforeClipId}:${warning.boundary.afterClip ?? "-"}`}
+                    type="button"
+                    className="jumpcut-seam"
+                    style={{ left: `${String(after.start.frames * zoom)}px` }}
+                    title={`${warning.evidence} Propose concealment.`}
+                    aria-label={`Jump-cut warning after ${beforeClipId}; propose concealment`}
+                    data-testid={`jumpcut-propose-${beforeClipId}`}
+                    onClick={() => void proposeConcealment(beforeClipId)}
+                  >
+                    <span aria-hidden="true">!</span>
+                  </button>
+                );
+              })}
               <div className="timeline-playhead" style={{ left: `${String(playhead.frames * zoom)}px` }} />
               {annotations.map((annotation, index) => (
                 <span
@@ -305,7 +350,11 @@ export function TimelinePanel({
           </div>
         </div>
       </div>
-      <small className="m2-note">Waveform tiers load on selection. M1 virtualizes the horizontal clip window; multi-layer placed-item editing remains M2.</small>
+      <small className="m2-note">
+        {jumpCuts.length === 0
+          ? "No same-source jump cuts are flagged in this sequence."
+          : `${String(jumpCuts.length)} jump-cut seam${jumpCuts.length === 1 ? "" : "s"} flagged; select ! to prepare a review proposal.`}
+      </small>
     </Panel>
   );
 }

@@ -146,6 +146,11 @@ export function App(): React.JSX.Element {
     const offAnnotation = window.guyditor.on("annotation.updated", () => {
       void Promise.all([refreshAnnotations(), refreshOverview()]);
     });
+    const offWatcher = window.guyditor.on("watcher.ingested", (event) => {
+      void Promise.all([refreshProject(), refreshOverview()]).then(() => {
+        setNotice(`Capture watcher ingested ${String(event.assetIds.length)} asset${event.assetIds.length === 1 ? "" : "s"}.`);
+      });
+    });
     return () => {
       active = false;
       offState();
@@ -153,6 +158,7 @@ export function App(): React.JSX.Element {
       offRevision();
       offProposal();
       offAnnotation();
+      offWatcher();
     };
   }, [applyJobEvent, hydrate, refreshAnnotations, refreshExportReport, refreshOverview, refreshProject, refreshProposals, replaceJobs]);
 

@@ -168,6 +168,30 @@ function compile(
 }
 
 describe("compileRenderGraph", () => {
+  it("lowers a static punch-in level to a normalized crop and restoring scale", () => {
+    const model = project();
+    model.sequences[0]!.clips[0]!.punchIn = {
+      level: 1.25,
+      anchor: { x: 0.4, y: 0.6 },
+    };
+
+    const graph = compile(model);
+    const transform = graph.nodes.find(({ kind }) => kind === "transform");
+    expect(transform).toMatchObject({
+      kind: "transform",
+      params: {
+        interpolation: "linear",
+        keyframes: [{
+          atOutputFrame: 0,
+          crop: [0, 0.2, 0.8, 0.8],
+          scale: 1.25,
+          pos: [0.5, 0.5],
+          anchor: [0.5, 0.5],
+        }],
+      },
+    });
+  });
+
   it("derives semantic PiP keyframes into transform samples without storing coordinates", () => {
     const model = project();
     model.presets.push({

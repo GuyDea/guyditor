@@ -84,12 +84,16 @@ export const M1_SHIP_IDS = Object.freeze([
 export const M1_AC_IDS = Object.freeze(["AC-001", "AC-002", "AC-004", "AC-009"]);
 
 export const M2_PARTIAL_IDS = Object.freeze([
+  "FR-009",
+  "FR-010",
+  "FR-011",
   "FR-205",
   "FR-206",
   "FR-207",
   "FR-208",
   "FR-1101",
   "FR-306",
+  "FR-311",
   "FR-500",
   "FR-501",
   "FR-502",

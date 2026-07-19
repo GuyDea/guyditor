@@ -33,6 +33,7 @@ import type {
   GuyditorProject,
   IdPrefix,
   SkillPin,
+  WatchFolderConfig,
 } from "../project/index.js";
 import type { Rational } from "../time/index.js";
 import {
@@ -69,18 +70,6 @@ export interface ProjectStoreOptions {
   idFactory?: (prefix: IdPrefix) => string;
   now?: () => Date;
   profilesDirectory?: string;
-}
-
-export interface WatchFolderConfig {
-  path: string;
-  convention: "guyditor" | "flat";
-  ignore?: string[];
-  autoIngest: boolean;
-  autoJobs: {
-    proxy: boolean;
-    analysis: boolean;
-    transcription: boolean;
-  };
 }
 
 export interface CreateProjectRequest {

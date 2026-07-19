@@ -1522,6 +1522,123 @@ function applyTransformSet(
   });
 }
 
+function applyPunchInSet(
+  project: GuyditorProject,
+  input: OperationInput,
+): Result<ClipApplication> {
+  const clipId = input.params["clipId"] as string;
+  const found = locateClip(project, clipId);
+  if (!found.ok) return found;
+  const unlocked = ensureUnlocked(project, found.value);
+  if (!unlocked.ok) return unlocked;
+  const located = unlocked.value;
+  const level = input.params["level"] as number | null;
+  const anchor = input.params["anchor"] as Clip["punchIn"] extends infer Punch
+    ? Punch extends { anchor: infer Anchor } ? Anchor | null : never
+    : never;
+  if ((level === null) !== (anchor === null)) {
+    return opFailure(
+      "E_OP_SCHEMA",
+      "clip.punchin.set must set both level and anchor, or clear both.",
+      [clipId],
+    );
+  }
+  const before = located.clip.punchIn;
+  const replacement = { ...located.clip };
+  if (level === null || anchor === null) delete replacement.punchIn;
+  else replacement.punchIn = { level, anchor: structuredClone(anchor) };
+  return success({
+    model: replaceClip(project, located, replacement),
+    inverse: [{
+      op: "clip.punchin.set",
+      params: {
+        clipId,
+        level: before?.level ?? null,
+        anchor: before === undefined ? null : structuredClone(before.anchor),
+      },
+    }],
+    affected: [clipId],
+    summary: replacement.punchIn === undefined
+      ? `Clear punch-in on ${humanClip(located)}`
+      : `Punch in ${humanClip(located)} to ${String(replacement.punchIn.level)}x`,
+    mutations: [{
+      entityId: clipId,
+      entityType: "clip",
+      change: "modified",
+      fields: [{
+        field: "punchIn",
+        ...(before === undefined ? {} : { before }),
+        ...(replacement.punchIn === undefined ? {} : { after: replacement.punchIn }),
+      }],
+    }],
+  });
+}
+
+function syncReference(asset: Asset): string | undefined {
+  return asset.sync?.referenceAssetId;
+}
+
+function assetsAreSynchronized(left: Asset, right: Asset): boolean {
+  const leftReference = syncReference(left);
+  const rightReference = syncReference(right);
+  return leftReference === right.id || rightReference === left.id ||
+    (leftReference !== undefined && leftReference === rightReference);
+}
+
+function applySourceSwitch(
+  project: GuyditorProject,
+  input: OperationInput,
+): Result<ClipApplication> {
+  const clipId = input.params["clipId"] as string;
+  const assetId = input.params["assetId"] as string;
+  const synchronizedTo = input.params["synchronizedTo"] as string;
+  const found = locateClip(project, clipId);
+  if (!found.ok) return found;
+  const unlocked = ensureUnlocked(project, found.value);
+  if (!unlocked.ok) return unlocked;
+  const located = unlocked.value;
+  const target = project.assets.find(({ id }) => id === assetId);
+  if (target === undefined) {
+    return opFailure("E_OP_NOT_FOUND", `Asset ${assetId} does not exist.`, [clipId, assetId]);
+  }
+  if (synchronizedTo !== located.asset.id || !assetsAreSynchronized(located.asset, target)) {
+    return opFailure(
+      "E_OP_SOURCE_NOT_SYNCHRONIZED",
+      `Asset ${assetId} is not a synchronized alternate for ${located.asset.id}.`,
+      [clipId, located.asset.id, assetId],
+    );
+  }
+  if (target.kind !== "video") {
+    return opFailure(
+      "E_OP_SOURCE_NOT_SYNCHRONIZED",
+      `Alternate angle ${assetId} must be a video asset.`,
+      [clipId, assetId],
+    );
+  }
+  const range = validRange(located.clip.source, target);
+  if (!range.ok) return range;
+  const replacement = { ...located.clip, asset: target.id };
+  return success({
+    model: replaceClip(project, located, replacement),
+    inverse: [{
+      op: "clip.source.switch",
+      params: {
+        clipId,
+        assetId: located.asset.id,
+        synchronizedTo: target.id,
+      },
+    }],
+    affected: [clipId, located.asset.id, target.id],
+    summary: `Switch ${humanClip(located)} to synchronized source ${target.id}`,
+    mutations: [{
+      entityId: clipId,
+      entityType: "clip",
+      change: "modified",
+      fields: [{ field: "asset", before: located.asset.id, after: target.id }],
+    }],
+  });
+}
+
 export function applyClipOperation(
   project: GuyditorProject,
   input: OperationInput,
@@ -1541,6 +1658,8 @@ export function applyClipOperation(
   if (input.op === "clip.key.set") return applyKeySet(project, input, idFactory);
   if (input.op === "clip.key.mask.set") return applyKeyMaskSet(project, input);
   if (input.op === "clip.transform.set") return applyTransformSet(project, input, idFactory);
+  if (input.op === "clip.punchin.set") return applyPunchInSet(project, input);
+  if (input.op === "clip.source.switch") return applySourceSwitch(project, input);
   return applyAudioFadeSet(project, input);
 }
 

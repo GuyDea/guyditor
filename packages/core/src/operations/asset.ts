@@ -7,6 +7,7 @@ import type { Result } from "../errors.js";
 import type {
   Asset,
   GuyditorProject,
+  SidecarRef,
 } from "../project/index.js";
 import type { ClipApplication } from "./clip.js";
 import type { OperationInput } from "./types.js";
@@ -129,11 +130,80 @@ function applyRemove(
   });
 }
 
+interface TakeSidecarParam {
+  path: string;
+  sha256: string;
+}
+
+function takeSidecar(project: GuyditorProject, assetId: string): SidecarRef | undefined {
+  return project.sidecars.find(({ schema, inputs }) =>
+    schema === "guyditor.take-markers/v1" && inputs.some(({ asset }) => asset === assetId));
+}
+
+function applyTakeMetadata(
+  project: GuyditorProject,
+  input: OperationInput,
+): Result<ClipApplication> {
+  const assetId = input.params["assetId"] as string;
+  const index = project.assets.findIndex(({ id }) => id === assetId);
+  const asset = project.assets[index];
+  if (asset === undefined) {
+    return assetFailure("E_OP_NOT_FOUND", `Asset ${assetId} does not exist.`, [assetId]);
+  }
+  const markerOperation = input.op === "asset.markers.attach";
+  const ids = input.params[markerOperation ? "markerIds" : "takeIds"] as string[];
+  const sidecar = input.params["sidecar"] as TakeSidecarParam | null;
+  const priorIds = markerOperation ? asset.markers ?? [] : asset.takes ?? [];
+  const priorSidecar = takeSidecar(project, assetId);
+  const replacement: Asset = { ...asset };
+  if (markerOperation) replacement.markers = [...ids];
+  else replacement.takes = [...ids];
+  const assets = project.assets.slice();
+  assets[index] = replacement;
+  const sidecars = project.sidecars.filter((candidate) => candidate !== priorSidecar);
+  if (sidecar !== null) {
+    sidecars.push({
+      name: `takes-${assetId}`,
+      path: sidecar.path,
+      schema: "guyditor.take-markers/v1",
+      sha256: sidecar.sha256,
+      inputs: [{ asset: assetId, sha256: asset.sha256 }],
+    });
+  }
+  return success({
+    model: { ...project, assets, sidecars },
+    inverse: [{
+      op: input.op,
+      params: {
+        assetId,
+        [markerOperation ? "markerIds" : "takeIds"]: [...priorIds],
+        sidecar: priorSidecar === undefined
+          ? null
+          : { path: priorSidecar.path, sha256: priorSidecar.sha256 },
+      },
+    }],
+    affected: [assetId, ...ids],
+    summary: markerOperation
+      ? `Attach ${String(ids.length)} markers to ${assetId}`
+      : `Set ${String(ids.length)} takes for ${assetId}`,
+    mutations: [{
+      entityId: assetId,
+      entityType: "asset",
+      change: "modified",
+      fields: [{
+        field: markerOperation ? "markers" : "takes",
+        before: [...priorIds],
+        after: [...ids],
+      }],
+    }],
+  });
+}
+
 export function applyAssetOperation(
   project: GuyditorProject,
   input: OperationInput,
 ): Result<ClipApplication> {
-  return input.op === "asset.ingest"
-    ? applyIngest(project, input)
-    : applyRemove(project, input);
+  if (input.op === "asset.ingest") return applyIngest(project, input);
+  if (input.op === "asset.remove") return applyRemove(project, input);
+  return applyTakeMetadata(project, input);
 }

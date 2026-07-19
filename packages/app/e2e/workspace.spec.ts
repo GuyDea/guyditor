@@ -1,4 +1,4 @@
-import { readFile, rm } from "node:fs/promises";
+import { copyFile, mkdir, readFile, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
 import { expect, test } from "@playwright/test";
@@ -275,6 +275,74 @@ test("accepts a directly persisted proposal from its semantic diff", async () =>
     expect(journal).toContain('"op":"annotation.resolve"');
     const sidecar = await readFile(join(launched.projectPath!, "sidecars/annotations.yaml"), "utf8");
     expect(sidecar).toContain("state: resolved");
+  } finally {
+    await launched.electronApp.close();
+    await rm(template, { recursive: true, force: true });
+  }
+});
+
+test("surfaces a jump-cut seam and prepares concealment without silently editing", async () => {
+  const template = await createWorkspaceProject({ jumpCut: true });
+  const launched = await launchApp({ projectTemplate: template });
+  try {
+    const seam = launched.page.getByTestId("jumpcut-propose-clp_aaaaaaaaaa");
+    await expect(seam).toBeVisible();
+    await seam.click();
+    await expect(launched.page.getByTestId("proposal-list"))
+      .toContainText("assist.jumpcuts.conceal");
+    await expect(launched.page.getByTestId("revision-indicator")).toHaveText("rev_00001");
+    const accepted = await launched.page.evaluate(() =>
+      window.guyditor.call<{ master: { sequences: Array<{ clips: Array<{ punchIn?: unknown }> }> } }>(
+        "ProjectStore",
+        "getSnapshot",
+        {},
+      ));
+    expect(accepted.master.sequences[0]!.clips[1]!.punchIn).toBeUndefined();
+  } finally {
+    await launched.electronApp.close();
+    await rm(template, { recursive: true, force: true });
+  }
+});
+
+test("configures a capture folder and shows stable session ingest and seeded take work", async () => {
+  const template = await createWorkspaceProject();
+  const watchRoot = join(template, "capture-inbox");
+  const sessionRoot = join(watchRoot, "20260719-2130_step-seven");
+  await mkdir(sessionRoot, { recursive: true });
+  const launched = await launchApp({ projectTemplate: template });
+  try {
+    await launched.page.getByTestId("watch-folder-panel").click();
+    await launched.page.getByTestId("watch-folder-path").fill(watchRoot);
+    const panel = launched.page.getByTestId("watch-folder-panel");
+    await panel.getByRole("checkbox", { name: "proxy" }).uncheck();
+    await panel.getByRole("checkbox", { name: "analysis" }).uncheck();
+    await panel.getByRole("checkbox", { name: "transcription" }).uncheck();
+    await launched.page.getByTestId("watch-folder-add").click();
+    await expect(launched.page.getByTestId("revision-indicator")).toHaveText("rev_00002");
+
+    const source = resolve(import.meta.dirname, "../../../.fixtures/disc-track-720p30-8s.mp4");
+    await copyFile(source, join(sessionRoot, "cam-a_t03.mp4"));
+    await expect(launched.page.getByTestId("asset-list")).toContainText("cam-a_t03.mp4", {
+      timeout: 30_000,
+    });
+    await expect(launched.page.locator('[data-testid^="takes-"]')).toContainText("1 takes");
+
+    const state = await launched.page.evaluate(async () => {
+      const snapshot = await window.guyditor.call<{
+        master: { assets: Array<{ path: string; session?: string; takes?: string[] }> };
+      }>("ProjectStore", "getSnapshot", {});
+      const jobs = await window.guyditor.call<Array<{ kind: string; state: string }>>(
+        "JobQueue",
+        "list",
+        {},
+      );
+      return { asset: snapshot.master.assets.find(({ path }) => path.endsWith("cam-a_t03.mp4")), jobs };
+    });
+    expect(state.asset).toMatchObject({
+      session: expect.stringMatching(/^ses_[a-z2-7]{10}$/u),
+      takes: [expect.stringMatching(/^tak_[a-z2-7]{10}$/u)],
+    });
+    expect(state.jobs).toContainEqual(expect.objectContaining({ kind: "ingest", state: "done" }));
   } finally {
     await launched.electronApp.close();
     await rm(template, { recursive: true, force: true });

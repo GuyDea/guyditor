@@ -1,20 +1,30 @@
 import { cpus } from "node:os";
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { access, readFile, readdir } from "node:fs/promises";
-import { isAbsolute, join, resolve } from "node:path";
+import { access, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { basename, extname, isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import {
   AnchorResolverRegistry,
   AnnotationService,
   buildAnnotationContext,
+  convertTimeRounding,
+  DEFAULT_JUMP_CUT_CONCEALMENT_CONFIG,
+  findJumpCutWarnings,
   JobQueue,
   makeId,
   OperationEngine,
   openProject as openCoreProject,
+  parseTakeMarkerSidecar,
+  planJumpCutConcealment,
   resolveAnchor,
+  serializeTakeMarkerSidecar,
 } from "../../../core/src/index.js";
 import type {
+  Asset,
+  FaceTrackAvailability,
+  JumpCutConcealmentConfig,
   JobFilter,
   JobOverview,
   JobRecord,
@@ -24,10 +34,13 @@ import type {
   Proposal,
   ProjectStore,
   Result,
+  TakeMarkerSidecar,
   TransactionRecord,
+  WatchFolderConfig,
 } from "../../../core/src/index.js";
 import {
   buildCaptureGuidanceReport,
+  CaptureWatcher,
   enqueueKeyQc,
   loadPeaks,
   MediaEngine,
@@ -42,12 +55,18 @@ import {
   compileFillerProposal,
   createAnnotationTranscriptSource,
   createTranscriptWordLookup,
+  detectSpokenTakeMarkers,
   enqueueFillerDetection,
+  importJsonTakeMarkers,
+  importTakeNotes,
   parseFillerDetectionResult,
   parseTranscriptSidecar,
+  planPickupSplice,
   registerFillerDetectionExecutor,
   TranscriptEngine,
 } from "../../../transcript/src/index.js";
+import { assessSourceRangeContinuity } from "../../../transcript/src/continuity.js";
+import type { TranscribeResult } from "../../../transcript/src/index.js";
 import { loadTranscriptWorkspace } from "../../../transcript/src/operations.js";
 import { RenderService, TemplateRegistry } from "../../../render/src/index.js";
 import type { ExportReport } from "../../../render/src/index.js";
@@ -96,6 +115,7 @@ interface ProjectServices {
   store: ProjectStore;
   jobs: JobQueue;
   media: MediaEngine;
+  capture: CaptureWatcher;
   transcript: TranscriptEngine;
   annotations: AnnotationService;
   compositor: CompositorModel;
@@ -203,6 +223,75 @@ async function latestExportReport(store: ProjectStore): Promise<ExportReport | n
     }));
   return reports.flatMap((report) => report === undefined ? [] : [report])
     .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0] ?? null;
+}
+
+function jsonRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function transcriptionFromJob(job: JobRecord): {
+  assetId: string;
+  result: TranscribeResult;
+} | undefined {
+  const payload = jsonRecord(job.payload);
+  const engine = jsonRecord(payload?.["engine"]);
+  if (
+    typeof payload?.["assetId"] !== "string" ||
+    typeof payload["language"] !== "string" ||
+    typeof payload["languageProbability"] !== "number" ||
+    !Array.isArray(payload["segments"]) ||
+    typeof engine?.["name"] !== "string" ||
+    typeof engine["version"] !== "string" ||
+    typeof engine["model"] !== "string"
+  ) return undefined;
+  return {
+    assetId: payload["assetId"],
+    result: {
+      language: payload["language"],
+      languageProbability: payload["languageProbability"],
+      segments: payload["segments"] as TranscribeResult["segments"],
+      engine: {
+        name: engine["name"],
+        version: engine["version"],
+        model: engine["model"],
+      },
+      jobId: job.jobId,
+    },
+  };
+}
+
+function assetTiming(
+  asset: Asset,
+  timelineFps: string,
+): { fps: string; endFrame: number } {
+  const fps = asset.video?.fps ?? asset.probe.fps ?? timelineFps;
+  const duration = asset.probe.duration;
+  if (duration === undefined) return { fps, endFrame: 1 };
+  const converted = "frames" in duration
+    ? convertTimeRounding(duration, fps)
+    : convertTimeRounding(
+        { frames: duration.samples, fps: `${String(duration.rate)}/1` },
+        fps,
+      );
+  return {
+    fps,
+    endFrame: converted.ok ? Math.max(1, converted.value.time.frames) : 1,
+  };
+}
+
+function markerFingerprint(
+  marker: TakeMarkerSidecar["markers"][number],
+): string {
+  return JSON.stringify({
+    at: marker.at,
+    type: marker.type,
+    note: marker.note ?? null,
+    anchor: marker.anchor ?? null,
+    detected: marker.detected ?? false,
+    source: marker.source,
+  });
 }
 
 export class AppServiceHost {
@@ -396,6 +485,9 @@ export class WindowServiceHost {
         if (job.state === "done" && job.kind === "assist.fillers.detect") {
           void this.#createFillerProposal(job).catch(() => undefined);
         }
+        if (job.state === "done" && job.kind === "transcribe") {
+          void this.#createTranscriptFromJob(job).catch(() => undefined);
+        }
         if (job.state === "done" && job.kind === "keyqc.analyze") {
           void this.#writeCaptureGuidance(job).catch(() => undefined);
         }
@@ -409,10 +501,25 @@ export class WindowServiceHost {
         return asset === undefined ? undefined : loadPeaks(store.root, asset);
       },
     });
+    const capture = new CaptureWatcher({
+      project: store,
+      media,
+      jobQueue: jobs,
+      onTakeSeeded: (assetId, take) => this.#seedCaptureTake(assetId, take),
+      importMarkerFile: (path, sessionId) => this.#importTakeMarkerFile(path, sessionId),
+      onIngested: (assetIds) => {
+        this.publisher.publish({ kind: "watcher.ingested", assetIds: [...assetIds] });
+        this.publisher.publish({
+          kind: "project.revision",
+          revision: store.currentProject.revision,
+        });
+      },
+    });
     this.#project = {
       store,
       jobs,
       media,
+      capture,
       transcript,
       annotations,
       compositor,
@@ -420,6 +527,7 @@ export class WindowServiceHost {
       templates,
       unsubscribeJobs,
     };
+    await capture.start(store.currentProject.watchFolders ?? []);
     return this.snapshot();
   }
 
@@ -487,6 +595,14 @@ export class WindowServiceHost {
             proposalId: string;
             instruction: string;
           }) => this.#supersedeProposal(proposalId, instruction),
+          listJumpCuts: ({ sequenceId }: { sequenceId: string }) =>
+            findJumpCutWarnings(project.store.currentProject, sequenceId),
+          proposeJumpCutConcealment: (params: {
+            sequenceId: string;
+            beforeClipId?: string;
+            config?: Partial<JumpCutConcealmentConfig>;
+            faceTracks?: Record<string, FaceTrackAvailability>;
+          }) => this.#proposeJumpCutConcealment(params),
         };
       case "JobQueue":
         return {
@@ -534,6 +650,10 @@ export class WindowServiceHost {
             state: this.#app.mlworker.state,
             capabilities: this.#app.mlworker.hello?.capabilities ?? [],
           }),
+          importPickup: async ({ path, slug }: { path: string; slug: string }) => {
+            const imported = await project.media.importPickup(project.store, path, slug);
+            return { path: imported.path, job: publicJobStatus(imported.job) };
+          },
         };
       case "TranscriptEngine":
         return project === undefined ? undefined : {
@@ -548,6 +668,31 @@ export class WindowServiceHost {
               project.jobs,
               assetIds === undefined ? {} : { assetIds },
             )),
+          proposePickup: (params: {
+            targetAssetId: string;
+            pickupAssetId: string;
+            fromWord: string;
+            toWord: string;
+            roomTonePaddingMs?: number;
+          }) => this.#proposePickup(params),
+        };
+      case "CaptureWatcher":
+        return project === undefined ? undefined : {
+          list: () => project.capture.configs,
+          configure: async ({ watchFolders }: { watchFolders: WatchFolderConfig[] }) => {
+            const result = await this.#execute({
+              operations: [{ op: "project.watchFolders.set", params: { watchFolders } }],
+              intent: "direct",
+              label: "Update capture watch folders",
+            });
+            await project.capture.start(watchFolders);
+            return { watchFolders: project.capture.configs, revision: result.revision };
+          },
+          reconcile: async () => {
+            await project.capture.reconcile();
+            return { watching: project.capture.configs.length };
+          },
+          listTakes: () => this.#takeSidecars(),
         };
       case "CompositorModel":
         return project === undefined ? undefined : {
@@ -641,7 +786,7 @@ export class WindowServiceHost {
         : {}),
     };
     const containsTranscript = request.operations.some(({ op }) =>
-      op.startsWith("transcript.") || op.startsWith("caption."));
+      op.startsWith("transcript.") || op.startsWith("caption.") || op === "pickup.splice");
     const containsAnnotation = request.operations.some(({ op }) => op.startsWith("annotation."));
     let result: OperationBatchResult;
     if (containsTranscript) {
@@ -693,13 +838,20 @@ export class WindowServiceHost {
 
   async #acceptProposal(proposalId: string): Promise<Proposal> {
     const project = this.#requireProject();
-    const proposal = resultValue(await this.#coreEngine(project, undefined, {
-      commit: (model, transaction) =>
-        project.annotations.commitAccepted(project.store, model, transaction),
-    }).acceptProposal(
-      proposalId,
-      "creator",
-    ));
+    const current = resultValue(await project.store.readProposal(proposalId));
+    const proposal = current.operations.some(({ op }) => op === "pickup.splice")
+      ? resultValue(await project.transcript.acceptProposal(
+          project.store,
+          proposalId,
+          "creator",
+        ))
+      : resultValue(await this.#coreEngine(project, undefined, {
+          commit: (model, transaction) =>
+            project.annotations.commitAccepted(project.store, model, transaction),
+        }).acceptProposal(
+          proposalId,
+          "creator",
+        ));
     this.publisher.publish({ kind: "proposal.updated", proposalId });
     this.publisher.publish({
       kind: "project.revision",
@@ -734,6 +886,299 @@ export class WindowServiceHost {
     this.publisher.publish({ kind: "proposal.updated", proposalId });
     this.publisher.publish({ kind: "proposal.updated", proposalId: proposal.id });
     return proposal;
+  }
+
+  async #proposeJumpCutConcealment(params: {
+    sequenceId: string;
+    beforeClipId?: string;
+    config?: Partial<JumpCutConcealmentConfig>;
+    faceTracks?: Record<string, FaceTrackAvailability>;
+  }): Promise<ReturnType<typeof planJumpCutConcealment> & { proposal?: Proposal }> {
+    const project = this.#requireProject();
+    const config: JumpCutConcealmentConfig = {
+      ...structuredClone(DEFAULT_JUMP_CUT_CONCEALMENT_CONFIG),
+      ...params.config,
+      minPunchDurationFrames: {
+        ...DEFAULT_JUMP_CUT_CONCEALMENT_CONFIG.minPunchDurationFrames,
+        ...params.config?.minPunchDurationFrames,
+      },
+    };
+    const warnings = findJumpCutWarnings(project.store.currentProject, params.sequenceId)
+      .filter(({ boundary }) => params.beforeClipId === undefined ||
+        boundary.beforeClip === params.beforeClipId);
+    const plan = planJumpCutConcealment({
+      project: project.store.currentProject,
+      sequenceId: params.sequenceId,
+      warnings,
+      config,
+      faceTracks: params.faceTracks ?? {},
+    });
+    if (plan.kind !== "proposal") return plan;
+    const proposal = resultValue(await this.#coreEngine(project).createProposal({
+      operations: plan.operations,
+      instruction: {
+        kind: "skill-policy",
+        text: "Review jump-cut concealment (policy supplied directly; editorial-skill integration lands in M4)",
+      },
+      actor: { kind: "tool", id: "assist.jumpcuts.conceal" },
+      reason: {
+        text: "Conceal flagged same-source jump cuts without silently changing the accepted timeline.",
+        sources: plan.reasons.map(({ evidence }) => ({
+          kind: "media-evidence" as const,
+          ref: evidence,
+        })),
+      },
+      addresses: [],
+      warnings,
+    }));
+    this.publisher.publish({ kind: "proposal.updated", proposalId: proposal.id });
+    return { ...plan, proposal };
+  }
+
+  async #proposePickup(params: {
+    targetAssetId: string;
+    pickupAssetId: string;
+    fromWord: string;
+    toWord: string;
+    roomTonePaddingMs?: number;
+  }): Promise<unknown> {
+    const project = this.#requireProject();
+    resultValue(await project.transcript.realign(project.store, {
+      assetId: params.pickupAssetId,
+    }));
+    const sidecars = await transcriptSidecars(project.store);
+    const target = sidecars.find(({ assetId }) => assetId === params.targetAssetId);
+    const pickup = sidecars.find(({ assetId }) => assetId === params.pickupAssetId);
+    if (target === undefined || pickup === undefined) {
+      throw new Error("Both the original and pickup assets must have canonical transcripts.");
+    }
+    const pickupWords = pickup.segments.flatMap(({ words }) => words.flatMap((wordId) => {
+      const word = pickup.words[wordId];
+      return word === undefined || word.state !== "active" ? [] : [word];
+    }));
+    const firstPickup = pickupWords[0];
+    const lastPickup = pickupWords.at(-1);
+    if (firstPickup === undefined || lastPickup === undefined) {
+      throw new Error("The pickup transcript has no active aligned words.");
+    }
+    const confidences = pickupWords.flatMap(({ confidence }) =>
+      confidence === null ? [] : [confidence]);
+    const confidence = confidences.length === 0
+      ? 0
+      : confidences.reduce((sum, value) => sum + value, 0) / confidences.length;
+    const targetFrom = target.words[params.fromWord];
+    const targetTo = target.words[params.toWord];
+    if (targetFrom === undefined || targetTo === undefined) {
+      throw new Error(`Pickup target ${params.fromWord}..${params.toWord} is not in ${params.targetAssetId}.`);
+    }
+    const plan = await planPickupSplice({
+      project: project.store.currentProject,
+      transcript: target,
+      pickupTranscript: pickup,
+      wordRange: { fromWord: params.fromWord, toWord: params.toWord },
+      pickupAssetId: params.pickupAssetId,
+      pickupRange: { in: firstPickup.start, out: lastPickup.end },
+      alignmentConfidence: confidence,
+      ...(params.roomTonePaddingMs === undefined
+        ? {}
+        : { roomTonePaddingMs: params.roomTonePaddingMs }),
+      evaluateContinuity: () => assessSourceRangeContinuity(
+        project.store.currentProject,
+        {
+          assetId: params.targetAssetId,
+          start: targetFrom.start,
+          end: targetTo.end,
+        },
+        {
+          sidecars,
+          loadPeaks: async (assetId) => {
+            const asset = project.store.currentProject.assets.find(({ id }) => id === assetId);
+            return asset === undefined ? undefined : loadPeaks(project.store.root, asset);
+          },
+        },
+      ),
+    });
+    if (plan.kind !== "proposal") return plan;
+    const captionWarning = {
+      code: "caption-realign-required" as const,
+      severity: "info" as const,
+      boundary: {},
+      evidence: `Pickup timing changes ${params.fromWord}..${params.toWord}; ${String(plan.captionUpdates.length)} enabled caption tracks require realignment.`,
+      suggestion: "Review caption breaks and timing with the pickup preview before acceptance.",
+    };
+    const proposal = resultValue(await project.transcript.createProposal(project.store, {
+      operations: [plan.operation],
+      instruction: { kind: "ui-direct", text: "Review imported pickup splice" },
+      actor: { kind: "tool", id: "pickup.import" },
+      reason: {
+        text: "Replace the selected flawed words with the force-aligned corrective recording.",
+        sources: [{ kind: "media-evidence", ref: params.pickupAssetId }],
+      },
+      addresses: [],
+      warnings: [...plan.warnings, captionWarning],
+    }));
+    this.publisher.publish({ kind: "proposal.updated", proposalId: proposal.id });
+    return { ...plan, warnings: [...plan.warnings, captionWarning], proposal };
+  }
+
+  async #takeSidecars(): Promise<TakeMarkerSidecar[]> {
+    const project = this.#requireProject();
+    return Promise.all(project.store.currentProject.sidecars
+      .filter(({ schema }) => schema === "guyditor.take-markers/v1")
+      .map(async ({ path }) => parseTakeMarkerSidecar(
+        await readFile(join(project.store.root, path), "utf8"),
+      )));
+  }
+
+  async #takeSidecar(assetId: string): Promise<TakeMarkerSidecar> {
+    const existing = (await this.#takeSidecars()).find((sidecar) => sidecar.assetId === assetId);
+    return existing ?? {
+      format: "guyditor.take-markers/v1",
+      assetId,
+      markers: [],
+      takes: [],
+    };
+  }
+
+  async #persistTakeSidecar(sidecar: TakeMarkerSidecar): Promise<void> {
+    const project = this.#requireProject();
+    const content = serializeTakeMarkerSidecar(sidecar);
+    const relativePath = `sidecars/takes/${sidecar.assetId}.takes.json`;
+    await mkdir(join(project.store.root, "sidecars/takes"), { recursive: true });
+    await writeFile(join(project.store.root, relativePath), content, "utf8");
+    const sha256 = createHash("sha256").update(content).digest("hex");
+    resultValue(await this.#coreEngine(project).execute([
+      {
+        op: "asset.markers.attach",
+        params: {
+          assetId: sidecar.assetId,
+          markerIds: sidecar.markers.map(({ id }) => id),
+          sidecar: { path: relativePath, sha256 },
+        },
+      },
+      {
+        op: "asset.takes.set",
+        params: {
+          assetId: sidecar.assetId,
+          takeIds: sidecar.takes.map(({ id }) => id),
+          sidecar: { path: relativePath, sha256 },
+        },
+      },
+    ], {
+      baseRevision: project.store.currentProject.revision,
+      origin: "system",
+      dryRun: false,
+      recordUndo: false,
+      instruction: { kind: "ui-direct", text: "Attach capture take metadata" },
+    }));
+  }
+
+  async #seedCaptureTake(
+    assetId: string,
+    seed: { id: string; index: number },
+  ): Promise<void> {
+    const project = this.#requireProject();
+    const asset = project.store.currentProject.assets.find(({ id }) => id === assetId);
+    if (asset === undefined) throw new Error(`Capture asset ${assetId} is unavailable.`);
+    const sidecar = await this.#takeSidecar(assetId);
+    if (sidecar.takes.some(({ id }) => id === seed.id)) return;
+    const timing = assetTiming(asset, project.store.currentProject.settings.timeline.fps);
+    sidecar.takes.push({
+      id: seed.id,
+      assetId,
+      index: seed.index,
+      range: { start: 0, end: timing.endFrame, fps: timing.fps },
+      quality: "unrated",
+      notes: [],
+      sourceMarkerIds: [],
+    });
+    await this.#persistTakeSidecar(sidecar);
+  }
+
+  async #importTakeMarkerFile(markerPath: string, sessionId: string): Promise<void> {
+    const project = this.#requireProject();
+    const markerName = basename(markerPath).toLocaleLowerCase("en");
+    const specificName = markerName === "markers.json" || markerName === "notes.txt"
+      ? undefined
+      : markerName.slice(0, -".markers.json".length);
+    const assets = project.store.currentProject.assets.filter((asset) => {
+      if (asset.session !== sessionId) return false;
+      if (specificName === undefined) return true;
+      const mediaName = basename(asset.path).toLocaleLowerCase("en");
+      return mediaName === specificName || mediaName.slice(0, -extname(mediaName).length) === specificName;
+    });
+    const text = await readFile(markerPath, "utf8");
+    let changed = false;
+    for (const asset of assets) {
+      const timing = assetTiming(asset, project.store.currentProject.settings.timeline.fps);
+      const imported = markerName.endsWith(".json")
+        ? importJsonTakeMarkers(text, {
+            assetId: asset.id,
+            fps: timing.fps,
+            assetEndFrame: timing.endFrame,
+            idFactory: makeId,
+            ...(asset.captureTime === undefined
+              ? {}
+              : { captureStart: asset.captureTime.value }),
+          })
+        : importTakeNotes(text, {
+            assetId: asset.id,
+            fps: timing.fps,
+            assetEndFrame: timing.endFrame,
+            idFactory: makeId,
+          });
+      const existing = await this.#takeSidecar(asset.id);
+      const fingerprints = new Set(existing.markers.map(markerFingerprint));
+      if (imported.markers.every((marker) => fingerprints.has(markerFingerprint(marker)))) continue;
+      await this.#persistTakeSidecar({
+        ...existing,
+        markers: [...existing.markers, ...imported.markers],
+        takes: imported.takes.length === 0
+          ? existing.takes
+          : [...existing.takes, ...imported.takes],
+      });
+      changed = true;
+    }
+    if (changed) {
+      this.publisher.publish({
+        kind: "project.revision",
+        revision: project.store.currentProject.revision,
+      });
+    }
+  }
+
+  async #createTranscriptFromJob(job: JobRecord): Promise<void> {
+    const parsed = transcriptionFromJob(job);
+    if (parsed === undefined) return;
+    const project = this.#requireProject();
+    const created = await project.transcript.createFromTranscription(
+      project.store,
+      parsed.assetId,
+      parsed.result,
+    );
+    if (!created.ok) {
+      if (created.error.code === "E_TRANSCRIPT_EXISTS") return;
+      throw created.error;
+    }
+    const asset = project.store.currentProject.assets.find(({ id }) => id === parsed.assetId);
+    if (asset !== undefined) {
+      const timing = assetTiming(asset, project.store.currentProject.settings.timeline.fps);
+      const spoken = detectSpokenTakeMarkers(created.value.sidecar, {
+        fps: timing.fps,
+        idFactory: makeId,
+      });
+      if (spoken.length > 0) {
+        const existing = await this.#takeSidecar(asset.id);
+        const fingerprints = new Set(existing.markers.map(markerFingerprint));
+        existing.markers.push(...spoken.filter((marker) =>
+          !fingerprints.has(markerFingerprint(marker))));
+        await this.#persistTakeSidecar(existing);
+      }
+    }
+    this.publisher.publish({
+      kind: "project.revision",
+      revision: project.store.currentProject.revision,
+    });
   }
 
   async #createFillerProposal(job: JobRecord): Promise<void> {
@@ -807,6 +1252,7 @@ export class WindowServiceHost {
     this.#project = undefined;
     if (project === undefined) return;
     project.unsubscribeJobs();
+    void project.capture.close();
     project.jobs.close();
   }
 }

@@ -32,7 +32,7 @@ export interface GuyditorProject {
   deliverables: Deliverable[];
   templates?: Record<string, { version: string; contentHash: string }>;
   avoidRegions?: AvoidRegion[];
-  watchFolders?: unknown[];
+  watchFolders?: WatchFolderConfig[];
   presets: PresetPin[];
   skills: SkillPin[];
   sidecars: SidecarRef[];
@@ -43,6 +43,14 @@ export interface ProjectSettings {
   audio: { sampleRate: number; channels: number };
   primaryDeliverable: string;
   automation?: unknown;
+}
+
+export interface WatchFolderConfig {
+  path: string;
+  convention: "guyditor" | "flat";
+  ignore?: string[];
+  autoIngest: boolean;
+  autoJobs: { proxy: boolean; analysis: boolean; transcription: boolean };
 }
 
 export interface Asset {
@@ -97,7 +105,7 @@ export interface Asset {
   takes?: string[];
   markers?: string[];
   analyses?: Record<string, unknown>;
-  sync?: unknown;
+  sync?: SyncDecision;
   integrity?: "ok" | "missing" | "mismatch";
   ingest?: {
     at: string;
@@ -106,6 +114,17 @@ export interface Asset {
   };
   provenance?: { sidecar: string };
   rights?: { source: string; license: string; restrictions?: string };
+}
+
+export interface SyncDecision {
+  referenceAssetId: string;
+  method: "timecode" | "waveform" | "manual";
+  offset: SampleTime;
+  confidence?: number;
+  drift?: { framesPerMinute: number; corrected: false };
+  evidence: Record<string, unknown>;
+  decidedBy: "system" | "creator" | "agent";
+  decidedAt: string;
 }
 
 export interface Beat {

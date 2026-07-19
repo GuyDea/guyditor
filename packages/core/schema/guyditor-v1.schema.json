@@ -41,12 +41,33 @@
       "additionalProperties": false
     },
     "avoidRegions": { "type": "array", "items": { "$ref": "#/$defs/avoidRegion" } },
-    "watchFolders": true,
+    "watchFolders": { "type": "array", "items": { "$ref": "#/$defs/watchFolder" } },
     "presets": { "type": "array", "items": { "$ref": "#/$defs/presetPin" } },
     "skills": { "type": "array", "items": { "$ref": "#/$defs/skillPin" } },
     "sidecars": { "type": "array", "items": { "$ref": "#/$defs/sidecarRef" } }
   },
   "$defs": {
+    "watchFolder": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "convention", "autoIngest", "autoJobs"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "convention": { "enum": ["guyditor", "flat"] },
+        "ignore": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "autoIngest": { "type": "boolean" },
+        "autoJobs": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["proxy", "analysis", "transcription"],
+          "properties": {
+            "proxy": { "type": "boolean" },
+            "analysis": { "type": "boolean" },
+            "transcription": { "type": "boolean" }
+          }
+        }
+      }
+    },
     "rational": {
       "type": "string",
       "pattern": "^[0-9]+/[1-9][0-9]*$"
@@ -224,11 +245,34 @@
         "takes": { "type": "array", "items": { "type": "string", "pattern": "^tak_[a-z2-7]{10}$" } },
         "markers": { "type": "array", "items": { "type": "string", "pattern": "^mrk_[a-z2-7]{10}$" } },
         "analyses": { "$ref": "#/$defs/unknownRecord" },
-        "sync": true,
+        "sync": { "$ref": "#/$defs/syncDecision" },
         "integrity": { "enum": ["ok", "missing", "mismatch"] },
         "ingest": { "$ref": "#/$defs/ingest" },
         "provenance": { "$ref": "#/$defs/provenance" },
         "rights": { "$ref": "#/$defs/rights" }
+      }
+    },
+    "syncDecision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["referenceAssetId", "method", "offset", "evidence", "decidedBy", "decidedAt"],
+      "properties": {
+        "referenceAssetId": { "type": "string", "pattern": "^ast_[a-z2-7]{10}$" },
+        "method": { "enum": ["timecode", "waveform", "manual"] },
+        "offset": { "$ref": "#/$defs/sampleTime" },
+        "confidence": { "type": "number", "minimum": 0 },
+        "drift": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["framesPerMinute", "corrected"],
+          "properties": {
+            "framesPerMinute": { "type": "number" },
+            "corrected": { "const": false }
+          }
+        },
+        "evidence": { "$ref": "#/$defs/unknownRecord" },
+        "decidedBy": { "enum": ["system", "creator", "agent"] },
+        "decidedAt": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T" }
       }
     },
     "assetProbe": {

@@ -1,0 +1,33 @@
+{
+  "$id": "guyditor:op/project.watchFolders.set",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["watchFolders"],
+  "properties": {
+    "watchFolders": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "convention", "autoIngest", "autoJobs"],
+        "properties": {
+          "path": { "type": "string", "minLength": 1 },
+          "convention": { "enum": ["guyditor", "flat"] },
+          "ignore": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+          "autoIngest": { "type": "boolean" },
+          "autoJobs": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["proxy", "analysis", "transcription"],
+            "properties": {
+              "proxy": { "type": "boolean" },
+              "analysis": { "type": "boolean" },
+              "transcription": { "type": "boolean" }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -14,6 +14,23 @@ export {
 } from "./anchor-lookup.js";
 export { createAnnotationTranscriptSource } from "./annotation-context.js";
 export { mapWordRangeToSourceRange } from "./range-mapping.js";
+export {
+  detectSpokenTakeMarkers,
+  importJsonTakeMarkers,
+  importTakeNotes,
+} from "./take-markers.js";
+export {
+  PICKUP_ALIGNMENT_CONFIDENCE_THRESHOLD,
+  planPickupSplice,
+} from "./pickup.js";
+export type {
+  PickupSpliceInput,
+  PickupSplicePlan,
+} from "./pickup.js";
+export type {
+  SpokenMarkerOptions,
+  TakeMarkerImportOptions,
+} from "./take-markers.js";
 export * from "./fillers.js";
 export * from "./captions/index.js";
 export {

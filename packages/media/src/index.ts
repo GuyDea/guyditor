@@ -1,4 +1,15 @@
 export { resolveFfmpeg, resolveFfprobe } from "./binaries.js";
+export {
+  CAPTURE_STABILITY_POLICY,
+  CaptureWatcher,
+  parseCaptureFilename,
+} from "./capture-watcher.js";
+export type {
+  CaptureFileConvention,
+  CaptureStabilityPolicy,
+  CaptureWatcherOptions,
+  CaptureWatcherWarning,
+} from "./capture-watcher.js";
 export type { ResolvedBinary } from "./binaries.js";
 export { estimateProjectCacheUse } from "./cache.js";
 export type {
@@ -52,6 +63,7 @@ export type {
   IngestSource,
   IngestWarning,
   MediaEngineOptions,
+  PickupImportResult,
 } from "./ingest.js";
 export {
   ebur128MeasureCommand,

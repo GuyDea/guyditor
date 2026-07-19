@@ -44,12 +44,16 @@ import markRegionSchema from "./schemas/region.mark.json" with { type: "json" };
 import setClipKeySchema from "./schemas/clip.key.set.json" with { type: "json" };
 import setClipKeyMaskSchema from "./schemas/clip.key.mask.set.json" with { type: "json" };
 import setClipTransformSchema from "./schemas/clip.transform.set.json" with { type: "json" };
+import setClipPunchInSchema from "./schemas/clip.punchin.set.json" with { type: "json" };
+import switchClipSourceSchema from "./schemas/clip.source.switch.json" with { type: "json" };
 import arrangeCompositionSchema from "./schemas/composition.arrange.json" with { type: "json" };
 import runKeyQcSchema from "./schemas/key.qc.run.json" with { type: "json" };
 import setTransitionSchema from "./schemas/transition.set.json" with { type: "json" };
 import removeTransitionSchema from "./schemas/transition.remove.json" with { type: "json" };
 import assetIngestSchema from "./schemas/asset.ingest.json" with { type: "json" };
 import assetRemoveSchema from "./schemas/asset.remove.json" with { type: "json" };
+import assetMarkersAttachSchema from "./schemas/asset.markers.attach.json" with { type: "json" };
+import assetTakesSetSchema from "./schemas/asset.takes.set.json" with { type: "json" };
 import transcriptCreateSchema from "./schemas/transcript.create.json" with { type: "json" };
 import transcriptWordCorrectSchema from "./schemas/transcript.word.correct.json" with { type: "json" };
 import transcriptWordReplaceSchema from "./schemas/transcript.word.replace.json" with { type: "json" };
@@ -64,6 +68,8 @@ import transcriptRangeRemoveSchema from "./schemas/transcript.range.remove.json"
 import transcriptRangeRetainSchema from "./schemas/transcript.range.retain.json" with { type: "json" };
 import transcriptRangeCreateClipSchema from "./schemas/transcript.range.createClip.json" with { type: "json" };
 import transcriptRangeShortCandidateSchema from "./schemas/transcript.range.shortCandidate.json" with { type: "json" };
+import pickupSpliceSchema from "./schemas/pickup.splice.json" with { type: "json" };
+import projectWatchFoldersSetSchema from "./schemas/project.watchFolders.set.json" with { type: "json" };
 import captionTrackAddSchema from "./schemas/caption.track.add.json" with { type: "json" };
 import captionTrackRemoveSchema from "./schemas/caption.track.remove.json" with { type: "json" };
 import captionTrackSetSchema from "./schemas/caption.track.set.json" with { type: "json" };
@@ -128,6 +134,7 @@ import {
 import { applyLayerOperation } from "./layer.js";
 import { applyTransitionOperation } from "./transition.js";
 import { applyAssetOperation } from "./asset.js";
+import { applyProjectOperation } from "./project.js";
 import { applyAnchorOperation } from "./anchor.js";
 import { assessBatchRisk, buildSemanticDiff } from "./diff.js";
 import { applyGraphicOperation, applyTemplateOperation } from "./graphic.js";
@@ -215,6 +222,9 @@ function catalogEntry(
 const catalog = new Map<string, CatalogEntry>([
   ["asset.ingest", catalogEntry(assetIngestSchema, "normal", "none", "Ingest {n} assets")],
   ["asset.remove", catalogEntry(assetRemoveSchema, "normal", "none", "Remove {n} assets")],
+  ["asset.markers.attach", catalogEntry(assetMarkersAttachSchema, "low", "none", "Attach {n} markers to {asset}")],
+  ["asset.takes.set", catalogEntry(assetTakesSetSchema, "low", "none", "Set take metadata for {asset}")],
+  ["project.watchFolders.set", catalogEntry(projectWatchFoldersSetSchema, "low", "none", "Configure {n} capture watch folders")],
   ["clip.trim", catalogEntry(trimSchema, "normal", "none", "Trim {clip}")],
   ["clip.split", catalogEntry(splitSchema, "normal", "none", "Split {clip}")],
   ["clip.join", catalogEntry(joinSchema, "normal", "none", "Join {clips}")],
@@ -245,6 +255,8 @@ const catalog = new Map<string, CatalogEntry>([
   ["clip.key.set", catalogEntry(setClipKeySchema, "normal", "none", "Set key on {clip}")],
   ["clip.key.mask.set", catalogEntry(setClipKeyMaskSchema, "normal", "none", "Set key mask on {clip}")],
   ["clip.transform.set", catalogEntry(setClipTransformSchema, "normal", "none", "Transform {clip}")],
+  ["clip.punchin.set", catalogEntry(setClipPunchInSchema, "normal", "none", "Punch in {clip} to {level}x")],
+  ["clip.source.switch", catalogEntry(switchClipSourceSchema, "normal", "none", "Switch {clip} to synchronized source {assetId}")],
   ["composition.arrange", catalogEntry(arrangeCompositionSchema, "normal", "none", "Arrange {sequence}")],
   ["key.qc.run", catalogEntry(runKeyQcSchema, "low", "none", "Analyze key quality for {clip}")],
   ["clip.audio.gain.set", catalogEntry(setClipAudioGainSchema, "low", "none", "Set {clip} gain to {gainDb} dB")],
@@ -261,6 +273,7 @@ const catalog = new Map<string, CatalogEntry>([
   ["clip.look.apply", catalogEntry(applyClipLookSchema, "low", "none", "Apply look {presetId}@{presetVersion} to {target}")],
   ["transition.set", catalogEntry(setTransitionSchema, "normal", "none", "Set {kind} ({duration}) between {a} and {b}")],
   ["transition.remove", catalogEntry(removeTransitionSchema, "normal", "none", "Remove {kind} between {a} and {b}")],
+  ["pickup.splice", catalogEntry(pickupSpliceSchema, "normal", "realign", "Replace {wordRange} with pickup {pickupAssetId}")],
   ["transcript.create", catalogEntry(
     transcriptCreateSchema,
     "low",
@@ -611,6 +624,8 @@ export class OperationEngine {
       let application: Result<ClipApplication>;
       if (isAudioColorOperation(requested.op)) {
         application = applyAudioColorOperation(working, normalized, this.#idFactory);
+      } else if (requested.op.startsWith("project.")) {
+        application = applyProjectOperation(working, normalized);
       } else if (requested.op.startsWith("asset.")) {
         application = applyAssetOperation(working, normalized);
       } else if (requested.op === "anchor.rebind") {

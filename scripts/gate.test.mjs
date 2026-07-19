@@ -283,6 +283,9 @@ test("m1 skip-dogfood is explicit, loud, and still emits the automated gate repo
 });
 
 test("m2 runs the declared partial gate and enforces its scoped traceability", () => {
+  for (const id of ["FR-009", "FR-010", "FR-011", "FR-311"]) {
+    assert.equal(M2_PARTIAL_IDS.includes(id), true, `${id} must be enforced by the M2 gate`);
+  }
   const commands = [];
   const output = [];
   const status = runGate("m2", {

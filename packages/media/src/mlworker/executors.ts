@@ -15,6 +15,20 @@ function taskParams(payload: JsonValue, taskId: string): Record<string, JsonValu
   return { ...payload, taskId };
 }
 
+function taskResult(
+  payload: JsonValue,
+  result: JsonValue,
+  taskId: string,
+): JsonValue {
+  if (
+    typeof payload === "object" && payload !== null && !Array.isArray(payload) &&
+    typeof result === "object" && result !== null && !Array.isArray(result)
+  ) {
+    return { ...payload, ...result, jobId: taskId };
+  }
+  return result;
+}
+
 export function registerMlworkerJobExecutors(
   queue: JobQueue,
   runner: MlworkerTaskRunner,
@@ -30,7 +44,7 @@ export function registerMlworkerJobExecutors(
         },
       );
       if (!result.ok) throw result.error;
-      return result.value;
+      return taskResult(job.payload, result.value, job.jobId);
     });
   }
 }
