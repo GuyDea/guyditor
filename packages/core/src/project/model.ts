@@ -134,7 +134,9 @@ export interface Clip {
   audio?: {
     gainDb?: number;
     fadeIn?: FrameTime;
+    fadeInCurve?: string;
     fadeOut?: FrameTime;
+    fadeOutCurve?: string;
     mute?: boolean;
     offset?: SampleTime;
     channels?: "left" | "right" | "mix" | number[];

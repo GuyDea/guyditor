@@ -1,0 +1,17 @@
+{
+  "$id": "guyditor:op/clip.duplicate",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["clipId", "toIndex"],
+  "additionalProperties": false,
+  "properties": {
+    "clipId": { "type": "string", "pattern": "^clp_[a-z2-7]{10}$" },
+    "toIndex": { "type": "integer", "minimum": 0 },
+    "duplicateClipId": { "type": "string", "pattern": "^clp_[a-z2-7]{10}$" },
+    "duplicateEffectIds": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^fx_[a-z2-7]{10}$" }
+    },
+    "duplicateTransitionId": { "type": "string", "pattern": "^trn_[a-z2-7]{10}$" }
+  }
+}

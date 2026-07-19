@@ -6,6 +6,22 @@ import splitSchema from "./schemas/clip.split.json" with { type: "json" };
 import joinSchema from "./schemas/clip.join.json" with { type: "json" };
 import removeClipSchema from "./schemas/clip.remove.json" with { type: "json" };
 import restoreClipSchema from "./schemas/clip.restore.json" with { type: "json" };
+import insertClipSchema from "./schemas/clip.insert.json" with { type: "json" };
+import moveClipSchema from "./schemas/clip.move.json" with { type: "json" };
+import duplicateClipSchema from "./schemas/clip.duplicate.json" with { type: "json" };
+import setClipGapSchema from "./schemas/clip.gap.set.json" with { type: "json" };
+import setClipOverlapSchema from "./schemas/clip.overlap.set.json" with { type: "json" };
+import setClipAudioGainSchema from "./schemas/clip.audio.gain.set.json" with { type: "json" };
+import setClipAudioFadeSchema from "./schemas/clip.audio.fade.set.json" with { type: "json" };
+import addLayerSchema from "./schemas/layer.add.json" with { type: "json" };
+import removeLayerSchema from "./schemas/layer.remove.json" with { type: "json" };
+import reorderLayerSchema from "./schemas/layer.reorder.json" with { type: "json" };
+import enableLayerSchema from "./schemas/layer.enable.json" with { type: "json" };
+import disableLayerSchema from "./schemas/layer.disable.json" with { type: "json" };
+import lockLayerSchema from "./schemas/layer.lock.json" with { type: "json" };
+import unlockLayerSchema from "./schemas/layer.unlock.json" with { type: "json" };
+import setTransitionSchema from "./schemas/transition.set.json" with { type: "json" };
+import removeTransitionSchema from "./schemas/transition.remove.json" with { type: "json" };
 import assetIngestSchema from "./schemas/asset.ingest.json" with { type: "json" };
 import assetRemoveSchema from "./schemas/asset.remove.json" with { type: "json" };
 import transcriptCreateSchema from "./schemas/transcript.create.json" with { type: "json" };
@@ -61,6 +77,8 @@ import type {
 import type { TransactionRecord } from "../store/types.js";
 import { applyClipOperation } from "./clip.js";
 import type { ClipApplication } from "./clip.js";
+import { applyLayerOperation } from "./layer.js";
+import { applyTransitionOperation } from "./transition.js";
 import { applyAssetOperation } from "./asset.js";
 import { applyAnchorOperation } from "./anchor.js";
 import { assessBatchRisk, buildSemanticDiff } from "./diff.js";
@@ -150,6 +168,22 @@ const catalog = new Map<string, CatalogEntry>([
   ["clip.join", catalogEntry(joinSchema, "normal", "none", "Join {clips}")],
   ["clip.remove", catalogEntry(removeClipSchema, "normal", "shift", "Remove {clip}")],
   ["clip.restore", catalogEntry(restoreClipSchema, "normal", "shift", "Restore {n} clips")],
+  ["clip.insert", catalogEntry(insertClipSchema, "normal", "shift", "Insert {asset} range at position {index}")],
+  ["clip.move", catalogEntry(moveClipSchema, "normal", "shift", "Move {clip} to {dest}")],
+  ["clip.duplicate", catalogEntry(duplicateClipSchema, "normal", "shift", "Duplicate {clip}")],
+  ["clip.gap.set", catalogEntry(setClipGapSchema, "normal", "shift", "Set gap before {clip} to {gap}")],
+  ["clip.overlap.set", catalogEntry(setClipOverlapSchema, "normal", "shift", "Overlap {clip} with previous by {t}")],
+  ["layer.add", catalogEntry(addLayerSchema, "normal", "none", "Add {kind} layer '{name}'")],
+  ["layer.remove", catalogEntry(removeLayerSchema, "low", "none", "Remove layer '{name}' ({n} clips)")],
+  ["layer.reorder", catalogEntry(reorderLayerSchema, "low", "none", "Move layer '{name}' to position {i}")],
+  ["layer.enable", catalogEntry(enableLayerSchema, "low", "none", "Enable layer '{name}'")],
+  ["layer.disable", catalogEntry(disableLayerSchema, "low", "none", "Disable layer '{name}'")],
+  ["layer.lock", catalogEntry(lockLayerSchema, "low", "none", "Lock layer '{name}'")],
+  ["layer.unlock", catalogEntry(unlockLayerSchema, "low", "none", "Unlock layer '{name}'")],
+  ["clip.audio.gain.set", catalogEntry(setClipAudioGainSchema, "low", "none", "Set {clip} gain to {gainDb} dB")],
+  ["clip.audio.fade.set", catalogEntry(setClipAudioFadeSchema, "low", "none", "Set audio fades on {clip}")],
+  ["transition.set", catalogEntry(setTransitionSchema, "normal", "none", "Set {kind} ({duration}) between {a} and {b}")],
+  ["transition.remove", catalogEntry(removeTransitionSchema, "normal", "none", "Remove {kind} between {a} and {b}")],
   ["transcript.create", catalogEntry(
     transcriptCreateSchema,
     "low",
@@ -413,6 +447,9 @@ export class OperationEngine {
         return operationFailure("E_OP_UNKNOWN", `Unknown operation ${requested.op}.`);
       }
       const params = structuredClone(requested.params);
+      if (requested.op === "clip.remove" && params["closeGap"] === undefined) {
+        params["closeGap"] = true;
+      }
       if (
         requested.op === "clip.split" &&
         typeof params["at"] === "string" &&
@@ -440,6 +477,10 @@ export class OperationEngine {
         application = applyAnchorOperation(working, normalized);
       } else if (requested.op.startsWith("clip.")) {
         application = applyClipOperation(working, normalized, this.#idFactory);
+      } else if (requested.op.startsWith("layer.")) {
+        application = applyLayerOperation(working, normalized, this.#idFactory);
+      } else if (requested.op.startsWith("transition.")) {
+        application = applyTransitionOperation(working, normalized, this.#idFactory);
       } else if (this.#operationDispatcher === undefined) {
         application = operationFailure(
           "E_OP_DISPATCH_UNAVAILABLE",

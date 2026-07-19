@@ -44,8 +44,8 @@ describe("workspace renderer state", () => {
       useUndoStore.getState().record({
         txnId: "txn_aaaaaaaaaa",
         label: `Edit ${String(index)}`,
-        ops: [{ op: "clip.remove", params: { clipId: "clp_aaaaaaaaaa" } }],
-        inverse: [{ op: "clip.restore", params: {} }],
+        ops: [{ op: "clip.remove", params: { clipId: "clp_aaaaaaaaaa", closeGap: true } }],
+        inverse: [{ op: "clip.insert", params: {} }],
       });
     }
     expect(useUndoStore.getState().undo).toHaveLength(200);

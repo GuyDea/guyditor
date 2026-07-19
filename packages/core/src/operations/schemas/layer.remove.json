@@ -1,0 +1,10 @@
+{
+  "$id": "guyditor:op/layer.remove",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["layerId"],
+  "additionalProperties": false,
+  "properties": {
+    "layerId": { "type": "string", "pattern": "^lyr_[a-z2-7]{10}$" }
+  }
+}

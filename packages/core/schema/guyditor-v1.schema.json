@@ -420,7 +420,9 @@
       "properties": {
         "gainDb": { "type": "number" },
         "fadeIn": { "$ref": "#/$defs/frameTime" },
+        "fadeInCurve": { "type": "string", "minLength": 1 },
         "fadeOut": { "$ref": "#/$defs/frameTime" },
+        "fadeOutCurve": { "type": "string", "minLength": 1 },
         "mute": { "type": "boolean" },
         "offset": { "$ref": "#/$defs/sampleTime" },
         "channels": {

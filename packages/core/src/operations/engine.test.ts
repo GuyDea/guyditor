@@ -343,18 +343,25 @@ describe("OperationEngine", () => {
 
     const removed = await valueOf(engine.execute([{
       op: "clip.remove",
-      params: { clipId: "clp_aaaaaaaaaa" },
+      params: { clipId: "clp_aaaaaaaaaa", closeGap: true },
     }], context()));
 
     expect(engine.currentProject.sequences[0]!.clips.map(({ id }) => id)).toEqual([
       "clp_bbbbbbbbbb",
     ]);
     expect(removed.applied[0]!.inverse).toEqual([{
-      op: "clip.restore",
+      op: "clip.insert",
       params: {
         sequenceId: "seq_aaaaaaaaaa",
-        targetIndex: 0,
-        clips: [original.sequences[0]!.clips[0]],
+        index: 0,
+        layerId: "lyr_aaaaaaaaaa",
+        clipId: "clp_aaaaaaaaaa",
+        source: {
+          assetId: "ast_aaaaaaaaaa",
+          in: { frames: 0, fps: "24/1" },
+          out: { frames: 24, fps: "24/1" },
+        },
+        restore: original.sequences[0]!.clips[0],
       },
     }]);
 

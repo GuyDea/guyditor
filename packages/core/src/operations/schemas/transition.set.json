@@ -1,0 +1,34 @@
+{
+  "$id": "guyditor:op/transition.set",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["boundary", "kind", "duration"],
+  "additionalProperties": false,
+  "properties": {
+    "boundary": {
+      "type": "object",
+      "required": ["beforeClipId", "afterClipId"],
+      "additionalProperties": false,
+      "properties": {
+        "beforeClipId": { "type": "string", "pattern": "^clp_[a-z2-7]{10}$" },
+        "afterClipId": { "type": "string", "pattern": "^clp_[a-z2-7]{10}$" }
+      }
+    },
+    "kind": { "enum": ["cut", "crossfade", "audio-crossfade", "preset"] },
+    "presetId": { "type": "string", "pattern": "^pre_[a-z2-7]{10}$" },
+    "duration": { "$ref": "#/$defs/frameTime" },
+    "intent": { "type": "string" },
+    "transitionId": { "type": "string", "pattern": "^trn_[a-z2-7]{10}$" }
+  },
+  "$defs": {
+    "frameTime": {
+      "type": "object",
+      "required": ["frames", "fps"],
+      "additionalProperties": false,
+      "properties": {
+        "frames": { "type": "integer", "minimum": 0 },
+        "fps": { "type": "string", "pattern": "^[0-9]+/[0-9]+$" }
+      }
+    }
+  }
+}

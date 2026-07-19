@@ -1,0 +1,27 @@
+{
+  "$id": "guyditor:op/clip.overlap.set",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["clipId", "overlapWithPrevious"],
+  "additionalProperties": false,
+  "properties": {
+    "clipId": { "type": "string", "pattern": "^clp_[a-z2-7]{10}$" },
+    "overlapWithPrevious": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/frameTime" }
+      ]
+    }
+  },
+  "$defs": {
+    "frameTime": {
+      "type": "object",
+      "required": ["frames", "fps"],
+      "additionalProperties": false,
+      "properties": {
+        "frames": { "type": "integer", "minimum": 0 },
+        "fps": { "type": "string", "pattern": "^[0-9]+/[0-9]+$" }
+      }
+    }
+  }
+}

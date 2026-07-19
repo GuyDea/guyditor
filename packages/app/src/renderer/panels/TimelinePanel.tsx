@@ -135,28 +135,21 @@ export function TimelinePanel({
     const clip = sequence.clips[from];
     if (clip === undefined || from < 0 || to < 0) return;
     const targetIndex = from < to ? to - 1 : to;
-    await commit([
-      { op: "clip.remove", params: { clipId } },
-      {
-        op: "clip.restore",
-        params: { sequenceId: sequence.id, targetIndex, clips: [structuredClone(clip)] },
-      },
-    ], `Reorder ${clipId}`, `Moved ${clipId} to position ${String(targetIndex + 1)}.`);
+    await commit([{
+      op: "clip.move",
+      params: { clipId, toIndex: targetIndex },
+    }], `Reorder ${clipId}`, `Moved ${clipId} to position ${String(targetIndex + 1)}.`);
   }
 
   async function setGap(): Promise<void> {
-    if (sequence === undefined || selected === undefined) return;
-    const index = sequence.clips.findIndex(({ id }) => id === selected.id);
-    const replacement = structuredClone(selected);
-    if (gapFrames <= 0) delete replacement.gapBefore;
-    else replacement.gapBefore = { frames: gapFrames, fps };
-    await commit([
-      { op: "clip.remove", params: { clipId: selected.id } },
-      {
-        op: "clip.restore",
-        params: { sequenceId: sequence.id, targetIndex: index, clips: [replacement] },
+    if (selected === undefined) return;
+    await commit([{
+      op: "clip.gap.set",
+      params: {
+        clipId: selected.id,
+        leadingGap: gapFrames <= 0 ? null : { frames: gapFrames, fps },
       },
-    ], `Set gap before ${selected.id}`, `Set gap before ${selected.id} to ${String(gapFrames)} frames.`);
+    }], `Set gap before ${selected.id}`, `Set gap before ${selected.id} to ${String(gapFrames)} frames.`);
   }
 
   async function layerAction(layer: Layer, action: "enable" | "disable" | "lock" | "unlock"): Promise<void> {
@@ -219,7 +212,7 @@ export function TimelinePanel({
           disabled={selected === undefined}
           onClick={() => selected === undefined ? undefined : void commit([{
             op: "clip.remove",
-            params: { clipId: selected.id },
+            params: { clipId: selected.id, closeGap: true },
           }], `Remove ${selected.id}`, `Removed ${selected.id}.`)}
         >Remove</button>
         <input
@@ -297,7 +290,7 @@ export function TimelinePanel({
           </div>
         </div>
       </div>
-      <small className="m2-note">Waveform tiers load on selection. M1 virtualizes the horizontal clip window; multi-layer placed-item editing and catalogued layer mutations depend on the remaining Part 5 operation entries.</small>
+      <small className="m2-note">Waveform tiers load on selection. M1 virtualizes the horizontal clip window; multi-layer placed-item editing remains M2.</small>
     </Panel>
   );
 }

@@ -1,0 +1,57 @@
+{
+  "$id": "guyditor:op/layer.add",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["kind", "name", "index"],
+  "additionalProperties": false,
+  "properties": {
+    "kind": { "enum": ["video", "image", "animation", "text", "caption", "matte", "adjustment", "audio", "music", "ambience", "sfx"] },
+    "name": { "type": "string", "minLength": 1 },
+    "index": { "type": "integer", "minimum": 0 },
+    "layerId": { "type": "string", "pattern": "^lyr_[a-z2-7]{10}$" },
+    "restore": { "type": "object", "additionalProperties": true },
+    "restoreReferences": {
+      "type": "object",
+      "required": ["captions", "mattes"],
+      "additionalProperties": false,
+      "properties": {
+        "captions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["captionId", "sourceLayerIds"],
+            "additionalProperties": false,
+            "properties": {
+              "captionId": { "type": "string", "pattern": "^cts_[a-z2-7]{10}$" },
+              "sourceLayerIds": {
+                "type": "array",
+                "items": { "type": "string", "pattern": "^lyr_[a-z2-7]{10}$" }
+              }
+            }
+          }
+        },
+        "mattes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["layerId", "matte"],
+            "additionalProperties": false,
+            "properties": {
+              "layerId": { "type": "string", "pattern": "^lyr_[a-z2-7]{10}$" },
+              "matte": {
+                "type": "object",
+                "required": ["layerId", "source"],
+                "additionalProperties": false,
+                "properties": {
+                  "layerId": { "type": "string", "pattern": "^lyr_[a-z2-7]{10}$" },
+                  "source": { "enum": ["alpha", "luma"] },
+                  "invert": { "type": "boolean" }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

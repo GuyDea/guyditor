@@ -1,0 +1,10 @@
+{
+  "$id": "guyditor:op/transition.remove",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["transitionId"],
+  "additionalProperties": false,
+  "properties": {
+    "transitionId": { "type": "string", "pattern": "^trn_[a-z2-7]{10}$" }
+  }
+}

@@ -13,8 +13,10 @@ import type {
   Asset,
   Clip,
   GuyditorProject,
+  Layer,
   Sequence,
 } from "../project/index.js";
+import { deriveTimeline } from "../project/index.js";
 import type { IdFactory } from "./engine.js";
 import type {
   OperationInput,
@@ -75,6 +77,47 @@ function ensureUnlocked(project: GuyditorProject, located: LocatedClip): Result<
         `Layer ${lockedLayer.id} is locked.`,
         [lockedLayer.id, located.clip.id],
       );
+}
+
+function layerForSequence(
+  project: GuyditorProject,
+  sequenceId: string,
+): Result<Layer> {
+  const layer = project.layers.find((candidate) =>
+    candidate.sequence === sequenceId && candidate.kind === "video");
+  return layer === undefined
+    ? opFailure(
+        "E_OP_NOT_FOUND",
+        `Sequence ${sequenceId} has no sequence-bound video layer.`,
+        [sequenceId],
+      )
+    : success(layer);
+}
+
+function targetVideoLayer(
+  project: GuyditorProject,
+  layerId: string,
+  sequenceId: string,
+): Result<Layer> {
+  const layer = project.layers.find(({ id }) => id === layerId);
+  if (layer === undefined) {
+    return opFailure("E_OP_NOT_FOUND", `Layer ${layerId} does not exist.`, [layerId]);
+  }
+  if (layer.kind !== "video" || layer.sequence !== sequenceId) {
+    return opFailure(
+      "E_OP_LAYER_TARGET",
+      `Layer ${layerId} must be a video layer bound to sequence ${sequenceId}.`,
+      [layerId, sequenceId],
+    );
+  }
+  if (layer.locked) {
+    return opFailure(
+      "E_OP_LAYER_LOCKED",
+      `Layer ${layer.id} is locked.`,
+      [layer.id],
+    );
+  }
+  return success(layer);
 }
 
 function replaceSequence(
@@ -497,6 +540,111 @@ function applyJoin(
   });
 }
 
+function addedClipMutations(clip: Clip): EntityMutation[] {
+  return [
+    {
+      entityId: clip.id,
+      entityType: "clip",
+      change: "added",
+      fields: [{ field: "$entity", after: clip }],
+    },
+    ...(clip.effects ?? []).map((effect) => ({
+      entityId: effect.id,
+      entityType: "effect" as const,
+      change: "added" as const,
+      fields: [{ field: "$entity", after: effect }],
+    })),
+  ];
+}
+
+function applyInsert(
+  project: GuyditorProject,
+  input: OperationInput,
+  idFactory: IdFactory,
+): Result<ClipApplication> {
+  const sequenceId = input.params["sequenceId"] as string;
+  const index = input.params["index"] as number;
+  const layerId = input.params["layerId"] as string;
+  const sourceParam = input.params["source"] as {
+    assetId: string;
+    in: FrameTime;
+    out: FrameTime;
+  };
+  const sequenceIndex = project.sequences.findIndex(({ id }) => id === sequenceId);
+  const sequence = project.sequences[sequenceIndex];
+  if (sequence === undefined) {
+    return opFailure("E_OP_NOT_FOUND", `Sequence ${sequenceId} does not exist.`, [sequenceId]);
+  }
+  const layer = targetVideoLayer(project, layerId, sequenceId);
+  if (!layer.ok) return layer;
+  if (index > sequence.clips.length) {
+    return opFailure(
+      "E_OP_RANGE_OUT_OF_BOUNDS",
+      `Insert index ${String(index)} is outside sequence ${sequenceId}.`,
+      [sequenceId],
+    );
+  }
+  const asset = project.assets.find(({ id }) => id === sourceParam.assetId);
+  if (asset === undefined) {
+    return opFailure("E_OP_NOT_FOUND", `Asset ${sourceParam.assetId} does not exist.`, [sourceParam.assetId]);
+  }
+  const range = validRange({ in: sourceParam.in, out: sourceParam.out }, asset);
+  if (!range.ok) return range;
+  const clipId = typeof input.params["clipId"] === "string"
+    ? input.params["clipId"]
+    : idFactory("clp");
+  if (project.sequences.some(({ clips }) => clips.some(({ id }) => id === clipId))) {
+    return opFailure("E_OP_ID_CONFLICT", `Clip ${clipId} already exists.`, [clipId]);
+  }
+  const restored = input.params["restore"] as Clip | undefined;
+  const clip: Clip = restored === undefined
+    ? {
+        id: clipId,
+        asset: sourceParam.assetId,
+        source: structuredClone({ in: sourceParam.in, out: sourceParam.out }),
+      }
+    : structuredClone(restored);
+  if (
+    clip.id !== clipId || clip.asset !== sourceParam.assetId ||
+    !deepEqual(clip.source, { in: sourceParam.in, out: sourceParam.out })
+  ) {
+    return opFailure(
+      "E_OP_CAPTURE_MISMATCH",
+      "Captured clip payload does not match clip.insert addressing fields.",
+      [clipId, sourceParam.assetId],
+    );
+  }
+
+  const clips = sequence.clips.slice();
+  const followingClipId = input.params["followingClipId"];
+  if (typeof followingClipId === "string") {
+    const following = clips[index];
+    if (following?.id !== followingClipId) {
+      return opFailure(
+        "E_OP_CAPTURE_MISMATCH",
+        `Captured following clip ${followingClipId} is not at insertion index ${String(index)}.`,
+        [followingClipId, sequenceId],
+      );
+    }
+    const restoredFollowing = { ...following };
+    const priorGap = input.params["followingGapBefore"] as FrameTime | null;
+    if (priorGap === null) delete restoredFollowing.gapBefore;
+    else restoredFollowing.gapBefore = structuredClone(priorGap);
+    clips[index] = restoredFollowing;
+  }
+  clips.splice(index, 0, clip);
+  const mutations = addedClipMutations(clip);
+  const redoParams = { ...input.params, clipId };
+  return success({
+    model: replaceSequence(project, sequenceIndex, { ...sequence, clips }),
+    inverse: [{ op: "clip.remove", params: { clipId, closeGap: true } }],
+    redo: { op: "clip.insert", params: redoParams },
+    affected: mutations.map(({ entityId }) => entityId),
+    summary: `Insert ${fileName(asset.path)} range at position ${String(index)}`,
+    mutations,
+  });
+}
+
 function applyRemove(
   project: GuyditorProject,
   input: OperationInput,
@@ -507,7 +655,53 @@ function applyRemove(
   const unlocked = ensureUnlocked(project, found.value);
   if (!unlocked.ok) return unlocked;
   const located = unlocked.value;
+  const layer = layerForSequence(project, located.sequence.id);
+  if (!layer.ok) return layer;
   const clips = located.sequence.clips.slice();
+  const closeGap = input.params["closeGap"] !== false;
+  let followingClipId: string | undefined;
+  let followingGapBefore: FrameTime | null | undefined;
+  if (!closeGap) {
+    const following = clips[located.clipIndex + 1];
+    const previous = clips[located.clipIndex - 1];
+    if (following !== undefined) {
+      if (
+        previous?.transitionAfter !== undefined || located.clip.overlapPrevious !== undefined ||
+        located.clip.transitionAfter !== undefined || following.overlapPrevious !== undefined
+      ) {
+        return opFailure(
+          "E_OP_BOUNDARY_CONFLICT",
+          "Keeping a removed clip as a gap requires an otherwise empty boundary.",
+          [located.clip.id, following.id],
+        );
+      }
+      const derivation = deriveTimeline(project, located.sequence.id);
+      if (!derivation.ok) return derivation;
+      const duration = derivation.value.clips.find(
+        ({ clipId: derivedClipId }) => derivedClipId === located.clip.id,
+      )?.duration;
+      if (duration === undefined) {
+        return opFailure(
+          "E_OP_NOT_FOUND",
+          `Clip ${located.clip.id} has no derived timeline duration.`,
+          [located.clip.id],
+        );
+      }
+      const existingGap = following.gapBefore?.frames ?? 0;
+      const removedGap = located.clip.gapBefore?.frames ?? 0;
+      followingClipId = following.id;
+      followingGapBefore = following.gapBefore === undefined
+        ? null
+        : structuredClone(following.gapBefore);
+      clips[located.clipIndex + 1] = {
+        ...following,
+        gapBefore: {
+          frames: existingGap + removedGap + duration.frames,
+          fps: project.settings.timeline.fps,
+        },
+      };
+    }
+  }
   clips.splice(located.clipIndex, 1);
   const removed = structuredClone(located.clip);
   const mutations: EntityMutation[] = [
@@ -527,15 +721,27 @@ function applyRemove(
   return success({
     model: replaceClips(project, located, clips),
     inverse: [{
-      op: "clip.restore",
+      op: "clip.insert",
       params: {
         sequenceId: located.sequence.id,
-        targetIndex: located.clipIndex,
-        clips: [removed],
+        index: located.clipIndex,
+        layerId: layer.value.id,
+        clipId: removed.id,
+        source: {
+          assetId: removed.asset,
+          in: removed.source.in,
+          out: removed.source.out,
+        },
+        restore: removed,
+        ...(followingClipId === undefined
+          ? {}
+          : { followingClipId, followingGapBefore }),
       },
     }],
     affected: mutations.map(({ entityId }) => entityId),
-    summary: `Remove ${humanClip(located)}`,
+    summary: `Remove ${humanClip(located)} (${String(
+      located.clip.source.out.frames - located.clip.source.in.frames
+    )} frames)`,
     mutations,
   });
 }
@@ -609,6 +815,450 @@ function applyRestore(
   });
 }
 
+function applyMove(
+  project: GuyditorProject,
+  input: OperationInput,
+): Result<ClipApplication> {
+  const clipId = input.params["clipId"] as string;
+  const found = locateClip(project, clipId);
+  if (!found.ok) return found;
+  const unlocked = ensureUnlocked(project, found.value);
+  if (!unlocked.ok) return unlocked;
+  const source = unlocked.value;
+  const sourceLayer = layerForSequence(project, source.sequence.id);
+  if (!sourceLayer.ok) return sourceLayer;
+
+  const requestedLayerId = input.params["toLayerId"] as string | undefined;
+  const requestedLayer = requestedLayerId === undefined
+    ? undefined
+    : project.layers.find(({ id }) => id === requestedLayerId);
+  if (requestedLayerId !== undefined && requestedLayer === undefined) {
+    return opFailure("E_OP_NOT_FOUND", `Layer ${requestedLayerId} does not exist.`, [requestedLayerId]);
+  }
+  const toSequenceId = input.params["toSequenceId"] as string | undefined ??
+    requestedLayer?.sequence ?? source.sequence.id;
+  const toSequenceIndex = project.sequences.findIndex(({ id }) => id === toSequenceId);
+  const toSequence = project.sequences[toSequenceIndex];
+  if (toSequence === undefined) {
+    return opFailure("E_OP_NOT_FOUND", `Sequence ${toSequenceId} does not exist.`, [toSequenceId]);
+  }
+  const inferredLayer = requestedLayerId === undefined
+    ? layerForSequence(project, toSequenceId)
+    : success(requestedLayer!);
+  if (!inferredLayer.ok) return inferredLayer;
+  const destinationLayer = targetVideoLayer(project, inferredLayer.value.id, toSequenceId);
+  if (!destinationLayer.ok) return destinationLayer;
+
+  const toIndex = input.params["toIndex"] as number;
+  const sameSequence = source.sequence.id === toSequenceId;
+  const maximumIndex = toSequence.clips.length - (sameSequence ? 1 : 0);
+  if (toIndex > maximumIndex) {
+    return opFailure(
+      "E_OP_RANGE_OUT_OF_BOUNDS",
+      `Move index ${String(toIndex)} is outside sequence ${toSequenceId}.`,
+      [clipId, toSequenceId],
+    );
+  }
+
+  const sourceClips = source.sequence.clips.slice();
+  const [moved] = sourceClips.splice(source.clipIndex, 1);
+  if (moved === undefined) {
+    return opFailure("E_OP_NOT_FOUND", `Clip ${clipId} disappeared during move.`, [clipId]);
+  }
+  let model: GuyditorProject;
+  if (sameSequence) {
+    sourceClips.splice(toIndex, 0, moved);
+    model = replaceSequence(project, source.sequenceIndex, {
+      ...source.sequence,
+      clips: sourceClips,
+    });
+  } else {
+    const destinationClips = toSequence.clips.slice();
+    destinationClips.splice(toIndex, 0, moved);
+    const sequences = project.sequences.slice();
+    sequences[source.sequenceIndex] = { ...source.sequence, clips: sourceClips };
+    sequences[toSequenceIndex] = { ...toSequence, clips: destinationClips };
+    model = { ...project, sequences };
+  }
+  const fields: SemanticFieldDelta[] = [
+    { field: "order", before: source.clipIndex, after: toIndex },
+    ...(sameSequence
+      ? []
+      : [{ field: "sequenceId", before: source.sequence.id, after: toSequenceId }]),
+  ];
+  return success({
+    model,
+    inverse: [{
+      op: "clip.move",
+      params: {
+        clipId,
+        toSequenceId: source.sequence.id,
+        toLayerId: sourceLayer.value.id,
+        toIndex: source.clipIndex,
+      },
+    }],
+    affected: [...new Set([clipId, source.sequence.id, toSequenceId])],
+    summary: `Move ${humanClip(source)} to ${destinationLayer.value.name} position ${String(toIndex)}`,
+    mutations: [{
+      entityId: clipId,
+      entityType: "clip",
+      change: "modified",
+      fields,
+    }],
+  });
+}
+
+function applyDuplicate(
+  project: GuyditorProject,
+  input: OperationInput,
+  idFactory: IdFactory,
+): Result<ClipApplication> {
+  const clipId = input.params["clipId"] as string;
+  const found = locateClip(project, clipId);
+  if (!found.ok) return found;
+  const unlocked = ensureUnlocked(project, found.value);
+  if (!unlocked.ok) return unlocked;
+  const located = unlocked.value;
+  const toIndex = input.params["toIndex"] as number;
+  if (toIndex > located.sequence.clips.length) {
+    return opFailure(
+      "E_OP_RANGE_OUT_OF_BOUNDS",
+      `Duplicate index ${String(toIndex)} is outside sequence ${located.sequence.id}.`,
+      [clipId],
+    );
+  }
+  const duplicateClipId = input.params["duplicateClipId"] as string | undefined ?? idFactory("clp");
+  if (project.sequences.some(({ clips }) => clips.some(({ id }) => id === duplicateClipId))) {
+    return opFailure("E_OP_ID_CONFLICT", `Clip ${duplicateClipId} already exists.`, [duplicateClipId]);
+  }
+  const duplicateEffectIds = input.params["duplicateEffectIds"] as string[] | undefined;
+  if (
+    duplicateEffectIds !== undefined &&
+    duplicateEffectIds.length !== (located.clip.effects?.length ?? 0)
+  ) {
+    return opFailure(
+      "E_OP_CAPTURE_MISMATCH",
+      "A replayed duplicate must supply one effect ID per duplicated effect.",
+      [clipId],
+    );
+  }
+  const duplicate: Clip = structuredClone(located.clip);
+  duplicate.id = duplicateClipId;
+  if (duplicate.effects !== undefined) {
+    duplicate.effects = duplicate.effects.map((effect, index) => ({
+      ...effect,
+      id: duplicateEffectIds?.[index] ?? idFactory("fx"),
+    }));
+  }
+  if (duplicate.transitionAfter !== undefined) {
+    duplicate.transitionAfter = {
+      ...duplicate.transitionAfter,
+      id: input.params["duplicateTransitionId"] as string | undefined ?? idFactory("trn"),
+    };
+  }
+  const clips = located.sequence.clips.slice();
+  clips.splice(toIndex, 0, duplicate);
+  const mutations = addedClipMutations(duplicate);
+  return success({
+    model: replaceClips(project, located, clips),
+    inverse: [{
+      op: "clip.remove",
+      params: { clipId: duplicate.id, closeGap: true },
+    }],
+    redo: {
+      op: "clip.duplicate",
+      params: {
+        ...input.params,
+        duplicateClipId: duplicate.id,
+        ...(duplicate.effects === undefined
+          ? {}
+          : { duplicateEffectIds: duplicate.effects.map(({ id }) => id) }),
+        ...(duplicate.transitionAfter === undefined
+          ? {}
+          : { duplicateTransitionId: duplicate.transitionAfter.id }),
+      },
+    },
+    affected: mutations.map(({ entityId }) => entityId),
+    summary: `Duplicate ${humanClip(located)}`,
+    mutations,
+  });
+}
+
+function boundaryTime(
+  project: GuyditorProject,
+  value: FrameTime | null,
+  label: string,
+  clipId: string,
+): Result<FrameTime | undefined> {
+  if (value === null || value.frames === 0) return success(undefined);
+  if (value.fps !== project.settings.timeline.fps) {
+    return opFailure(
+      "E_OP_RATE_MISMATCH",
+      `${label} rate ${value.fps} does not match timeline rate ${project.settings.timeline.fps}.`,
+      [clipId],
+    );
+  }
+  return success(structuredClone(value));
+}
+
+function applyGapSet(
+  project: GuyditorProject,
+  input: OperationInput,
+): Result<ClipApplication> {
+  const clipId = input.params["clipId"] as string;
+  const found = locateClip(project, clipId);
+  if (!found.ok) return found;
+  const unlocked = ensureUnlocked(project, found.value);
+  if (!unlocked.ok) return unlocked;
+  const located = unlocked.value;
+  const leadingGap = boundaryTime(
+    project,
+    input.params["leadingGap"] as FrameTime | null,
+    "Gap",
+    clipId,
+  );
+  if (!leadingGap.ok) return leadingGap;
+  const previous = located.sequence.clips[located.clipIndex - 1];
+  if (
+    leadingGap.value !== undefined &&
+    (located.clip.overlapPrevious !== undefined || previous?.transitionAfter !== undefined)
+  ) {
+    return opFailure(
+      "E_OP_BOUNDARY_CONFLICT",
+      `Gap before ${clipId} is exclusive with overlap and transition state.`,
+      [clipId, ...(previous === undefined ? [] : [previous.id])],
+    );
+  }
+  const replacement = { ...located.clip };
+  if (leadingGap.value === undefined) delete replacement.gapBefore;
+  else replacement.gapBefore = leadingGap.value;
+  const clips = located.sequence.clips.slice();
+  clips[located.clipIndex] = replacement;
+  return success({
+    model: replaceClips(project, located, clips),
+    inverse: [{
+      op: "clip.gap.set",
+      params: {
+        clipId,
+        leadingGap: located.clip.gapBefore === undefined
+          ? null
+          : structuredClone(located.clip.gapBefore),
+      },
+    }],
+    affected: [clipId],
+    summary: `Set gap before ${humanClip(located)} to ${leadingGap.value === undefined
+      ? "0 frames"
+      : `${String(leadingGap.value.frames)} frames`}`,
+    mutations: [{
+      entityId: clipId,
+      entityType: "clip",
+      change: "modified",
+      fields: [{
+        field: "gapBefore",
+        ...(located.clip.gapBefore === undefined ? {} : { before: located.clip.gapBefore }),
+        ...(leadingGap.value === undefined ? {} : { after: leadingGap.value }),
+      }],
+    }],
+  });
+}
+
+function applyOverlapSet(
+  project: GuyditorProject,
+  input: OperationInput,
+): Result<ClipApplication> {
+  const clipId = input.params["clipId"] as string;
+  const found = locateClip(project, clipId);
+  if (!found.ok) return found;
+  const unlocked = ensureUnlocked(project, found.value);
+  if (!unlocked.ok) return unlocked;
+  const located = unlocked.value;
+  const overlap = boundaryTime(
+    project,
+    input.params["overlapWithPrevious"] as FrameTime | null,
+    "Overlap",
+    clipId,
+  );
+  if (!overlap.ok) return overlap;
+  const previous = located.sequence.clips[located.clipIndex - 1];
+  if (overlap.value !== undefined && previous === undefined) {
+    return opFailure(
+      "E_OP_RANGE_OUT_OF_BOUNDS",
+      `First clip ${clipId} cannot overlap a previous clip.`,
+      [clipId],
+    );
+  }
+  if (
+    overlap.value !== undefined &&
+    (located.clip.gapBefore !== undefined || previous?.transitionAfter !== undefined)
+  ) {
+    return opFailure(
+      "E_OP_BOUNDARY_CONFLICT",
+      `Overlap before ${clipId} is exclusive with gap and transition state.`,
+      [clipId, ...(previous === undefined ? [] : [previous.id])],
+    );
+  }
+  const replacement = { ...located.clip };
+  if (overlap.value === undefined) delete replacement.overlapPrevious;
+  else replacement.overlapPrevious = overlap.value;
+  const clips = located.sequence.clips.slice();
+  clips[located.clipIndex] = replacement;
+  const model = replaceClips(project, located, clips);
+  const derived = deriveTimeline(model, located.sequence.id);
+  if (!derived.ok) return derived;
+  return success({
+    model,
+    inverse: [{
+      op: "clip.overlap.set",
+      params: {
+        clipId,
+        overlapWithPrevious: located.clip.overlapPrevious === undefined
+          ? null
+          : structuredClone(located.clip.overlapPrevious),
+      },
+    }],
+    affected: [clipId],
+    summary: `Overlap ${humanClip(located)} with previous by ${overlap.value === undefined
+      ? "0 frames"
+      : `${String(overlap.value.frames)} frames`}`,
+    mutations: [{
+      entityId: clipId,
+      entityType: "clip",
+      change: "modified",
+      fields: [{
+        field: "overlapPrevious",
+        ...(located.clip.overlapPrevious === undefined
+          ? {}
+          : { before: located.clip.overlapPrevious }),
+        ...(overlap.value === undefined ? {} : { after: overlap.value }),
+      }],
+    }],
+  });
+}
+
+function withoutEmptyAudio(audio: NonNullable<Clip["audio"]>): Clip["audio"] {
+  return Object.keys(audio).length === 0 ? undefined : audio;
+}
+
+function applyAudioGainSet(
+  project: GuyditorProject,
+  input: OperationInput,
+): Result<ClipApplication> {
+  const clipId = input.params["clipId"] as string;
+  const found = locateClip(project, clipId);
+  if (!found.ok) return found;
+  const unlocked = ensureUnlocked(project, found.value);
+  if (!unlocked.ok) return unlocked;
+  const located = unlocked.value;
+  const gainDb = input.params["gainDb"] as number | null;
+  const audio = { ...located.clip.audio };
+  if (gainDb === null) delete audio.gainDb;
+  else audio.gainDb = gainDb;
+  const replacement = { ...located.clip };
+  const nextAudio = withoutEmptyAudio(audio);
+  if (nextAudio === undefined) delete replacement.audio;
+  else replacement.audio = nextAudio;
+  const clips = located.sequence.clips.slice();
+  clips[located.clipIndex] = replacement;
+  return success({
+    model: replaceClips(project, located, clips),
+    inverse: [{
+      op: "clip.audio.gain.set",
+      params: { clipId, gainDb: located.clip.audio?.gainDb ?? null },
+    }],
+    affected: [clipId],
+    summary: `Set ${humanClip(located)} gain to ${gainDb === null ? "default" : String(gainDb)} dB`,
+    mutations: [{
+      entityId: clipId,
+      entityType: "clip",
+      change: "modified",
+      fields: [{
+        field: "audio.gainDb",
+        ...(located.clip.audio?.gainDb === undefined ? {} : { before: located.clip.audio.gainDb }),
+        ...(gainDb === null ? {} : { after: gainDb }),
+      }],
+    }],
+  });
+}
+
+interface FadeParameter {
+  t: FrameTime;
+  curve: string;
+}
+
+function applyAudioFadeSet(
+  project: GuyditorProject,
+  input: OperationInput,
+): Result<ClipApplication> {
+  const clipId = input.params["clipId"] as string;
+  const found = locateClip(project, clipId);
+  if (!found.ok) return found;
+  const unlocked = ensureUnlocked(project, found.value);
+  if (!unlocked.ok) return unlocked;
+  const located = unlocked.value;
+  const fadeIn = input.params["fadeIn"] as FadeParameter | null;
+  const fadeOut = input.params["fadeOut"] as FadeParameter | null;
+  for (const [name, fade] of [["Fade-in", fadeIn], ["Fade-out", fadeOut]] as const) {
+    if (fade !== null && fade.t.fps !== project.settings.timeline.fps) {
+      return opFailure(
+        "E_OP_RATE_MISMATCH",
+        `${name} rate ${fade.t.fps} does not match timeline rate ${project.settings.timeline.fps}.`,
+        [clipId],
+      );
+    }
+  }
+  const audio = { ...located.clip.audio };
+  if (fadeIn === null) {
+    delete audio.fadeIn;
+    delete audio.fadeInCurve;
+  } else {
+    audio.fadeIn = structuredClone(fadeIn.t);
+    audio.fadeInCurve = fadeIn.curve;
+  }
+  if (fadeOut === null) {
+    delete audio.fadeOut;
+    delete audio.fadeOutCurve;
+  } else {
+    audio.fadeOut = structuredClone(fadeOut.t);
+    audio.fadeOutCurve = fadeOut.curve;
+  }
+  const replacement = { ...located.clip };
+  const nextAudio = withoutEmptyAudio(audio);
+  if (nextAudio === undefined) delete replacement.audio;
+  else replacement.audio = nextAudio;
+  const clips = located.sequence.clips.slice();
+  clips[located.clipIndex] = replacement;
+  const priorFadeIn: FadeParameter | null = located.clip.audio?.fadeIn === undefined
+    ? null
+    : {
+        t: structuredClone(located.clip.audio.fadeIn),
+        curve: located.clip.audio.fadeInCurve ?? "linear",
+      };
+  const priorFadeOut: FadeParameter | null = located.clip.audio?.fadeOut === undefined
+    ? null
+    : {
+        t: structuredClone(located.clip.audio.fadeOut),
+        curve: located.clip.audio.fadeOutCurve ?? "linear",
+      };
+  return success({
+    model: replaceClips(project, located, clips),
+    inverse: [{
+      op: "clip.audio.fade.set",
+      params: { clipId, fadeIn: priorFadeIn, fadeOut: priorFadeOut },
+    }],
+    affected: [clipId],
+    summary: `Set audio fades on ${humanClip(located)}`,
+    mutations: [{
+      entityId: clipId,
+      entityType: "clip",
+      change: "modified",
+      fields: [
+        { field: "audio.fadeIn", before: priorFadeIn, after: fadeIn },
+        { field: "audio.fadeOut", before: priorFadeOut, after: fadeOut },
+      ],
+    }],
+  });
+}
+
 export function applyClipOperation(
   project: GuyditorProject,
   input: OperationInput,
@@ -618,7 +1268,14 @@ export function applyClipOperation(
   if (input.op === "clip.split") return applySplit(project, input, idFactory);
   if (input.op === "clip.remove") return applyRemove(project, input);
   if (input.op === "clip.restore") return applyRestore(project, input);
-  return applyJoin(project, input);
+  if (input.op === "clip.join") return applyJoin(project, input);
+  if (input.op === "clip.insert") return applyInsert(project, input, idFactory);
+  if (input.op === "clip.move") return applyMove(project, input);
+  if (input.op === "clip.duplicate") return applyDuplicate(project, input, idFactory);
+  if (input.op === "clip.gap.set") return applyGapSet(project, input);
+  if (input.op === "clip.overlap.set") return applyOverlapSet(project, input);
+  if (input.op === "clip.audio.gain.set") return applyAudioGainSet(project, input);
+  return applyAudioFadeSet(project, input);
 }
 
 // TODO(Part 5 §5.3): resolve `word:` split anchors after transcript sidecars land.

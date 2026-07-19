@@ -70,7 +70,7 @@ const ORDERS = {
   sampleTime: ["samples", "rate"],
   transition: ["id", "preset", "duration", "params", "intent"],
   effect: ["id", "kind", "params"],
-  clipAudio: ["gainDb", "fadeIn", "fadeOut", "mute", "offset", "channels", "chain"],
+  clipAudio: ["gainDb", "fadeIn", "fadeInCurve", "fadeOut", "fadeOutCurve", "mute", "offset", "channels", "chain"],
   loop: ["enabled", "crossfade"],
   punchIn: ["level", "anchor"],
   point: ["x", "y"],
