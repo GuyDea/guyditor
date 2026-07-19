@@ -153,18 +153,43 @@ async function buildMediaRuntime() {
       }`,
     );
   }
+  const transcriptResult = spawnSync(
+    process.execPath,
+    [
+      compilerPath,
+      "-p",
+      path.join(SCRIPT_ROOT, "packages", "transcript", "tsconfig.json"),
+      "--noEmit",
+      "false",
+      "--outDir",
+      buildRoot,
+      "--rootDir",
+      path.join(SCRIPT_ROOT, "packages"),
+    ],
+    { encoding: "utf8", shell: false, windowsHide: true },
+  );
+  if (transcriptResult.error || transcriptResult.status !== 0) {
+    await rm(buildRoot, { force: true, recursive: true });
+    throw new Error(
+      `Could not build @guyditor/transcript for fixture generation: ${
+        transcriptResult.error?.message ?? `${transcriptResult.stdout}${transcriptResult.stderr}`.trim()
+      }`,
+    );
+  }
   await symlink(
     path.join(SCRIPT_ROOT, "node_modules"),
     path.join(buildRoot, "node_modules"),
     process.platform === "win32" ? "junction" : "dir",
   );
-  const [media, core] = await Promise.all([
+  const [media, core, transcript] = await Promise.all([
     import(pathToFileURL(path.join(buildRoot, "media", "src", "index.js")).href),
     import(pathToFileURL(path.join(buildRoot, "core", "src", "index.js")).href),
+    import(pathToFileURL(path.join(buildRoot, "transcript", "src", "index.js")).href),
   ]);
   return {
     cleanup: () => rm(buildRoot, { force: true, recursive: true }),
     core,
+    transcript,
     runFfmpeg: media.runFfmpeg,
     runFfprobe: media.runFfprobe,
   };
@@ -981,7 +1006,11 @@ function annotationSidecar(annotated) {
   };
 }
 
-async function createProjectTemplate(core, fixtureRoot, name) {
+async function createProjectTemplate(core, transcriptDomain, fixtureRoot, name) {
+  if (name === "ac006") {
+    await createAc006ProjectTemplate(core, transcriptDomain, fixtureRoot);
+    return;
+  }
   if (name === "ac005") {
     await createAc005ProjectTemplate(core, fixtureRoot);
     return;
@@ -1177,6 +1206,108 @@ async function createAc005ProjectTemplate(core, fixtureRoot) {
   await writeFile(path.join(root, "presets/pre_dddddddddd@1.json"), arrangement);
 }
 
+async function createAc006ProjectTemplate(core, transcriptDomain, fixtureRoot) {
+  const root = path.join(fixtureRoot, "projects", "ac006");
+  const allAssets = await projectAssets(fixtureRoot);
+  const ids = new Set(["ast_cccccccccc", "ast_dddddddddd"]);
+  const assets = allAssets.filter(({ id }) => ids.has(id));
+  const annotations = core.serializeAnnotationSidecar(annotationSidecar(false));
+  const transcriptText = transcriptDomain.serializeTranscriptSidecar(makeTranscriptFixture({
+    assetId: "ast_cccccccccc",
+    durationSamples: 288_000,
+    seed: 0xac_006,
+    wordCount: 123,
+  }));
+  const generation = `${JSON.stringify({
+    format: "guyditor.generated-provenance/v1",
+    frozen: true,
+    generator: { name: "guyditor-fixture-generator", version: FIXTURE_GENERATOR_VERSION },
+  }, null, 2)}\n`;
+  const model = {
+    format: "guyditor/v1",
+    revision: "rev_00001",
+    project: { id: "prj_aaaaaaaaaa", name: "M2 AC-006 semantic picture in picture", created: FIXED_CREATED_AT },
+    settings: {
+      timeline: { fps: "30/1", width: 1920, height: 1080 },
+      audio: { sampleRate: 48_000, channels: 2 },
+      primaryDeliverable: "dlv_aaaaaaaaaa",
+    },
+    transcript: { nextWordOrdinal: 124 },
+    assets,
+    beats: [],
+    sequences: [{
+      id: "seq_aaaaaaaaaa",
+      name: "presenter",
+      clips: [{
+        id: "clp_aaaaaaaaaa",
+        asset: "ast_cccccccccc",
+        source: { in: { frames: 0, fps: "30/1" }, out: { frames: 180, fps: "30/1" } },
+        effects: [{
+          id: "fx_aaaaaaaaaa",
+          kind: "key",
+          params: {
+            schema: "guyditor/key@1", mode: "chroma",
+            chroma: {
+              keyColor: "#00B140", tolerance: 0.35, softness: 0.12, preBlur: 1.5,
+              edge: { erodePx: 1, featherPx: 2 },
+              spill: { mode: "despill", strength: 0.7 },
+            },
+            masks: [],
+          },
+        }],
+      }],
+    }],
+    layers: [{
+      id: "lyr_aaaaaaaaaa", kind: "video", name: "screencast", order: 0,
+      enabled: true, locked: false, items: [{
+        id: "clp_bbbbbbbbbb", asset: "ast_dddddddddd", at: "timeline:seq_aaaaaaaaaa@0",
+        duration: { frames: 180, fps: "30/1" },
+        source: { in: { frames: 0, fps: "30/1" }, out: { frames: 180, fps: "30/1" } },
+      }],
+    }, {
+      id: "lyr_bbbbbbbbbb", kind: "video", name: "presenter", order: 10,
+      enabled: true, locked: false, sequence: "seq_aaaaaaaaaa",
+      pip: {
+        style: {
+          mask: { shape: "rounded", cornerRadius: 0.08 },
+          border: { widthPx: 4, color: "#FFFFFF", opacity: 0.9 },
+          shadow: { dx: 0, dy: 8, blurPx: 24, color: "#000000", opacity: 0.35 },
+        },
+        placement: { base: { anchor: "bottom_right", width: "24%", margin: "4%", aspect: "16:9" } },
+        keyframes: [],
+      },
+    }],
+    captions: [],
+    annotations: { sidecar: "annotations", summary: { open: 0, resolved: 0, rejected: 0, reopened: 0 } },
+    deliverables: [{
+      id: "dlv_aaaaaaaaaa", kind: "longform", name: "AC-006 PiP",
+      profile: "youtube-longform@1.0.0", sequenceId: "seq_aaaaaaaaaa", status: "draft",
+    }],
+    presets: [],
+    skills: [],
+    sidecars: [{
+      name: "annotations", path: "sidecars/annotations.yaml", schema: "guyditor.annotations/v1",
+      sha256: createHash("sha256").update(annotations).digest("hex"), inputs: [],
+    }, {
+      name: "transcript-speech", path: "sidecars/transcript-speech.json", schema: "guyditor.transcript/v1",
+      sha256: createHash("sha256").update(transcriptText).digest("hex"),
+      generatedBy: { tool: "guyditor-fixture-generator", version: FIXTURE_GENERATOR_VERSION, job: "job_fixturezzz" },
+      inputs: [{ asset: "ast_cccccccccc", sha256: assets.find(({ id }) => id === "ast_cccccccccc").sha256 }],
+    }],
+  };
+  const created = await core.createProject(root, model, {
+    appVersion: "0.0.0-fixtures",
+    idFactory: (prefix) => `${prefix}_fixturezzz`,
+    now: () => new Date(FIXED_CREATED_AT),
+  });
+  if (!created.ok) throw created.error;
+  await Promise.all([
+    writeFile(path.join(root, "sidecars/annotations.yaml"), annotations),
+    writeFile(path.join(root, "sidecars/generated-frozen.json"), generation),
+    writeFile(path.join(root, "sidecars/transcript-speech.json"), transcriptText),
+  ]);
+}
+
 function ac003CaptionPreset() {
   return {
     format: "guyditor.caption-preset/v1",
@@ -1314,9 +1445,9 @@ async function createAc003ProjectTemplate(core, fixtureRoot) {
   await writeFile(path.join(root, "presets/pre_aaaaaaaaaa@1.yaml"), presetText);
 }
 
-async function createProjectTemplates(core, fixtureRoot) {
+async function createProjectTemplates(core, transcriptDomain, fixtureRoot) {
   for (const name of REQUIRED_PROJECT_TEMPLATES) {
-    await createProjectTemplate(core, fixtureRoot, name);
+    await createProjectTemplate(core, transcriptDomain, fixtureRoot, name);
   }
 }
 
@@ -1405,7 +1536,7 @@ export async function generateFixtures({
   let mediaRuntime;
   try {
     mediaRuntime = await buildMediaRuntime();
-    const { core, runFfmpeg, runFfprobe } = mediaRuntime;
+    const { core, transcript, runFfmpeg, runFfprobe } = mediaRuntime;
     await rm(fixtureRoot, { force: true, recursive: true });
     await mkdir(fixtureRoot, { recursive: true });
 
@@ -1429,7 +1560,7 @@ export async function generateFixtures({
     log("fixtures: validating media with ffprobe");
     await validateOutputs(runFfprobe, fixtureRoot);
     log("fixtures: building schema-valid project templates through @guyditor/core");
-    await createProjectTemplates(core, fixtureRoot);
+    await createProjectTemplates(core, transcript, fixtureRoot);
     const manifest = await buildManifest(ffmpeg, fixtureRoot);
     await writeJson(path.join(fixtureRoot, "manifest.json"), manifest);
     const elapsedSeconds = (performance.now() - startedAt) / 1_000;
@@ -1446,7 +1577,7 @@ export async function generateFixtures({
       `fixtures: wrote ${Object.keys(manifest.files).length} files (${totalBytes} bytes) in ${elapsedSeconds.toFixed(2)} s`,
     );
     log(
-      "fixtures: wrote basic, annotated, AC-003, and AC-005 project templates",
+      "fixtures: wrote basic, annotated, AC-003, AC-005, and AC-006 project templates",
     );
     return { manifest, regenerated: true };
   } finally {

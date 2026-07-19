@@ -1,6 +1,6 @@
-export const FIXTURE_GENERATOR_VERSION = "1.3.0";
+export const FIXTURE_GENERATOR_VERSION = "1.4.0";
 
-export const REQUIRED_PROJECT_TEMPLATES = Object.freeze(["basic", "annotated", "ac003", "ac005"]);
+export const REQUIRED_PROJECT_TEMPLATES = Object.freeze(["basic", "annotated", "ac003", "ac005", "ac006"]);
 
 export const REQUIRED_PROJECT_TEMPLATE_PATHS = Object.freeze([
   "episode.guyditor.yaml",

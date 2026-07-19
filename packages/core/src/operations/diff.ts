@@ -164,6 +164,11 @@ function semanticEntities(project: GuyditorProject): SemanticEntity[] {
       value: entityValue(value),
     })),
     ...project.presets.map((value) => ({ id: value.id, type: "preset" as const, value: entityValue(value) })),
+    ...(project.avoidRegions ?? []).map((value) => ({
+      id: value.id,
+      type: "avoid-region" as const,
+      value: entityValue(value),
+    })),
     ...project.skills.map((value) => ({ id: value.id, type: "skill" as const, value: entityValue(value) })),
     ...project.sidecars.map((value) => ({
       id: value.name,

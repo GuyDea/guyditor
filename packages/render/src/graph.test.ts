@@ -168,6 +168,44 @@ function compile(
 }
 
 describe("compileRenderGraph", () => {
+  it("derives semantic PiP keyframes into transform samples without storing coordinates", () => {
+    const model = project();
+    model.presets.push({
+      id: "pre_pipsmoothm", name: "pip-smooth-move", kind: "motion", version: 1,
+      path: "builtin:pip-smooth-move@1", sha256: "6".repeat(64),
+    });
+    model.layers[0]!.pip = {
+      style: {
+        mask: { shape: "rounded", cornerRadius: 0.08 },
+        border: { widthPx: 4, color: "#FFFFFF", opacity: 0.9 },
+        shadow: { dx: 0, dy: 8, blurPx: 24, color: "#000000", opacity: 0.35 },
+      },
+      placement: { base: { anchor: "bottom_right", width: "24%", margin: "4%", aspect: "16:9" } },
+      keyframes: [{
+        id: "kfr_aaaaaaaaaa", at: "word:w000123",
+        placement: { anchor: "bottom_left", width: "24%", margin: "4%", aspect: "16:9" },
+        transition: { preset: "pre_pipsmoothm", durationFrames: 18 },
+      }],
+    };
+    const rendered = compileRenderGraph({
+      project: model, revision: model.revision, deliverableId: "dlv_aaaaaaaaaa",
+      variant: "clean", quality: "high", profile: PROFILE, profileSha256: HASH,
+      toolchain: TOOLCHAIN, anchorFrames: { "word:w000123": 90 },
+    });
+    const transform = rendered.nodes.find(({ kind }) => kind === "transform" &&
+      "keyframes" in rendered.nodes.find(({ kind }) => kind === "transform")!.params);
+    if (transform === undefined || !("keyframes" in transform.params)) {
+      throw new Error("missing PiP transform");
+    }
+    expect(transform.params.keyframes.map(({ atOutputFrame }) => atOutputFrame)).toEqual([
+      0, 72, 75, 78, 81, 84, 87, 90,
+    ]);
+    const firstScale = transform.params.keyframes[0]!.scale;
+    expect(Array.isArray(firstScale) ? firstScale[0] : firstScale).toBeCloseTo(0.24);
+    expect(transform.params.keyframes.at(-1)!.pos?.[0]).toBeCloseTo(0.16);
+    expect(rendered.nodes.some(({ kind }) => kind === "pip")).toBe(true);
+  });
+
   it("emits only the M0 node subset with ordered gap slots and exact speed", () => {
     const graph = compile();
     const kinds = new Set(graph.nodes.map((node) => node.kind));

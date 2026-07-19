@@ -24,6 +24,13 @@ import unlockLayerSchema from "./schemas/layer.unlock.json" with { type: "json" 
 import setLayerSchema from "./schemas/layer.set.json" with { type: "json" };
 import setLayerTransformSchema from "./schemas/layer.transform.set.json" with { type: "json" };
 import setLayerMatteSchema from "./schemas/layer.matte.set.json" with { type: "json" };
+import setPipStyleSchema from "./schemas/pip.style.set.json" with { type: "json" };
+import placePipSchema from "./schemas/pip.place.json" with { type: "json" };
+import addPipKeyframeSchema from "./schemas/pip.keyframe.add.json" with { type: "json" };
+import removePipKeyframeSchema from "./schemas/pip.keyframe.remove.json" with { type: "json" };
+import applyPipPresetSchema from "./schemas/pip.preset.apply.json" with { type: "json" };
+import solvePipAvoidSchema from "./schemas/pip.avoid.solve.json" with { type: "json" };
+import markRegionSchema from "./schemas/region.mark.json" with { type: "json" };
 import setClipKeySchema from "./schemas/clip.key.set.json" with { type: "json" };
 import setClipKeyMaskSchema from "./schemas/clip.key.mask.set.json" with { type: "json" };
 import setClipTransformSchema from "./schemas/clip.transform.set.json" with { type: "json" };
@@ -214,6 +221,13 @@ const catalog = new Map<string, CatalogEntry>([
   ["layer.set", catalogEntry(setLayerSchema, "low", "none", "Set layer '{name}'")],
   ["layer.transform.set", catalogEntry(setLayerTransformSchema, "normal", "none", "Transform layer '{name}'")],
   ["layer.matte.set", catalogEntry(setLayerMatteSchema, "normal", "none", "Set matte on layer '{name}'")],
+  ["pip.style.set", catalogEntry(setPipStyleSchema, "normal", "none", "Style PiP on {layerId}")],
+  ["pip.place", catalogEntry(placePipSchema, "normal", "none", "Place {layerId} {placement.anchor}")],
+  ["pip.keyframe.add", catalogEntry(addPipKeyframeSchema, "normal", "none", "Add PiP keyframe at {keyframe.at}")],
+  ["pip.keyframe.remove", catalogEntry(removePipKeyframeSchema, "normal", "none", "Remove PiP keyframe {keyframeId}")],
+  ["pip.preset.apply", catalogEntry(applyPipPresetSchema, "normal", "none", "Apply PiP preset {presetId}@{version} at {at}")],
+  ["pip.avoid.solve", catalogEntry(solvePipAvoidSchema, "low", "none", "Plan collision avoidance for {layerId}")],
+  ["region.mark", catalogEntry(markRegionSchema, "low", "none", "Mark avoid region")],
   ["clip.key.set", catalogEntry(setClipKeySchema, "normal", "none", "Set key on {clip}")],
   ["clip.key.mask.set", catalogEntry(setClipKeyMaskSchema, "normal", "none", "Set key mask on {clip}")],
   ["clip.transform.set", catalogEntry(setClipTransformSchema, "normal", "none", "Transform {clip}")],

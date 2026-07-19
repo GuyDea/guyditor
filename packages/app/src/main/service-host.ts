@@ -12,6 +12,7 @@ import {
   makeId,
   OperationEngine,
   openProject as openCoreProject,
+  resolveAnchor,
 } from "../../../core/src/index.js";
 import type {
   JobFilter,
@@ -464,6 +465,18 @@ export class WindowServiceHost {
               project.store.currentProject,
               target,
               scope,
+            ));
+          },
+          resolveAnchor: async ({ anchor, scope }: { anchor: string; scope?: string }) => {
+            const sidecars = await transcriptSidecars(project.store);
+            const resolvers = new AnchorResolverRegistry();
+            resolvers.registerWordLookup(createTranscriptWordLookup(sidecars));
+            project.annotations.registerAnchorResolver(resolvers, project.store);
+            return resultValue(await resolveAnchor(
+              project.store.currentProject,
+              anchor,
+              scope,
+              resolvers.dependencies(),
             ));
           },
           acceptProposal: ({ proposalId }: { proposalId: string }) =>

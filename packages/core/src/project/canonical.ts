@@ -82,6 +82,27 @@ const ORDERS = {
   keyEdge: ["erodePx", "featherPx"],
   keySpill: ["mode", "strength"],
   keyMask: ["id", "role", "shape", "points", "featherPx", "frames"],
+  shapeMask: ["shape", "cornerRadius", "featherPx"],
+  pipStyle: ["mask", "border", "shadow", "background", "deviceFrame"],
+  pipBorder: ["widthPx", "color", "opacity"],
+  pipShadow: ["dx", "dy", "blurPx", "color", "opacity"],
+  pipBackground: ["color", "blurSigma", "padPx"],
+  deviceFrame: ["templateId", "params"],
+  pip: ["style", "placement", "keyframes", "avoid"],
+  responsivePlacement: ["base", "overrides"],
+  placement: [
+    "anchor", "width", "height", "margin", "margin_x", "margin_y",
+    "offset_x", "offset_y", "aspect", "fit",
+  ],
+  pipKeyframe: ["id", "at", "placement", "style", "transition"],
+  pipTransition: ["preset", "durationFrames", "params"],
+  avoidConfig: [
+    "enabled", "sources", "softOverlapMax", "holdFrames", "fallbackAnchors",
+    "moveTransition",
+  ],
+  moveTransition: ["preset", "durationFrames"],
+  avoidRegion: ["id", "source", "hardness", "rect", "frames", "fromAnnotation"],
+  normalizedRect: ["x", "y", "w", "h"],
   layer: [
     "id", "kind", "name", "order", "enabled", "locked", "opacity", "blend",
     "transform", "matte", "pip", "adjustment", "ducking", "sequence", "items",
@@ -127,6 +148,7 @@ const REGISTRY_SORT_KEYS = new Map<string, string>([
   ["presets", "id"],
   ["skills", "id"],
   ["sidecars", "name"],
+  ["avoidRegions", "id"],
 ]);
 
 const ISO_8601_TIMESTAMP =
@@ -198,6 +220,20 @@ function orderFor(
     return ORDERS.anchorMetadataEntry;
   }
   if (key === "preset" && "presetId" in value) return ORDERS.captionPreset;
+  if (key === "pip") return ORDERS.pip;
+  if (key === "style" && includesPath(path, "pip")) return ORDERS.pipStyle;
+  if (key === "mask" && includesPath(path, "pip")) return ORDERS.shapeMask;
+  if (key === "border" && includesPath(path, "pip")) return ORDERS.pipBorder;
+  if (key === "shadow" && includesPath(path, "pip")) return ORDERS.pipShadow;
+  if (key === "background" && includesPath(path, "pip")) return ORDERS.pipBackground;
+  if (key === "deviceFrame") return ORDERS.deviceFrame;
+  if (key === "placement" && "base" in value) return ORDERS.responsivePlacement;
+  if (key === "base" && includesPath(path, "placement")) return ORDERS.placement;
+  if (key === "placement" && includesPath(path, "keyframes")) return ORDERS.placement;
+  if (key === "transition" && includesPath(path, "keyframes")) return ORDERS.pipTransition;
+  if (key === "avoid" && includesPath(path, "pip")) return ORDERS.avoidConfig;
+  if (key === "moveTransition") return ORDERS.moveTransition;
+  if (key === "rect" && includesPath(path, "avoidRegions")) return ORDERS.normalizedRect;
   if (key === "summary" && includesPath(path, "annotations")) return ORDERS.annotationSummary;
   if (key === "generatedBy") return ORDERS.generatedBy;
   if (typeof path.at(-1) === "number" && path.at(-2) === "inputs" && includesPath(path, "sidecars")) {
@@ -208,6 +244,8 @@ function orderFor(
   const id = typeof value.id === "string" ? value.id : "";
   const prefix = id.slice(0, id.indexOf("_"));
   if (prefix === "msk") return ORDERS.keyMask;
+  if (prefix === "kfr") return ORDERS.pipKeyframe;
+  if (prefix === "avr") return ORDERS.avoidRegion;
   if (prefix === "ast") return ORDERS.asset;
   if (prefix === "beat") return ORDERS.beat;
   if (prefix === "seq") return ORDERS.sequence;

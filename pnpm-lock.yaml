@@ -119,6 +119,9 @@ importers:
 
   packages/render:
     dependencies:
+      '@guyditor/compositor':
+        specifier: workspace:*
+        version: link:../compositor
       '@guyditor/core':
         specifier: workspace:*
         version: link:../core

@@ -20,9 +20,9 @@ import { isId } from "./ids.js";
 import { parseAnchor } from "../anchors/parser.js";
 import { storedAnchors } from "../anchors/owners.js";
 
-// TODO(part 3/4/5/6/7/9/11): replace the true schemas for fields owned by
-// later parts (automation, sync, chain, transform, pip, adjustment, ducking,
-// breakOverrides, avoidRegions, watchFolders, dependencies, staleReasons)
+// TODO(part 3/4/5/7/9/11): replace the true schemas for fields owned by
+// later parts (automation, sync, chain, ducking, breakOverrides, watchFolders,
+// dependencies, staleReasons)
 // when their normative sub-schemas land.
 const ajv = new Ajv2020({ allErrors: true, strict: true });
 const validateShape = ajv.compile<GuyditorProject>(projectSchema);
@@ -69,6 +69,7 @@ function allIds(project: GuyditorProject): string[] {
     ...Object.keys(project.templates ?? {}),
     ...project.presets.map((preset) => preset.id),
     ...project.skills.map((skill) => skill.id),
+    ...(project.avoidRegions ?? []).map((region) => region.id),
   ];
 
   for (const sequence of project.sequences) {
@@ -80,6 +81,7 @@ function allIds(project: GuyditorProject): string[] {
   }
 
   for (const layer of project.layers) {
+    ids.push(...(layer.pip?.keyframes ?? []).map((keyframe) => keyframe.id));
     for (const item of layer.items ?? []) {
       ids.push(item.id, ...effectsFromItem(item).map((effect) => effect.id));
     }
@@ -179,6 +181,24 @@ function validateReferences(project: GuyditorProject): Result<GuyditorProject> |
     if (layer.matte !== undefined && !layerIds.has(layer.matte.layerId)) {
       return missingReference("matte layer reference", layer.id, layer.matte.layerId);
     }
+    const deviceFrame = layer.pip?.style.deviceFrame?.templateId;
+    if (deviceFrame !== undefined && !templateIds.has(deviceFrame)) {
+      return missingReference("PiP device-frame template reference", layer.id, deviceFrame);
+    }
+    for (const keyframe of layer.pip?.keyframes ?? []) {
+      const preset = keyframe.transition?.preset;
+      if (preset !== undefined && !presetById.has(preset)) {
+        return missingReference("PiP motion preset reference", keyframe.id, preset);
+      }
+      const keyframeDevice = keyframe.style?.deviceFrame?.templateId;
+      if (keyframeDevice !== undefined && !templateIds.has(keyframeDevice)) {
+        return missingReference("PiP keyframe device-frame template reference", keyframe.id, keyframeDevice);
+      }
+    }
+    const avoidPreset = layer.pip?.avoid?.moveTransition.preset;
+    if (avoidPreset !== undefined && !presetById.has(avoidPreset)) {
+      return missingReference("PiP avoid motion preset reference", layer.id, avoidPreset);
+    }
     for (const item of layer.items ?? []) {
       if (item.asset !== undefined && !assetIds.has(item.asset)) {
         return missingReference("placed item asset reference", item.id, item.asset);
@@ -265,6 +285,12 @@ function validateComposition(project: GuyditorProject): Result<GuyditorProject> 
   for (const layer of project.layers) {
     if (layer.sequence !== undefined && layer.items !== undefined) {
       return invariantFailure("layer content sequence xor items", [layer.id]);
+    }
+    if (
+      layer.pip !== undefined &&
+      layer.kind !== "video" && layer.kind !== "image" && layer.kind !== "animation"
+    ) {
+      return invariantFailure("PiP belongs to video, image, or animation layer", [layer.id]);
     }
     if (layer.kind === "adjustment") {
       if (layer.sequence !== undefined || layer.items !== undefined || layer.adjustment === undefined) {
@@ -357,6 +383,11 @@ function validateSourceRanges(project: GuyditorProject): Result<GuyditorProject>
 }
 
 function validateBoundaries(project: GuyditorProject): Result<GuyditorProject> | undefined {
+  for (const region of project.avoidRegions ?? []) {
+    if (region.frames !== undefined && region.frames.from > region.frames.to) {
+      return invariantFailure("avoid region frame range", [region.id]);
+    }
+  }
   for (const sequence of project.sequences) {
     for (const [index, clip] of sequence.clips.entries()) {
       if (index === 0 && clip.overlapPrevious !== undefined) {

@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["layerId", "keyframeId"],
+  "properties": {
+    "layerId": { "type": "string", "pattern": "^lyr_[a-z2-7]{10}$" },
+    "keyframeId": { "type": "string", "pattern": "^kfr_[a-z2-7]{10}$" },
+    "restorePip": { "type": ["object", "null"] },
+    "restorePresets": { "type": "array" }
+  }
+}

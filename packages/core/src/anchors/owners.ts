@@ -8,6 +8,7 @@ import type {
   Beat,
   Clip,
   GuyditorProject,
+  PipKeyframe,
   PlacedItem,
 } from "../project/model.js";
 import { parseAnchor } from "./parser.js";
@@ -23,7 +24,7 @@ export interface StoredAnchorReference {
   metadata?: AnchorMetadata[StoredAnchorPath];
 }
 
-type AnchorOwner = Beat | Clip | PlacedItem;
+type AnchorOwner = Beat | Clip | PlacedItem | PipKeyframe;
 
 function reference(
   owner: AnchorOwner,
@@ -38,7 +39,7 @@ function reference(
     anchorPath,
     modelPath,
     ...(scope === undefined ? {} : { scope }),
-    ...(owner.anchorMetadata?.[anchorPath] === undefined
+    ...(!("anchorMetadata" in owner) || owner.anchorMetadata?.[anchorPath] === undefined
       ? {}
       : { metadata: owner.anchorMetadata[anchorPath] }),
   };
@@ -67,6 +68,15 @@ export function storedAnchors(project: GuyditorProject): StoredAnchorReference[]
     }
   }
   for (const layer of project.layers) {
+    for (const keyframe of layer.pip?.keyframes ?? []) {
+      anchors.push(reference(
+        keyframe,
+        keyframe.at,
+        "/at",
+        `/layers/${layer.id}/pip/keyframes/${keyframe.id}/at`,
+        layer.sequence,
+      ));
+    }
     for (const item of layer.items ?? []) {
       anchors.push(reference(
         item,
@@ -101,6 +111,7 @@ export function findStoredAnchor(
 function findOwner(project: GuyditorProject, ownerId: string): AnchorOwner | undefined {
   return project.beats.find(({ id }) => id === ownerId) ??
     project.sequences.flatMap(({ clips }) => clips).find(({ id }) => id === ownerId) ??
+    project.layers.flatMap(({ pip }) => pip?.keyframes ?? []).find(({ id }) => id === ownerId) ??
     project.layers.flatMap(({ items }) => items ?? []).find(({ id }) => id === ownerId);
 }
 
@@ -109,14 +120,16 @@ function setMetadata(
   anchorPath: StoredAnchorPath,
   lastResolved: AnchorLastResolved | undefined,
 ): void {
+  if (owner.id.startsWith("kfr_")) return;
+  const metadataOwner = owner as Beat | Clip | PlacedItem;
   if (lastResolved === undefined) {
-    if (owner.anchorMetadata === undefined) return;
-    delete owner.anchorMetadata[anchorPath];
-    if (Object.keys(owner.anchorMetadata).length === 0) delete owner.anchorMetadata;
+    if (metadataOwner.anchorMetadata === undefined) return;
+    delete metadataOwner.anchorMetadata[anchorPath];
+    if (Object.keys(metadataOwner.anchorMetadata).length === 0) delete metadataOwner.anchorMetadata;
     return;
   }
-  owner.anchorMetadata = {
-    ...owner.anchorMetadata,
+  metadataOwner.anchorMetadata = {
+    ...metadataOwner.anchorMetadata,
     [anchorPath]: { lastResolved: structuredClone(lastResolved) },
   };
 }

@@ -15,6 +15,8 @@ import { paintCaptionFrame } from "../../../../render/src/caption-painter.js";
 import type { CaptionPaintContext } from "../../../../render/src/caption-painter.js";
 import type { CaptionFrameSpec } from "../../../../transcript/src/index.js";
 import { ChromaPreviewCanvas } from "../chroma-preview.js";
+import { pipPlaceOperation } from "../../../../compositor/src/pip-operation.js";
+import { PipPreviewCanvas } from "../pip-preview.js";
 import {
   errorMessage,
   executeDirect,
@@ -132,6 +134,7 @@ export function PreviewPanel({
   transcripts,
   annotations,
   refreshAnnotations,
+  refreshProject,
   setNotice,
 }: WorkspacePanelProps): React.JSX.Element {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -144,6 +147,7 @@ export function PreviewPanel({
   const [body, setBody] = useState("");
   const [context, setContext] = useState<unknown>(null);
   const [chromaAvailable, setChromaAvailable] = useState(true);
+  const [pipAnchorFrames, setPipAnchorFrames] = useState<Record<string, number>>({});
   const playhead = usePreviewStore((state) => state.playhead);
   const playing = usePreviewStore((state) => state.playing);
   const settled = usePreviewStore((state) => state.settled);
@@ -156,6 +160,7 @@ export function PreviewPanel({
   const previewKeySettings = usePreviewStore((state) => state.previewKeySettings);
   const selectAnnotation = useSelectionStore((state) => state.selectAnnotation);
   const selectWord = useSelectionStore((state) => state.selectWord);
+  const selectedLayerId = useSelectionStore((state) => state.selectedLayerId);
   const fps = snapshot?.master.settings.timeline.fps ?? playhead.fps;
   const duration = totalFrames(snapshot);
   const active = snapshot === null ? undefined : activeClip(snapshot, playhead.frames);
@@ -169,6 +174,32 @@ export function PreviewPanel({
     ?.params as unknown as KeySettings | undefined;
   const keySettings = previewKeySettings ?? persistedKeySettings ?? null;
   const keyPreviewActive = keySettings?.mode === "chroma" && chromaAvailable;
+  const selectedPipLayer = snapshot?.master.layers.find((candidate) =>
+    candidate.id === selectedLayerId && candidate.pip !== undefined);
+  const selectedPip = selectedPipLayer?.pip;
+
+  useEffect(() => {
+    let current = true;
+    if (snapshot === null || selectedPip === undefined || deliverable === undefined) {
+      setPipAnchorFrames({});
+      return () => { current = false; };
+    }
+    void Promise.all(selectedPip.keyframes.map(async ({ at }) => {
+      const resolution = await window.guyditor.call<{
+        status: "resolved" | "orphaned";
+        timeline?: FrameTime;
+      }>("OperationEngine", "resolveAnchor", {
+        anchor: at,
+        scope: deliverable.sequenceId,
+      });
+      return resolution.status === "resolved" && resolution.timeline !== undefined
+        ? [at, resolution.timeline.frames] as const
+        : undefined;
+    })).then((entries) => {
+      if (current) setPipAnchorFrames(Object.fromEntries(entries.filter((entry) => entry !== undefined)));
+    });
+    return () => { current = false; };
+  }, [deliverable, selectedPip, snapshot]);
   const handleChromaReady = useCallback((): void => setChromaAvailable(true), []);
   const handleChromaUnavailable = useCallback((message: string): void => {
     setChromaAvailable(false);
@@ -450,6 +481,31 @@ export function PreviewPanel({
           onReady={handleChromaReady}
           onUnavailable={handleChromaUnavailable}
         />
+        {selectedPipLayer === undefined || selectedPip === undefined || snapshot === null ? null : (
+          <PipPreviewCanvas
+            videoRef={videoRef}
+            pip={selectedPip}
+            avoidRegions={snapshot.master.avoidRegions ?? []}
+            frame={playhead.frames}
+            anchorFrames={pipAnchorFrames}
+            composition={{
+              width: snapshot.master.settings.timeline.width,
+              height: snapshot.master.settings.timeline.height,
+            }}
+            onPlace={async (placement) => {
+              try {
+                await executeDirect(
+                  [pipPlaceOperation(selectedPipLayer.id, placement)],
+                  `Drag ${selectedPipLayer.name} PiP`,
+                );
+                await refreshProject();
+                setNotice(`Placed ${selectedPipLayer.name} with semantic constraints.`);
+              } catch (error: unknown) {
+                setNotice(errorMessage(error));
+              }
+            }}
+          />
+        )}
         {graphicsFrame === null ? null : (
           <img
             className="graphic-overlay"

@@ -95,11 +95,17 @@ export const M2_PARTIAL_IDS = Object.freeze([
   "FR-502",
   "FR-504",
   "FR-505",
+  "FR-506",
+  "FR-507",
+  "FR-508",
+  "FR-509",
+  "FR-510",
   "AC-003",
   "AC-005",
+  "AC-006",
 ]);
 
-const M2_PARTIAL_STATUS_IDS = new Set(["FR-1101", "FR-306", "FR-505"]);
+const M2_PARTIAL_STATUS_IDS = new Set(["FR-1101", "FR-505", "FR-510"]);
 
 // The M1 table explicitly permits scoped rows ("core" and "foundation"), and the
 // coordinator ruling permits evidence-backed partial rows. The three required M1
@@ -315,7 +321,7 @@ export function runGate(
   log(`gate ${milestone}: traceability passed for ${String(traceabilityCount)} rows`);
 
   if (milestone === "m2") {
-    log("gate m2: partial milestone scope passed (captions, transforms, compositing/keying, AC-003, AC-005)");
+    log("gate m2: partial milestone scope passed (captions, keyframed transforms, compositing/keying, PiP, AC-003, AC-005, AC-006)");
     return 0;
   }
 

@@ -146,6 +146,64 @@ function graph(
 }
 
 describe("compileFiltergraph", () => {
+  it("lowers piecewise-linear transform keyframes to FFmpeg frame expressions", () => {
+    const rendered = graph();
+    const sourceComposite = rendered.nodes.find(({ kind }) => kind === "composite");
+    if (sourceComposite === undefined) throw new Error("missing visual composite");
+    const transform = {
+      id: "rn_aaaaaaaaaa",
+      kind: "transform" as const,
+      inputs: [sourceComposite.id],
+      params: {
+        keyframes: [
+          { atOutputFrame: 0, scale: [0.24, 0.24] as [number, number], pos: [0.84, 0.84] as [number, number], anchor: [0.5, 0.5] as [number, number], opacity: 1 },
+          { atOutputFrame: 30, scale: [0.32, 0.32] as [number, number], pos: [0.2, 0.8] as [number, number], anchor: [0.5, 0.5] as [number, number], opacity: 0.8 },
+          { atOutputFrame: 60, scale: [1, 1] as [number, number], pos: [0.5, 0.5] as [number, number], anchor: [0.5, 0.5] as [number, number], opacity: 1 },
+        ],
+        interpolation: "linear" as const,
+      },
+    };
+    const top = rendered.nodes.find(({ kind, params }) =>
+      kind === "composite" && "mode" in params && params.mode === "stack");
+    if (top === undefined) throw new Error("missing stack composite");
+    top.inputs = top.inputs.map((id) => id === sourceComposite.id ? transform.id : id);
+    rendered.nodes.splice(rendered.nodes.indexOf(top), 0, transform);
+
+    const command = compileFiltergraph(rendered, "/tmp/keyframed.mp4");
+    expect(command.filterComplex).toContain("eval=frame");
+    expect(command.filterComplex).toContain("if(lt(n,30)");
+    expect(command.filterComplex).toContain("if(lt(n,60)");
+    expect(command.filterComplex).not.toContain("keyframed transform");
+  });
+
+  it("uses deterministic raster mask/underlay/chrome sequences for final PiP assembly", () => {
+    const rendered = graph("/tmp/source.mp4", undefined, false, (project) => {
+      project.layers[0]!.pip = {
+        style: { mask: { shape: "rounded", cornerRadius: 0.08 } },
+        placement: { base: { anchor: "bottom_right", width: "24%", margin: "4%" } },
+        keyframes: [],
+      };
+    });
+    const pipNode = rendered.nodes.find(({ kind }) => kind === "pip");
+    if (pipNode === undefined || !("styleKeyframes" in pipNode.params)) throw new Error("missing PiP node");
+    pipNode.params.rasterAssets = {
+      maskPath: "/tmp/pip/mask/%08d.png",
+      underlayPath: "/tmp/pip/underlay/%08d.png",
+      chromePath: "/tmp/pip/chrome/%08d.png",
+      sha256: HASH,
+      durationFrames: 150,
+    };
+    const command = compileFiltergraph(rendered, "/tmp/pip.mp4");
+    expect(command.args).toEqual(expect.arrayContaining([
+      "/tmp/pip/mask/%08d.png",
+      "/tmp/pip/underlay/%08d.png",
+      "/tmp/pip/chrome/%08d.png",
+    ]));
+    expect(command.filterComplex).toContain("blend=all_mode=multiply");
+    expect(command.filterComplex).toContain("alphamerge");
+    expect(command.filterComplex).not.toContain("geq=");
+  });
+
   it("lowers trims, a black-and-silent gap, concat, and profile encoding once", () => {
     const command = compileFiltergraph(graph(), "/tmp/output.mp4");
     const args = command.args;

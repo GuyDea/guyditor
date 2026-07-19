@@ -13,6 +13,7 @@ import type {
   EncodeNodeParams,
   KeyNodeParams,
   OverlayNodeParams,
+  PipNodeParams,
   RenderGraph,
   RenderNode,
   SourceNodeParams,
@@ -187,6 +188,7 @@ export function compileFiltergraph(graph: RenderGraph, outputPath?: string): Com
   const inputIndexBySource = new Map<string, number>();
   const keyMaskInput = new Map<string, number>();
   const overlayInput = new Map<string, number>();
+  const pipAssetInput = new Map<string, { mask: number; underlay: number; chrome: number }>();
   let inputCount = 0;
 
   for (const sourceNode of graph.nodes.filter(({ kind }) => kind === "source")) {
@@ -237,6 +239,21 @@ export function compileFiltergraph(graph: RenderGraph, outputPath?: string): Com
     );
     overlayInput.set(overlayNode.id, inputCount);
     inputCount += 1;
+  }
+
+  for (const pipNode of graph.nodes.filter(({ kind }) => kind === "pip")) {
+    const pip = params<PipNodeParams>(pipNode, "pip");
+    if (pip.rasterAssets === undefined) continue;
+    const indexes = { mask: inputCount, underlay: inputCount + 1, chrome: inputCount + 2 };
+    for (const path of [
+      pip.rasterAssets.maskPath,
+      pip.rasterAssets.underlayPath,
+      pip.rasterAssets.chromePath,
+    ]) {
+      args.push("-framerate", graph.outputFps, "-start_number", "0", "-i", localPath(path, "input"));
+      inputCount += 1;
+    }
+    pipAssetInput.set(pipNode.id, indexes);
   }
 
   const labels = new Map<string, string>();
@@ -331,51 +348,192 @@ export function compileFiltergraph(graph: RenderGraph, outputPath?: string): Com
 
   function compileTransform(node: RenderNode): void {
     const transform = params<TransformNodeParams>(node, "transform");
-    if (transform.keyframes.length !== 1 || transform.keyframes[0]!.atOutputFrame !== 0) {
-      unsupported(`keyframed transform ${node.id}`, [node.id]);
+    const keyframes = [...transform.keyframes].sort((a, b) => a.atOutputFrame - b.atOutputFrame);
+    if (keyframes.length === 0 || keyframes[0]!.atOutputFrame !== 0) {
+      graphInvalid(`Transform ${node.id} must begin at output frame 0.`, [node.id]);
     }
-    const keyframe = transform.keyframes[0]!;
+    for (let index = 1; index < keyframes.length; index += 1) {
+      if (keyframes[index]!.atOutputFrame === keyframes[index - 1]!.atOutputFrame) {
+        graphInvalid(`Transform ${node.id} has duplicate output frames.`, [node.id]);
+      }
+    }
+    const keyframe = keyframes[0]!;
+    const animated = keyframes.length > 1;
+    function curve(accessor: (frame: typeof keyframe) => number | undefined, fallback: number): string {
+      let held = fallback;
+      const points = keyframes.map((frame) => {
+        held = accessor(frame) ?? held;
+        return { frame: frame.atOutputFrame, value: held };
+      });
+      if (points.length === 1) return numberText(points[0]!.value);
+      let expression = numberText(points.at(-1)!.value);
+      for (let index = points.length - 2; index >= 0; index -= 1) {
+        const from = points[index]!;
+        const to = points[index + 1]!;
+        const slope = `(${numberText(to.value)}-${numberText(from.value)})*` +
+          `(n-${String(from.frame)})/${String(to.frame - from.frame)}`;
+        expression = `if(lt(n,${String(to.frame)}),${numberText(from.value)}+${slope},${expression})`;
+      }
+      return expression;
+    }
     const input = compiledInput(node);
     const label = compiledNodeLabel(node);
     const body = `${label}body`;
     const stages: string[] = [];
-    if (keyframe.crop !== undefined) {
-      const [x, y, width, height] = keyframe.crop;
+    if (keyframes.some(({ crop }) => crop !== undefined)) {
+      const x = curve((frame) => frame.crop?.[0], 0);
+      const y = curve((frame) => frame.crop?.[1], 0);
+      const width = curve((frame) => frame.crop?.[2], 1);
+      const height = curve((frame) => frame.crop?.[3], 1);
       stages.push(
-        `crop=iw*${numberText(width)}:ih*${numberText(height)}:` +
-        `iw*${numberText(x)}:ih*${numberText(y)}`,
+        `crop=w='iw*${width}':h='ih*${height}':x='iw*${x}':y='ih*${y}'`,
       );
     }
-    if (keyframe.scale !== undefined) {
-      const scale = Array.isArray(keyframe.scale)
-        ? keyframe.scale
-        : [keyframe.scale, keyframe.scale] as const;
-      stages.push(`scale=iw*${numberText(scale[0])}:ih*${numberText(scale[1])}:flags=bicubic`);
-    }
-    if (keyframe.rotateDeg !== undefined && keyframe.rotateDeg !== 0) {
+    if (keyframes.some(({ scale }) => scale !== undefined)) {
+      const scaleX = curve((frame) => Array.isArray(frame.scale) ? frame.scale[0] : frame.scale, 1);
+      const scaleY = curve((frame) => Array.isArray(frame.scale) ? frame.scale[1] : frame.scale, 1);
       stages.push(
-        `rotate=${numberText(keyframe.rotateDeg)}*PI/180:` +
+        `scale=w='iw*${scaleX}':h='ih*${scaleY}':flags=bicubic${animated ? ":eval=frame" : ""}`,
+      );
+    }
+    if (keyframes.some(({ rotateDeg }) => rotateDeg !== undefined && rotateDeg !== 0)) {
+      stages.push(
+        `rotate='${curve((frame) => frame.rotateDeg, 0)}*PI/180':` +
         "ow=rotw(iw):oh=roth(ih):c=none",
       );
     }
     stages.push("format=yuva444p");
-    if (keyframe.opacity !== undefined) {
-      stages.push(`colorchannelmixer=aa=${numberText(keyframe.opacity)}`);
+    if (keyframes.some(({ opacity }) => opacity !== undefined && opacity !== 1)) {
+      const opacity = curve((frame) => frame.opacity, 1);
+      stages.push(animated
+        ? `geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='alpha(X,Y)*${opacity}'`
+        : `colorchannelmixer=aa=${opacity}`);
     }
     filters.push(`${inputLabel(input)}${stages.join(",")}[${body}]`);
     const duration = durationForNode(node.inputs[0]!);
-    const [positionX, positionY] = keyframe.pos ?? [0.5, 0.5];
-    const [anchorX, anchorY] = keyframe.anchor ?? [0.5, 0.5];
+    const positionX = curve((frame) => frame.pos?.[0], 0.5);
+    const positionY = curve((frame) => frame.pos?.[1], 0.5);
+    const anchorX = curve((frame) => frame.anchor?.[0], 0.5);
+    const anchorY = curve((frame) => frame.anchor?.[1], 0.5);
     const base = `${label}base`;
     filters.push(
       `color=c=0x00000000:s=${String(graph.outputSize.w)}x${String(graph.outputSize.h)}` +
       `:r=${graph.outputFps}:d=${decimal(duration)},format=yuva444p[${base}]`,
     );
     filters.push(
-      `[${base}][${body}]overlay=x='${numberText(positionX)}*main_w-` +
-      `${numberText(anchorX)}*overlay_w':y='${numberText(positionY)}*main_h-` +
-      `${numberText(anchorY)}*overlay_h':eof_action=pass:shortest=0[${label}]`,
+      `[${base}][${body}]overlay=x='${positionX}*main_w-` +
+      `${anchorX}*overlay_w':y='${positionY}*main_h-` +
+      `${anchorY}*overlay_h':eof_action=pass:shortest=0[${label}]`,
     );
+    labels.set(node.id, label);
+  }
+
+  function ffmpegColor(value: string): string {
+    return value.startsWith("#") ? `0x${value.slice(1)}` : value;
+  }
+
+  function compilePip(node: RenderNode): void {
+    const pip = params<PipNodeParams>(node, "pip");
+    const input = compiledInput(node);
+    const label = compiledNodeLabel(node);
+    const raster = pipAssetInput.get(node.id);
+    if (raster !== undefined) {
+      const visual = `${label}visual`;
+      const alpha = `${label}alpha`;
+      const mask = `${label}mask`;
+      const maskedAlpha = `${label}maskedalpha`;
+      const masked = `${label}masked`;
+      const underlay = `${label}underlay`;
+      const chrome = `${label}chrome`;
+      const assembled = `${label}assembled`;
+      filters.push(`${inputLabel(input)}format=rgba,split[${visual}][${alpha}source]`);
+      filters.push(`[${alpha}source]alphaextract[${alpha}]`);
+      filters.push(`[${String(raster.mask)}:v]format=gray[${mask}]`);
+      filters.push(`[${alpha}][${mask}]blend=all_mode=multiply[${maskedAlpha}]`);
+      filters.push(`[${visual}][${maskedAlpha}]alphamerge[${masked}]`);
+      filters.push(`[${String(raster.underlay)}:v]format=rgba[${underlay}]`);
+      filters.push(`[${String(raster.chrome)}:v]format=rgba[${chrome}]`);
+      filters.push(`[${underlay}][${masked}]overlay=format=auto:eof_action=pass[${assembled}]`);
+      filters.push(`[${assembled}][${chrome}]overlay=format=auto:eof_action=pass[${label}]`);
+      labels.set(node.id, label);
+      return;
+    }
+    const masked = `${label}masked`;
+    const stages = ["format=yuva444p"];
+    const { mask } = pip.style;
+    let pipInput = inputLabel(input);
+    if (pip.style.background?.color !== undefined) {
+      const foreground = `${label}backgroundfg`;
+      const background = `${label}background`;
+      const combined = `${label}backgroundcombined`;
+      filters.push(`${pipInput}format=yuva444p[${foreground}]`);
+      filters.push(
+        `color=c=${ffmpegColor(pip.style.background.color)}:` +
+        `s=${String(graph.outputSize.w)}x${String(graph.outputSize.h)}:` +
+        `r=${graph.outputFps}:d=${decimal(durationForNode(node.inputs[0]!))}[${background}]`,
+      );
+      filters.push(`[${background}][${foreground}]overlay=format=auto[${combined}]`);
+      pipInput = `[${combined}]`;
+    }
+    if ((pip.style.background?.padPx ?? 0) > 0) {
+      const pad = pip.style.background?.padPx ?? 0;
+      stages.push(
+        `pad=w=iw+${numberText(pad * 2)}:h=ih+${numberText(pad * 2)}:` +
+        `x=${numberText(pad)}:y=${numberText(pad)}:color=0x00000000`,
+      );
+    }
+    if (mask.shape === "circle") {
+      stages.push(
+        "geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':" +
+        "a='alpha(X,Y)*lte(hypot(X-W/2,Y-H/2),min(W,H)/2)'",
+      );
+    } else if (mask.shape === "ellipse") {
+      stages.push(
+        "geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':" +
+        "a='alpha(X,Y)*lte(pow((X-W/2)/(W/2),2)+pow((Y-H/2)/(H/2),2),1)'",
+      );
+    } else if (mask.shape === "rounded") {
+      const radius = numberText(mask.cornerRadius ?? 0.08);
+      stages.push(
+        "geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='alpha(X,Y)*" +
+        `if(lte(abs(X-W/2),W/2-min(W,H)*${radius}),1,` +
+        `if(lte(abs(Y-H/2),H/2-min(W,H)*${radius}),1,` +
+        `lte(hypot(abs(X-W/2)-(W/2-min(W,H)*${radius}),` +
+        `abs(Y-H/2)-(H/2-min(W,H)*${radius})),min(W,H)*${radius})))'`,
+      );
+    }
+    if ((mask.featherPx ?? 0) > 0) {
+      stages.push(`gblur=sigma=${numberText(mask.featherPx ?? 0)}:steps=1`);
+    }
+    if (pip.style.background?.blurSigma !== undefined) {
+      stages.unshift(`gblur=sigma=${numberText(pip.style.background.blurSigma)}:steps=1`);
+    }
+    if (pip.style.border !== undefined && pip.style.border.widthPx > 0) {
+      stages.push(
+        `drawbox=x=0:y=0:w=iw:h=ih:color=${ffmpegColor(pip.style.border.color)}` +
+        `@${numberText(pip.style.border.opacity)}:t=${numberText(pip.style.border.widthPx)}`,
+      );
+    }
+    if (pip.style.deviceFrame !== undefined) {
+      stages.push("drawbox=x=0:y=0:w=iw:h=ih:color=0x20242A@1:t=12");
+    }
+    filters.push(`${pipInput}${stages.join(",")}[${masked}]`);
+    if (pip.style.shadow === undefined || pip.style.shadow.opacity <= 0) {
+      filters.push(`[${masked}]null[${label}]`);
+    } else {
+      const shadow = pip.style.shadow;
+      const foreground = `${label}fg`;
+      const shadowLayer = `${label}shadow`;
+      filters.push(`[${masked}]split[${foreground}][${shadowLayer}source]`);
+      filters.push(
+        `[${shadowLayer}source]gblur=sigma=${numberText(shadow.blurPx)}:steps=2,` +
+        `colorchannelmixer=rr=0:gg=0:bb=0:aa=${numberText(shadow.opacity)}[${shadowLayer}]`,
+      );
+      filters.push(
+        `[${shadowLayer}][${foreground}]overlay=x=${numberText(-shadow.dx)}:` +
+        `y=${numberText(-shadow.dy)}:format=auto[${label}]`,
+      );
+    }
     labels.set(node.id, label);
   }
 
@@ -653,6 +811,7 @@ export function compileFiltergraph(graph: RenderGraph, outputPath?: string): Com
       case "source": break;
       case "trim": compileTrim(node); break;
       case "transform": compileTransform(node); break;
+      case "pip": compilePip(node); break;
       case "key": compileKey(node); break;
       case "composite": compileComposite(node); break;
       case "overlay": compileOverlay(node); break;

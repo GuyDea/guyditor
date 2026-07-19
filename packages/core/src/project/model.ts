@@ -31,7 +31,7 @@ export interface GuyditorProject {
   annotations: AnnotationIndex;
   deliverables: Deliverable[];
   templates?: Record<string, { version: string; contentHash: string }>;
-  avoidRegions?: unknown[];
+  avoidRegions?: AvoidRegion[];
   watchFolders?: unknown[];
   presets: PresetPin[];
   skills: SkillPin[];
@@ -231,6 +231,96 @@ export interface KeySettings {
   postColor?: ColorCorrection;
 }
 
+export type AnchorName =
+  | "top_left"
+  | "top"
+  | "top_right"
+  | "left"
+  | "center"
+  | "right"
+  | "bottom_left"
+  | "bottom"
+  | "bottom_right";
+
+export interface ShapeMask {
+  shape: "none" | "rect" | "rounded" | "circle" | "ellipse";
+  cornerRadius?: number;
+  featherPx?: number;
+}
+
+export interface PipStyle {
+  mask: ShapeMask;
+  border?: { widthPx: number; color: string; opacity: number };
+  shadow?: {
+    dx: number;
+    dy: number;
+    blurPx: number;
+    color: string;
+    opacity: number;
+  };
+  background?: { color?: string; blurSigma?: number; padPx?: number };
+  deviceFrame?: { templateId: string; params?: Record<string, unknown> };
+}
+
+export interface PlacementConstraints {
+  anchor: AnchorName;
+  width?: string;
+  height?: string;
+  margin?: string;
+  margin_x?: string;
+  margin_y?: string;
+  offset_x?: string;
+  offset_y?: string;
+  aspect?: string;
+  fit?: "contain" | "cover" | "stretch";
+}
+
+export type AspectClass = "16:9" | "9:16" | "1:1" | "4:5";
+
+export interface ResponsivePlacement {
+  base: PlacementConstraints;
+  overrides?: Partial<Record<AspectClass, Partial<PlacementConstraints>>>;
+}
+
+export interface PipTransition {
+  preset: string;
+  durationFrames: number;
+  params?: { direction?: "left" | "right" | "up" | "down"; overshoot?: number };
+}
+
+export interface PipKeyframe {
+  id: string;
+  at: SemanticAnchor;
+  placement: PlacementConstraints;
+  style?: Partial<PipStyle>;
+  transition?: PipTransition;
+}
+
+export interface AvoidSolverConfig {
+  enabled: boolean;
+  sources: Array<AvoidRegion["source"]>;
+  softOverlapMax: number;
+  holdFrames: number;
+  fallbackAnchors: AnchorName[];
+  moveTransition: { preset: string; durationFrames: number };
+}
+
+export interface PipConfig {
+  style: PipStyle;
+  placement: ResponsivePlacement;
+  keyframes: PipKeyframe[];
+  avoid?: AvoidSolverConfig;
+}
+
+export interface AvoidRegion {
+  id: string;
+  source: "caption" | "face" | "subject" | "marked" | "safe_area" | "cursor" | "diagram";
+  hardness: "hard" | "soft";
+  rect: { x: number; y: number; w: number; h: number };
+  frames?: { from: number; to: number };
+  fromAnnotation?: string;
+}
+
 export interface Layer {
   id: string;
   kind:
@@ -253,7 +343,7 @@ export interface Layer {
   blend?: BlendMode;
   transform?: Transform2D;
   matte?: { layerId: string; source: "alpha" | "luma"; invert?: boolean };
-  pip?: unknown;
+  pip?: PipConfig;
   adjustment?: ColorCorrection;
   ducking?: unknown;
   sequence?: string;

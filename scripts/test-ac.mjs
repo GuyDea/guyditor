@@ -54,6 +54,10 @@ export const M2_AC_COMMANDS = Object.freeze([
       "packages/transcript/src/captions/caption.test.ts",
       "packages/transcript/src/captions/caption.prop.test.ts",
       "packages/transcript/src/captions/operations.test.ts",
+      "packages/compositor/src/placement.test.ts",
+      "packages/compositor/src/motion.test.ts",
+      "packages/compositor/src/avoidance.test.ts",
+      "packages/compositor/src/pip-operations.test.ts",
     ],
   }),
   Object.freeze({
@@ -62,6 +66,7 @@ export const M2_AC_COMMANDS = Object.freeze([
       "exec", "vitest", "run", "--project", "golden",
       "packages/render/test/golden/ac003.golden.test.ts",
       "packages/render/test/golden/ac005.golden.test.ts",
+      "packages/render/test/golden/ac006.golden.test.ts",
     ],
   }),
   Object.freeze({ command: "pnpm", args: ["--filter", "@guyditor/app", "build"] }),
@@ -69,7 +74,7 @@ export const M2_AC_COMMANDS = Object.freeze([
     command: "pnpm",
     args: [
       "--filter", "@guyditor/app", "exec", "playwright", "test",
-      "--config", "playwright.config.ts", "e2e/ac/ac003.spec.ts",
+      "--config", "playwright.config.ts", "e2e/ac/ac003.spec.ts", "e2e/ac/ac006.spec.ts",
     ],
   }),
 ]);
@@ -99,7 +104,7 @@ export function main(args = process.argv.slice(2)) {
   }
   console.log(milestone === "m1"
     ? "test:ac m1: AC-001, AC-002, AC-004, and AC-009 passed"
-    : "test:ac m2: AC-003 captions and AC-005 keyed presenter diagnostics passed");
+    : "test:ac m2: AC-003 captions, AC-005 keyed presenter diagnostics, and AC-006 semantic PiP passed");
   return 0;
 }
 

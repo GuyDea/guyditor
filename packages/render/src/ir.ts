@@ -2,6 +2,7 @@ export type RenderNodeKind =
   | "source"
   | "trim"
   | "transform"
+  | "pip"
   | "key"
   | "composite"
   | "overlay"
@@ -12,8 +13,23 @@ export interface RenderNode {
   id: string;
   kind: RenderNodeKind;
   inputs: string[];
-  params: SourceNodeParams | TrimNodeParams | TransformNodeParams | KeyNodeParams
+  params: SourceNodeParams | TrimNodeParams | TransformNodeParams | PipNodeParams | KeyNodeParams
         | CompositeNodeParams | OverlayNodeParams | AudioChainNodeParams | EncodeNodeParams;
+}
+
+export interface PipNodeParams {
+  style: import("../../core/src/index.js").PipStyle;
+  styleKeyframes: Array<{
+    atOutputFrame: number;
+    style: import("../../core/src/index.js").PipStyle | Partial<import("../../core/src/index.js").PipStyle>;
+  }>;
+  rasterAssets?: {
+    maskPath: string;
+    underlayPath: string;
+    chromePath: string;
+    sha256: string;
+    durationFrames: number;
+  };
 }
 
 export interface RenderGraph {

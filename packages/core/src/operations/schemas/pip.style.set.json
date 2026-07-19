@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["layerId", "style"],
+  "properties": {
+    "layerId": { "type": "string", "pattern": "^lyr_[a-z2-7]{10}$" },
+    "style": { "type": "object" },
+    "restorePip": { "type": ["object", "null"] },
+    "restorePresets": { "type": "array" }
+  }
+}

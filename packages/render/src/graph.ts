@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { compilePipTimeline } from "../../compositor/src/index.js";
 
 import {
   convertTime,
@@ -23,6 +24,7 @@ import type {
   EncodeNodeParams,
   KeyNodeParams,
   OverlayNodeParams,
+  PipNodeParams,
   RenderGraph,
   RenderNode,
   RenderNodeKind,
@@ -56,6 +58,9 @@ export interface CompileRenderGraphOptions {
   diagnosticBackground?: DiagnosticBackground;
   diagnosticSaturatedColor?: string;
   inspectedLayerId?: string;
+  /** Compile-time semantic-anchor resolutions; solved coordinates remain derived IR only. */
+  anchorFrames?: Readonly<Record<string, number>>;
+  pipAssets?: Readonly<Record<string, NonNullable<PipNodeParams["rasterAssets"]>>>;
 }
 
 interface VisualInput {
@@ -332,7 +337,6 @@ function assertSupportedSubset(
     if (layer.kind === "adjustment") {
       unsupported(`adjustment-layer color math on ${layer.id}`, "Part 6", [layer.id]);
     }
-    if (layer.pip !== undefined) unsupported(`PiP on ${layer.id}`, "Part 6 §6.8", [layer.id]);
     if (layer.kind === "text" || layer.kind === "animation") {
       const templatesOnly = layer.items?.every((item) => item.template !== undefined) ?? true;
       if (!templatesOnly) unsupported(`overlay items layer ${layer.id}`, "Part 7", [layer.id]);
@@ -555,6 +559,36 @@ export function compileRenderGraph(options: CompileRenderGraphOptions): RenderGr
       compiled = {
         ...compiled,
         root: pushNode(nodes, nextId, "transform", [compiled.root.id], layerTransformParams(layer.transform)),
+      };
+    }
+    if (layer.pip !== undefined) {
+      const timeline = compilePipTimeline({
+        pip: layer.pip,
+        compWidth: project.settings.timeline.width,
+        compHeight: project.settings.timeline.height,
+        anchorFrames: options.anchorFrames ?? {},
+      });
+      const transformed = pushNode(nodes, nextId, "transform", [compiled.root.id], {
+        keyframes: timeline.samples.map(({ atOutputFrame, rect, opacity }) => ({
+          atOutputFrame,
+          scale: [rect.w, rect.h],
+          pos: [rect.x + rect.w / 2, rect.y + rect.h / 2],
+          anchor: [0.5, 0.5],
+          opacity,
+        })),
+        interpolation: "linear",
+      } satisfies TransformNodeParams);
+      const styled = pushNode(nodes, nextId, "pip", [transformed.id], {
+        style: structuredClone(layer.pip.style),
+        styleKeyframes: timeline.samples.flatMap(({ atOutputFrame, style }) =>
+          style === undefined ? [] : [{ atOutputFrame, style: structuredClone(style) }]),
+        ...(options.pipAssets?.[layer.id] === undefined
+          ? {}
+          : { rasterAssets: structuredClone(options.pipAssets[layer.id]) }),
+      } satisfies PipNodeParams);
+      compiled = {
+        ...compiled,
+        root: styled,
       };
     }
     return compiled;

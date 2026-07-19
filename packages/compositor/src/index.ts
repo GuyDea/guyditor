@@ -13,9 +13,22 @@ import type {
   OperationDispatcher,
   OperationContext,
   OperationInput,
+  PipConfig,
+  PipKeyframe,
+  PipStyle,
+  PlacementConstraints,
+  PresetPin,
+  AvoidRegion,
   PlacedItem,
   Result,
 } from "../../core/src/index.js";
+import { formatPlacementConstraints, solvePlacement } from "./placement.js";
+import { motionPreset, motionPresetPin } from "./motion.js";
+
+export * from "./placement.js";
+export * from "./motion.js";
+export * from "./avoidance.js";
+export * from "./pip-operation.js";
 
 export interface PresenterArrangement {
   id: string;
@@ -96,6 +109,61 @@ export interface CompositorModelOptions {
   onKeyQcRun?: (request: { project: GuyditorProject; clipId: string; shotBoundaries: number[] }) => void;
 }
 
+interface PipOperationParams {
+  layerId: string;
+  placement?: PlacementConstraints;
+  style?: PipStyle;
+  keyframe?: PipKeyframe;
+  keyframeId?: string;
+  at?: string;
+  presetId?: string;
+  version?: number;
+  durationFrames?: number;
+  params?: PipKeyframe["transition"] extends { params?: infer P } ? P : never;
+  restorePip?: PipConfig | null;
+  restorePresets?: PresetPin[];
+}
+
+interface RegionMarkParams {
+  region: AvoidRegion;
+  restoreRegions?: AvoidRegion[];
+}
+
+const DEFAULT_PLACEMENT: PlacementConstraints = {
+  anchor: "bottom_right",
+  width: "24%",
+  margin: "4%",
+};
+
+function initialPip(placement = DEFAULT_PLACEMENT): PipConfig {
+  return {
+    style: { mask: { shape: "none" } },
+    placement: { base: structuredClone(placement) },
+    keyframes: [],
+  };
+}
+
+function findPipLayer(project: GuyditorProject, layerId: string): Result<Layer> {
+  const layer = project.layers.find(({ id }) => id === layerId);
+  if (layer === undefined) {
+    return compositorFailure("E_OP_NOT_FOUND", `Layer ${layerId} does not exist.`, [layerId]);
+  }
+  if (layer.locked) {
+    return compositorFailure("E_OP_LAYER_LOCKED", `Layer ${layerId} is locked.`, [layerId]);
+  }
+  if (layer.kind !== "video" && layer.kind !== "image" && layer.kind !== "animation") {
+    return compositorFailure("E_OP_SCHEMA", `Layer ${layerId} cannot contain a PiP.`, [layerId]);
+  }
+  return success(layer);
+}
+
+function replaceLayer(project: GuyditorProject, replacement: Layer): GuyditorProject {
+  return {
+    ...project,
+    layers: project.layers.map((layer) => layer.id === replacement.id ? replacement : layer),
+  };
+}
+
 function compositorFailure(
   code: `E_${Uppercase<string>}`,
   message: string,
@@ -161,11 +229,204 @@ export class CompositorModel {
     context: OperationContext,
   ) => this.#dispatch(project, input, context);
 
+  #dispatchPip(
+    project: GuyditorProject,
+    input: OperationInput,
+  ): Result<DispatchedOperationApplication> {
+    if (input.op === "region.mark") {
+      const params = input.params as unknown as RegionMarkParams;
+      if (params.restoreRegions !== undefined) {
+        return success({
+          model: { ...project, avoidRegions: structuredClone(params.restoreRegions) },
+          inverse: [{
+            op: input.op,
+            params: { ...input.params, restoreRegions: structuredClone(project.avoidRegions ?? []) },
+          }],
+          affected: [...new Set([
+            ...(project.avoidRegions ?? []).map(({ id }) => id),
+            ...params.restoreRegions.map(({ id }) => id),
+          ])],
+          summary: "Restore marked avoid regions",
+        });
+      }
+      const region = structuredClone(params.region);
+      region.id ??= this.#idFactory("avr");
+      if (region.source !== "marked") {
+        return compositorFailure("E_OP_SCHEMA", "region.mark only accepts marked regions.", [region.id]);
+      }
+      if (region.rect.x + region.rect.w > 1 || region.rect.y + region.rect.h > 1) {
+        return compositorFailure("E_OP_SCHEMA", "Marked region must fit inside the normalized canvas.", [region.id]);
+      }
+      if (region.frames !== undefined && region.frames.from > region.frames.to) {
+        return compositorFailure("E_OP_SCHEMA", "Marked region frame range is reversed.", [region.id]);
+      }
+      return success({
+        model: { ...project, avoidRegions: [...(project.avoidRegions ?? []), region] },
+        inverse: [{
+          op: input.op,
+          params: { ...input.params, restoreRegions: structuredClone(project.avoidRegions ?? []) },
+        }],
+        redo: { op: input.op, params: { ...input.params, region } },
+        affected: [region.id],
+        summary: `Mark hard avoid region ${region.id}`,
+      });
+    }
+
+    const params = input.params as unknown as PipOperationParams;
+    const found = findPipLayer(project, params.layerId);
+    if (!found.ok) return found;
+    const layer = structuredClone(found.value);
+    if (Object.hasOwn(input.params, "restorePip")) {
+      if (params.restorePip === null) delete layer.pip;
+      else if (params.restorePip !== undefined) layer.pip = structuredClone(params.restorePip);
+      return success({
+        model: {
+          ...replaceLayer(project, layer),
+          ...(params.restorePresets === undefined
+            ? {}
+            : { presets: structuredClone(params.restorePresets) }),
+        },
+        inverse: [{
+          op: input.op,
+          params: {
+            ...input.params,
+            restorePip: found.value.pip === undefined ? null : structuredClone(found.value.pip),
+            restorePresets: structuredClone(project.presets),
+          },
+        }],
+        affected: [layer.id],
+        summary: `Restore PiP on ${layer.id}`,
+      });
+    }
+    const beforePip = layer.pip === undefined ? null : structuredClone(layer.pip);
+    const inverse = [{
+      op: input.op,
+      params: {
+        ...input.params,
+        restorePip: beforePip,
+        restorePresets: structuredClone(project.presets),
+      },
+    }];
+
+    if (input.op === "pip.avoid.solve") {
+      return success({
+        model: project,
+        inverse: [],
+        affected: [layer.id],
+        summary: `Prepared reviewable collision-avoidance proposal for ${layer.id}`,
+      });
+    }
+    if (input.op === "pip.place") {
+      if (params.placement === undefined) {
+        return compositorFailure("E_OP_SCHEMA", "pip.place requires placement constraints.", [layer.id]);
+      }
+      solvePlacement(params.placement, 1920, 1080);
+      layer.pip = layer.pip ?? initialPip(params.placement);
+      layer.pip.placement.base = structuredClone(params.placement);
+      return success({
+        model: replaceLayer(project, layer), inverse, affected: [layer.id],
+        summary: `Place layer ${formatPlacementConstraints(params.placement)
+          .replace(/^anchor: /u, "")
+          .replace(/, ([a-z_]+): /gu, ", $1 ")}`,
+      });
+    }
+    if (input.op === "pip.style.set") {
+      if (params.style === undefined || params.style.mask === undefined) {
+        return compositorFailure("E_OP_SCHEMA", "pip.style.set requires a complete style and mask.", [layer.id]);
+      }
+      layer.pip = layer.pip ?? initialPip();
+      layer.pip.style = structuredClone(params.style);
+      return success({
+        model: replaceLayer(project, layer), inverse, affected: [layer.id],
+        summary: `Style PiP on ${layer.id} as ${params.style.mask.shape}`,
+      });
+    }
+    if (input.op === "pip.keyframe.add") {
+      if (params.keyframe === undefined) {
+        return compositorFailure("E_OP_SCHEMA", "pip.keyframe.add requires a keyframe.", [layer.id]);
+      }
+      const keyframe = structuredClone(params.keyframe);
+      keyframe.id ??= this.#idFactory("kfr");
+      solvePlacement(keyframe.placement, 1920, 1080);
+      layer.pip = layer.pip ?? initialPip();
+      if (layer.pip.keyframes.some(({ id }) => id === keyframe.id)) {
+        return compositorFailure("E_OP_DUPLICATE_ID", `PiP keyframe ${keyframe.id} already exists.`, [keyframe.id]);
+      }
+      layer.pip.keyframes.push(keyframe);
+      return success({
+        model: replaceLayer(project, layer), inverse,
+        redo: { op: input.op, params: { ...input.params, keyframe } },
+        affected: [layer.id, keyframe.id],
+        summary: `Add PiP keyframe at ${keyframe.at}`,
+      });
+    }
+    if (input.op === "pip.keyframe.remove") {
+      layer.pip = layer.pip ?? initialPip();
+      const index = layer.pip.keyframes.findIndex(({ id }) => id === params.keyframeId);
+      if (index === -1) {
+        return compositorFailure("E_OP_NOT_FOUND", `PiP keyframe ${String(params.keyframeId)} does not exist.`, [String(params.keyframeId)]);
+      }
+      layer.pip.keyframes.splice(index, 1);
+      return success({
+        model: replaceLayer(project, layer), inverse, affected: [layer.id, String(params.keyframeId)],
+        summary: `Remove PiP keyframe ${String(params.keyframeId)}`,
+      });
+    }
+    if (input.op === "pip.preset.apply") {
+      if (
+        params.placement === undefined || params.at === undefined || params.presetId === undefined ||
+        params.version === undefined || params.durationFrames === undefined
+      ) {
+        return compositorFailure("E_OP_SCHEMA", "pip.preset.apply parameters are incomplete.", [layer.id]);
+      }
+      let preset;
+      try {
+        preset = motionPreset(params.presetId, params.version);
+      } catch {
+        return compositorFailure(
+          "E_PIP_PRESET_NOT_FOUND",
+          `PiP motion preset ${params.presetId}@${String(params.version)} is not installed.`,
+          [params.presetId],
+        );
+      }
+      solvePlacement(params.placement, 1920, 1080);
+      const keyframe: PipKeyframe = {
+        id: params.keyframeId ?? this.#idFactory("kfr"),
+        at: params.at,
+        placement: structuredClone(params.placement),
+        transition: {
+          preset: preset.id,
+          durationFrames: params.durationFrames,
+          ...(params.params === undefined ? {} : { params: structuredClone(params.params) }),
+        },
+      };
+      layer.pip = layer.pip ?? initialPip();
+      if (layer.pip.keyframes.some(({ id }) => id === keyframe.id)) {
+        return compositorFailure("E_OP_DUPLICATE_ID", `PiP keyframe ${keyframe.id} already exists.`, [keyframe.id]);
+      }
+      layer.pip.keyframes.push(keyframe);
+      const presets = project.presets.some(({ id, version }) =>
+        id === preset.id && version === preset.version)
+        ? project.presets
+        : [...project.presets, motionPresetPin(preset.id, preset.version)];
+      return success({
+        model: { ...replaceLayer(project, layer), presets }, inverse,
+        redo: { op: input.op, params: { ...input.params, keyframeId: keyframe.id } },
+        affected: [layer.id, keyframe.id, preset.id],
+        summary: `Apply ${preset.label}@${String(preset.version)} at ${params.at}`,
+      });
+    }
+    return compositorFailure("E_OP_UNKNOWN", `CompositorModel cannot dispatch ${input.op}.`, [input.op]);
+  }
+
   #dispatch(
     project: GuyditorProject,
     input: OperationInput,
     context: OperationContext,
   ): Result<DispatchedOperationApplication> {
+    if (input.op.startsWith("pip.") || input.op === "region.mark") {
+      return this.#dispatchPip(project, input);
+    }
     if (input.op === "key.qc.run") {
       const clipId = input.params["clipId"] as string;
       const exists = project.sequences.some(({ clips }) => clips.some(({ id }) => id === clipId));

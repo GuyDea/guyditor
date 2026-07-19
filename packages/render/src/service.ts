@@ -11,8 +11,10 @@ import {
 import { dirname, extname, isAbsolute, join, resolve } from "node:path";
 
 import {
+  deriveTimeline,
   makeGuyditorError,
   parseProjectYaml,
+  resolveAnchor,
 } from "../../core/src/index.js";
 import type {
   Deliverable,
@@ -74,6 +76,8 @@ import {
 import { TemplateRegistry } from "./template-registry.js";
 import type { TemplateCatalogEntry } from "./template-registry.js";
 import { rasterizeKeyMasks } from "./key-mask.js";
+import { rasterizePipAssets } from "./pip-assets.js";
+import type { RasterizedPipAssets } from "./pip-assets.js";
 
 const RENDER_PACKAGE_VERSION = "0.0.0";
 
@@ -773,6 +777,11 @@ export class RenderService {
     try {
       const profile = await loadRenderProfile(deliverable.profile, this.#profilesRoot);
       const resolved = this.#withResolvedAssetPaths(project);
+      const anchorFrames = await this.#pipAnchorFrames(
+        resolved,
+        deliverable,
+        await this.#captionSidecars(project),
+      );
       compileRenderGraph({
         project: resolved,
         revision: resolved.revision,
@@ -782,6 +791,7 @@ export class RenderService {
         profile: profile.profile,
         profileSha256: profile.sha256,
         toolchain: await toolchainManifest(),
+        anchorFrames,
       });
       checks.push({
         id: "VAL-200",
@@ -899,6 +909,57 @@ export class RenderService {
     return sidecars;
   }
 
+  async #pipAnchorFrames(
+    project: GuyditorProject,
+    deliverable: Deliverable,
+    sidecars: readonly TranscriptSidecar[],
+  ): Promise<Record<string, number>> {
+    const anchors = [...new Set(project.layers.flatMap(({ pip }) =>
+      pip?.keyframes.map(({ at }) => at) ?? []))];
+    const frames: Record<string, number> = {};
+    const dependencies = { wordLookup: createTranscriptWordLookup(sidecars) };
+    for (const anchor of anchors) {
+      const resolution = await resolveAnchor(project, anchor, deliverable.sequenceId, dependencies);
+      if (!resolution.ok) throw resolution.error;
+      if (resolution.value.status !== "resolved" || resolution.value.timeline === undefined) {
+        throw makeGuyditorError(
+          "E_PIP_ANCHOR_UNRESOLVED",
+          `PiP anchor ${anchor} is orphaned and cannot be rendered.`,
+          { affected: [anchor] },
+        );
+      }
+      frames[anchor] = resolution.value.timeline.frames;
+    }
+    return frames;
+  }
+
+  async #rasterizedPips(
+    project: GuyditorProject,
+    deliverable: Deliverable,
+    anchorFrames: Readonly<Record<string, number>>,
+  ): Promise<Record<string, RasterizedPipAssets>> {
+    const timeline = deriveTimeline(project, deliverable.sequenceId);
+    if (!timeline.ok) throw timeline.error;
+    const [durationNumerator = "0", durationDenominator = "1"] = timeline.value.duration.split("/");
+    const [fpsNumerator = "1", fpsDenominator = "1"] = project.settings.timeline.fps.split("/");
+    const durationFrames = Number(
+      BigInt(durationNumerator) * BigInt(fpsNumerator) /
+      (BigInt(durationDenominator) * BigInt(fpsDenominator)),
+    );
+    const entries = await Promise.all(project.layers.flatMap((layer) =>
+      layer.enabled && layer.pip !== undefined
+        ? [rasterizePipAssets({
+            pip: layer.pip,
+            compWidth: project.settings.timeline.width,
+            compHeight: project.settings.timeline.height,
+            durationFrames: Math.max(1, durationFrames),
+            anchorFrames,
+            cacheRoot: join(this.#projectRoot, ".guyditor/cache/render/pip"),
+          }).then((assets) => [layer.id, assets] as const)]
+        : []));
+    return Object.fromEntries(entries);
+  }
+
   async #captionModel(
     project: GuyditorProject,
     deliverable: Deliverable,
@@ -1009,6 +1070,8 @@ export class RenderService {
             durationFrames: graphicPlan.durationFrames,
           }];
     const maskAssets = await this.#rasterizedMasks(project, deliverable);
+    const anchorFrames = await this.#pipAnchorFrames(project, deliverable, transcriptSidecars);
+    const pipAssets = await this.#rasterizedPips(project, deliverable, anchorFrames);
     const graph = compileRenderGraph({
       project,
       revision: project.revision,
@@ -1021,6 +1084,8 @@ export class RenderService {
       overlays,
       graphicOverlays,
       maskAssets,
+      anchorFrames,
+      pipAssets,
       ...(options.diagnostic === undefined ? {} : {
         diagnosticBackground: options.diagnostic.background,
         diagnosticSaturatedColor: options.diagnostic.saturatedColor,

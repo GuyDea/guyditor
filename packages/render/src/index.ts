@@ -68,6 +68,8 @@ export type { CompiledFiltergraph } from "./filtergraph.js";
 export { compileRenderGraph, validateRenderGraph } from "./graph.js";
 export type { CompileRenderGraphOptions, DiagnosticBackground } from "./graph.js";
 export { rasterizeKeyMasks } from "./key-mask.js";
+export { rasterizePipAssets } from "./pip-assets.js";
+export type { RasterizedPipAssets, RasterizePipAssetsOptions } from "./pip-assets.js";
 export type {
   RasterizedKeyMask,
   RasterizeKeyMasksOptions,
@@ -78,6 +80,7 @@ export type {
   EncodeNodeParams,
   KeyNodeParams,
   OverlayNodeParams,
+  PipNodeParams,
   RenderGraph,
   RenderNode,
   RenderNodeKind,

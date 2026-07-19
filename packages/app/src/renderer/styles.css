@@ -238,6 +238,12 @@ small { color: var(--muted); }
 .preview-surface[data-diagnostic="saturated"] .diagnostic-backdrop { background: #f0f; }
 .preview-surface[data-diagnostic="checkerboard"] .diagnostic-backdrop { background-color: #666; background-image: linear-gradient(45deg, #999 25%, transparent 25%), linear-gradient(-45deg, #999 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #999 75%), linear-gradient(-45deg, transparent 75%, #999 75%); background-position: 0 0, 0 16px, 16px -16px, -16px 0; background-size: 32px 32px; }
 .chroma-preview { object-fit: contain; z-index: 1; }
+.pip-preview-canvas { position: absolute; inset: 0; z-index: 2; width: 100%; height: 100%; cursor: grab; touch-action: none; }
+.pip-preview-canvas:active { cursor: grabbing; }
+.pip-preview-canvas[data-overlap="soft"] { filter: drop-shadow(0 0 4px rgb(242 184 75 / 85%)); }
+.pip-preview-canvas[data-overlap="hard"] { filter: drop-shadow(0 0 5px rgb(240 71 67 / 90%)); }
+.pip-avoid-region { position: absolute; z-index: 3; pointer-events: none; border: 1px dashed var(--amber); background: rgb(242 184 75 / 8%); }
+.pip-avoid-region[data-hardness="hard"] { border-color: var(--red); background: rgb(240 71 67 / 9%); }
 .black-frame { display: grid; place-items: center; color: #414b51; background: #010203; font: 650 10px/1 ui-monospace, monospace; letter-spacing: .18em; }
 .caption-overlay { position: absolute; inset: 0; width: 100%; height: 100%; }
 .graphic-overlay { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: fill; pointer-events: none; }
@@ -326,6 +332,16 @@ small { color: var(--muted); }
 .key-inspector label input[type="range"] { grid-column: 1 / -1; width: 100%; accent-color: #73d8b4; }
 .key-inspector output { color: #73d8b4; font: 600 8px ui-monospace, monospace; }
 .key-inspector select { min-width: 118px; max-width: 176px; }
+.pip-inspector { display: grid; gap: 7px; margin: 0 8px 9px; padding: 9px; border: 1px solid #40505a; background: linear-gradient(145deg, #151e24, #0b1216); }
+.pip-inspector header { display: flex; justify-content: space-between; gap: 8px; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+.pip-inspector header span, .pip-inspector small, .pip-inspector output { color: var(--muted); font: 500 7px/1.35 ui-monospace, monospace; }
+.pip-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; }
+.pip-grid label, .pip-motion label { display: grid; gap: 3px; color: #9eabb1; font-size: 7px; }
+.pip-grid input, .pip-grid select, .pip-motion input, .pip-motion select { min-width: 0; width: 100%; }
+.pip-motion, .pip-avoid-actions { display: grid; gap: 5px; padding-top: 6px; border-top: 1px solid var(--line); }
+.pip-motion output { overflow-wrap: anywhere; color: var(--blue); }
+.pip-avoid-actions { grid-template-columns: 1fr 1fr; }
+.pip-avoid-actions small { grid-column: 1 / -1; }
 .key-color-row input[type="color"] { width: 34px; height: 24px; padding: 1px; }
 .key-qc-report, .capture-guidance, .arrangement-controls { display: grid; gap: 4px; padding: 7px; border-left: 2px solid #73d8b4; background: #0b1216; }
 .key-qc-report p, .capture-guidance p { margin: 0; color: #96a4ab; font-size: 7px; line-height: 1.35; }
