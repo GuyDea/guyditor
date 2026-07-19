@@ -17,6 +17,24 @@ const operationSchema: JsonSchema = {
   },
   additionalProperties: false,
 };
+const assetIdParams: JsonSchema = {
+  type: "object",
+  required: ["assetId"],
+  properties: { assetId: { type: "string", pattern: "^ast_[a-z2-7]{10}$" } },
+  additionalProperties: false,
+};
+const proposalIdParams: JsonSchema = {
+  type: "object",
+  required: ["proposalId"],
+  properties: { proposalId: { type: "string", pattern: "^prp_[a-z2-7]{10}$" } },
+  additionalProperties: false,
+};
+const annotationIdParams: JsonSchema = {
+  type: "object",
+  required: ["annotationId"],
+  properties: { annotationId: { type: "string", pattern: "^ann_[a-z2-7]{10}$" } },
+  additionalProperties: false,
+};
 
 export const IPC_SURFACES: readonly IpcSurface[] = Object.freeze([
   {
@@ -35,6 +53,10 @@ export const IPC_SURFACES: readonly IpcSurface[] = Object.freeze([
       },
       getSnapshot: { paramsSchema: emptyParams, resultSchema: anyResult, budgetMs: 20 },
       listHistory: { paramsSchema: emptyParams, resultSchema: { type: "array" }, budgetMs: 20 },
+      listProposals: { paramsSchema: emptyParams, resultSchema: { type: "array" }, budgetMs: 20 },
+      readTranscript: { paramsSchema: emptyParams, resultSchema: { type: "array" }, budgetMs: 50 },
+      revealProject: { paramsSchema: emptyParams, resultSchema: anyResult, budgetMs: 20 },
+      openMaster: { paramsSchema: emptyParams, resultSchema: anyResult, budgetMs: 20 },
     },
   },
   {
@@ -49,6 +71,31 @@ export const IPC_SURFACES: readonly IpcSurface[] = Object.freeze([
             intent: { enum: ["direct", "undo", "redo"] },
             label: { type: "string", minLength: 1 },
             undoOf: { type: "string", pattern: "^txn_[a-z2-7]{10}$" },
+          },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 150,
+      },
+      resolveNavigation: {
+        paramsSchema: {
+          type: "object",
+          required: ["target"],
+          properties: { target: { type: "object" }, scope: { type: "string" } },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 50,
+      },
+      acceptProposal: { paramsSchema: proposalIdParams, resultSchema: anyResult, budgetMs: 150 },
+      rejectProposal: { paramsSchema: proposalIdParams, resultSchema: anyResult, budgetMs: 50 },
+      supersedeProposal: {
+        paramsSchema: {
+          type: "object",
+          required: ["proposalId", "instruction"],
+          properties: {
+            proposalId: { type: "string", pattern: "^prp_[a-z2-7]{10}$" },
+            instruction: { type: "string", minLength: 1 },
           },
           additionalProperties: false,
         },
@@ -87,6 +134,25 @@ export const IPC_SURFACES: readonly IpcSurface[] = Object.freeze([
   {
     service: "MediaEngine",
     methods: {
+      ingest: {
+        paramsSchema: {
+          type: "object",
+          required: ["paths"],
+          properties: {
+            paths: {
+              type: "array",
+              minItems: 1,
+              items: { type: "string", minLength: 1 },
+            },
+          },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 20,
+      },
+      pickAndIngest: { paramsSchema: emptyParams, resultSchema: anyResult, budgetMs: 20 },
+      resolveProxy: { paramsSchema: assetIdParams, resultSchema: anyResult, budgetMs: 20 },
+      readPeaks: { paramsSchema: assetIdParams, resultSchema: anyResult, budgetMs: 50 },
       estimateCacheUse: { paramsSchema: emptyParams, resultSchema: anyResult, budgetMs: 20 },
       mlworkerState: { paramsSchema: emptyParams, resultSchema: anyResult, budgetMs: 20 },
     },
@@ -114,6 +180,20 @@ export const IPC_SURFACES: readonly IpcSurface[] = Object.freeze([
         resultSchema: anyResult,
         budgetMs: 20,
       },
+      enqueueFillerDetection: {
+        paramsSchema: {
+          type: "object",
+          properties: {
+            assetIds: {
+              type: "array",
+              items: { type: "string", pattern: "^ast_[a-z2-7]{10}$" },
+            },
+          },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 20,
+      },
     },
   },
   {
@@ -121,15 +201,11 @@ export const IPC_SURFACES: readonly IpcSurface[] = Object.freeze([
     methods: {
       list: { paramsSchema: emptyParams, resultSchema: { type: "array" }, budgetMs: 20 },
       get: {
-        paramsSchema: {
-          type: "object",
-          required: ["annotationId"],
-          properties: { annotationId: { type: "string", pattern: "^ann_[a-z2-7]{10}$" } },
-          additionalProperties: false,
-        },
+        paramsSchema: annotationIdParams,
         resultSchema: anyResult,
         budgetMs: 20,
       },
+      contextPackage: { paramsSchema: annotationIdParams, resultSchema: anyResult, budgetMs: 150 },
     },
   },
   {
@@ -150,6 +226,7 @@ export const IPC_SURFACES: readonly IpcSurface[] = Object.freeze([
         resultSchema: anyResult,
         budgetMs: 20,
       },
+      exportReport: { paramsSchema: emptyParams, resultSchema: anyResult, budgetMs: 50 },
     },
   },
   {

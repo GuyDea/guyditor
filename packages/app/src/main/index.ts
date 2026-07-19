@@ -15,6 +15,7 @@ import {
   BrowserWindow,
   dialog,
   ipcMain,
+  shell,
 } from "electron";
 import type { IpcMainInvokeEvent, Session } from "electron";
 
@@ -258,6 +259,16 @@ async function createWindow(initialProjectPath?: string): Promise<BrowserWindow>
       });
       return selected.canceled ? undefined : selected.filePaths[0];
     },
+    chooseMedia: async () => {
+      const selected = await dialog.showOpenDialog(window, {
+        title: "Import media",
+        buttonLabel: "Import",
+        properties: ["openFile", "multiSelections"],
+      });
+      return selected.canceled ? [] : selected.filePaths;
+    },
+    revealPath: (path) => shell.showItemInFolder(path),
+    openPath: (path) => shell.openPath(path),
   });
   windowHosts.set(window.id, windowHost);
   window.once("ready-to-show", () => window.show());

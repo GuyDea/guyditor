@@ -1,5 +1,7 @@
 // This file is the single renderer/main source of truth for Part 1 §1.3.
 
+import type { GuyditorProject, SidecarRef } from "../../../core/src/index.js";
+
 export interface GuyditorError {              // Part 0 §0.4 envelope, verbatim
   code: string;                               // "E_" + SCREAMING_SNAKE, e.g. "E_MLWORKER_DOWN"
   message: string;
@@ -126,6 +128,13 @@ export interface ExecuteResult {
   txnId: string;
   revision: string;
   inverse: Array<{ op: string; params: Record<string, unknown> }>;
+}
+
+export interface ProjectSnapshot {
+  revision: string;
+  master: GuyditorProject;
+  sidecarIndex: SidecarRef[];
+  projectPath: string;
 }
 
 declare global {

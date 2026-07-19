@@ -16,3 +16,14 @@ test("opens the secure Electron shell with the generated facade and jobs panel",
     await launched.electronApp.close();
   }
 });
+
+test("renders the seven fixed workspace panels for an open project", async () => {
+  const launched = await launchApp();
+  try {
+    for (const panel of ["media", "preview", "transcript", "inspector", "agent", "timeline", "status"]) {
+      await expect(launched.page.getByTestId(`${panel}-panel`)).toBeVisible();
+    }
+  } finally {
+    await launched.electronApp.close();
+  }
+});

@@ -1,182 +1,192 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
-import type { GuyditorProject, SidecarRef } from "../../../core/src/index.js";
-import type { ExecuteResult, JobStatus } from "../shared/ipc.js";
+import type { Annotation, Proposal } from "../../../core/src/index.js";
+import type { ExportReport } from "../../../render/src/index.js";
+import type { TranscriptSidecar } from "../../../transcript/src/index.js";
+import type { JobStatus, ProjectSnapshot } from "../shared/ipc.js";
+import { errorMessage, getSnapshot, redoLast, undoLast } from "./ipc.js";
+import { InspectorPanel } from "./panels/InspectorPanel.js";
+import { MediaBrowserPanel } from "./panels/MediaBrowserPanel.js";
+import { PreviewPanel } from "./panels/PreviewPanel.js";
+import { ProposalPanel } from "./panels/ProposalPanel.js";
+import { StatusStripPanel } from "./panels/StatusStripPanel.js";
+import { TimelinePanel } from "./panels/TimelinePanel.js";
+import { TranscriptPanel } from "./panels/TranscriptPanel.js";
+import type { WorkspacePanelProps } from "./panels/types.js";
 import { useJobsStore } from "./state/jobs.js";
+import { useProjectMirror } from "./state/project-mirror.js";
+import { useUndoStore } from "./state/undo.js";
 import {
+  usePreviewStore,
   useSelectionStore,
-  useTimelineViewStore,
   useWorkspaceStore,
 } from "./state/view-state.js";
+import type { PanelId } from "./state/view-state.js";
 
-interface ProjectSnapshot {
-  revision: string;
-  master: GuyditorProject;
-  sidecarIndex: SidecarRef[];
-  projectPath: string;
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function JobsPanel(): React.JSX.Element {
-  const jobs = useJobsStore((state) => state.jobs);
-  return (
-    <aside className="jobs-panel" data-testid="jobs-panel" aria-labelledby="jobs-title">
-      <div className="panel-heading">
-        <div>
-          <span className="eyebrow">Background work</span>
-          <h2 id="jobs-title">Jobs</h2>
-        </div>
-        <span className="count" aria-label={`${String(jobs.length)} jobs`}>{jobs.length}</span>
-      </div>
-      {jobs.length === 0 ? (
-        <div className="empty-state" data-testid="jobs-empty">
-          <span className="empty-mark" aria-hidden="true">◌</span>
-          <p>No background work yet.</p>
-          <small>Proxy, transcript, and render progress will stay visible here.</small>
-        </div>
-      ) : (
-        <ol className="job-list">
-          {jobs.map((job) => (
-            <li key={job.jobId} data-testid={`job-${job.jobId}`}>
-              <div className="job-title-row">
-                <strong>{job.title}</strong>
-                <span data-state={job.state}>{job.state}</span>
-              </div>
-              <progress value={job.progress} max={1} aria-label={`${job.title} progress`} />
-              <small>{Math.round(job.progress * 100)}% · {job.kind}</small>
-            </li>
-          ))}
-        </ol>
-      )}
-    </aside>
-  );
-}
-
-interface OperationConsoleProps {
-  snapshot: ProjectSnapshot;
-  onCommitted: (result: ExecuteResult) => void;
-}
-
-function OperationConsole({ snapshot, onCommitted }: OperationConsoleProps): React.JSX.Element {
-  const clips = snapshot.master.sequences.flatMap(({ clips }) => clips);
-  const selectedClipId = useSelectionStore((state) => state.selectedClipId);
-  const selectClip = useSelectionStore((state) => state.selectClip);
-  const [edge, setEdge] = useState<"head" | "tail">("tail");
-  const [frames, setFrames] = useState(-1);
-  const [result, setResult] = useState("Ready");
-  const clipId = selectedClipId ?? clips[0]?.id ?? null;
-
-  async function executeTrim(): Promise<void> {
-    if (clipId === null) return;
-    setResult("Committing…");
-    try {
-      const committed = await window.guyditor.call<ExecuteResult>("OperationEngine", "execute", {
-        operations: [{
-          op: "clip.trim",
-          params: {
-            clipId,
-            edge,
-            delta: { frames, fps: snapshot.master.settings.timeline.fps },
-            snapPolicy: "none",
-          },
-        }],
-        intent: "direct",
-        label: `Trim ${clipId} ${edge} by ${String(frames)} frames`,
-      });
-      setResult(`${committed.txnId} → ${committed.revision}`);
-      onCommitted(committed);
-    } catch (error: unknown) {
-      setResult(errorMessage(error));
-    }
-  }
-
-  return (
-    <section className="operation-console" data-testid="operation-console">
-      <div className="panel-heading">
-        <div>
-          <span className="eyebrow">Development surface</span>
-          <h2>Raw operation console</h2>
-        </div>
-        <code>clip.trim</code>
-      </div>
-      {clips.length === 0 ? (
-        <p className="inline-note">This project has no clips to trim.</p>
-      ) : (
-        <div className="console-grid">
-          <label>
-            Clip
-            <select value={clipId ?? ""} onChange={(event) => selectClip(event.target.value)}>
-              {clips.map((clip) => <option key={clip.id} value={clip.id}>{clip.id}</option>)}
-            </select>
-          </label>
-          <label>
-            Edge
-            <select value={edge} onChange={(event) => setEdge(event.target.value as "head" | "tail")}>
-              <option value="head">Head</option>
-              <option value="tail">Tail</option>
-            </select>
-          </label>
-          <label>
-            Delta frames
-            <input
-              type="number"
-              value={frames}
-              onChange={(event) => setFrames(event.target.valueAsNumber)}
-            />
-          </label>
-          <button type="button" onClick={() => void executeTrim()} data-testid="trim-submit">
-            Commit trim
-          </button>
-        </div>
-      )}
-      <output className="console-output" aria-live="polite">{result}</output>
-    </section>
-  );
+function isTypingTarget(target: EventTarget | null): boolean {
+  return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement ||
+    target instanceof HTMLSelectElement ||
+    target instanceof HTMLElement && target.isContentEditable;
 }
 
 export function App(): React.JSX.Element {
-  const [snapshot, setSnapshot] = useState<ProjectSnapshot | null>(null);
+  const snapshot = useProjectMirror((state) => state.snapshot);
+  const replaceSnapshot = useProjectMirror((state) => state.replace);
+  const [transcripts, setTranscripts] = useState<TranscriptSidecar[]>([]);
+  const [annotations, setAnnotations] = useState<Annotation[]>([]);
+  const [proposals, setProposals] = useState<Proposal[]>([]);
+  const [exportReport, setExportReport] = useState<ExportReport | null>(null);
   const [notice, setNotice] = useState("Open a project directory to connect the edit journal.");
   const replaceJobs = useJobsStore((state) => state.replace);
   const applyJobEvent = useJobsStore((state) => state.applyEvent);
-  const zoom = useTimelineViewStore((state) => state.zoomPixelsPerFrame);
-  const setZoom = useTimelineViewStore((state) => state.setZoom);
-  const jobsPanelWidth = useWorkspaceStore((state) => state.jobsPanelWidth);
+  const jobs = useJobsStore((state) => state.jobs);
+  const leftWidth = useWorkspaceStore((state) => state.leftWidth);
+  const rightWidth = useWorkspaceStore((state) => state.rightWidth);
+  const focusPanel = useWorkspaceStore((state) => state.focusPanel);
+  const playhead = usePreviewStore((state) => state.playhead);
+  const playing = usePreviewStore((state) => state.playing);
+  const setPlayhead = usePreviewStore((state) => state.setPlayhead);
+  const setPlaying = usePreviewStore((state) => state.setPlaying);
+  const selectWord = useSelectionStore((state) => state.selectWord);
+  const selectAnnotation = useSelectionStore((state) => state.selectAnnotation);
+  const undoCount = useUndoStore((state) => state.undo.length);
+  const redoCount = useUndoStore((state) => state.redo.length);
 
-  const projectName = snapshot?.master.project.name ?? "No project open";
-  const clips = useMemo(
-    () => snapshot?.master.sequences.reduce((count, sequence) => count + sequence.clips.length, 0) ?? 0,
-    [snapshot],
-  );
+  const refreshAnnotations = useCallback(async (): Promise<void> => {
+    try {
+      setAnnotations(await window.guyditor.call<Annotation[]>("AnnotationService", "list", {}));
+    } catch {
+      setAnnotations([]);
+    }
+  }, []);
+
+  const refreshProposals = useCallback(async (): Promise<void> => {
+    try {
+      setProposals(await window.guyditor.call<Proposal[]>("ProjectStore", "listProposals", {}));
+    } catch {
+      setProposals([]);
+    }
+  }, []);
+
+  const refreshExportReport = useCallback(async (): Promise<void> => {
+    try {
+      setExportReport(await window.guyditor.call<ExportReport | null>(
+        "RenderService",
+        "exportReport",
+        {},
+      ));
+    } catch {
+      setExportReport(null);
+    }
+  }, []);
+
+  const hydrate = useCallback(async (next: ProjectSnapshot): Promise<void> => {
+    replaceSnapshot(next);
+    const [nextTranscripts, nextJobs] = await Promise.all([
+      window.guyditor.call<TranscriptSidecar[]>("ProjectStore", "readTranscript", {})
+        .catch(() => []),
+      window.guyditor.call<JobStatus[]>("JobQueue", "list", {}).catch(() => []),
+    ]);
+    setTranscripts(nextTranscripts);
+    replaceJobs(nextJobs);
+    await Promise.all([refreshAnnotations(), refreshProposals(), refreshExportReport()]);
+  }, [refreshAnnotations, refreshExportReport, refreshProposals, replaceJobs, replaceSnapshot]);
+
+  const refreshProject = useCallback(async (): Promise<void> => {
+    const next = await getSnapshot();
+    await hydrate(next);
+  }, [hydrate]);
 
   useEffect(() => {
     let active = true;
-    void window.guyditor.call<ProjectSnapshot>("ProjectStore", "getSnapshot", {}).then((opened) => {
-      if (active) setSnapshot(opened);
+    void getSnapshot().then((opened) => active ? hydrate(opened) : undefined).catch(() => undefined);
+    void window.guyditor.call<JobStatus[]>("JobQueue", "list", {}).then((initial) => {
+      if (active) replaceJobs(initial);
     }).catch(() => undefined);
-    void window.guyditor.call<JobStatus[]>("JobQueue", "list", {}).then((jobs) => {
-      if (active) replaceJobs(jobs);
-    }).catch(() => undefined);
-    const offState = window.guyditor.on("job.state", applyJobEvent);
+    const offState = window.guyditor.on("job.state", (event) => {
+      applyJobEvent(event);
+      if (event.job.state === "done" && event.job.kind === "render.export") {
+        void refreshExportReport();
+      }
+      if (event.job.state === "done" && event.job.kind === "ingest") {
+        void refreshProject();
+      }
+    });
     const offProgress = window.guyditor.on("job.progress", applyJobEvent);
     const offRevision = window.guyditor.on("project.revision", (event) => {
-      void window.guyditor.call<ProjectSnapshot>("ProjectStore", "getSnapshot", {}).then((next) => {
-        if (active) {
-          setSnapshot(next);
-          setNotice(`Accepted ${event.revision}`);
-        }
-      });
+      void refreshProject().then(() => setNotice(`Accepted ${event.revision}`));
     });
+    const offProposal = window.guyditor.on("proposal.updated", () => void refreshProposals());
+    const offAnnotation = window.guyditor.on("annotation.updated", () => void refreshAnnotations());
     return () => {
       active = false;
       offState();
       offProgress();
       offRevision();
+      offProposal();
+      offAnnotation();
     };
-  }, [applyJobEvent, replaceJobs]);
+  }, [applyJobEvent, hydrate, refreshAnnotations, refreshExportReport, refreshProject, refreshProposals, replaceJobs]);
+
+  useEffect(() => {
+    const keydown = (event: KeyboardEvent): void => {
+      if (isTypingTarget(event.target)) return;
+      const fps = snapshot?.master.settings.timeline.fps ?? playhead.fps;
+      const step = (delta: number): void => {
+        event.preventDefault();
+        setPlaying(false);
+        setPlayhead({ frames: Math.max(0, playhead.frames + delta), fps });
+      };
+      if (event.code === "Space") {
+        event.preventDefault();
+        setPlaying(!playing);
+      } else if (event.key === "ArrowLeft" && !event.altKey && !event.ctrlKey && !event.metaKey) {
+        step(event.shiftKey ? -10 : -1);
+      } else if (event.key === "ArrowRight" && !event.altKey && !event.ctrlKey && !event.metaKey) {
+        step(event.shiftKey ? 10 : 1);
+      } else if ((event.key === "," || event.key === ".") && !playing) {
+        step(event.key === "," ? -1 : 1);
+      } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") {
+        event.preventDefault();
+        void (event.shiftKey ? redoLast() : undoLast())
+          .then(() => refreshProject())
+          .catch((error: unknown) => setNotice(errorMessage(error)));
+      } else if (event.key === "Home") {
+        event.preventDefault();
+        setPlayhead({ frames: 0, fps });
+      } else if (event.altKey && (event.key === "ArrowLeft" || event.key === "ArrowRight")) {
+        event.preventDefault();
+        const words = transcripts.flatMap((sidecar) => sidecar.segments.flatMap(({ words: ids }) => ids));
+        const selected = useSelectionStore.getState().selectedWordId;
+        const index = Math.max(0, words.indexOf(selected ?? words[0] ?? ""));
+        const id = words[Math.max(0, Math.min(words.length - 1, index + (event.key === "ArrowLeft" ? -1 : 1)))];
+        if (id !== undefined) {
+          selectWord(id);
+          void window.guyditor.call<{ frame: { frames: number; fps: string } }>(
+            "OperationEngine",
+            "resolveNavigation",
+            { target: { kind: "word", wordId: id } },
+          ).then(({ frame }) => setPlayhead(frame)).catch(() => undefined);
+        }
+      } else if (event.key.toLowerCase() === "a" && annotations.length > 0) {
+        event.preventDefault();
+        const selected = useSelectionStore.getState().selectedAnnotationId;
+        const index = Math.max(0, annotations.findIndex(({ id }) => id === selected));
+        const next = annotations[(index + (event.shiftKey ? -1 : 1) + annotations.length) % annotations.length];
+        if (next !== undefined) selectAnnotation(next.id);
+      } else if (/^[1-7]$/u.test(event.key)) {
+        const id = (["media", "preview", "transcript", "inspector", "agent", "timeline", "status"] as PanelId[])[Number(event.key) - 1];
+        if (id !== undefined) {
+          focusPanel(id);
+          document.querySelector<HTMLElement>(`[data-panel="${id}"]`)?.focus();
+        }
+      } else if (event.key.toLowerCase() === "q") {
+        setNotice("HQ preview is an M2 mode; M1 remains on the proxy leg.");
+      }
+    };
+    window.addEventListener("keydown", keydown);
+    return () => window.removeEventListener("keydown", keydown);
+  }, [annotations, focusPanel, playhead, playing, refreshProject, selectAnnotation, selectWord, setPlayhead, setPlaying, snapshot, transcripts]);
 
   async function openProject(): Promise<void> {
     setNotice("Waiting for a project directory…");
@@ -190,89 +200,66 @@ export function App(): React.JSX.Element {
         setNotice("Project open cancelled.");
         return;
       }
-      setSnapshot(opened);
-      replaceJobs(await window.guyditor.call<JobStatus[]>("JobQueue", "list", {}));
+      useUndoStore.getState().clear();
+      await hydrate(opened);
+      setPlayhead({ frames: 0, fps: opened.master.settings.timeline.fps });
       setNotice(`Opened ${opened.projectPath}`);
     } catch (error: unknown) {
       setNotice(errorMessage(error));
     }
   }
 
+  const panelProps: WorkspacePanelProps = {
+    snapshot,
+    transcripts,
+    annotations,
+    proposals,
+    exportReport,
+    refreshProject,
+    refreshAnnotations,
+    refreshProposals,
+    refreshExportReport,
+    setNotice,
+  };
+
   return (
-    <main className="shell" style={{ "--jobs-width": `${String(jobsPanelWidth)}px` } as React.CSSProperties}>
+    <main
+      className="shell workspace-shell"
+      style={{
+        "--left-width": `${String(leftWidth)}px`,
+        "--right-width": `${String(rightWidth)}px`,
+      } as React.CSSProperties}
+    >
       <header className="titlebar">
         <div className="wordmark" aria-label="Guyditor">
           <span className="wordmark-glyph" aria-hidden="true">G</span>
           <span>GUYDITOR</span>
         </div>
         <div className="project-identity">
-          <strong>{projectName}</strong>
-          <span data-testid="revision-indicator">
-            {snapshot?.revision ?? "— no revision"}
-          </span>
+          <strong>{snapshot?.master.project.name ?? "No project open"}</strong>
+          <span data-testid="revision-indicator">{snapshot?.revision ?? "— no revision"}</span>
         </div>
-        <button type="button" className="open-button" onClick={() => void openProject()} data-testid="open-project">
-          Open project
-        </button>
+        <div className="title-actions">
+          <span className="background-badge" data-testid="background-job-badge">{jobs.filter(({ state }) => state === "running" || state === "queued").length} active</span>
+          <button type="button" data-testid="undo-action" disabled={undoCount === 0} onClick={() => void undoLast().then(() => refreshProject()).catch((error: unknown) => setNotice(errorMessage(error)))}>Undo</button>
+          <button type="button" data-testid="redo-action" disabled={redoCount === 0} onClick={() => void redoLast().then(() => refreshProject()).catch((error: unknown) => setNotice(errorMessage(error)))}>Redo</button>
+          <button type="button" className="open-button" onClick={() => void openProject()} data-testid="open-project">Open project</button>
+        </div>
       </header>
-
-      <div className="workspace">
-        <section className="stage" aria-labelledby="stage-title">
-          <div className="stage-heading">
-            <div>
-              <span className="eyebrow">Main process link</span>
-              <h1 id="stage-title">Edit pipe</h1>
-            </div>
-            <div className="revision-ticket" data-active={snapshot !== null}>
-              <span>Accepted revision</span>
-              <strong>{snapshot?.revision ?? "UNMOUNTED"}</strong>
-            </div>
-          </div>
-
-          <div className="project-well" data-empty={snapshot === null}>
-            <div className="tape-rail" aria-hidden="true" />
-            {snapshot === null ? (
-              <div className="project-empty">
-                <p>Project state stays on disk and in the main process.</p>
-                <button type="button" onClick={() => void openProject()}>Choose a project directory</button>
-              </div>
-            ) : (
-              <div className="project-summary">
-                <span>{snapshot.master.project.id}</span>
-                <strong>{snapshot.master.project.name}</strong>
-                <dl>
-                  <div><dt>Clips</dt><dd>{clips}</dd></div>
-                  <div><dt>Frame rate</dt><dd>{snapshot.master.settings.timeline.fps}</dd></div>
-                  <div><dt>Sidecars</dt><dd>{snapshot.sidecarIndex.length}</dd></div>
-                </dl>
-              </div>
-            )}
-          </div>
-
-          <div className="view-controls" aria-label="View-state proof">
-            <label htmlFor="zoom">Timeline view zoom</label>
-            <input
-              id="zoom"
-              type="range"
-              min="0.25"
-              max="16"
-              step="0.25"
-              value={zoom}
-              onChange={(event) => setZoom(event.target.valueAsNumber)}
-            />
-            <output>{zoom.toFixed(2)} px/frame</output>
-          </div>
-
-          {import.meta.env.DEV && snapshot !== null ? (
-            <OperationConsole snapshot={snapshot} onCommitted={({ revision }) => {
-              setNotice(`Trim committed as ${revision}; waiting for revision event.`);
-            }} />
-          ) : null}
-
-          <p className="notice" role="status" data-testid="shell-status">{notice}</p>
-        </section>
-        <JobsPanel />
+      <div className="workspace-layout">
+        <MediaBrowserPanel {...panelProps} />
+        <div className="center-stack">
+          <PreviewPanel {...panelProps} />
+          <TranscriptPanel {...panelProps} />
+        </div>
+        <div className="right-stack">
+          <ProposalPanel {...panelProps} />
+          <InspectorPanel {...panelProps} />
+        </div>
+        <TimelinePanel {...panelProps} />
+        <StatusStripPanel {...panelProps} />
       </div>
+      <p className="global-notice" role="status" data-testid="shell-status">{notice}</p>
     </main>
   );
 }
