@@ -213,15 +213,79 @@ export interface CaptionTrack {
   name: string;
   sourceLayerIds: string[];
   preset: { presetId: string; version: number };
-  styleOverrides?: Record<string, unknown>;
-  breakOverrides?: unknown[];
-  emphasisOverrides?: { wordId: string; emphasis: boolean }[];
-  timingOffsets?: {
+  styleOverrides: Partial<CaptionStyle>;
+  breakOverrides: CueBreakOverride[];
+  emphasisOverrides: { wordId: string; emphasis: boolean }[];
+  timingOffsets: {
     firstWordId: string;
     startMs?: number;
     endMs?: number;
   }[];
   enabled: boolean;
+}
+
+export interface CueBreakOverride {
+  afterWordId: string;
+  kind: "line" | "cue" | "join";
+}
+
+export interface CaptionStyle {
+  typeface: {
+    family: string;
+    fontAssetId: string;
+    fallbackAssetIds: string[];
+  };
+  sizePct: number;
+  weight: 100 | 200 | 300 | 400 | 500 | 600 | 700 | 800 | 900;
+  italic: boolean;
+  letterSpacingPct: number;
+  lineSpacing: number;
+  color: string;
+  outline: { color: string; widthPct: number } | null;
+  shadow: {
+    color: string;
+    dxPct: number;
+    dyPct: number;
+    blurPct: number;
+  } | null;
+  background: {
+    color: string;
+    padXPct: number;
+    padYPct: number;
+    radiusPct: number;
+    scope: "word" | "line" | "block";
+  } | null;
+  transform: "none" | "upper" | "lower" | "title";
+  wordsPerLine: number;
+  maxLines: 1 | 2 | 3;
+  maxWidthPct: number;
+  placement: {
+    anchor: "top" | "middle" | "bottom";
+    offsetYPct: number;
+    align: "left" | "center" | "right";
+  };
+  safeArea: "platform" | "none";
+  highlight: {
+    mode: "per-word" | "per-line" | "none";
+    style: "color" | "scale" | "weight" | "underline" | "background";
+    color?: string;
+    scale?: number;
+    weight?: number;
+    pastWords: "keep" | "dim";
+    dimOpacity?: number;
+    maxGapMs: number;
+    holdMs: number;
+    leadInMs: number;
+  };
+  emphasisStyle: {
+    style: "color" | "scale" | "weight" | "underline";
+    color?: string;
+    scale?: number;
+    weight?: number;
+  };
+  cueGapMs: number;
+  maxCueDurationMs: number;
+  speakerStyles: Record<string, Partial<CaptionStyle>>;
 }
 
 export interface AnnotationIndex {

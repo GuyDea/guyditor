@@ -14,6 +14,8 @@ import {
   FIXTURE_GENERATOR_VERSION,
   EXPECTED_FIXTURE_KINDS,
   REQUIRED_FIXTURE_PATHS,
+  REQUIRED_PROJECT_TEMPLATE_PATHS,
+  REQUIRED_PROJECT_TEMPLATES,
 } from "./fixture-spec.mjs";
 
 const temporaryDirectories = [];
@@ -118,18 +120,10 @@ test("isFixtureManifestFresh accepts only current manifests with every file", as
     };
   }
   const projects = {};
-  for (const [name, annotationCount] of [["basic", 0], ["annotated", 1]]) {
+  for (const name of REQUIRED_PROJECT_TEMPLATES) {
+    const annotationCount = name === "annotated" ? 1 : 0;
     const projectFiles = {};
-    for (const projectPath of [
-      "episode.guyditor.yaml",
-      "history/HEAD",
-      "history/revisions/rev_00001.yaml",
-      "history/revisions/rev_00001.lock.json",
-      "history/transactions.jsonl",
-      "sidecars/annotations.yaml",
-      "sidecars/generated-frozen.json",
-      "sidecars/transcript-speech.json",
-    ]) {
+    for (const projectPath of REQUIRED_PROJECT_TEMPLATE_PATHS) {
       const content = `${name}:${projectPath}`;
       const absolutePath = path.join(directory, "projects", name, projectPath);
       await mkdir(path.dirname(absolutePath), { recursive: true });

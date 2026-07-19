@@ -465,6 +465,8 @@ export class WindowServiceHost {
         };
       case "TranscriptEngine":
         return project === undefined ? undefined : {
+          importSubtitles: async ({ path }: { path: string }) =>
+            resultValue(await project.transcript.importSubtitles(path)),
           findWord: async ({ wordId }: { wordId: string }) =>
             resultValue(await project.transcript.findWord(wordId)),
           resolveWord: async ({ wordId }: { wordId: string }) =>
@@ -491,6 +493,8 @@ export class WindowServiceHost {
       case "RenderService":
         return project === undefined ? undefined : {
           cacheStats: () => project.render.cacheStats(),
+          captionFrame: (params: Parameters<RenderService["captionFrame"]>[0]) =>
+            project.render.captionFrame(params),
           renderExport: (params: Parameters<RenderService["renderExport"]>[0]) =>
             project.render.renderExport(params),
           validateExport: ({ deliverableId, revision }: { deliverableId: string; revision: string }) =>
@@ -547,7 +551,8 @@ export class WindowServiceHost {
         ? { redoOf: request.undoOf }
         : {}),
     };
-    const containsTranscript = request.operations.some(({ op }) => op.startsWith("transcript."));
+    const containsTranscript = request.operations.some(({ op }) =>
+      op.startsWith("transcript.") || op.startsWith("caption."));
     const containsAnnotation = request.operations.some(({ op }) => op.startsWith("annotation."));
     let result: OperationBatchResult;
     if (containsTranscript) {

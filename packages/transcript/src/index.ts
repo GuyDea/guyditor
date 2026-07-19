@@ -15,6 +15,7 @@ export {
 export { createAnnotationTranscriptSource } from "./annotation-context.js";
 export { mapWordRangeToSourceRange } from "./range-mapping.js";
 export * from "./fillers.js";
+export * from "./captions/index.js";
 export {
   assessSourceRangeContinuity,
   continuityEvidenceOperation,
@@ -29,6 +30,7 @@ export type {
   TranscriptEngineOptions,
   TranscriptAlignmentJobs,
   TranscriptMutationResult,
+  SubtitleImportResult,
 } from "./engine.js";
 export type {
   RawTranscriptionSegment,

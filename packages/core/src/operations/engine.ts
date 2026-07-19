@@ -38,6 +38,15 @@ import transcriptRangeRemoveSchema from "./schemas/transcript.range.remove.json"
 import transcriptRangeRetainSchema from "./schemas/transcript.range.retain.json" with { type: "json" };
 import transcriptRangeCreateClipSchema from "./schemas/transcript.range.createClip.json" with { type: "json" };
 import transcriptRangeShortCandidateSchema from "./schemas/transcript.range.shortCandidate.json" with { type: "json" };
+import captionTrackAddSchema from "./schemas/caption.track.add.json" with { type: "json" };
+import captionTrackRemoveSchema from "./schemas/caption.track.remove.json" with { type: "json" };
+import captionTrackSetSchema from "./schemas/caption.track.set.json" with { type: "json" };
+import captionStyleSetSchema from "./schemas/caption.style.set.json" with { type: "json" };
+import captionBreakSetSchema from "./schemas/caption.break.set.json" with { type: "json" };
+import captionBreakClearSchema from "./schemas/caption.break.clear.json" with { type: "json" };
+import captionWordEmphasisSetSchema from "./schemas/caption.word.emphasis.set.json" with { type: "json" };
+import captionCueRetimeSchema from "./schemas/caption.cue.retime.json" with { type: "json" };
+import captionPresetUpgradeSchema from "./schemas/caption.preset.upgrade.json" with { type: "json" };
 import anchorRebindSchema from "./schemas/anchor.rebind.json" with { type: "json" };
 import annotationCreateSchema from "./schemas/annotation.create.json" with { type: "json" };
 import annotationUpdateSchema from "./schemas/annotation.update.json" with { type: "json" };
@@ -268,6 +277,15 @@ const catalog = new Map<string, CatalogEntry>([
     "none",
     "Mark {wordRange} as short-form candidate",
   )],
+  ["caption.track.add", catalogEntry(captionTrackAddSchema, "low", "shift", "Add caption track {name}")],
+  ["caption.track.remove", catalogEntry(captionTrackRemoveSchema, "low", "shift", "Remove caption track {captionId}")],
+  ["caption.track.set", catalogEntry(captionTrackSetSchema, "low", "shift", "Configure caption track {captionId}")],
+  ["caption.style.set", catalogEntry(captionStyleSetSchema, "low", "shift", "Style caption track {captionId}")],
+  ["caption.break.set", catalogEntry(captionBreakSetSchema, "low", "shift", "Set caption break after {afterWordId}")],
+  ["caption.break.clear", catalogEntry(captionBreakClearSchema, "low", "shift", "Clear caption break after {afterWordId}")],
+  ["caption.word.emphasis.set", catalogEntry(captionWordEmphasisSetSchema, "low", "shift", "Set caption emphasis on {wordId}")],
+  ["caption.cue.retime", catalogEntry(captionCueRetimeSchema, "low", "retime", "Nudge caption cue {firstWordId}")],
+  ["caption.preset.upgrade", catalogEntry(captionPresetUpgradeSchema, "normal", "shift", "Upgrade caption preset on {captionId}")],
   ["anchor.rebind", catalogEntry(
     anchorRebindSchema,
     "normal",

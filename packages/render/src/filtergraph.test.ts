@@ -26,7 +26,7 @@ const TOOLCHAIN: ToolchainManifest = {
   os: "linux",
 };
 
-function graph(sourcePath = "/tmp/source.mp4", speedRate?: string): RenderGraph {
+function graph(sourcePath = "/tmp/source.mp4", speedRate?: string, withOverlay = false): RenderGraph {
   const project: GuyditorProject = {
     format: "guyditor/v1",
     revision: "rev_00001",
@@ -124,11 +124,17 @@ function graph(sourcePath = "/tmp/source.mp4", speedRate?: string): RenderGraph 
     project,
     revision: project.revision,
     deliverableId: "dlv_aaaaaaaaaa",
-    variant: "clean",
+    variant: withOverlay ? "burnin" : "clean",
     quality: "high",
     profile: PROFILE,
     profileSha256: HASH,
     toolchain: TOOLCHAIN,
+    overlays: withOverlay ? [{
+      overlayAssetPath: "/tmp/caption-frames/%08d.png",
+      overlaySha256: HASH,
+      atOutputFrame: 12,
+      durationFrames: 45,
+    }] : [],
   });
 }
 
@@ -190,5 +196,19 @@ describe("compileFiltergraph", () => {
     const deliverableId = "dlv_aaaaaaaaaa";
 
     expect(command.args.at(-1)).toBe(`${deliverableId}-clean.mp4`);
+  });
+
+  it("adds an exact-fps image2 input and frame-enabled alpha overlay", () => {
+    const command = compileFiltergraph(graph("/tmp/source.mp4", undefined, true), "/tmp/burnin.mp4");
+    expect(command.args).toEqual(expect.arrayContaining([
+      "-framerate",
+      "30/1",
+      "-start_number",
+      "0",
+      "-i",
+      "/tmp/caption-frames/%08d.png",
+    ]));
+    expect(command.filterComplex).toContain("overlay=enable='between(n,12,56)'");
+    expect(command.filterComplex).toContain("format=rgba");
   });
 });

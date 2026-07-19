@@ -15,12 +15,27 @@ import {
   parseProjectYaml,
 } from "../../core/src/index.js";
 import type {
+  Deliverable,
   GuyditorError,
   GuyditorProject,
   JobExecutorContext,
   JobQueue,
   ProjectStore,
 } from "../../core/src/index.js";
+import {
+  DEFAULT_CAPTION_STYLE,
+  buildWordTimelineMap,
+  compileCaptionTrack,
+  loadPinnedCaptionPreset,
+  parseTranscriptSidecar,
+  resolveCaptionStyle,
+  serializeSubtitles,
+} from "../../transcript/src/index.js";
+import type {
+  CaptionFrameSpec,
+  CaptionRenderModel,
+  TranscriptSidecar,
+} from "../../transcript/src/index.js";
 import {
   probeMedia,
   resolveFfmpeg,
@@ -38,6 +53,11 @@ import type {
 } from "./ir.js";
 import { loadRenderProfile } from "./profile.js";
 import type { LoadedRenderProfile } from "./profile.js";
+import {
+  captionOverlayToolchain,
+  createCaptionTextMeasurer,
+  renderCaptionOverlaySequence,
+} from "./caption-overlay.js";
 
 const RENDER_PACKAGE_VERSION = "0.0.0";
 
@@ -54,6 +74,12 @@ export interface ExportRequest {
   variants: Array<"burnin" | "clean">;
   outputDir: string;
   skipValidationWarnings?: boolean;
+}
+
+export interface ExportEnqueueResult {
+  jobId: string;
+  jobIds: string[];
+  subtitlePaths: { srt: string; vtt: string } | null;
 }
 
 export interface FunctionalEquivalenceSpec {
@@ -198,6 +224,17 @@ function profilePin(pin: string): { id: string; version: string } {
     : { id: pin.slice(0, separator), version: pin.slice(separator + 1) };
 }
 
+function captionPreset(
+  deliverable: Deliverable,
+  project: GuyditorProject,
+): { presetId: string; version: number } {
+  const track = project.captions.find(({ id }) => id === deliverable.captionsTrackId);
+  if (track === undefined) {
+    throw new TypeError(`Caption track ${deliverable.captionsTrackId ?? "<unset>"} does not exist.`);
+  }
+  return track.preset;
+}
+
 function isProposalRevision(revision: string): boolean {
   return /^prp_[a-z2-7]{10}$/u.test(revision);
 }
@@ -216,11 +253,7 @@ async function toolchainManifest(): Promise<ToolchainManifest> {
     ffmpeg: { version: ffmpeg.version, buildSha256: await sha256(ffmpeg.path) },
     ffprobe: { version: ffprobe.version, buildSha256: await sha256(ffprobe.path) },
     renderPackage: RENDER_PACKAGE_VERSION,
-    overlayRenderer: {
-      version: "not-used-m0",
-      canvasVersion: "not-used-m0",
-      fontHashes: {},
-    },
+    overlayRenderer: captionOverlayToolchain(),
     encoderThreads: 1,
     os: platform(),
   };
@@ -256,6 +289,16 @@ export function exportOutputPath(
 export function exportReportPath(outputPath: string): string {
   const extension = extname(outputPath);
   return `${outputPath.slice(0, -extension.length)}.export-report.json`;
+}
+
+export function subtitleOutputPaths(
+  outputDir: string,
+  deliverableId: string,
+): { srt: string; vtt: string } {
+  return {
+    srt: join(outputDir, `${deliverableId}.srt`),
+    vtt: join(outputDir, `${deliverableId}.vtt`),
+  };
 }
 
 export class RenderService {
@@ -295,17 +338,41 @@ export class RenderService {
     throw renderUnsupported("preview rendering", "Part 12");
   }
 
-  public async renderExport(req: ExportRequest): Promise<{ jobId: string }> {
+  public async captionFrame(request: {
+    revision: string;
+    deliverableId: string;
+    frame: number;
+  }): Promise<CaptionFrameSpec> {
+    if (!Number.isSafeInteger(request.frame) || request.frame < 0) {
+      throw new RangeError("Caption preview frame must be a non-negative safe integer.");
+    }
+    const project = await this.#loadProject(request.revision);
+    await this.#verifySidecars(project);
+    const deliverable = project.deliverables.find(({ id }) => id === request.deliverableId);
+    if (deliverable === undefined) {
+      throw makeGuyditorError(
+        "E_RENDER_DELIVERABLE_NOT_FOUND",
+        `Deliverable ${request.deliverableId} does not exist at ${project.revision}.`,
+        { affected: [request.deliverableId, project.revision] },
+      );
+    }
+    const model = await this.#captionModel(project, deliverable);
+    return model?.captionsAtFrame(request.frame) ?? {
+      cues: [],
+      styleResolved: resolveCaptionStyle(DEFAULT_CAPTION_STYLE, {}),
+    };
+  }
+
+  public async renderExport(req: ExportRequest): Promise<ExportEnqueueResult> {
     if (isProposalRevision(req.revision)) {
       throw renderUnsupported(`proposal revision ${req.revision}`, "Part 5", [req.revision]);
     }
-    if (req.variants.length !== 1) {
-      throw renderUnsupported("zero or multiple export variants in one job", "Part 12", [req.deliverableId]);
+    const variants = [...new Set(req.variants)];
+    if (variants.length === 0) {
+      throw renderUnsupported("an export without a variant", "Part 12", [req.deliverableId]);
     }
-    const variant = req.variants[0]!;
-    const prepared = await this.#prepare(req, variant);
-    const validation = await this.validateExport(req.deliverableId, prepared.graph.revision);
-    prepared.validation = validation;
+    const preparedExports = await Promise.all(variants.map((variant) => this.#prepare(req, variant)));
+    const validation = await this.validateExport(req.deliverableId, preparedExports[0]!.graph.revision);
     if (
       validation.outcome === "blocked" ||
       (validation.outcome === "warnings" && req.skipValidationWarnings !== true)
@@ -320,19 +387,30 @@ export class RenderService {
         },
       );
     }
-    const job = this.#jobQueue.enqueue({
-      kind: "render.export",
-      title: `Render ${req.deliverableId} ${variant}`,
-      cancellable: true,
-      payload: {
-        deliverableId: req.deliverableId,
-        outputPath: prepared.outputPath,
-        revision: prepared.graph.revision,
-        variant,
-      },
+    const jobs = preparedExports.map((prepared) => {
+      prepared.validation = validation;
+      const job = this.#jobQueue.enqueue({
+        kind: "render.export",
+        title: `Render ${req.deliverableId} ${prepared.variant}`,
+        cancellable: true,
+        payload: {
+          deliverableId: req.deliverableId,
+          outputPath: prepared.outputPath,
+          revision: prepared.graph.revision,
+          variant: prepared.variant,
+        },
+      });
+      this.#prepared.set(job.jobId, prepared);
+      return job;
     });
-    this.#prepared.set(job.jobId, prepared);
-    return { jobId: job.jobId };
+    const first = jobs[0]!;
+    return {
+      jobId: first.jobId,
+      jobIds: jobs.map(({ jobId }) => jobId),
+      subtitlePaths: preparedExports[0]!.project.deliverables.find(({ id }) => id === req.deliverableId)?.captionsTrackId === undefined
+        ? null
+        : subtitleOutputPaths(resolve(req.outputDir), req.deliverableId),
+    };
   }
 
   public async validateExport(
@@ -423,6 +501,58 @@ export class RenderService {
           : `Sidecar ${sidecar.path} is missing or does not match its recorded SHA-256.`,
         affected: [sidecar.path],
       });
+    }
+    if (deliverable.captionsTrackId !== undefined) {
+      try {
+        const model = await this.#captionModel(project, deliverable);
+        if (model !== undefined) {
+          const orphaned = model.diagnostics.orphanedAnchors;
+          const overflow = model.cues.flatMap(({ overflow }) => overflow);
+          checks.push({
+            id: "VAL-CAPTION-ANCHORS",
+            status: orphaned.length === 0 ? "pass" : "fail",
+            message: orphaned.length === 0
+              ? "Caption word anchors resolve on the derived timeline."
+              : `${String(orphaned.length)} caption override anchors are orphaned.`,
+            affected: orphaned.length === 0 ? [deliverable.captionsTrackId] : orphaned.map(({ anchor }) => anchor),
+          });
+          checks.push({
+            id: "VAL-CAPTION-OVERFLOW",
+            status: overflow.length === 0 ? "pass" : "fail",
+            message: overflow.length === 0
+              ? "Caption words fit the configured safe width."
+              : `${String(overflow.length)} caption words exceed the configured safe width.`,
+            affected: overflow.length === 0 ? [deliverable.captionsTrackId] : overflow,
+          });
+          const ambiguous = model.diagnostics.ambiguousRanges;
+          checks.push({
+            id: "VAL-CAPTION-AMBIGUITY",
+            status: ambiguous.length === 0 ? "pass" : "warn",
+            message: ambiguous.length === 0
+              ? "Caption speech mapping is unambiguous."
+              : `${String(ambiguous.length)} overlapping speech ranges need review.`,
+            affected: ambiguous.length === 0
+              ? [deliverable.captionsTrackId]
+              : [...new Set(ambiguous.flatMap(({ layerIds }) => layerIds))],
+          });
+          const provisional = model.diagnostics.provisionalAssetIds ?? [];
+          checks.push({
+            id: "VAL-CAPTION-PROVISIONAL",
+            status: provisional.length === 0 ? "pass" : "warn",
+            message: provisional.length === 0
+              ? "Caption timing comes from canonical aligned transcripts."
+              : `${String(provisional.length)} imported subtitle transcript needs audio realignment.`,
+            affected: provisional.length === 0 ? [deliverable.captionsTrackId] : provisional,
+          });
+        }
+      } catch (error: unknown) {
+        checks.push({
+          id: "VAL-CAPTION-COMPILE",
+          status: "fail",
+          message: errorMessage(error),
+          affected: [deliverable.captionsTrackId],
+        });
+      }
     }
     try {
       const profile = await loadRenderProfile(deliverable.profile, this.#profilesRoot);
@@ -541,6 +671,56 @@ export class RenderService {
     }
   }
 
+  async #captionSidecars(project: GuyditorProject): Promise<TranscriptSidecar[]> {
+    const sidecars: TranscriptSidecar[] = [];
+    for (const reference of project.sidecars) {
+      if (reference.schema !== "guyditor.transcript/v1") continue;
+      sidecars.push(parseTranscriptSidecar(await readFile(
+        resolvedMediaPath(this.#projectRoot, reference.path),
+        "utf8",
+      )));
+    }
+    return sidecars;
+  }
+
+  async #captionModel(
+    project: GuyditorProject,
+    deliverable: Deliverable,
+  ): Promise<CaptionRenderModel | undefined> {
+    const captionId = deliverable.captionsTrackId;
+    if (captionId === undefined) return undefined;
+    const track = project.captions.find(({ id }) => id === captionId);
+    if (track === undefined || !track.enabled) return undefined;
+    const pin = project.presets.find(({ id, version }) =>
+      id === track.preset.presetId && version === track.preset.version);
+    if (pin === undefined) throw new TypeError(`Caption preset ${track.preset.presetId}@${String(track.preset.version)} is not pinned.`);
+    const preset = await loadPinnedCaptionPreset(this.#projectRoot, pin);
+    const style = resolveCaptionStyle(preset.style, track.styleOverrides);
+    const sidecars = await this.#captionSidecars(project);
+    const timeline = buildWordTimelineMap({
+      project,
+      sequenceId: deliverable.sequenceId,
+      track,
+      sidecars,
+    });
+    const safeArea = style.safeArea === "none"
+      ? { x: 0, y: 0, w: 1, h: 1 }
+      : { x: 0.05, y: 0.05, w: 0.9, h: 0.9 };
+    return compileCaptionTrack({
+      track,
+      timeline,
+      sidecars,
+      style,
+      safeArea,
+      output: {
+        width: project.settings.timeline.width,
+        height: project.settings.timeline.height,
+        fps: project.settings.timeline.fps,
+      },
+      measureText: createCaptionTextMeasurer(),
+    });
+  }
+
   async #prepare(req: ExportRequest, variant: "burnin" | "clean"): Promise<PreparedExport> {
     const loaded = await this.#loadProject(req.revision);
     await this.#verifySidecars(loaded);
@@ -554,6 +734,39 @@ export class RenderService {
       );
     }
     const profile = await loadRenderProfile(deliverable.profile, this.#profilesRoot);
+    const captionModel = await this.#captionModel(project, deliverable);
+    let overlays: Parameters<typeof compileRenderGraph>[0]["overlays"] = [];
+    if (captionModel !== undefined) {
+      await mkdir(resolve(req.outputDir), { recursive: true });
+      const subtitlePaths = subtitleOutputPaths(resolve(req.outputDir), req.deliverableId);
+      await Promise.all([
+        writeFile(subtitlePaths.srt, serializeSubtitles(captionModel, {
+          format: "srt",
+          vttWordTimestamps: false,
+          vttPositioning: false,
+          includeSpeakerLabels: false,
+        }), "utf8"),
+        writeFile(subtitlePaths.vtt, serializeSubtitles(captionModel, {
+          format: "vtt",
+          vttWordTimestamps: true,
+          vttPositioning: true,
+          includeSpeakerLabels: false,
+        }), "utf8"),
+      ]);
+      if (variant === "burnin" && captionModel.cues.length > 0) {
+        const plan = await renderCaptionOverlaySequence({
+          model: captionModel,
+          cacheRoot: join(this.#projectRoot, ".guyditor/cache/render/overlays"),
+          versions: { preset: captionPreset(deliverable, project), captionRevision: project.revision },
+        });
+        overlays = [{
+          overlayAssetPath: plan.pathPattern,
+          overlaySha256: plan.overlaySha256,
+          atOutputFrame: plan.atOutputFrame,
+          durationFrames: plan.durationFrames,
+        }];
+      }
+    }
     const graph = compileRenderGraph({
       project,
       revision: project.revision,
@@ -563,6 +776,7 @@ export class RenderService {
       profile: profile.profile,
       profileSha256: profile.sha256,
       toolchain: await toolchainManifest(),
+      overlays,
     });
     const outputPath = exportOutputPath(
       resolve(req.outputDir),

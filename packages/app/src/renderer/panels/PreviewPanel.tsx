@@ -9,6 +9,10 @@ import type {
   Clip,
   FrameTime,
 } from "../../../../core/src/index.js";
+import captionFontUrl from "../../../../render/assets/fonts/Inconsolata.otf?url";
+import { paintCaptionFrame } from "../../../../render/src/caption-painter.js";
+import type { CaptionPaintContext } from "../../../../render/src/caption-painter.js";
+import type { CaptionFrameSpec } from "../../../../transcript/src/index.js";
 import {
   errorMessage,
   executeDirect,
@@ -129,7 +133,10 @@ export function PreviewPanel({
   setNotice,
 }: WorkspacePanelProps): React.JSX.Element {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const captionCanvasRef = useRef<HTMLCanvasElement>(null);
   const [proxy, setProxy] = useState<ProxyResolution | null>(null);
+  const [captionFrame, setCaptionFrame] = useState<CaptionFrameSpec | null>(null);
+  const [captionFontReady, setCaptionFontReady] = useState(false);
   const [tool, setTool] = useState<AnnotationShape>("pin");
   const [body, setBody] = useState("");
   const [context, setContext] = useState<unknown>(null);
@@ -142,12 +149,69 @@ export function PreviewPanel({
   const setSettled = usePreviewStore((state) => state.setSettled);
   const setWarning = usePreviewStore((state) => state.setWarning);
   const selectAnnotation = useSelectionStore((state) => state.selectAnnotation);
+  const selectWord = useSelectionStore((state) => state.selectWord);
   const fps = snapshot?.master.settings.timeline.fps ?? playhead.fps;
   const duration = totalFrames(snapshot);
   const active = snapshot === null ? undefined : activeClip(snapshot, playhead.frames);
   const currentSourceFrame = active === undefined
     ? undefined
     : sourceFrame(active.clip, playhead.frames, active.timelineStart, fps);
+  const deliverable = snapshot?.master.deliverables.find(
+    ({ id }) => id === snapshot.master.settings.primaryDeliverable,
+  );
+
+  useEffect(() => {
+    let current = true;
+    const face = new FontFace("Inconsolata Guyditor", `url(${captionFontUrl})`);
+    void face.load().then((loaded) => {
+      if (!current) return;
+      document.fonts.add(loaded);
+      setCaptionFontReady(true);
+    }).catch(() => {
+      if (current) setCaptionFontReady(false);
+    });
+    return () => { current = false; };
+  }, []);
+
+  useEffect(() => {
+    let current = true;
+    if (snapshot === null || deliverable === undefined) {
+      setCaptionFrame(null);
+      return () => { current = false; };
+    }
+    void window.guyditor.call<CaptionFrameSpec>("RenderService", "captionFrame", {
+      deliverableId: deliverable.id,
+      revision: snapshot.revision,
+      frame: playhead.frames,
+    }).then((frame) => {
+      if (current) setCaptionFrame(frame);
+    }).catch((error: unknown) => {
+      if (current) {
+        setCaptionFrame(null);
+        setNotice(errorMessage(error));
+      }
+    });
+    return () => { current = false; };
+  }, [deliverable?.id, playhead.frames, setNotice, snapshot?.revision]);
+
+  useEffect(() => {
+    const canvas = captionCanvasRef.current;
+    if (canvas === null || snapshot === null) return;
+    const { width, height } = snapshot.master.settings.timeline;
+    if (canvas.width !== width) canvas.width = width;
+    if (canvas.height !== height) canvas.height = height;
+    const context = canvas.getContext("2d");
+    if (context === null) return;
+    context.clearRect(0, 0, width, height);
+    if (captionFrame !== null && captionFontReady) {
+      paintCaptionFrame(
+        context as unknown as CaptionPaintContext,
+        captionFrame,
+        width,
+        height,
+      );
+    }
+  }, [captionFontReady, captionFrame, snapshot]);
 
   useEffect(() => {
     let current = true;
@@ -308,6 +372,23 @@ export function PreviewPanel({
             onEnded={() => setPlayhead({ frames: Math.min(duration - 1, playhead.frames + 1), fps })}
           />
         )}
+        <canvas
+          ref={captionCanvasRef}
+          className="caption-overlay"
+          data-testid="preview-caption-overlay"
+          aria-label="Caption overlay"
+          onClick={(event) => {
+            if (captionFrame === null) return;
+            const bounds = event.currentTarget.getBoundingClientRect();
+            const x = (event.clientX - bounds.left) / bounds.width;
+            const y = (event.clientY - bounds.top) / bounds.height;
+            const word = captionFrame.cues.flatMap(({ lines }) =>
+              lines.flatMap(({ words }) => words)).find(({ box }) =>
+                x >= box.x && x <= box.x + box.w &&
+                y >= box.y && y <= box.y + box.h);
+            if (word !== undefined) selectWord(word.wordId);
+          }}
+        />
         <svg className="annotation-overlay" viewBox="0 0 100 56.25" aria-label="Annotation overlay">
           {annotations.filter(({ state }) => state === "open" || state === "reopened").map((annotation) => (
             <AnnotationMark key={annotation.id} annotation={annotation} />

@@ -222,13 +222,13 @@ describe("AC-002 — inspect every accepted edit", () => {
     const captionModel = structuredClone(store.currentProject);
     captionModel.revision = "rev_00012";
     captionModel.captions[0]!.styleOverrides = {
-      color: "#f2b84b",
-      fontSize: 64,
+      color: "#F2B84BFF",
+      sizePct: 5.9,
     };
     await valueOf(store.commit(captionModel, transaction(store, captionModel.revision, {
       op: "caption.style.set",
-      params: { captionId: "cts_aaaaaaaaaa", color: "#f2b84b", fontSize: 64 },
-      summary: "Set captions style to 64 px warm gold",
+      params: { captionId: "cts_aaaaaaaaaa", color: "#F2B84BFF", sizePct: 5.9 },
+      summary: "Set captions style to 5.9 percent warm gold",
     }, 11)));
 
     const deliverableModel = structuredClone(store.currentProject);

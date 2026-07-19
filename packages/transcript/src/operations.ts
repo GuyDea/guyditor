@@ -31,6 +31,7 @@ import type {
   TranscriptWord,
 } from "./types.js";
 import { applyTranscriptRangeOperation } from "./range-operations.js";
+import { applyCaptionOperation } from "./captions/operations.js";
 
 const TRANSCRIPT_SCHEMA = "guyditor.transcript/v1";
 
@@ -880,10 +881,14 @@ function realign(
   }
   for (const [wordId, word] of candidates) document.sidecar.words[wordId] = word;
   const previousAlignment = document.sidecar.provenance.alignment;
+  const previousProvisional = document.sidecar.provisional;
   document.sidecar.provenance = {
     ...document.sidecar.provenance,
     alignment: input.params["alignment"] as TranscriptEngineIdentity | null,
   };
+  const provisional = input.params["provisional"] as boolean | null | undefined;
+  if (provisional === true || provisional === false) document.sidecar.provisional = provisional;
+  else delete document.sidecar.provisional;
   const wordRange = input.params["wordRange"] as {
     fromWord: string;
     toWord: string;
@@ -897,6 +902,7 @@ function realign(
         ...(wordRange === undefined ? {} : { wordRange }),
         updates: previous,
         alignment: previousAlignment,
+        provisional: previousProvisional ?? null,
         jobId: input.params["jobId"],
       },
     }],
@@ -919,6 +925,8 @@ function dispatcher(
         idFactory,
       );
       if (rangeOperation !== undefined) return rangeOperation;
+      const captionOperation = applyCaptionOperation(project, input, idFactory);
+      if (captionOperation !== undefined) return captionOperation;
       switch (input.op) {
         case "transcript.word.correct":
           return correction(documents, project, input, writes);

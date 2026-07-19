@@ -4,8 +4,11 @@
   "type": "module",
   "main": "dist/main/index.js",
   "scripts": {
+    "predev": "node ../../scripts/setup-caption-font.mjs",
     "dev": "node scripts/dev.mjs",
+    "prebuild": "node ../../scripts/setup-caption-font.mjs",
     "build": "electron-vite build",
+    "postbuild": "node scripts/stage-caption-font.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src electron.vite.config.ts e2e",
     "test:e2e": "playwright test --config playwright.config.ts"
@@ -16,6 +19,7 @@
     "@guyditor/media": "workspace:*",
     "@guyditor/render": "workspace:*",
     "@guyditor/transcript": "workspace:*",
+    "@napi-rs/canvas": "1.0.2",
     "react": "18.3.1",
     "react-dom": "18.3.1",
     "zustand": "5.0.14"

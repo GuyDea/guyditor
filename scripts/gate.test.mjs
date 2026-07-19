@@ -6,9 +6,12 @@ import { test } from "node:test";
 import {
   M1_AC_IDS,
   M1_SHIP_IDS,
+  M2_PARTIAL_COMMANDS,
+  M2_PARTIAL_IDS,
   runGate,
   validateDogfoodReport,
   validateM1Traceability,
+  validateM2PartialTraceability,
 } from "./gate.mjs";
 import {
   REQUIRED_FIXTURE_PATHS,
@@ -134,6 +137,12 @@ exports/report.json
 ## §23 metrics snapshot
 recorded
 `;
+}
+
+function completeM2Traceability() {
+  return M2_PARTIAL_IDS.map((id) =>
+    `| ${id} | Part | ${id === "FR-1101" ? "partial" : "implemented"} | \`test/${id}.test.ts\` | evidence |`
+  ).join("\n");
 }
 
 test("m0 runs fixtures first, then checks, and prints deferred work", () => {
@@ -267,6 +276,24 @@ test("m1 skip-dogfood is explicit, loud, and still emits the automated gate repo
   assert.match(output.join("\n"), /TODO.*DOGFOOD.*SKIPPED/iu);
 });
 
+test("m2 runs the declared partial gate and enforces its scoped traceability", () => {
+  const commands = [];
+  const output = [];
+  const status = runGate("m2", {
+    log: (message) => output.push(message),
+    readFixtureManifest: completeManifest,
+    readTraceabilityReport: completeM2Traceability,
+    runCommand: (command, args) => {
+      commands.push([command, ...args]);
+      return { status: 0 };
+    },
+  });
+  assert.equal(status, 0);
+  assert.deepEqual(commands, M2_PARTIAL_COMMANDS.map(({ command, args }) => [command, ...args]));
+  assert.match(output.join("\n"), /partial milestone scope passed/iu);
+  assert.deepEqual(validateM2PartialTraceability(completeM2Traceability()), []);
+});
+
 test("m1 rejects absent, incomplete, or un-evidenced checklist rows", () => {
   const missing = validateM1Traceability(completeTraceability().replace(
     /^\| FR-001 .*$/mu,
@@ -354,7 +381,7 @@ test("m0 rejects motion paths with missing coordinates", () => {
   assert.match(errors.join("\n"), /subjectBoundingBoxPath.*x.*y.*width.*height/);
 });
 
-for (const milestone of [undefined, "m2", "m3", "m4", "unsupported"]) {
+for (const milestone of [undefined, "m3", "m4", "unsupported"]) {
   test(`gate ${milestone ?? "<missing>"} exits one with a clear message`, () => {
     const gatePath = path.join(import.meta.dirname, "gate.mjs");
     const args = milestone === undefined ? [gatePath] : [gatePath, milestone];

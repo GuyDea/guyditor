@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -213,5 +213,50 @@ describe("TranscriptEngine.createFromTranscription", () => {
       start: { samples: 0, rate: 48_000 },
       end: { samples: 1, rate: 48_000 },
     });
+  });
+});
+
+describe("TranscriptEngine.importSubtitles", () => {
+  it("ingests an SRT asset and registers a provisional imported transcript atomically", async () => {
+    const store = await makeStore();
+    const source = join(store.root, "captions.srt");
+    await writeFile(source, "1\n00:00:00,000 --> 00:00:01,000\nHello captions.\n", "utf8");
+    const engine = new transcriptPackage.TranscriptEngine({
+      project: store,
+      now: () => new Date("2026-07-19T10:00:00.000Z"),
+      idFactory: (prefix) => {
+        if (prefix === "ast") return "ast_bbbbbbbbbb";
+        if (prefix === "job") return "job_bbbbbbbbbb";
+        if (prefix === "txn") return "txn_bbbbbbbbbb";
+        if (prefix === "seg") return "seg_bbbbbbbbbb";
+        if (prefix === "spk") return "spk_bbbbbbbbbb";
+        return `${prefix}_bbbbbbbbbb`;
+      },
+    });
+
+    const result = await engine.importSubtitles(source);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value).toMatchObject({
+      assetId: "ast_bbbbbbbbbb",
+      provisional: true,
+      transactionId: "txn_bbbbbbbbbb",
+      sidecar: { provisional: true, assetId: "ast_bbbbbbbbbb" },
+    });
+    expect(store.currentProject.assets).toContainEqual(expect.objectContaining({
+      id: "ast_bbbbbbbbbb",
+      kind: "subtitle",
+      path: source,
+    }));
+    expect(store.currentProject.transcript.nextWordOrdinal).toBe(14);
+    expect(store.currentProject.sidecars).toContainEqual(expect.objectContaining({
+      name: "transcript-ast_bbbbbbbbbb",
+      schema: "guyditor.transcript/v1",
+    }));
+    const persisted = JSON.parse(await readFile(
+      join(store.root, "sidecars/transcripts/ast_bbbbbbbbbb.transcript.json"),
+      "utf8",
+    )) as { provisional?: boolean };
+    expect(persisted.provisional).toBe(true);
   });
 });

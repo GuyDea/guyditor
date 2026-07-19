@@ -161,6 +161,16 @@ export const IPC_SURFACES: readonly IpcSurface[] = Object.freeze([
   {
     service: "TranscriptEngine",
     methods: {
+      importSubtitles: {
+        paramsSchema: {
+          type: "object",
+          required: ["path"],
+          properties: { path: { type: "string", minLength: 1 } },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 50,
+      },
       findWord: {
         paramsSchema: {
           type: "object",
@@ -213,6 +223,20 @@ export const IPC_SURFACES: readonly IpcSurface[] = Object.freeze([
     service: "RenderService",
     methods: {
       cacheStats: { paramsSchema: emptyParams, resultSchema: anyResult, budgetMs: 20 },
+      captionFrame: {
+        paramsSchema: {
+          type: "object",
+          required: ["deliverableId", "revision", "frame"],
+          properties: {
+            deliverableId: { type: "string", pattern: "^dlv_[a-z2-7]{10}$" },
+            revision: { type: "string", pattern: "^rev_[0-9]{5}$" },
+            frame: { type: "integer", minimum: 0 },
+          },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 50,
+      },
       renderExport: { paramsSchema: { type: "object" }, resultSchema: anyResult, budgetMs: 20 },
       validateExport: {
         paramsSchema: {

@@ -11,6 +11,7 @@ import type {
   AudioChainNodeParams,
   CompositeNodeParams,
   EncodeNodeParams,
+  OverlayNodeParams,
   RenderGraph,
   RenderNode,
   SourceNodeParams,
@@ -174,6 +175,7 @@ export function compileFiltergraph(graph: RenderGraph, outputPath?: string): Com
   );
   const canvas = params<CompositeNodeParams>(composite, "composite").canvas;
   const stages = params<AudioChainNodeParams>(audiochain, "audiochain").stages;
+  const overlays = graph.nodes.filter((node) => node.kind === "overlay");
   if (stages.length > 0) unsupported("audiochain stages", [audiochain.id]);
   if (composite.inputs.length === 0 || composite.inputs.length !== audiochain.inputs.length) {
     graphInvalid("Video and audio sequence slot counts must match.");
@@ -270,7 +272,41 @@ export function compileFiltergraph(graph: RenderGraph, outputPath?: string): Com
     audioLabels.push(`[${outputLabel}]`);
   }
 
-  filters.push(`${videoLabels.join("")}concat=n=${String(videoLabels.length)}:v=1:a=0[vout]`);
+  const overlayInputs = overlays.map((node, index) => {
+    const overlay = params<OverlayNodeParams>(node, "overlay");
+    if (node.inputs.length !== 1) graphInvalid(`Overlay ${node.id} requires one visual input.`, [node.id]);
+    args.push(
+      "-framerate",
+      graph.outputFps,
+      "-start_number",
+      "0",
+      "-i",
+      localPath(overlay.overlayAssetPath, "input"),
+    );
+    const inputIndex = inputCount;
+    inputCount += 1;
+    return { node, overlay, inputIndex, index };
+  });
+
+  filters.push(`${videoLabels.join("")}concat=n=${String(videoLabels.length)}:v=1:a=0[${overlayInputs.length === 0 ? "vout" : "vbase"}]`);
+  let visualLabel = "vbase";
+  const outputFpsForOverlay = rational(graph.outputFps);
+  for (const { overlay, inputIndex, index } of overlayInputs) {
+    const overlayLabel = `ov${String(index)}`;
+    const nextLabel = index === overlayInputs.length - 1 ? "vout" : `vo${String(index)}`;
+    const offset = fraction(
+      BigInt(overlay.atOutputFrame) * outputFpsForOverlay.denominator,
+      outputFpsForOverlay.numerator,
+    );
+    filters.push(
+      `[${String(inputIndex)}:v]format=rgba,setpts=PTS-STARTPTS+${decimal(offset)}/TB[${overlayLabel}]`,
+    );
+    filters.push(
+      `[${visualLabel}][${overlayLabel}]overlay=enable='between(n,${String(overlay.atOutputFrame)},` +
+      `${String(overlay.atOutputFrame + overlay.durationFrames - 1)})':eof_action=pass:shortest=0[${nextLabel}]`,
+    );
+    visualLabel = nextLabel;
+  }
   filters.push(`${audioLabels.join("")}concat=n=${String(audioLabels.length)}:v=0:a=1[aout]`);
   const filterComplex = filters.join(";");
   const outputFps = rational(graph.outputFps);

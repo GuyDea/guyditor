@@ -16,6 +16,7 @@ import type {
   AudioChainNodeParams,
   CompositeNodeParams,
   EncodeNodeParams,
+  OverlayNodeParams,
   RenderGraph,
   RenderNode,
   RenderNodeKind,
@@ -38,6 +39,7 @@ export interface CompileRenderGraphOptions {
   profile: RenderProfile;
   profileSha256: string;
   toolchain: ToolchainManifest;
+  overlays?: readonly OverlayNodeParams[];
 }
 
 function unsupported(feature: string, part: string, affected: readonly string[] = []): never {
@@ -137,9 +139,6 @@ function assertSupportedSubset(project: GuyditorProject, deliverableId: string, 
   if (deliverable.profileOverrides !== undefined) {
     unsupported(`profile overrides on ${deliverableId}`, "Part 11", [deliverableId]);
   }
-  if (deliverable.captionsTrackId !== undefined) {
-    unsupported(`captions on ${deliverableId}`, "Part 4", [deliverableId]);
-  }
   const sequence = project.sequences.find((item) => item.id === deliverable.sequenceId);
   if (sequence === undefined) {
     throw makeGuyditorError(
@@ -168,8 +167,8 @@ function assertSupportedSubset(project: GuyditorProject, deliverableId: string, 
         [layer.id],
       );
     }
-    if (layer.kind !== "video") {
-      unsupported(`${layer.kind} layer ${layer.id}`, layer.kind === "caption" ? "Part 4" : "Part 6", [layer.id]);
+    if (layer.kind !== "video" && layer.kind !== "caption") {
+      unsupported(`${layer.kind} layer ${layer.id}`, "Part 6", [layer.id]);
     }
     if (layer.transform !== undefined || layer.opacity !== undefined || layer.blend !== undefined ||
         layer.matte !== undefined || layer.pip !== undefined || layer.adjustment !== undefined ||
@@ -272,11 +271,12 @@ export function compileRenderGraph(options: CompileRenderGraphOptions): RenderGr
       );
     }
     const speed = speedOf(clip);
+    const audioOnly = asset.kind === "audio";
     const videoSource = pushNode(nodes, nextId, "source", [], {
-      assetId: asset.id,
-      assetSha256: asset.sha256,
+      assetId: audioOnly ? VIRTUAL_GAP_ASSET : asset.id,
+      assetSha256: audioOnly ? "0".repeat(64) : asset.sha256,
       stream: "video",
-      path: asset.path,
+      path: audioOnly ? "" : asset.path,
       useProxy: false,
     } satisfies SourceNodeParams);
     const videoTrimParams: TrimNodeParams = { in: clip.source.in, out: clip.source.out };
@@ -326,10 +326,16 @@ export function compileRenderGraph(options: CompileRenderGraphOptions): RenderGr
       background: "black",
     },
   } satisfies CompositeNodeParams);
+  let visualRoot = composite;
+  if (variant === "burnin") {
+    for (const overlay of options.overlays ?? []) {
+      visualRoot = pushNode(nodes, nextId, "overlay", [visualRoot.id], structuredClone(overlay));
+    }
+  }
   const audiochain = pushNode(nodes, nextId, "audiochain", audioInputs, {
     stages: [],
   } satisfies AudioChainNodeParams);
-  pushNode(nodes, nextId, "encode", [composite.id, audiochain.id], {
+  pushNode(nodes, nextId, "encode", [visualRoot.id, audiochain.id], {
     profileId: profile.id,
     profileVersion: profile.version,
     profileSha256,

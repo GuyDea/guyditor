@@ -42,6 +42,7 @@
         { "type": "null" }
       ]
     },
+    "provisional": { "type": ["boolean", "null"] },
     "jobId": { "type": "string", "pattern": "^job_[a-z2-7]{10}$" }
   },
   "$defs": {

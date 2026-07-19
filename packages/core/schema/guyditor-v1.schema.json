@@ -547,14 +547,14 @@
     "captionTrack": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "name", "sourceLayerIds", "preset", "enabled"],
+      "required": ["id", "name", "sourceLayerIds", "preset", "styleOverrides", "breakOverrides", "emphasisOverrides", "timingOffsets", "enabled"],
       "properties": {
         "id": { "type": "string", "pattern": "^cts_[a-z2-7]{10}$" },
         "name": { "type": "string" },
         "sourceLayerIds": { "type": "array", "items": { "type": "string", "pattern": "^lyr_[a-z2-7]{10}$" } },
         "preset": { "$ref": "#/$defs/captionPreset" },
-        "styleOverrides": { "$ref": "#/$defs/unknownRecord" },
-        "breakOverrides": true,
+        "styleOverrides": { "$ref": "#/$defs/captionStylePartial" },
+        "breakOverrides": { "type": "array", "items": { "$ref": "#/$defs/cueBreakOverride" } },
         "emphasisOverrides": { "type": "array", "items": { "$ref": "#/$defs/emphasisOverride" } },
         "timingOffsets": { "type": "array", "items": { "$ref": "#/$defs/timingOffset" } },
         "enabled": { "type": "boolean" }
@@ -568,6 +568,139 @@
         "presetId": { "type": "string", "pattern": "^pre_[a-z2-7]{10}$" },
         "version": { "type": "integer", "minimum": 0 }
       }
+    },
+    "cueBreakOverride": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["afterWordId", "kind"],
+      "properties": {
+        "afterWordId": { "$ref": "#/$defs/wordId" },
+        "kind": { "enum": ["line", "cue", "join"] }
+      }
+    },
+    "captionTypeface": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["family", "fontAssetId", "fallbackAssetIds"],
+      "properties": {
+        "family": { "type": "string", "minLength": 1 },
+        "fontAssetId": { "type": "string", "minLength": 1 },
+        "fallbackAssetIds": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+      }
+    },
+    "captionOutline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["color", "widthPct"],
+      "properties": {
+        "color": { "$ref": "#/$defs/rgba" },
+        "widthPct": { "type": "number", "minimum": 0 }
+      }
+    },
+    "captionShadow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["color", "dxPct", "dyPct", "blurPct"],
+      "properties": {
+        "color": { "$ref": "#/$defs/rgba" },
+        "dxPct": { "type": "number" },
+        "dyPct": { "type": "number" },
+        "blurPct": { "type": "number", "minimum": 0 }
+      }
+    },
+    "captionBackground": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["color", "padXPct", "padYPct", "radiusPct", "scope"],
+      "properties": {
+        "color": { "$ref": "#/$defs/rgba" },
+        "padXPct": { "type": "number", "minimum": 0 },
+        "padYPct": { "type": "number", "minimum": 0 },
+        "radiusPct": { "type": "number", "minimum": 0 },
+        "scope": { "enum": ["word", "line", "block"] }
+      }
+    },
+    "captionPlacement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["anchor", "offsetYPct", "align"],
+      "properties": {
+        "anchor": { "enum": ["top", "middle", "bottom"] },
+        "offsetYPct": { "type": "number" },
+        "align": { "enum": ["left", "center", "right"] }
+      }
+    },
+    "captionHighlight": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "style", "pastWords", "maxGapMs", "holdMs", "leadInMs"],
+      "properties": {
+        "mode": { "enum": ["per-word", "per-line", "none"] },
+        "style": { "enum": ["color", "scale", "weight", "underline", "background"] },
+        "color": { "$ref": "#/$defs/rgba" },
+        "scale": { "type": "number", "exclusiveMinimum": 0 },
+        "weight": { "type": "number" },
+        "pastWords": { "enum": ["keep", "dim"] },
+        "dimOpacity": { "type": "number", "minimum": 0, "maximum": 1 },
+        "maxGapMs": { "type": "integer", "minimum": 0 },
+        "holdMs": { "type": "integer" },
+        "leadInMs": { "type": "integer" }
+      }
+    },
+    "captionEmphasisStyle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["style"],
+      "properties": {
+        "style": { "enum": ["color", "scale", "weight", "underline"] },
+        "color": { "$ref": "#/$defs/rgba" },
+        "scale": { "type": "number", "exclusiveMinimum": 0 },
+        "weight": { "type": "number" }
+      }
+    },
+    "captionStyleProperties": {
+      "type": "object",
+      "properties": {
+        "typeface": { "$ref": "#/$defs/captionTypeface" },
+        "sizePct": { "type": "number", "exclusiveMinimum": 0 },
+        "weight": { "enum": [100, 200, 300, 400, 500, 600, 700, 800, 900] },
+        "italic": { "type": "boolean" },
+        "letterSpacingPct": { "type": "number" },
+        "lineSpacing": { "type": "number", "exclusiveMinimum": 0 },
+        "color": { "$ref": "#/$defs/rgba" },
+        "outline": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/captionOutline" }] },
+        "shadow": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/captionShadow" }] },
+        "background": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/captionBackground" }] },
+        "transform": { "enum": ["none", "upper", "lower", "title"] },
+        "wordsPerLine": { "type": "integer", "minimum": 1 },
+        "maxLines": { "enum": [1, 2, 3] },
+        "maxWidthPct": { "type": "number", "exclusiveMinimum": 0 },
+        "placement": { "$ref": "#/$defs/captionPlacement" },
+        "safeArea": { "enum": ["platform", "none"] },
+        "highlight": { "$ref": "#/$defs/captionHighlight" },
+        "emphasisStyle": { "$ref": "#/$defs/captionEmphasisStyle" },
+        "cueGapMs": { "type": "integer", "minimum": 0 },
+        "maxCueDurationMs": { "type": "integer", "minimum": 1 },
+        "speakerStyles": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/captionStylePartial" }
+        }
+      }
+    },
+    "captionStylePartial": {
+      "type": "object",
+      "allOf": [{ "$ref": "#/$defs/captionStyleProperties" }],
+      "unevaluatedProperties": false
+    },
+    "captionStyle": {
+      "type": "object",
+      "allOf": [{ "$ref": "#/$defs/captionStyleProperties" }],
+      "unevaluatedProperties": false,
+      "required": ["typeface", "sizePct", "weight", "italic", "letterSpacingPct", "lineSpacing", "color", "outline", "shadow", "background", "transform", "wordsPerLine", "maxLines", "maxWidthPct", "placement", "safeArea", "highlight", "emphasisStyle", "cueGapMs", "maxCueDurationMs", "speakerStyles"]
+    },
+    "rgba": {
+      "type": "string",
+      "pattern": "^#[0-9A-Fa-f]{8}$"
     },
     "emphasisOverride": {
       "type": "object",
@@ -584,8 +717,8 @@
       "required": ["firstWordId"],
       "properties": {
         "firstWordId": { "$ref": "#/$defs/wordId" },
-        "startMs": { "type": "number" },
-        "endMs": { "type": "number" }
+        "startMs": { "type": "integer" },
+        "endMs": { "type": "integer" }
       }
     },
     "annotationIndex": {

@@ -7,6 +7,7 @@ import {
 import type { GuyditorProject } from "../../core/src/index.js";
 import {
   compileRenderGraph,
+  VIRTUAL_GAP_ASSET,
   validateRenderGraph,
 } from "./graph.js";
 import { RenderService } from "./service.js";
@@ -145,16 +146,22 @@ function project(): GuyditorProject {
   };
 }
 
-function compile(model = project(), quality: "proxy" | "high" = "high") {
+function compile(
+  model = project(),
+  quality: "proxy" | "high" = "high",
+  variant: "burnin" | "clean" = "clean",
+  overlays: Array<{ overlayAssetPath: string; overlaySha256: string; atOutputFrame: number; durationFrames: number }> = [],
+) {
   return compileRenderGraph({
     project: model,
     revision: model.revision,
     deliverableId: "dlv_aaaaaaaaaa",
-    variant: "clean",
+    variant,
     quality,
     profile: PROFILE,
     profileSha256: HASH,
     toolchain: TOOLCHAIN,
+    overlays,
   });
 }
 
@@ -259,13 +266,6 @@ describe("compileRenderGraph", () => {
       },
     },
     {
-      feature: "captions",
-      part: "Part 4",
-      change: (model: GuyditorProject) => {
-        model.deliverables[0]!.captionsTrackId = "cts_aaaaaaaaaa";
-      },
-    },
-    {
       feature: "freeze",
       part: "Part 6",
       change: (model: GuyditorProject) => {
@@ -282,6 +282,67 @@ describe("compileRenderGraph", () => {
     expect(() => compile(model)).toThrow(expect.objectContaining({
       code: "E_RENDER_UNSUPPORTED",
       message: expect.stringMatching(new RegExp(`${feature}.*${part}`, "iu")),
+    }));
+  });
+
+  it("emits image2 caption overlays only for the burnin variant", () => {
+    const model = project();
+    model.deliverables[0]!.captionsTrackId = "cts_aaaaaaaaaa";
+    model.captions.push({
+      id: "cts_aaaaaaaaaa",
+      name: "captions",
+      sourceLayerIds: ["lyr_aaaaaaaaaa"],
+      preset: { presetId: "pre_aaaaaaaaaa", version: 1 },
+      styleOverrides: {},
+      breakOverrides: [],
+      emphasisOverrides: [],
+      timingOffsets: [],
+      enabled: true,
+    });
+    model.presets.push({ id: "pre_aaaaaaaaaa", name: "captions", kind: "caption", version: 1, path: "presets/pre_aaaaaaaaaa@1.yaml", sha256: HASH });
+    const overlay = { overlayAssetPath: "/tmp/captions/%08d.png", overlaySha256: HASH, atOutputFrame: 12, durationFrames: 45 };
+
+    expect(compile(model, "high", "clean", [overlay]).nodes.some(({ kind }) => kind === "overlay")).toBe(false);
+    const burnin = compile(model, "high", "burnin", [overlay]);
+    expect(burnin.nodes.find(({ kind }) => kind === "overlay")).toMatchObject({ params: overlay });
+    expect(burnin.nodes.at(-1)?.inputs[0]).toBe(burnin.nodes.find(({ kind }) => kind === "overlay")?.id);
+  });
+
+  it("uses a deterministic black visual slot for an audio-only speech clip", () => {
+    const model = project();
+    model.assets = [{
+      id: "ast_aaaaaaaaaa",
+      kind: "audio",
+      path: "/tmp/speech.wav",
+      sha256: HASH,
+      probe: {
+        duration: { samples: 192_000, rate: 48_000 },
+        audio: { rate: 48_000, channels: 1 },
+      },
+      audio: [{
+        index: 0,
+        codec: "pcm_s16le",
+        sampleRate: 48_000,
+        channels: 1,
+        layout: "mono",
+      }],
+    }];
+    model.sequences[0]!.clips = [{
+      id: "clp_aaaaaaaaaa",
+      asset: "ast_aaaaaaaaaa",
+      source: {
+        in: { frames: 0, fps: "30/1" },
+        out: { frames: 120, fps: "30/1" },
+      },
+    }];
+
+    const graph = compile(model);
+    const sources = graph.nodes.filter(({ kind }) => kind === "source");
+    expect(sources).toContainEqual(expect.objectContaining({
+      params: expect.objectContaining({ assetId: VIRTUAL_GAP_ASSET, stream: "video" }),
+    }));
+    expect(sources).toContainEqual(expect.objectContaining({
+      params: expect.objectContaining({ assetId: "ast_aaaaaaaaaa", stream: "audio" }),
     }));
   });
 

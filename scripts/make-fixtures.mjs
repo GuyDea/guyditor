@@ -22,6 +22,7 @@ import {
   REQUIRED_FIXTURE_PATHS,
   validateFixtureManifest,
 } from "./fixture-spec.mjs";
+import { ensureCaptionFont } from "./setup-caption-font.mjs";
 
 const SCRIPT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_FIXTURE_ROOT = path.join(SCRIPT_ROOT, ".fixtures");
@@ -962,6 +963,10 @@ function annotationSidecar(annotated) {
 }
 
 async function createProjectTemplate(core, fixtureRoot, name) {
+  if (name === "ac003") {
+    await createAc003ProjectTemplate(core, fixtureRoot);
+    return;
+  }
   const root = path.join(fixtureRoot, "projects", name);
   const annotated = name === "annotated";
   const assets = await projectAssets(fixtureRoot);
@@ -1031,6 +1036,143 @@ async function createProjectTemplate(core, fixtureRoot, name) {
     writeFile(path.join(root, "sidecars/generated-frozen.json"), generation),
     writeFile(path.join(root, "sidecars/transcript-speech.json"), transcriptText),
   ]);
+}
+
+function ac003CaptionPreset() {
+  return {
+    format: "guyditor.caption-preset/v1",
+    presetId: "pre_aaaaaaaaaa",
+    name: "AC-003 deterministic captions",
+    version: 1,
+    style: {
+      typeface: { family: "Inconsolata Guyditor", fontAssetId: "font_inconsolata_001010", fallbackAssetIds: [] },
+      sizePct: 5.2,
+      weight: 700,
+      italic: false,
+      letterSpacingPct: 0,
+      lineSpacing: 1.08,
+      color: "#FFFFFFFF",
+      outline: { color: "#000000FF", widthPct: 0.45 },
+      shadow: { color: "#00000099", dxPct: 0.18, dyPct: 0.24, blurPct: 0.18 },
+      background: null,
+      transform: "none",
+      wordsPerLine: 4,
+      maxLines: 2,
+      maxWidthPct: 90,
+      placement: { anchor: "bottom", offsetYPct: -5, align: "center" },
+      safeArea: "platform",
+      highlight: {
+        mode: "per-word", style: "color", color: "#F2B84BFF", pastWords: "keep",
+        maxGapMs: 400, holdMs: 0, leadInMs: 0,
+      },
+      emphasisStyle: { style: "scale", scale: 1.08 },
+      cueGapMs: 800,
+      maxCueDurationMs: 7_000,
+      speakerStyles: {},
+    },
+  };
+}
+
+async function createAc003ProjectTemplate(core, fixtureRoot) {
+  const root = path.join(fixtureRoot, "projects", "ac003");
+  const assets = await projectAssets(fixtureRoot);
+  const speech = assets.find(({ id }) => id === "ast_bbbbbbbbbb");
+  if (speech === undefined) throw new Error("AC-003 speech fixture asset is missing.");
+  const transcript = JSON.parse(await readFile(
+    path.join(fixtureRoot, "transcripts/drift-2800w-20m.json"),
+    "utf8",
+  ));
+  transcript.assetId = speech.id;
+  const transcriptText = `${JSON.stringify(transcript, null, 2)}\n`;
+  const annotations = core.serializeAnnotationSidecar(annotationSidecar(false));
+  const generation = `${JSON.stringify({
+    format: "guyditor.generated-provenance/v1",
+    assetId: "ast_jjjjjjjjjj",
+    frozen: true,
+    generator: { name: "guyditor-fixture-generator", version: FIXTURE_GENERATOR_VERSION },
+  }, null, 2)}\n`;
+  const presetText = `${JSON.stringify(ac003CaptionPreset(), null, 2)}\n`;
+  const model = {
+    format: "guyditor/v1",
+    revision: "rev_00001",
+    project: { id: "prj_aaaaaaaaaa", name: "M2 AC-003 caption correction", created: FIXED_CREATED_AT },
+    settings: {
+      timeline: { fps: "30/1", width: 1920, height: 1080 },
+      audio: { sampleRate: 48_000, channels: 2 },
+      primaryDeliverable: "dlv_aaaaaaaaaa",
+    },
+    transcript: { nextWordOrdinal: 2_801 },
+    assets: [speech],
+    beats: [],
+    sequences: [{
+      id: "seq_aaaaaaaaaa",
+      name: "speech-backed captions",
+      clips: [{
+        id: "clp_aaaaaaaaaa",
+        asset: speech.id,
+        source: {
+          in: { frames: 0, fps: "30/1" },
+          out: { frames: 600, fps: "30/1" },
+        },
+      }],
+    }],
+    layers: [{
+      id: "lyr_aaaaaaaaaa",
+      kind: "video",
+      name: "Speech with deterministic black visual",
+      order: 0,
+      enabled: true,
+      locked: false,
+      sequence: "seq_aaaaaaaaaa",
+    }],
+    captions: [{
+      id: "cts_aaaaaaaaaa",
+      name: "AC-003 captions",
+      sourceLayerIds: ["lyr_aaaaaaaaaa"],
+      preset: { presetId: "pre_aaaaaaaaaa", version: 1 },
+      styleOverrides: {},
+      breakOverrides: [],
+      emphasisOverrides: [],
+      timingOffsets: [],
+      enabled: true,
+    }],
+    annotations: { sidecar: "annotations", summary: { open: 0, resolved: 0, rejected: 0, reopened: 0 } },
+    deliverables: [{
+      id: "dlv_aaaaaaaaaa",
+      kind: "longform",
+      name: "AC-003 primary",
+      profile: "youtube-longform@1.0.0",
+      sequenceId: "seq_aaaaaaaaaa",
+      captionsTrackId: "cts_aaaaaaaaaa",
+      status: "draft",
+    }],
+    presets: [{
+      id: "pre_aaaaaaaaaa",
+      name: "AC-003 deterministic captions",
+      kind: "caption",
+      version: 1,
+      path: "presets/pre_aaaaaaaaaa@1.yaml",
+      sha256: createHash("sha256").update(presetText).digest("hex"),
+    }],
+    skills: [],
+    sidecars: [
+      { name: "annotations", path: "sidecars/annotations.yaml", schema: "guyditor.annotations/v1", sha256: createHash("sha256").update(annotations).digest("hex"), inputs: [] },
+      { name: "transcript-speech", path: "sidecars/transcript-speech.json", schema: "guyditor.transcript/v1", sha256: createHash("sha256").update(transcriptText).digest("hex"), generatedBy: { tool: "guyditor-fixture-generator", version: FIXTURE_GENERATOR_VERSION, job: "job_fixturezzz" }, inputs: [{ asset: speech.id, sha256: speech.sha256 }] },
+    ],
+  };
+  const created = await core.createProject(root, model, {
+    appVersion: "0.0.0-fixtures",
+    idFactory: (prefix) => `${prefix}_fixturezzz`,
+    now: () => new Date(FIXED_CREATED_AT),
+  });
+  if (!created.ok) throw created.error;
+  await Promise.all([
+    mkdir(path.join(root, "presets"), { recursive: true }),
+    writeFile(path.join(root, "sidecars/annotations.yaml"), annotations),
+    writeFile(path.join(root, "sidecars/generated-frozen.json"), generation),
+    writeFile(path.join(root, "sidecars/transcript-speech.json"), transcriptText),
+  ]);
+  await writeFile(path.join(root, "presets/pre_aaaaaaaaaa@1.yaml"), presetText);
 }
 
 async function createProjectTemplates(core, fixtureRoot) {
@@ -1105,6 +1247,7 @@ export async function generateFixtures({
   force = false,
   log = console.log,
 } = {}) {
+  await ensureCaptionFont();
   if (!force && (await isFixtureManifestFresh(fixtureRoot))) {
     log(`fixtures: current manifest found at ${path.relative(SCRIPT_ROOT, fixtureRoot)}; skipping regeneration`);
     return { regenerated: false };
@@ -1162,7 +1305,7 @@ export async function generateFixtures({
       `fixtures: wrote ${Object.keys(manifest.files).length} files (${totalBytes} bytes) in ${elapsedSeconds.toFixed(2)} s`,
     );
     log(
-      "fixtures: wrote basic and annotated project templates",
+      "fixtures: wrote basic, annotated, and AC-003 project templates",
     );
     return { manifest, regenerated: true };
   } finally {
