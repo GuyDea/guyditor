@@ -6,6 +6,12 @@ export type {
   OpenSessionInput,
   SessionManagerOptions,
 } from "./session.js";
+export { AgentGateway, AC004_GATEWAY_TOOLS } from "./gateway.js";
+export type {
+  AgentGatewayOptions,
+  GatewayDirector,
+  StartedAgentGateway,
+} from "./gateway.js";
 export { CostMeter, DEFAULT_BUDGETS } from "./cost-meter.js";
 export type {
   BudgetConfig,

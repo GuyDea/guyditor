@@ -54,6 +54,7 @@ function validGroundTruth(filePath) {
       })),
       radius: 48,
     },
+    "generated/frozen-overlay.png": { frozen: true, height: 360, width: 640 },
     "transcripts/short-exact.json": {
       duration: { rate: 48_000, samples: 576_000 },
       wordCount: 24,
@@ -116,16 +117,58 @@ test("isFixtureManifestFresh accepts only current manifests with every file", as
       sha256: createHash("sha256").update("x").digest("hex"),
     };
   }
+  const projects = {};
+  for (const [name, annotationCount] of [["basic", 0], ["annotated", 1]]) {
+    const projectFiles = {};
+    for (const projectPath of [
+      "episode.guyditor.yaml",
+      "history/HEAD",
+      "history/revisions/rev_00001.yaml",
+      "history/revisions/rev_00001.lock.json",
+      "history/transactions.jsonl",
+      "sidecars/annotations.yaml",
+      "sidecars/generated-frozen.json",
+      "sidecars/transcript-speech.json",
+    ]) {
+      const content = `${name}:${projectPath}`;
+      const absolutePath = path.join(directory, "projects", name, projectPath);
+      await mkdir(path.dirname(absolutePath), { recursive: true });
+      await writeFile(absolutePath, content);
+      projectFiles[projectPath] = {
+        bytes: Buffer.byteLength(content),
+        sha256: createHash("sha256").update(content).digest("hex"),
+      };
+    }
+    projects[name] = {
+      files: projectFiles,
+      groundTruth: {
+        annotationCount,
+        exactFrame: annotationCount === 0 ? null : { frames: 90, fps: "30/1" },
+        primaryDeliverableId: "dlv_aaaaaaaaaa",
+        revision: "rev_00001",
+        schemaValid: true,
+        sequenceId: "seq_aaaaaaaaaa",
+        transcriptAssetId: "ast_bbbbbbbbbb",
+      },
+    };
+  }
   await writeFile(
     path.join(directory, "manifest.json"),
     `${JSON.stringify({
       ffmpegVersion: "ffmpeg version fixture",
       files,
       generatorVersion: FIXTURE_GENERATOR_VERSION,
+      projects,
     })}\n`,
   );
 
   assert.equal(await isFixtureManifestFresh(directory), true);
+  await rm(path.join(directory, "projects/basic/episode.guyditor.yaml"));
+  assert.equal(await isFixtureManifestFresh(directory), false);
+  await writeFile(
+    path.join(directory, "projects/basic/episode.guyditor.yaml"),
+    "basic:episode.guyditor.yaml",
+  );
   await writeFile(path.join(directory, REQUIRED_FIXTURE_PATHS[0]), "y");
   assert.equal(await isFixtureManifestFresh(directory), false);
   await rm(path.join(directory, REQUIRED_FIXTURE_PATHS[0]));

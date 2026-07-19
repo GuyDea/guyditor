@@ -1,0 +1,35 @@
+{
+  "id": "ac001-m1-single-video-composition",
+  "project": "basic",
+  "deliverable": "dlv_aaaaaaaaaa",
+  "frames": [
+    {
+      "at": { "frames": 30, "fps": "30/1" },
+      "dhash": "482822c5c4b052ab",
+      "maxDistance": 2,
+      "reason": "The reordered greenscreen clip opens the edited composition"
+    },
+    {
+      "at": { "frames": 150, "fps": "30/1" },
+      "dhash": "fe7e7e7e7ec18888",
+      "maxDistance": 2,
+      "reason": "SMPTE bars remain frame-accurate after the first trim"
+    },
+    {
+      "at": { "frames": 270, "fps": "30/1" },
+      "dhash": "08080808080a0a08",
+      "maxDistance": 2,
+      "reason": "The head-trimmed screencast section enters at the intended cut"
+    },
+    {
+      "at": { "frames": 360, "fps": "30/1" },
+      "dhash": "0000000000000000",
+      "maxDistance": 2,
+      "reason": "The split audio-bearing A/V sync clip closes the composition"
+    }
+  ],
+  "toolVersions": {
+    "ffmpeg": "ffmpeg version 4.4.2-0ubuntu0.22.04.1 Copyright (c) 2000-2021 the FFmpeg developers",
+    "overlayRenderer": "not-used-m1"
+  }
+}
