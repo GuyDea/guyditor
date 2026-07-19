@@ -32,6 +32,8 @@ describe("workspace IPC surfaces", () => {
       TranscriptEngine: ["enqueueFillerDetection", "proposePickup"],
       CaptureWatcher: ["list", "configure", "reconcile", "listTakes"],
       AnnotationService: ["list", "get", "contextPackage"],
+      AdapterRegistry: ["list"],
+      DeliverableService: ["restylePlan", "createRestylePlan", "startRestyle"],
       RenderService: [
         "renderExport",
         "exportReport",

@@ -1,0 +1,21 @@
+{
+  "id": "fr607-fr608-kling-stub-burnin",
+  "project": "basic",
+  "deliverable": "dlv_aaaaaaaaaa",
+  "filteredFrame": {
+    "at": 15,
+    "dhash": "7e7e7e7e7ec18888",
+    "rgbHash": "72ea6a88c0fd2caeb6a36fcaad5fe85c9113246736ebcc6c0db5bb962760da3a",
+    "maxDistance": 2
+  },
+  "untouchedFrame": {
+    "at": 45,
+    "dhash": "7e7e7e7e7ec18888",
+    "rgbHash": "6f9d8c73da147e79ca38168382f653c3e500ab7bda38fb8c4a2fc7c8708b5995",
+    "maxDistance": 2
+  },
+  "toolVersions": {
+    "ffmpeg": "ffmpeg version 4.4.2-0ubuntu0.22.04.1 Copyright (c) 2000-2021 the FFmpeg developers",
+    "stubFilter": "curves+hue-v1"
+  }
+}

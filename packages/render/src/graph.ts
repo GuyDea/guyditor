@@ -411,6 +411,27 @@ function itemStart(item: PlacedItem, sequenceId: string, outputFps: string): num
   unsupported(`unresolved item anchor ${item.at}`, "Part 0 anchor resolver", [item.id]);
 }
 
+function restyleSourceRange(
+  item: PlacedItem,
+): { startFrame: number; endFrame: number } | undefined {
+  const value = item.params?.["restyle"];
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const sourceRange = (value as Record<string, unknown>)["sourceRange"];
+  if (typeof sourceRange !== "object" || sourceRange === null || Array.isArray(sourceRange)) {
+    graphInvalid(`Restyle item ${item.id} has no source range.`, [item.id]);
+  }
+  const range = sourceRange as Record<string, unknown>;
+  const startFrame = range["startFrame"];
+  const endFrame = range["endFrame"];
+  if (
+    typeof startFrame !== "number" || !Number.isSafeInteger(startFrame) || startFrame < 0 ||
+    typeof endFrame !== "number" || !Number.isSafeInteger(endFrame) || endFrame <= startFrame
+  ) {
+    graphInvalid(`Restyle item ${item.id} has an invalid source range.`, [item.id]);
+  }
+  return { startFrame, endFrame };
+}
+
 function visualLayers(project: GuyditorProject): Layer[] {
   return project.layers
     .filter(({ enabled, kind }) => enabled && (
@@ -637,6 +658,20 @@ export function compileRenderGraph(options: CompileRenderGraphOptions): RenderGr
         project.settings.timeline.fps,
         compositionDurationFrames,
       );
+      const restyleRange = restyleSourceRange(item);
+      if (restyleRange !== undefined) {
+        const startFrame = itemStart(item, sequence.id, project.settings.timeline.fps);
+        if (
+          asset.kind !== "generated" || asset.provenance === undefined ||
+          startFrame !== restyleRange.startFrame ||
+          durationFrames !== restyleRange.endFrame - restyleRange.startFrame
+        ) {
+          graphInvalid(
+            `Restyle item ${item.id} must use a frozen generated asset over its exact source range.`,
+            [item.id, asset.id],
+          );
+        }
+      }
       let source: { in: FrameTime; out: FrameTime };
       if (item.source !== undefined && "in" in item.source) {
         source = item.source;

@@ -15,9 +15,14 @@ import {
   BrowserWindow,
   dialog,
   ipcMain,
+  safeStorage,
   shell,
 } from "electron";
 import type { IpcMainInvokeEvent, Session } from "electron";
+import {
+  EphemeralCredentialStore,
+  SafeStorageCredentialStore,
+} from "../../../agent/src/index.js";
 
 import type { IpcRequest, IpcResponse, ServiceName } from "../shared/ipc.js";
 import { WindowEventPublisher } from "./events.js";
@@ -317,10 +322,17 @@ async function startApplication(): Promise<void> {
     userDirectory: startup.userDirectory,
     autoStartMlworker: startup.settings.mlworker.autoStart && !startup.safeMode,
     profilesRoot: resolve(currentDirectory, "../../../../profiles"),
+    credentials: safeStorage.isEncryptionAvailable()
+      ? new SafeStorageCredentialStore({
+          userDir: startup.userDirectory,
+          codec: safeStorage,
+        })
+      : new EphemeralCredentialStore(),
     settings: {
       auditRetentionDays: startup.settings.audit.retentionDays,
       budgets: startup.settings.budgets,
       maxConcurrentJobs: startup.settings.performance.maxConcurrentJobs,
+      restyleAdapter: startup.settings.adapters.restyle.kling,
     },
   });
   registerIpc();

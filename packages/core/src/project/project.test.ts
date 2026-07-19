@@ -440,15 +440,15 @@ describe("canonical project YAML", () => {
     const longName = "x".repeat(180);
     project.project.name = longName;
     project.assets[0]!.rights = {
-      source: "creator",
-      license: "owned",
-      restrictions: "first line\nsecond line",
+      origin: "captured",
+      licenseName: "owned",
+      restrictions: ["first line", "second line"],
     };
 
     const canonical = canonicalizeYaml(project);
     expect(canonical).toContain(`name: ${longName}\n`);
     expect(canonical).toContain(
-      "restrictions: |-\n        first line\n        second line",
+      "restrictions:\n        - first line\n        - second line",
     );
     expect(valueOf(parseProjectYaml(canonical))).toEqual(project);
   });

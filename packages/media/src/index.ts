@@ -137,6 +137,15 @@ export type {
 } from "./proxy.js";
 export { runFfmpeg, runFfprobe } from "./run.js";
 export type { FfmpegRunResult, RunFfmpegOptions } from "./run.js";
+export {
+  applyDeterministicRestyleFilter,
+  materializeRestyleSegment,
+} from "./restyle.js";
+export type {
+  ApplyDeterministicRestyleFilterInput,
+  MaterializeRestyleSegmentInput,
+  MaterializedRestyleSegment,
+} from "./restyle.js";
 export { registerMlworkerJobExecutors } from "./mlworker/executors.js";
 export { MlworkerSupervisor } from "./mlworker/supervisor.js";
 export type { MlworkerSupervisorOptions } from "./mlworker/supervisor.js";

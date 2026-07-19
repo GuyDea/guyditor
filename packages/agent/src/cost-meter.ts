@@ -360,6 +360,33 @@ export class CostMeter {
       .map((confirmation) => structuredClone(confirmation));
   }
 
+  public confirm(confirmToken: string, context: CostContext): boolean {
+    this.#ensureOpen();
+    assertContext(context);
+    const confirmation = this.#outstandingConfirmations.get(confirmToken);
+    if (
+      confirmation === undefined ||
+      confirmation.projectId !== context.projectId ||
+      confirmation.taskId !== context.taskId
+    ) return false;
+    this.#outstandingConfirmations.delete(confirmToken);
+    const threshold = this.#budgets[confirmation.level].warnUsd ?? 0;
+    const status = this.statusForTask(context.projectId, context.taskId);
+    const current = confirmation.level === "task"
+      ? status.taskUsd
+      : confirmation.level === "episode"
+        ? status.episodeUsd
+        : status.cumulativeUsd;
+    this.#budgetEvent(
+      context,
+      confirmation.level,
+      "creator_override",
+      threshold,
+      current + confirmation.estimatedUsd,
+    );
+    return true;
+  }
+
   public statusForTask(projectId: string, taskId: string): CostStatus {
     this.#ensureOpen();
     const task = this.#total(
@@ -407,7 +434,7 @@ export class CostMeter {
   #budgetEvent(
     context: CostContext,
     level: BudgetLevel,
-    kind: "warn" | "cap_block",
+    kind: "warn" | "cap_block" | "creator_override",
     thresholdUsd: number,
     projectedUsd: number,
   ): void {

@@ -1,6 +1,7 @@
 export { OperationEngine } from "./engine.js";
 export { applyClipOperation } from "./clip.js";
 export { AUDIO_CHAIN_ORDER } from "./audio-color.js";
+export { applyRestyleOperation } from "../restyle/operations.js";
 export type {
   DispatchedOperationApplication,
   IdFactory,

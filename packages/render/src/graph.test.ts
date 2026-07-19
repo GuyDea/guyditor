@@ -444,6 +444,65 @@ describe("compileRenderGraph", () => {
       .find(({ kind }) => kind === "overlay")?.params).toEqual(graphic);
   });
 
+  it("renders a frozen restyle asset only over its source range while retaining source audio", () => {
+    const model = project();
+    model.assets.push({
+      id: "ast_cccccccccc",
+      kind: "generated",
+      path: "/tmp/restyled.mp4",
+      sha256: "c".repeat(64),
+      probe: { duration: { frames: 30, fps: "30/1" }, fps: "30/1" },
+      provenance: { sidecar: "provenance-ast_cccccccccc" },
+      rights: { origin: "generated", restrictions: [], confirmedBy: "provider" },
+    });
+    model.layers.push({
+      id: "lyr_cccccccccc",
+      kind: "video",
+      name: "AI restyle · 1",
+      order: 10,
+      enabled: true,
+      locked: false,
+      items: [{
+        id: "gfx_cccccccccc",
+        asset: "ast_cccccccccc",
+        at: "timeline:seq_aaaaaaaaaa@30",
+        duration: { frames: 30, fps: "30/1" },
+        source: {
+          in: { frames: 0, fps: "30/1" },
+          out: { frames: 30, fps: "30/1" },
+        },
+        params: {
+          restyle: {
+            planId: "restyle-plan-render",
+            chunkId: "restyle-chunk-001",
+            sourceRange: { startFrame: 30, endFrame: 60 },
+          },
+        },
+      }],
+    });
+
+    const graph = compile(model, "high", "burnin");
+    expect(graph.nodes).toContainEqual(expect.objectContaining({
+      kind: "source",
+      params: expect.objectContaining({ assetId: "ast_cccccccccc", stream: "video" }),
+    }));
+    expect(graph.nodes).toContainEqual(expect.objectContaining({
+      kind: "source",
+      params: expect.objectContaining({ assetId: "ast_aaaaaaaaaa", stream: "audio" }),
+    }));
+    const anchored = graph.nodes.find(({ kind, params }) =>
+      kind === "composite" && "mode" in params && params.mode === "timeline.anchored");
+    expect(anchored?.params).toMatchObject({
+      inputSettings: [{ atOutputFrame: 30, durationFrames: 30 }],
+    });
+
+    model.layers.at(-1)!.items![0]!.duration = { frames: 29, fps: "30/1" };
+    expect(() => compile(model)).toThrow(expect.objectContaining({
+      code: "E_RENDER_GRAPH_INVALID",
+      message: expect.stringMatching(/restyle.*source range/iu),
+    }));
+  });
+
   it("uses a deterministic black visual slot for an audio-only speech clip", () => {
     const model = project();
     model.assets = [{

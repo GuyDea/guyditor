@@ -4,6 +4,7 @@ import type { Proposal, SemanticDiffEntry } from "../../../../core/src/index.js"
 import { errorMessage } from "../ipc.js";
 import { useAgentPanelStore } from "../state/view-state.js";
 import { Panel } from "./Panel.js";
+import { RestylePlanReview } from "./RestylePlan.js";
 import type { WorkspacePanelProps } from "./types.js";
 
 function grouped(entries: SemanticDiffEntry[]): Array<[string, SemanticDiffEntry[]]> {
@@ -22,6 +23,8 @@ export function ProposalPanel({
   refreshProject,
   refreshAnnotations,
   refreshProposals,
+  restylePlan,
+  refreshRestylePlan,
   setNotice,
 }: WorkspacePanelProps): React.JSX.Element {
   const expandedProposalId = useAgentPanelStore((state) => state.expandedProposalId);
@@ -55,9 +58,18 @@ export function ProposalPanel({
       eyebrow="Semantic review"
       actions={<button type="button" data-testid="proposal-refresh" onClick={() => void refreshProposals()}>Refresh</button>}
     >
+      <RestylePlanReview
+        snapshot={snapshot}
+        restylePlan={restylePlan}
+        refreshProposals={refreshProposals}
+        refreshRestylePlan={refreshRestylePlan}
+        setNotice={setNotice}
+      />
       <ol className="proposal-list" data-testid="proposal-list">
         {proposals.map((proposal) => {
           const stale = proposal.staleBase === true || proposal.baseRevision !== snapshot?.revision;
+          const rebasableRestyle = proposal.operations.length > 0 &&
+            proposal.operations.every(({ op }) => op === "restyle.segment.approve");
           const expanded = expandedProposalId === proposal.id || proposals.length === 1;
           return (
             <li key={proposal.id} data-testid={`proposal-${proposal.id}`}>
@@ -119,9 +131,9 @@ export function ProposalPanel({
                       type="button"
                       className="primary-action"
                       data-testid={`proposal-accept-${proposal.id}`}
-                      disabled={stale}
+                      disabled={stale && !rebasableRestyle}
                       onClick={() => void act(proposal, "acceptProposal")}
-                    >Accept</button>
+                    >{stale && rebasableRestyle ? "Rebase + accept" : "Accept"}</button>
                     <button type="button" data-testid={`proposal-reject-${proposal.id}`} onClick={() => void act(proposal, "rejectProposal")}>Reject</button>
                     <button type="button" data-testid={`proposal-preview-${proposal.id}`} disabled title="Comparison rendering is M2">Compare summary</button>
                   </div>

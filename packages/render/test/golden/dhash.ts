@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 
 import { resolveFfmpeg } from "../../../media/src/index.js";
 
@@ -61,4 +62,38 @@ export function dhashFrame(filePath: string, frame: number): string {
     }
   }
   return bits.toString(16).padStart(16, "0");
+}
+
+export function rgbFrameHash(filePath: string, frame: number): string {
+  if (!Number.isSafeInteger(frame) || frame < 0) {
+    throw new RangeError("Golden frame index must be a non-negative safe integer.");
+  }
+  const ffmpeg = resolveFfmpeg();
+  const result = spawnSync(ffmpeg.path, [
+    "-hide_banner",
+    "-loglevel",
+    "error",
+    "-nostdin",
+    "-i",
+    filePath,
+    "-vf",
+    `select=eq(n\\,${String(frame)}),scale=32:18:flags=neighbor,format=rgb24`,
+    "-frames:v",
+    "1",
+    "-f",
+    "rawvideo",
+    "pipe:1",
+  ], {
+    encoding: null,
+    maxBuffer: 1024 * 1024,
+    shell: false,
+  });
+  if (result.error !== undefined || result.status !== 0 || result.stdout.length !== 32 * 18 * 3) {
+    throw new Error(
+      `Could not extract RGB golden frame ${String(frame)}: ${
+        result.error?.message ?? result.stderr.toString("utf8")
+      }`,
+    );
+  }
+  return createHash("sha256").update(result.stdout).digest("hex");
 }

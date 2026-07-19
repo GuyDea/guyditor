@@ -25,6 +25,7 @@ function clipDuration(clip: Clip): number {
 export function TimelinePanel({
   snapshot,
   annotations,
+  restylePlan,
   refreshProject,
   refreshProposals,
   setNotice,
@@ -283,6 +284,20 @@ export function TimelinePanel({
         >
           <div className="timeline-content" style={{ width: `${String(Math.max(viewportWidth, totalFrames * zoom + 80))}px` }}>
             <div className="timeline-ruler" aria-hidden="true" style={{ backgroundSize: `${String(Math.max(12, zoom * 24))}px 100%` }} />
+            <div className="restyle-timeline-ranges" aria-label="Restyle chunk boundaries">
+              {restylePlan?.chunks.map((chunk) => (
+                <span
+                  key={chunk.id}
+                  data-state={chunk.status}
+                  data-testid={`restyle-timeline-chunk-${String(chunk.index)}`}
+                  title={`Restyle ${String(chunk.index + 1)} · ${String(chunk.sourceRange.startFrame)}–${String(chunk.sourceRange.endFrame)} · ${chunk.semanticAnchors.boundaryKind}`}
+                  style={{
+                    left: `${String(chunk.sourceRange.startFrame * zoom)}px`,
+                    width: `${String(Math.max(2, (chunk.sourceRange.endFrame - chunk.sourceRange.startFrame) * zoom))}px`,
+                  }}
+                />
+              ))}
+            </div>
             <div className="timeline-clips">
               {visibleClips.map((timed) => {
                 const clip = sequence?.clips.find(({ id }) => id === timed.clipId);

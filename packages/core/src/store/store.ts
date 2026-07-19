@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import {
   access,
+  chmod,
+  copyFile,
   mkdir,
   open,
   readFile,
@@ -40,6 +42,18 @@ import {
   structuralSemanticEntries,
 } from "../operations/diff.js";
 import type { Proposal } from "../operations/types.js";
+import {
+  parseRestylePlan,
+  restylePlanSidecarName,
+  restylePlanSidecarRef,
+  restyleProvenanceSidecarRef,
+  serializeRestylePlan,
+  serializeRestyleProvenance,
+} from "../restyle/index.js";
+import type {
+  RestyleGenerationProvenance,
+  RestylePlan,
+} from "../restyle/index.js";
 import { computeChangedRanges } from "./history.js";
 import type {
   RevisionComparison,
@@ -386,6 +400,27 @@ async function atomicWrite(path: string, content: string): Promise<void> {
   }
 }
 
+async function atomicCopyReadOnly(source: string, target: string): Promise<void> {
+  await mkdir(dirname(target), { recursive: true });
+  temporaryOrdinal += 1;
+  const temporary = `${target}.tmp-${String(process.pid)}-${String(temporaryOrdinal)}`;
+  try {
+    await copyFile(source, temporary);
+    const handle = await open(temporary, "r");
+    try {
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    await rename(temporary, target);
+    await chmod(target, 0o444);
+    await syncDirectory(dirname(target));
+  } catch (error: unknown) {
+    await unlinkIfPresent(temporary);
+    throw error;
+  }
+}
+
 async function appendDurably(path: string, content: string): Promise<void> {
   const handle = await open(path, "a");
   try {
@@ -471,6 +506,198 @@ function sidecarFilePath(root: string, relativePath: string): string {
     throw new Error(`Sidecar path ${relativePath} must stay under sidecars/.`);
   }
   return path;
+}
+
+function generatedAssetFilePath(root: string, relativePath: string): string {
+  const generatedRoot = resolve(root, "media/generated");
+  const path = resolve(root, relativePath);
+  if (path === generatedRoot || !path.startsWith(`${generatedRoot}${sep}`)) {
+    throw new Error(`Generated asset path ${relativePath} must stay under media/generated/.`);
+  }
+  return path;
+}
+
+async function generationCandidatePath(root: string, requestedPath: string): Promise<string> {
+  const cacheRoot = await realpath(join(root, ".guyditor/cache"));
+  const candidate = await realpath(requestedPath);
+  if (candidate === cacheRoot || !candidate.startsWith(`${cacheRoot}${sep}`)) {
+    throw new Error("Restyle candidates must stay under the project generation cache.");
+  }
+  return candidate;
+}
+
+interface RestyleFileWrite {
+  path: string;
+  content: string;
+}
+
+interface RestyleFileCopy {
+  source: string;
+  target: string;
+}
+
+interface PreparedRestyleCommit {
+  model: GuyditorProject;
+  writes: RestyleFileWrite[];
+  copies: RestyleFileCopy[];
+}
+
+function restyleSidecarReference(
+  project: GuyditorProject,
+  name: string,
+) {
+  return project.sidecars.find((sidecar) => sidecar.name === name);
+}
+
+function rangesOverlap(
+  left: { startFrame: number; endFrame: number },
+  right: { startFrame: number; endFrame: number },
+): boolean {
+  return left.startFrame < right.endFrame && right.startFrame < left.endFrame;
+}
+
+async function prepareRestyleCommit(
+  root: string,
+  before: GuyditorProject,
+  incoming: GuyditorProject,
+  transaction: TransactionRecord,
+): Promise<PreparedRestyleCommit> {
+  let model = structuredClone(incoming);
+  const writes = new Map<string, string>();
+  const copies: RestyleFileCopy[] = [];
+  for (const operation of transaction.operations) {
+    if (operation.op === "restyle.plan.create") {
+      const plan = structuredClone(operation.params["plan"] as RestylePlan);
+      const reference = restylePlanSidecarRef(plan);
+      const registered = restyleSidecarReference(model, reference.name);
+      if (
+        registered === undefined || registered.path !== reference.path ||
+        registered.sha256 !== reference.sha256
+      ) {
+        throw new Error(`Restyle plan ${plan.id} does not match its registered sidecar.`);
+      }
+      writes.set(sidecarFilePath(root, reference.path), serializeRestylePlan(plan));
+    }
+    if (operation.op === "restyle.segment.approve") {
+      const proposedPlan = structuredClone(operation.params["plan"] as RestylePlan);
+      const provenance = structuredClone(
+        operation.params["provenance"] as RestyleGenerationProvenance,
+      );
+      const assetId = provenance.assetId;
+      const asset = model.assets.find(({ id }) => id === assetId);
+      if (asset === undefined) {
+        throw new Error(`Restyle approval asset ${assetId} is not registered.`);
+      }
+      const planName = restylePlanSidecarName(proposedPlan.id);
+      const currentReference = restyleSidecarReference(model, planName);
+      if (currentReference === undefined) {
+        throw new Error(`Restyle plan sidecar ${planName} is not registered.`);
+      }
+      const currentSource = writes.get(sidecarFilePath(root, currentReference.path)) ??
+        await readOptional(sidecarFilePath(root, currentReference.path));
+      if (currentSource === undefined) throw new Error(`Restyle plan ${proposedPlan.id} is missing.`);
+      const currentPlan = parseRestylePlan(currentSource);
+      if (!currentPlan.ok) throw new Error(currentPlan.error.message);
+      const approvedChunk = proposedPlan.chunks.find(({ id }) =>
+        id === operation.params["chunkId"]);
+      const targetChunk = currentPlan.value.chunks.find(({ id }) => id === approvedChunk?.id);
+      if (approvedChunk === undefined || targetChunk === undefined || approvedChunk.status !== "approved") {
+        throw new Error(`Restyle approval chunk ${String(operation.params["chunkId"])} is invalid.`);
+      }
+      Object.assign(targetChunk, structuredClone(approvedChunk));
+      const mergedPlan = currentPlan.value;
+      const planReference = restylePlanSidecarRef(mergedPlan);
+      const provenanceReference = restyleProvenanceSidecarRef(provenance, mergedPlan);
+      const registeredProvenance = restyleSidecarReference(model, provenanceReference.name);
+      if (
+        registeredProvenance === undefined ||
+        registeredProvenance.path !== provenanceReference.path ||
+        registeredProvenance.sha256 !== provenanceReference.sha256
+      ) {
+        throw new Error(`Restyle sidecar ${provenanceReference.name} does not match its registration.`);
+      }
+      model = {
+        ...model,
+        sidecars: model.sidecars.map((sidecar) =>
+          sidecar.name === planReference.name ? planReference : sidecar),
+      };
+      const cachedPath = operation.params["cachedPath"];
+      if (typeof cachedPath !== "string") {
+        throw new Error(`Restyle approval ${assetId} has no candidate path.`);
+      }
+      const source = await generationCandidatePath(root, cachedPath);
+      const sourceHash = createHash("sha256").update(await readFile(source)).digest("hex");
+      if (sourceHash !== asset.sha256 || provenance.contentHash !== `sha256:${sourceHash}`) {
+        throw new Error(`Restyle candidate ${assetId} changed after generation.`);
+      }
+      const target = generatedAssetFilePath(root, asset.path);
+      if (await readOptional(target) !== undefined) {
+        throw new Error(`Frozen restyle asset ${asset.path} already exists.`);
+      }
+      copies.push({ source, target });
+      writes.set(sidecarFilePath(root, planReference.path), serializeRestylePlan(mergedPlan));
+      writes.set(
+        sidecarFilePath(root, provenanceReference.path),
+        serializeRestyleProvenance(provenance),
+      );
+    }
+  }
+
+  const isRestyleTransaction = transaction.operations.some(({ op }) => op.startsWith("restyle."));
+  if (!isRestyleTransaction && !transaction.operations.some(({ op }) => op === "project.restore")) {
+    const affectedIds = transaction.operations.flatMap(({ params }) => [...objectIds(params)]);
+    const changedRanges = computeChangedRanges(before, model, affectedIds).map((range) => ({
+      startFrame: range.start.frames,
+      endFrame: range.end.frames,
+    }));
+    if (changedRanges.length > 0) {
+      for (const deliverable of model.deliverables) {
+        const sidecarName = deliverable.restyle?.planSidecar;
+        if (sidecarName === undefined) continue;
+        const sequence = model.sequences.find(({ id }) => id === deliverable.sequenceId);
+        if (
+          sequence === undefined ||
+          !affectedIds.some((id) => sequence.clips.some((clip) => clip.id === id))
+        ) continue;
+        const reference = restyleSidecarReference(model, sidecarName);
+        if (reference === undefined) continue;
+        const pending = writes.get(sidecarFilePath(root, reference.path));
+        const source = pending ?? await readOptional(sidecarFilePath(root, reference.path));
+        if (source === undefined) continue;
+        const parsed = parseRestylePlan(source);
+        if (!parsed.ok) throw new Error(parsed.error.message);
+        const plan = parsed.value;
+        let changed = false;
+        for (const chunk of plan.chunks) {
+          if (
+            (chunk.status === "approved" || chunk.status === "generated") &&
+            changedRanges.some((range) => rangesOverlap(chunk.sourceRange, range))
+          ) {
+            chunk.status = "stale";
+            chunk.stale = {
+              reason: "source-range-overlap",
+              markedAt: transaction.acceptance.at,
+              transactionId: transaction.id,
+            };
+            changed = true;
+          }
+        }
+        if (!changed) continue;
+        const replacement = restylePlanSidecarRef(plan);
+        model = {
+          ...model,
+          sidecars: model.sidecars.map((sidecar) =>
+            sidecar.name === replacement.name ? replacement : sidecar),
+        };
+        writes.set(sidecarFilePath(root, replacement.path), serializeRestylePlan(plan));
+      }
+    }
+  }
+  return {
+    model,
+    writes: [...writes].map(([path, content]) => ({ path, content })),
+    copies,
+  };
 }
 
 async function findSidecarSnapshot(
@@ -1386,6 +1613,8 @@ export class ProjectStore {
     model: GuyditorProject,
     transaction: TransactionRecord,
   ): Promise<Result<GuyditorProject>> {
+    const materializedPaths: string[] = [];
+    const previousSidecars = new Map<string, string | undefined>();
     try {
       const diskHead = await readHead(this.#root);
       if (
@@ -1406,14 +1635,31 @@ export class ProjectStore {
           "Transaction result revision must match the model and increment the base by one.",
         );
       }
-      const valid = validateProject(model);
+      const prepared = await prepareRestyleCommit(
+        this.#root,
+        this.#project,
+        model,
+        transaction,
+      );
+      const committedModel = prepared.model;
+      const valid = validateProject(committedModel);
       if (!valid.ok) return valid;
 
-      const canonicalMaster = canonicalizeYaml(model);
+      for (const write of prepared.writes) {
+        previousSidecars.set(write.path, await readOptional(write.path));
+        await atomicWrite(write.path, write.content);
+        materializedPaths.push(write.path);
+      }
+      for (const copy of prepared.copies) {
+        await atomicCopyReadOnly(copy.source, copy.target);
+        materializedPaths.push(copy.target);
+      }
+
+      const canonicalMaster = canonicalizeYaml(committedModel);
       await atomicWrite(join(this.#root, MASTER_FILE), canonicalMaster);
       await writeRevisionArtifacts(
         this.#root,
-        model,
+        committedModel,
         canonicalMaster,
         this.#appVersion,
         this.#project,
@@ -1425,12 +1671,17 @@ export class ProjectStore {
         join(this.#root, "history/transactions.jsonl"),
         `${canonicalJson(transaction)}\n`,
       );
-      await atomicWrite(join(this.#root, "history/HEAD"), `${model.revision}\n`);
+      await atomicWrite(join(this.#root, "history/HEAD"), `${committedModel.revision}\n`);
 
-      this.#project = model;
-      this.#head = model.revision;
-      return success(model);
+      this.#project = committedModel;
+      this.#head = committedModel.revision;
+      return success(committedModel);
     } catch (error: unknown) {
+      for (const path of materializedPaths.reverse()) {
+        const previous = previousSidecars.get(path);
+        if (previous === undefined) await unlinkIfPresent(path).catch(() => undefined);
+        else await atomicWrite(path, previous).catch(() => undefined);
+      }
       return storeFailure(
         "E_PROJECT_COMMIT",
         `Project commit failed: ${errorMessage(error)}`,

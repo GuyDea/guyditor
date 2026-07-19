@@ -372,11 +372,18 @@
     "rights": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["source", "license"],
+      "required": ["origin", "restrictions"],
       "properties": {
-        "source": { "type": "string" },
-        "license": { "type": "string" },
-        "restrictions": { "type": "string" }
+        "origin": { "enum": ["captured", "licensed", "stock", "generated", "programmatic", "unknown"] },
+        "licenseName": { "type": "string" },
+        "licenseUrl": { "type": "string" },
+        "licensor": { "type": "string" },
+        "purchaseRef": { "type": "string" },
+        "restrictions": { "type": "array", "items": { "type": "string" } },
+        "attributionText": { "type": "string" },
+        "providerTermsUrl": { "type": "string" },
+        "confirmedBy": { "enum": ["creator", "provider"] },
+        "confirmedAt": { "$ref": "#/$defs/iso8601" }
       }
     },
     "beat": {
@@ -1327,6 +1334,16 @@
         "divergences": { "type": "array", "items": { "$ref": "#/$defs/divergence" } },
         "staleReasons": true,
         "publishFiles": { "type": "array", "items": { "$ref": "#/$defs/publishFile" } }
+        ,"restyle": { "$ref": "#/$defs/restyleDeliverable" }
+      }
+    },
+    "restyleDeliverable": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["coverageMode", "planSidecar"],
+      "properties": {
+        "coverageMode": { "enum": ["full", "ranges"] },
+        "planSidecar": { "type": "string", "minLength": 1 }
       }
     },
     "divergence": {

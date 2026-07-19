@@ -9,6 +9,7 @@ import type {
   AnchorLastResolved,
   SemanticAnchor,
 } from "../anchors/types.js";
+import type { RightsMetadata } from "../restyle/types.js";
 
 export type { AnchorRange, SemanticAnchor } from "../anchors/types.js";
 
@@ -113,7 +114,7 @@ export interface Asset {
     via: "manual" | "watch" | "pickup" | "agent" | "generated";
   };
   provenance?: { sidecar: string };
-  rights?: { source: string; license: string; restrictions?: string };
+  rights?: RightsMetadata;
 }
 
 export interface SyncDecision {
@@ -533,6 +534,10 @@ export interface Deliverable {
   divergences?: { class: string; transactionIds: string[] }[];
   staleReasons?: unknown[];
   publishFiles?: { path: string; sha256: string }[];
+  restyle?: {
+    coverageMode: "full" | "ranges";
+    planSidecar: string;
+  };
 }
 
 export interface PresetPin {
