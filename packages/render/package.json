@@ -8,6 +8,7 @@
   },
   "dependencies": {
     "@guyditor/core": "workspace:*",
+    "@guyditor/media": "workspace:*",
     "@guyditor/transcript": "workspace:*",
     "@napi-rs/canvas": "1.0.2",
     "ajv": "^8.20.0",

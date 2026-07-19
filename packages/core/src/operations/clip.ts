@@ -13,6 +13,8 @@ import type {
   Asset,
   Clip,
   GuyditorProject,
+  KeyMask,
+  KeySettings,
   Layer,
   Sequence,
 } from "../project/index.js";
@@ -1259,6 +1261,267 @@ function applyAudioFadeSet(
   });
 }
 
+function keyEffect(clip: Clip): { effect: NonNullable<Clip["effects"]>[number]; index: number } | undefined {
+  const index = clip.effects?.findIndex(({ kind }) => kind === "key") ?? -1;
+  const effect = clip.effects?.[index];
+  return effect === undefined ? undefined : { effect, index };
+}
+
+function dominantKeyChannel(color: string): "green" | "blue" | undefined {
+  const red = Number.parseInt(color.slice(1, 3), 16);
+  const green = Number.parseInt(color.slice(3, 5), 16);
+  const blue = Number.parseInt(color.slice(5, 7), 16);
+  if (green > red && green > blue) return "green";
+  if (blue > red && blue > green) return "blue";
+  return undefined;
+}
+
+function validateDespill(settings: KeySettings, clipId: string): Result<true> {
+  const chroma = settings.mode === "chroma" ? settings.chroma : undefined;
+  if (
+    chroma?.spill.mode === "despill" &&
+    dominantKeyChannel(chroma.keyColor) === undefined
+  ) {
+    return failure(makeGuyditorError(
+      "E_KEY_UNSUPPORTED_COLOR",
+      `Key color ${chroma.keyColor} has no dominant green or blue channel for FFmpeg despill.`,
+      {
+        affected: [clipId],
+        suggestion: "Use spill mode 'average' for this key color.",
+      },
+    ));
+  }
+  return success(true);
+}
+
+function replaceClip(
+  project: GuyditorProject,
+  located: LocatedClip,
+  clip: Clip,
+): GuyditorProject {
+  const clips = located.sequence.clips.slice();
+  clips[located.clipIndex] = clip;
+  return replaceClips(project, located, clips);
+}
+
+function applyKeySet(
+  project: GuyditorProject,
+  input: OperationInput,
+  idFactory: IdFactory,
+): Result<ClipApplication> {
+  const clipId = input.params["clipId"] as string;
+  const found = locateClip(project, clipId);
+  if (!found.ok) return found;
+  const unlocked = ensureUnlocked(project, found.value);
+  if (!unlocked.ok) return unlocked;
+  const located = unlocked.value;
+  const settings = input.params["settings"] as KeySettings | null;
+  if (settings !== null) {
+    const supported = validateDespill(settings, clipId);
+    if (!supported.ok) return supported;
+  }
+  const prior = keyEffect(located.clip);
+  const effects = [...(located.clip.effects ?? [])];
+  let effectId: string | undefined;
+  if (settings === null) {
+    if (prior !== undefined) effects.splice(prior.index, 1);
+  } else {
+    effectId = input.params["effectId"] as string | undefined ?? prior?.effect.id ?? idFactory("fx");
+    const effect = {
+      id: effectId,
+      kind: "key",
+      params: structuredClone(settings) as unknown as Record<string, unknown>,
+    };
+    if (prior === undefined) effects.push(effect);
+    else effects[prior.index] = effect;
+  }
+  const replacement = { ...located.clip };
+  if (effects.length === 0) delete replacement.effects;
+  else replacement.effects = effects;
+  const priorSettings = prior?.effect.params as unknown as KeySettings | undefined;
+  return success({
+    model: replaceClip(project, located, replacement),
+    inverse: [{
+      op: "clip.key.set",
+      params: {
+        clipId,
+        settings: priorSettings === undefined ? null : structuredClone(priorSettings),
+        ...(prior === undefined ? {} : { effectId: prior.effect.id }),
+      },
+    }],
+    ...(settings === null || effectId === undefined
+      ? {}
+      : { redo: { op: "clip.key.set", params: { ...input.params, effectId } } }),
+    affected: [clipId, ...(effectId === undefined ? [] : [effectId])],
+    summary: `${settings === null ? "Remove" : "Set"} key on ${humanClip(located)}`,
+    mutations: [{
+      entityId: clipId,
+      entityType: "clip",
+      change: "modified",
+      fields: [{
+        field: "effects.key",
+        ...(priorSettings === undefined ? {} : { before: priorSettings }),
+        ...(settings === null ? {} : { after: settings }),
+      }],
+    }],
+  });
+}
+
+function applyKeyMaskSet(
+  project: GuyditorProject,
+  input: OperationInput,
+): Result<ClipApplication> {
+  const clipId = input.params["clipId"] as string;
+  const found = locateClip(project, clipId);
+  if (!found.ok) return found;
+  const unlocked = ensureUnlocked(project, found.value);
+  if (!unlocked.ok) return unlocked;
+  const located = unlocked.value;
+  const priorKey = keyEffect(located.clip);
+  if (priorKey === undefined) {
+    return opFailure("E_OP_NOT_FOUND", `Clip ${clipId} has no key settings.`, [clipId]);
+  }
+  const settings = structuredClone(priorKey.effect.params) as unknown as KeySettings;
+  const requested = input.params["mask"] as KeyMask | null;
+  const maskId = requested?.id ?? input.params["maskId"] as string;
+  const priorIndex = settings.masks.findIndex(({ id }) => id === maskId);
+  const priorMask = settings.masks[priorIndex];
+  if (requested === null) {
+    if (priorIndex === -1) {
+      return opFailure("E_OP_NOT_FOUND", `Key mask ${maskId} does not exist.`, [clipId, maskId]);
+    }
+    settings.masks.splice(priorIndex, 1);
+  } else if (priorIndex === -1) {
+    settings.masks.push(structuredClone(requested));
+  } else {
+    settings.masks[priorIndex] = structuredClone(requested);
+  }
+  const effects = [...(located.clip.effects ?? [])];
+  effects[priorKey.index] = {
+    ...priorKey.effect,
+    params: settings as unknown as Record<string, unknown>,
+  };
+  const replacement = { ...located.clip, effects };
+  return success({
+    model: replaceClip(project, located, replacement),
+    inverse: [{
+      op: "clip.key.mask.set",
+      params: {
+        clipId,
+        ...(priorMask === undefined
+          ? { maskId, mask: null }
+          : { mask: structuredClone(priorMask) }),
+      },
+    }],
+    affected: [clipId, maskId],
+    summary: `${requested === null ? "Remove" : "Set"} key mask ${maskId} on ${humanClip(located)}`,
+    mutations: [{
+      entityId: priorKey.effect.id,
+      entityType: "effect",
+      change: "modified",
+      fields: [{
+        field: `params.masks.${maskId}`,
+        ...(priorMask === undefined ? {} : { before: priorMask }),
+        ...(requested === null ? {} : { after: requested }),
+      }],
+    }],
+  });
+}
+
+type ClipTransformParams = Partial<{
+  crop: { l: number; t: number; r: number; b: number };
+  scale: number;
+  position: { x: number; y: number };
+  rotationDeg: number;
+  opacity: number;
+}>;
+
+const TRANSFORM_FIELDS = [
+  "crop",
+  "scale",
+  "position",
+  "rotationDeg",
+  "opacity",
+] as const satisfies readonly (keyof ClipTransformParams)[];
+
+function applyTransformSet(
+  project: GuyditorProject,
+  input: OperationInput,
+  idFactory: IdFactory,
+): Result<ClipApplication> {
+  const clipId = input.params["clipId"] as string;
+  const found = locateClip(project, clipId);
+  if (!found.ok) return found;
+  const unlocked = ensureUnlocked(project, found.value);
+  if (!unlocked.ok) return unlocked;
+  const located = unlocked.value;
+  const priorIndex = located.clip.effects?.findIndex(({ kind }) => kind === "transform") ?? -1;
+  const priorEffect = located.clip.effects?.[priorIndex];
+  const prior = priorEffect?.params as ClipTransformParams | undefined;
+  const next: ClipTransformParams = structuredClone(prior ?? {});
+  const inverseParams: Record<string, unknown> = { clipId };
+  const changed: string[] = [];
+  for (const field of TRANSFORM_FIELDS) {
+    if (!(field in input.params)) continue;
+    const value = input.params[field] as ClipTransformParams[typeof field] | null;
+    inverseParams[field] = prior?.[field] ?? null;
+    changed.push(field);
+    if (value === null) delete next[field];
+    else if (value !== undefined) Object.assign(next, { [field]: structuredClone(value) });
+  }
+  if (
+    next.crop !== undefined &&
+    (next.crop.l + next.crop.r >= 1 || next.crop.t + next.crop.b >= 1)
+  ) {
+    return opFailure(
+      "E_OP_RANGE_OUT_OF_BOUNDS",
+      "Clip crop must retain a positive normalized source rectangle.",
+      [clipId],
+    );
+  }
+  const effects = [...(located.clip.effects ?? [])];
+  const hasTransform = Object.keys(next).length > 0;
+  const effectId = input.params["effectId"] as string | undefined ?? priorEffect?.id ?? idFactory("fx");
+  if (!hasTransform) {
+    if (priorIndex !== -1) effects.splice(priorIndex, 1);
+  } else {
+    const effect = {
+      id: effectId,
+      kind: "transform",
+      params: next as Record<string, unknown>,
+    };
+    if (priorIndex === -1) effects.push(effect);
+    else effects[priorIndex] = effect;
+  }
+  const replacement = { ...located.clip };
+  if (effects.length === 0) delete replacement.effects;
+  else replacement.effects = effects;
+  if (priorEffect !== undefined) inverseParams["effectId"] = priorEffect.id;
+  return success({
+    model: replaceClip(project, located, replacement),
+    inverse: [{ op: "clip.transform.set", params: inverseParams }],
+    ...(hasTransform
+      ? { redo: { op: "clip.transform.set", params: { ...input.params, effectId } } }
+      : {}),
+    affected: [clipId, ...(hasTransform ? [effectId] : [])],
+    summary: `Transform ${humanClip(located)}: ${changed.join(", ")}`,
+    mutations: [{
+      entityId: clipId,
+      entityType: "clip",
+      change: "modified",
+      fields: changed.map((field) => ({
+        field: `effects.transform.${field}`,
+        ...(prior?.[field as keyof ClipTransformParams] === undefined
+          ? {}
+          : { before: prior[field as keyof ClipTransformParams] }),
+        ...(next[field as keyof ClipTransformParams] === undefined
+          ? {}
+          : { after: next[field as keyof ClipTransformParams] }),
+      })),
+    }],
+  });
+}
+
 export function applyClipOperation(
   project: GuyditorProject,
   input: OperationInput,
@@ -1275,6 +1538,9 @@ export function applyClipOperation(
   if (input.op === "clip.gap.set") return applyGapSet(project, input);
   if (input.op === "clip.overlap.set") return applyOverlapSet(project, input);
   if (input.op === "clip.audio.gain.set") return applyAudioGainSet(project, input);
+  if (input.op === "clip.key.set") return applyKeySet(project, input, idFactory);
+  if (input.op === "clip.key.mask.set") return applyKeyMaskSet(project, input);
+  if (input.op === "clip.transform.set") return applyTransformSet(project, input, idFactory);
   return applyAudioFadeSet(project, input);
 }
 

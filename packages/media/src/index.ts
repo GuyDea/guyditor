@@ -6,6 +6,17 @@ export type {
   ProjectedProxySize,
 } from "./cache.js";
 export {
+  buildCaptureGuidanceReport,
+  writeCaptureGuidanceReport,
+} from "./capture-guidance.js";
+export type {
+  BuildCaptureGuidanceInput,
+  CaptureGuidanceMetrics,
+  CaptureGuidanceReport,
+  CaptureGuidanceWarning,
+  CaptureGuidanceWarningCode,
+} from "./capture-guidance.js";
+export {
   peaksDecodeCommand,
   proxyCommand,
   proxyProfile,
@@ -42,6 +53,27 @@ export type {
   IngestWarning,
   MediaEngineOptions,
 } from "./ingest.js";
+export {
+  analyzeKeyQcFrame,
+  applyChromaKeyAlpha,
+  buildKeyQcReport,
+  enqueueKeyQc,
+  extractRgbaFrame,
+  keyQcSampleFrames,
+  registerKeyQcExecutor,
+  runKeyQc,
+} from "./key-qc.js";
+export type {
+  AnalyzeKeyQcFrameInput,
+  BuildKeyQcReportInput,
+  KeyQcJobPayload,
+  KeyQcMetrics,
+  KeyQcReport,
+  KeyQcWarning,
+  KeyQcWarningCode,
+  RgbaFrame,
+  RunKeyQcInput,
+} from "./key-qc.js";
 export {
   PEAK_SAMPLE_RATE,
   PEAK_SAMPLES_PER_PEAK,

@@ -66,7 +66,12 @@ export type {
 } from "./caption-overlay.js";
 export type { CompiledFiltergraph } from "./filtergraph.js";
 export { compileRenderGraph, validateRenderGraph } from "./graph.js";
-export type { CompileRenderGraphOptions } from "./graph.js";
+export type { CompileRenderGraphOptions, DiagnosticBackground } from "./graph.js";
+export { rasterizeKeyMasks } from "./key-mask.js";
+export type {
+  RasterizedKeyMask,
+  RasterizeKeyMasksOptions,
+} from "./key-mask.js";
 export type {
   AudioChainNodeParams,
   CompositeNodeParams,
@@ -93,6 +98,8 @@ export {
   subtitleOutputPaths,
 } from "./service.js";
 export type {
+  DiagnosticRenderRequest,
+  DiagnosticRenderResult,
   EquivalenceResult,
   ExportEnqueueResult,
   ExportReport,

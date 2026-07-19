@@ -33,6 +33,8 @@ export interface SourceNodeParams {
   stream: "video" | "audio";
   path: string;
   useProxy: boolean;
+  still?: boolean;
+  preserveAlpha?: boolean;
 }
 
 export interface TrimNodeParams {
@@ -46,8 +48,9 @@ export interface TransformNodeParams {
   keyframes: Array<{
     atOutputFrame: number;
     crop?: [number, number, number, number];
-    scale?: number;
+    scale?: number | [number, number];
     pos?: [number, number];
+    anchor?: [number, number];
     rotateDeg?: number;
     opacity?: number;
   }>;
@@ -56,17 +59,47 @@ export interface TransformNodeParams {
 }
 
 export interface KeyNodeParams {
-  method: "chroma" | "neuralMatte";
+  method: "chroma" | "neuralMatte" | "alphaMatte";
   keyColor?: string;
   tolerance?: number;
   edgeSoftness?: number;
   spillSuppression?: number;
   garbageMaskAssetId?: string;
   matteAssetId?: string;
+  preBlur?: number;
+  edge?: { erodePx: number; featherPx: number };
+  spill?: { mode: "off" | "despill" | "average"; strength: number; channel?: "green" | "blue" };
+  masks?: Array<{
+    id: string;
+    role: "garbage" | "holdout";
+    path: string;
+    sha256: string;
+    animated: boolean;
+  }>;
+  postColor?: {
+    exposure: number;
+    contrast: number;
+    temperatureK?: number;
+    tint?: number;
+    saturation: number;
+  };
+  matteSource?: "alpha" | "luma";
+  invertMatte?: boolean;
 }
 
 export interface CompositeNodeParams {
   canvas: { w: number; h: number; background: string };
+  mode?: "timeline.sequential" | "timeline.anchored" | "stack";
+  durationFrames?: number;
+  inputSettings?: Array<{
+    atOutputFrame?: number;
+    durationFrames: number;
+    transitionFromPreviousFrames?: number;
+    layerId?: string;
+    blend?: "normal" | "multiply" | "screen" | "overlay" | "darken"
+      | "lighten" | "addition" | "subtract" | "difference";
+    opacity?: number;
+  }>;
 }
 
 export interface OverlayNodeParams {
@@ -77,6 +110,10 @@ export interface OverlayNodeParams {
 }
 
 export interface AudioChainNodeParams {
+  inputSettings?: Array<{
+    durationSamples: number;
+    transitionFromPreviousSamples?: number;
+  }>;
   stages: Array<{
     stage: "gain" | "fade" | "channelmap" | "denoise" | "eq" | "compress"
       | "limit" | "duck" | "loudnorm";

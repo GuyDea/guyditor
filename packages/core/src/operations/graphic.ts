@@ -191,9 +191,6 @@ async function applyAdd(
   }
   if (layer === undefined) {
     layerId = idFactory("lyr");
-    const primarySequence = project.deliverables.find(
-      ({ id }) => id === project.settings.primaryDeliverable,
-    )?.sequenceId;
     createdLayer = {
       id: layerId,
       kind: "animation",
@@ -201,7 +198,6 @@ async function applyAdd(
       order: nextLayerOrder(project.layers),
       enabled: true,
       locked: false,
-      ...(primarySequence === undefined ? {} : { sequence: primarySequence }),
       items: [],
     };
     layer = createdLayer;
@@ -223,6 +219,7 @@ async function applyAdd(
     seed,
   };
   const nextLayer: Layer = { ...layer, items: [...(layer.items ?? []), item] };
+  delete nextLayer.sequence;
   const layers = createdLayer === undefined
     ? project.layers.map((candidate) => candidate.id === nextLayer.id ? nextLayer : candidate)
     : [...project.layers, nextLayer];

@@ -1,0 +1,58 @@
+{
+  "$id": "guyditor:op/layer.transform.set",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["layerId", "transform"],
+  "additionalProperties": false,
+  "properties": {
+    "layerId": { "type": "string", "pattern": "^lyr_[a-z2-7]{10}$" },
+    "transform": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["anchor", "position", "scale", "rotationDeg"],
+          "properties": {
+            "anchor": { "$ref": "#/$defs/point" },
+            "position": { "$ref": "#/$defs/point" },
+            "scale": { "$ref": "#/$defs/scale" },
+            "rotationDeg": { "type": "number" },
+            "crop": { "$ref": "#/$defs/crop" }
+          }
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "point": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y"],
+      "properties": {
+        "x": { "type": "number", "minimum": 0, "maximum": 1 },
+        "y": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "scale": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y"],
+      "properties": {
+        "x": { "type": "number", "exclusiveMinimum": 0 },
+        "y": { "type": "number", "exclusiveMinimum": 0 }
+      }
+    },
+    "crop": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y", "w", "h"],
+      "properties": {
+        "x": { "type": "number", "minimum": 0, "maximum": 1 },
+        "y": { "type": "number", "minimum": 0, "maximum": 1 },
+        "w": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
+        "h": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 }
+      }
+    }
+  }
+}

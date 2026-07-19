@@ -160,6 +160,15 @@ function validateReferences(project: GuyditorProject): Result<GuyditorProject> |
       if (preset !== undefined && isId("pre", preset) && !presetById.has(preset)) {
         return missingReference("transition preset reference", clip.transitionAfter!.id, preset);
       }
+      const key = clip.effects?.find(({ kind }) => kind === "key");
+      const neural = key?.params["neural"];
+      if (
+        typeof neural === "object" && neural !== null &&
+        "matteAssetId" in neural && typeof neural.matteAssetId === "string" &&
+        !assetIds.has(neural.matteAssetId)
+      ) {
+        return missingReference("neural matte asset reference", clip.id, neural.matteAssetId);
+      }
     }
   }
 
@@ -248,6 +257,67 @@ function validateReferences(project: GuyditorProject): Result<GuyditorProject> |
     }
   }
 
+  return undefined;
+}
+
+function validateComposition(project: GuyditorProject): Result<GuyditorProject> | undefined {
+  const layerById = new Map(project.layers.map((layer) => [layer.id, layer] as const));
+  for (const layer of project.layers) {
+    if (layer.sequence !== undefined && layer.items !== undefined) {
+      return invariantFailure("layer content sequence xor items", [layer.id]);
+    }
+    if (layer.kind === "adjustment") {
+      if (layer.sequence !== undefined || layer.items !== undefined || layer.adjustment === undefined) {
+        return invariantFailure("adjustment layer holds only ColorCorrection", [layer.id]);
+      }
+    } else if (layer.adjustment !== undefined) {
+      return invariantFailure("ColorCorrection belongs to adjustment layer", [layer.id]);
+    }
+    if (layer.matte !== undefined) {
+      const matteLayer = layerById.get(layer.matte.layerId);
+      if (matteLayer?.kind !== "matte" || matteLayer.id === layer.id) {
+        return invariantFailure("matte reference targets another matte layer", [
+          layer.id,
+          layer.matte.layerId,
+        ]);
+      }
+    }
+    const crop = layer.transform?.crop;
+    if (crop !== undefined && (crop.x + crop.w > 1 || crop.y + crop.h > 1)) {
+      return invariantFailure("Transform2D crop remains within source", [layer.id]);
+    }
+  }
+
+  for (const sequence of project.sequences) {
+    for (const clip of sequence.clips) {
+      const keyEffects = clip.effects?.filter(({ kind }) => kind === "key") ?? [];
+      if (keyEffects.length > 1) {
+        return invariantFailure("one key effect per clip", [clip.id]);
+      }
+      const masks = keyEffects[0]?.params["masks"];
+      if (!Array.isArray(masks)) continue;
+      const ids = masks.flatMap((mask) =>
+        typeof mask === "object" && mask !== null && "id" in mask && typeof mask.id === "string"
+          ? [mask.id]
+          : []);
+      const duplicate = firstDuplicate(ids);
+      if (duplicate !== undefined) {
+        return invariantFailure("unique key mask IDs per clip", [clip.id, duplicate]);
+      }
+      for (const mask of masks) {
+        if (typeof mask !== "object" || mask === null || !("frames" in mask)) continue;
+        const frames = mask.frames;
+        if (
+          typeof frames === "object" && frames !== null &&
+          "from" in frames && typeof frames.from === "number" &&
+          "to" in frames && typeof frames.to === "number" &&
+          frames.from > frames.to
+        ) {
+          return invariantFailure("key mask frame range", [clip.id]);
+        }
+      }
+    }
+  }
   return undefined;
 }
 
@@ -374,6 +444,7 @@ export function validateProject(value: unknown): Result<GuyditorProject> {
   const checks = [
     validateUniqueIds,
     validateReferences,
+    validateComposition,
     validateSourceRanges,
     validateBoundaries,
     validateGeneratedAssets,

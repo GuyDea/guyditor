@@ -57,6 +57,7 @@ function validGroundTruth(filePath) {
       radius: 48,
     },
     "generated/frozen-overlay.png": { frozen: true, height: 360, width: 640 },
+    "generated/ac005-foreground.png": { foreground: true, height: 1080, width: 1920 },
     "transcripts/short-exact.json": {
       duration: { rate: 48_000, samples: 576_000 },
       wordCount: 24,

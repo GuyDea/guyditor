@@ -67,6 +67,11 @@ function validGroundTruth(filePath) {
       height: 360,
       width: 640,
     },
+    "generated/ac005-foreground.png": {
+      foreground: true,
+      height: 1080,
+      width: 1920,
+    },
     "transcripts/short-exact.json": {
       duration: { rate: 48_000, samples: 576_000 },
       wordCount: 24,
@@ -140,8 +145,9 @@ recorded
 }
 
 function completeM2Traceability() {
+  const partial = new Set(["FR-1101", "FR-306", "FR-505"]);
   return M2_PARTIAL_IDS.map((id) =>
-    `| ${id} | Part | ${id === "FR-1101" ? "partial" : "implemented"} | \`test/${id}.test.ts\` | evidence |`
+    `| ${id} | Part | ${partial.has(id) ? "partial" : "implemented"} | \`test/${id}.test.ts\` | evidence |`
   ).join("\n");
 }
 

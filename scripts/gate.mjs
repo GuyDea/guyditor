@@ -45,6 +45,7 @@ export const M2_PARTIAL_COMMANDS = Object.freeze([
   Object.freeze({ args: ["-r", "typecheck"], command: "pnpm" }),
   Object.freeze({ args: ["-r", "lint"], command: "pnpm" }),
   Object.freeze({ args: ["exec", "vitest", "run", "--project", "unit"], command: "pnpm" }),
+  Object.freeze({ args: ["test:golden"], command: "pnpm" }),
   Object.freeze({ args: ["test:ac", "--", "m2"], command: "pnpm" }),
 ]);
 
@@ -88,8 +89,17 @@ export const M2_PARTIAL_IDS = Object.freeze([
   "FR-207",
   "FR-208",
   "FR-1101",
+  "FR-306",
+  "FR-500",
+  "FR-501",
+  "FR-502",
+  "FR-504",
+  "FR-505",
   "AC-003",
+  "AC-005",
 ]);
+
+const M2_PARTIAL_STATUS_IDS = new Set(["FR-1101", "FR-306", "FR-505"]);
 
 // The M1 table explicitly permits scoped rows ("core" and "foundation"), and the
 // coordinator ruling permits evidence-backed partial rows. The three required M1
@@ -166,7 +176,7 @@ export function validateM2PartialTraceability(markdown) {
       errors.push(`${id}: traceability row is missing`);
       continue;
     }
-    const expected = id === "FR-1101" ? "partial" : "implemented";
+    const expected = M2_PARTIAL_STATUS_IDS.has(id) ? "partial" : "implemented";
     if (row.status !== expected) {
       errors.push(`${id}: M2 partial gate requires status ${expected} (received ${row.status})`);
     }
@@ -305,7 +315,7 @@ export function runGate(
   log(`gate ${milestone}: traceability passed for ${String(traceabilityCount)} rows`);
 
   if (milestone === "m2") {
-    log("gate m2: partial milestone scope passed (FR-205..208, FR-1101 partial, AC-003)");
+    log("gate m2: partial milestone scope passed (captions, transforms, compositing/keying, AC-003, AC-005)");
     return 0;
   }
 

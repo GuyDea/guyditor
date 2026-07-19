@@ -412,7 +412,13 @@
         "id": { "type": "string", "pattern": "^fx_[a-z2-7]{10}$" },
         "kind": { "type": "string" },
         "params": { "$ref": "#/$defs/unknownRecord" }
-      }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "key" } }, "required": ["kind"] },
+          "then": { "properties": { "params": { "$ref": "#/$defs/keySettings" } } }
+        }
+      ]
     },
     "clipAudio": {
       "type": "object",
@@ -478,14 +484,167 @@
         "enabled": { "type": "boolean" },
         "locked": { "type": "boolean" },
         "opacity": { "type": "number", "minimum": 0, "maximum": 1 },
-        "blend": { "type": "string" },
-        "transform": true,
+        "blend": { "$ref": "#/$defs/blendMode" },
+        "transform": { "$ref": "#/$defs/transform2d" },
         "matte": { "$ref": "#/$defs/matte" },
         "pip": true,
-        "adjustment": true,
+        "adjustment": { "$ref": "#/$defs/colorCorrection" },
         "ducking": true,
         "sequence": { "type": "string", "pattern": "^seq_[a-z2-7]{10}$" },
         "items": { "type": "array", "items": { "$ref": "#/$defs/placedItem" } }
+      }
+    },
+    "blendMode": {
+      "enum": ["normal", "multiply", "screen", "overlay", "darken", "lighten", "addition", "subtract", "difference"]
+    },
+    "normalizedPoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y"],
+      "properties": {
+        "x": { "type": "number", "minimum": 0, "maximum": 1 },
+        "y": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "transformScale": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y"],
+      "properties": {
+        "x": { "type": "number", "exclusiveMinimum": 0 },
+        "y": { "type": "number", "exclusiveMinimum": 0 }
+      }
+    },
+    "normalizedCrop": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y", "w", "h"],
+      "properties": {
+        "x": { "type": "number", "minimum": 0, "maximum": 1 },
+        "y": { "type": "number", "minimum": 0, "maximum": 1 },
+        "w": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
+        "h": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 }
+      }
+    },
+    "transform2d": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["anchor", "position", "scale", "rotationDeg"],
+      "properties": {
+        "anchor": { "$ref": "#/$defs/normalizedPoint" },
+        "position": { "$ref": "#/$defs/normalizedPoint" },
+        "scale": { "$ref": "#/$defs/transformScale" },
+        "rotationDeg": { "type": "number" },
+        "crop": { "$ref": "#/$defs/normalizedCrop" }
+      }
+    },
+    "colorCorrection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["exposure", "contrast", "saturation"],
+      "properties": {
+        "exposure": { "type": "number", "minimum": -4, "maximum": 4 },
+        "contrast": { "type": "number", "minimum": 0, "maximum": 2 },
+        "temperatureK": { "type": "number", "minimum": 1000, "maximum": 40000 },
+        "tint": { "type": "number", "minimum": -1, "maximum": 1 },
+        "saturation": { "type": "number", "minimum": 0, "maximum": 2 }
+      }
+    },
+    "keySettings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "mode", "masks"],
+      "properties": {
+        "schema": { "const": "guyditor/key@1" },
+        "mode": { "enum": ["off", "chroma", "neural"] },
+        "chroma": { "$ref": "#/$defs/chromaKeyParams" },
+        "neural": { "$ref": "#/$defs/neuralMatteParams" },
+        "masks": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/keyMask" }
+        },
+        "postColor": { "$ref": "#/$defs/colorCorrection" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "mode": { "const": "chroma" } }, "required": ["mode"] },
+          "then": { "properties": { "chroma": {} }, "required": ["chroma"] }
+        },
+        {
+          "if": { "properties": { "mode": { "const": "neural" } }, "required": ["mode"] },
+          "then": { "properties": { "neural": {} }, "required": ["neural"] }
+        }
+      ]
+    },
+    "chromaKeyParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["keyColor", "tolerance", "softness", "preBlur", "edge", "spill"],
+      "properties": {
+        "keyColor": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+        "tolerance": { "type": "number", "minimum": 0, "maximum": 1 },
+        "softness": { "type": "number", "minimum": 0, "maximum": 1 },
+        "preBlur": { "type": "number", "minimum": 0, "maximum": 4 },
+        "edge": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["erodePx", "featherPx"],
+          "properties": {
+            "erodePx": { "type": "integer", "minimum": 0 },
+            "featherPx": { "type": "number", "minimum": 0 }
+          }
+        },
+        "spill": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "strength"],
+          "properties": {
+            "mode": { "enum": ["off", "despill", "average"] },
+            "strength": { "type": "number", "minimum": 0, "maximum": 1 }
+          }
+        }
+      }
+    },
+    "keyMask": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "role", "shape", "points", "featherPx"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^msk_[a-z2-7]{10}$" },
+        "role": { "enum": ["garbage", "holdout"] },
+        "shape": { "enum": ["rect", "ellipse", "polygon"] },
+        "points": { "type": "array", "minItems": 2, "items": { "$ref": "#/$defs/normalizedPoint" } },
+        "featherPx": { "type": "number", "minimum": 0 },
+        "frames": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["from", "to"],
+          "properties": {
+            "from": { "type": "integer", "minimum": 0 },
+            "to": { "type": "integer", "minimum": 0 }
+          }
+        }
+      }
+    },
+    "neuralMatteParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model", "downsampleRatio", "stabilization"],
+      "properties": {
+        "model": { "enum": ["rvm_mobilenetv3", "rvm_resnet50"] },
+        "matteAssetId": { "type": "string", "pattern": "^ast_[a-z2-7]{10}$" },
+        "downsampleRatio": { "type": "number", "minimum": 0.1, "maximum": 1 },
+        "stabilization": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "alphaMin", "motionGain", "minSpeckleArea"],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "alphaMin": { "type": "number", "minimum": 0, "maximum": 1 },
+            "motionGain": { "type": "number", "minimum": 0 },
+            "minSpeckleArea": { "type": "number", "minimum": 0, "maximum": 1 }
+          }
+        }
       }
     },
     "matte": {

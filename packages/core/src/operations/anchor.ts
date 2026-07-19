@@ -43,6 +43,8 @@ export function applyAnchorOperation(
       [owner],
     );
   }
+  const itemLayer = model.layers.find((layer) => layer.items?.some(({ id }) => id === owner));
+  if (itemLayer !== undefined) delete itemLayer.sequence;
   const inverseParams: Record<string, unknown> = {
     owner,
     anchorPath,

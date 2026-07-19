@@ -61,6 +61,7 @@ export const M2_AC_COMMANDS = Object.freeze([
     args: [
       "exec", "vitest", "run", "--project", "golden",
       "packages/render/test/golden/ac003.golden.test.ts",
+      "packages/render/test/golden/ac005.golden.test.ts",
     ],
   }),
   Object.freeze({ command: "pnpm", args: ["--filter", "@guyditor/app", "build"] }),
@@ -98,7 +99,7 @@ export function main(args = process.argv.slice(2)) {
   }
   console.log(milestone === "m1"
     ? "test:ac m1: AC-001, AC-002, AC-004, and AC-009 passed"
-    : "test:ac m2: AC-003 caption correction, four-output export, and drift checks passed");
+    : "test:ac m2: AC-003 captions and AC-005 keyed presenter diagnostics passed");
   return 0;
 }
 

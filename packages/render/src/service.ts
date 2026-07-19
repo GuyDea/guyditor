@@ -20,6 +20,7 @@ import type {
   GuyditorProject,
   JobExecutorContext,
   JobQueue,
+  KeySettings,
   ProjectStore,
 } from "../../core/src/index.js";
 import {
@@ -46,6 +47,7 @@ import {
 
 import { compileFiltergraph } from "./filtergraph.js";
 import { compileRenderGraph } from "./graph.js";
+import type { DiagnosticBackground } from "./graph.js";
 import type {
   EncodeNodeParams,
   RenderGraph,
@@ -71,6 +73,7 @@ import {
 } from "./template-runtime.js";
 import { TemplateRegistry } from "./template-registry.js";
 import type { TemplateCatalogEntry } from "./template-registry.js";
+import { rasterizeKeyMasks } from "./key-mask.js";
 
 const RENDER_PACKAGE_VERSION = "0.0.0";
 
@@ -79,6 +82,20 @@ export interface RenderRequest {
   deliverableId: string;
   range?: { startFrame: number; endFrame: number };
   quality: "proxy" | "high";
+}
+
+export interface DiagnosticRenderRequest {
+  revision: string;
+  deliverableId: string;
+  inspectedLayerId: string;
+  diagnosticBackground: Exclude<DiagnosticBackground, "none">;
+  saturatedColor?: string;
+  outputDir: string;
+}
+
+export interface DiagnosticRenderResult {
+  jobId: string;
+  outputPath: string;
 }
 
 export interface ExportRequest {
@@ -169,6 +186,14 @@ interface PreparedExport {
   request: ExportRequest;
   validation: ExportValidationResult;
   variant: "burnin" | "clean";
+}
+
+interface PrepareOptions {
+  diagnostic?: {
+    background: Exclude<DiagnosticBackground, "none">;
+    inspectedLayerId: string;
+    saturatedColor?: string;
+  };
 }
 
 function renderUnsupported(feature: string, part: string, affected: readonly string[] = []): GuyditorError {
@@ -358,11 +383,59 @@ export class RenderService {
         variant: prepared.variant,
       };
     });
+    this.#jobQueue.registerExecutor("render.diagnostic", async (job, context) => {
+      const prepared = this.#prepared.get(job.jobId);
+      if (prepared === undefined) {
+        throw makeGuyditorError(
+          "E_RENDER_SEGMENT_FAILED",
+          `Diagnostic render job ${job.jobId} has no compiled graph in this process.`,
+          { affected: [job.jobId], retry: "safe" },
+        );
+      }
+      await this.#execute(job.jobId, prepared, context);
+      return {
+        deliverableId: prepared.request.deliverableId,
+        outputPath: prepared.outputPath,
+        revision: prepared.graph.revision,
+        variant: "diagnostic",
+      };
+    });
   }
 
   public async renderPreview(req: RenderRequest): Promise<{ jobId: string }> {
     void req;
     throw renderUnsupported("preview rendering", "Part 12");
+  }
+
+  public async renderDiagnostic(req: DiagnosticRenderRequest): Promise<DiagnosticRenderResult> {
+    const request: ExportRequest = {
+      revision: req.revision,
+      deliverableId: req.deliverableId,
+      outputDir: req.outputDir,
+      variants: ["clean"],
+      skipValidationWarnings: true,
+    };
+    const prepared = await this.#prepare(request, "clean", {
+      diagnostic: {
+        background: req.diagnosticBackground,
+        inspectedLayerId: req.inspectedLayerId,
+        ...(req.saturatedColor === undefined ? {} : { saturatedColor: req.saturatedColor }),
+      },
+    });
+    const job = this.#jobQueue.enqueue({
+      kind: "render.diagnostic",
+      title: `Render ${req.diagnosticBackground} key diagnostic for ${req.inspectedLayerId}`,
+      cancellable: true,
+      payload: {
+        background: req.diagnosticBackground,
+        deliverableId: req.deliverableId,
+        inspectedLayerId: req.inspectedLayerId,
+        outputPath: prepared.outputPath,
+        revision: prepared.graph.revision,
+      },
+    });
+    this.#prepared.set(job.jobId, prepared);
+    return { jobId: job.jobId, outputPath: prepared.outputPath };
   }
 
   public async captionFrame(request: {
@@ -864,7 +937,11 @@ export class RenderService {
     });
   }
 
-  async #prepare(req: ExportRequest, variant: "burnin" | "clean"): Promise<PreparedExport> {
+  async #prepare(
+    req: ExportRequest,
+    variant: "burnin" | "clean",
+    options: PrepareOptions = {},
+  ): Promise<PreparedExport> {
     const loaded = await this.#loadProject(req.revision);
     await this.#verifySidecars(loaded);
     const project = this.#withResolvedAssetPaths(loaded);
@@ -931,6 +1008,7 @@ export class RenderService {
             atOutputFrame: graphicPlan.atOutputFrame,
             durationFrames: graphicPlan.durationFrames,
           }];
+    const maskAssets = await this.#rasterizedMasks(project, deliverable);
     const graph = compileRenderGraph({
       project,
       revision: project.revision,
@@ -942,13 +1020,19 @@ export class RenderService {
       toolchain: await toolchainManifest(),
       overlays,
       graphicOverlays,
+      maskAssets,
+      ...(options.diagnostic === undefined ? {} : {
+        diagnosticBackground: options.diagnostic.background,
+        diagnosticSaturatedColor: options.diagnostic.saturatedColor,
+        inspectedLayerId: options.diagnostic.inspectedLayerId,
+      }),
     });
-    const outputPath = exportOutputPath(
-      resolve(req.outputDir),
-      req.deliverableId,
-      variant,
-      profile.profile.container,
-    );
+    const outputPath = options.diagnostic === undefined
+      ? exportOutputPath(resolve(req.outputDir), req.deliverableId, variant, profile.profile.container)
+      : join(
+          resolve(req.outputDir),
+          `${req.deliverableId}-${options.diagnostic.inspectedLayerId}-${options.diagnostic.background}.${profile.profile.container}`,
+        );
     return {
       command: compileFiltergraph(graph, outputPath),
       graph,
@@ -966,6 +1050,51 @@ export class RenderService {
       },
       variant,
     };
+  }
+
+  async #rasterizedMasks(
+    project: GuyditorProject,
+    deliverable: Deliverable,
+  ): Promise<NonNullable<Parameters<typeof compileRenderGraph>[0]["maskAssets"]>> {
+    const sequence = project.sequences.find(({ id }) => id === deliverable.sequenceId);
+    if (sequence === undefined) return {};
+    const candidates = [
+      ...sequence.clips.map((clip) => ({
+        assetId: clip.asset,
+        durationFrames: Math.max(1, clip.source.out.frames - clip.source.in.frames),
+        effects: clip.effects ?? [],
+      })),
+      ...project.layers.flatMap((layer) => (layer.items ?? []).flatMap((item) => {
+        if (item.asset === undefined) return [];
+        const durationFrames = typeof item.duration === "object" && "frames" in item.duration
+          ? item.duration.frames
+          : item.source !== undefined && "in" in item.source
+            ? item.source.out.frames - item.source.in.frames
+            : 1;
+        return [{ assetId: item.asset, durationFrames: Math.max(1, durationFrames), effects: item.effects ?? [] }];
+      })),
+    ];
+    const result: Record<string, { path: string; sha256: string; animated?: boolean }> = {};
+    for (const candidate of candidates) {
+      const asset = project.assets.find(({ id }) => id === candidate.assetId);
+      if (asset === undefined) continue;
+      for (const effect of candidate.effects.filter(({ kind }) => kind === "key")) {
+        const settings = effect.params as unknown as KeySettings;
+        if (settings.masks.length === 0) continue;
+        const rendered = await rasterizeKeyMasks({
+          masks: settings.masks,
+          width: asset.video?.width ?? asset.image?.width ?? project.settings.timeline.width,
+          height: asset.video?.height ?? asset.image?.height ?? project.settings.timeline.height,
+          durationFrames: candidate.durationFrames,
+          fps: project.settings.timeline.fps,
+          cacheRoot: join(this.#projectRoot, ".guyditor/cache/masks"),
+        });
+        for (const mask of rendered) {
+          result[mask.id] = { path: mask.path, sha256: mask.sha256, animated: mask.animated };
+        }
+      }
+    }
+    return result;
   }
 
   async #execute(

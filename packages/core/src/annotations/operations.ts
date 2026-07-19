@@ -499,7 +499,6 @@ function convertAnnotation(
       order: Math.max(-1, ...layers.map(({ order }) => order)) + 1,
       enabled: true,
       locked: false,
-      sequence: annotation.canvasRef.sequenceId,
       items: [],
     };
     layers.push(layer);
@@ -597,6 +596,7 @@ function convertAnnotation(
     source: { annotationId: annotation.id },
     params: conversionParams(annotation, styleOverrides),
   };
+  delete layer.sequence;
   layer.items = [...(layer.items ?? []), item];
   workspace.pendingConversions.push({ annotationId, itemId });
   const model = { ...project, assets: modelAssets, layers, sidecars: modelSidecars };

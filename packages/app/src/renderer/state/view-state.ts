@@ -1,6 +1,8 @@
 import { create } from "zustand";
 
-import type { FrameTime } from "../../../../core/src/index.js";
+import type { FrameTime, KeySettings } from "../../../../core/src/index.js";
+
+export type DiagnosticBackground = "none" | "black" | "white" | "saturated" | "checkerboard";
 
 export type PanelId =
   | "media"
@@ -60,11 +62,15 @@ interface PreviewState {
   settled: boolean;
   warning: string | null;
   loopRange: { start: number; end: number } | null;
+  diagnosticBackground: DiagnosticBackground;
+  previewKeySettings: KeySettings | null;
   setPlayhead: (playhead: FrameTime) => void;
   setPlaying: (playing: boolean) => void;
   setSettled: (settled: boolean) => void;
   setWarning: (warning: string | null) => void;
   setLoopRange: (range: PreviewState["loopRange"]) => void;
+  setDiagnosticBackground: (background: DiagnosticBackground) => void;
+  setPreviewKeySettings: (settings: KeySettings | null) => void;
 }
 
 interface TranscriptViewState {
@@ -153,11 +159,15 @@ export const usePreviewStore = create<PreviewState>((set) => ({
   settled: true,
   warning: null,
   loopRange: null,
+  diagnosticBackground: "none",
+  previewKeySettings: null,
   setPlayhead: (playhead) => set({ playhead }),
   setPlaying: (playing) => set({ playing }),
   setSettled: (settled) => set({ settled }),
   setWarning: (warning) => set({ warning }),
   setLoopRange: (loopRange) => set({ loopRange }),
+  setDiagnosticBackground: (diagnosticBackground) => set({ diagnosticBackground }),
+  setPreviewKeySettings: (previewKeySettings) => set({ previewKeySettings }),
 }));
 
 export const useTranscriptViewStore = create<TranscriptViewState>((set) => ({

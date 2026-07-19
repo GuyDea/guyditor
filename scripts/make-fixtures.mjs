@@ -622,6 +622,20 @@ async function createFrozenOverlay(runFfmpeg, fixtureRoot) {
   );
 }
 
+async function createAc005Foreground(runFfmpeg, fixtureRoot) {
+  const outputPath = path.join(fixtureRoot, "generated", "ac005-foreground.png");
+  await mkdir(path.dirname(outputPath), { recursive: true });
+  await runFfmpeg(ffmpegArgs([
+    "-f", "lavfi", "-i", "color=c=black@0:size=1920x1080:rate=1:duration=1",
+    "-vf",
+    "format=rgba,drawbox=x=0:y=0:w=1920:h=92:color=0x14202BCC:t=fill:replace=1," +
+      "drawbox=x=0:y=988:w=1920:h=92:color=0x14202BCC:t=fill:replace=1," +
+      "drawbox=x=70:y=28:w=430:h=36:color=0xF2B84BCC:t=fill:replace=1," +
+      "drawbox=x=1420:y=1016:w=430:h=36:color=0x73D8B4CC:t=fill:replace=1",
+    "-frames:v", "1", "-threads", "1", "-map_metadata", "-1", outputPath,
+  ]));
+}
+
 async function createTranscripts(fixtureRoot) {
   await writeJson(
     path.join(fixtureRoot, "transcripts", "short-exact.json"),
@@ -778,6 +792,7 @@ function groundTruthByPath() {
       radius: 48,
     },
     "generated/frozen-overlay.png": { frozen: true, height: 360, width: 640 },
+    "generated/ac005-foreground.png": { foreground: true, height: 1080, width: 1920 },
     "transcripts/short-exact.json": {
       duration: { rate: SAMPLE_RATE, samples: 12 * SAMPLE_RATE },
       seed: 0x53_48_4f_52,
@@ -938,6 +953,10 @@ async function projectAssets(fixtureRoot) {
       probe: { width: 640, height: 360 }, image: { width: 640, height: 360, hasAlpha: false },
       provenance: { sidecar: "generation-frozen" },
     }),
+    fixtureAsset(fixtureRoot, "generated/ac005-foreground.png", {
+      id: "ast_kkkkkkkkkk", kind: "image", container: "png_pipe",
+      probe: { width: 1920, height: 1080 }, image: { width: 1920, height: 1080, hasAlpha: true },
+    }),
   ]);
 }
 
@@ -963,6 +982,10 @@ function annotationSidecar(annotated) {
 }
 
 async function createProjectTemplate(core, fixtureRoot, name) {
+  if (name === "ac005") {
+    await createAc005ProjectTemplate(core, fixtureRoot);
+    return;
+  }
   if (name === "ac003") {
     await createAc003ProjectTemplate(core, fixtureRoot);
     return;
@@ -1036,6 +1059,122 @@ async function createProjectTemplate(core, fixtureRoot, name) {
     writeFile(path.join(root, "sidecars/generated-frozen.json"), generation),
     writeFile(path.join(root, "sidecars/transcript-speech.json"), transcriptText),
   ]);
+}
+
+async function createAc005ProjectTemplate(core, fixtureRoot) {
+  const root = path.join(fixtureRoot, "projects", "ac005");
+  const allAssets = await projectAssets(fixtureRoot);
+  const ids = new Set(["ast_aaaaaaaaaa", "ast_cccccccccc", "ast_kkkkkkkkkk"]);
+  const assets = allAssets.filter(({ id }) => ids.has(id));
+  const annotations = core.serializeAnnotationSidecar(annotationSidecar(false));
+  const generation = `${JSON.stringify({
+    format: "guyditor.generated-provenance/v1",
+    assetId: "ast_kkkkkkkkkk",
+    frozen: true,
+    generator: { name: "guyditor-fixture-generator", version: FIXTURE_GENERATOR_VERSION },
+  }, null, 2)}\n`;
+  const transcriptText = `${JSON.stringify(makeTranscriptFixture({
+    assetId: "ast_cccccccccc",
+    durationSamples: 288_000,
+    seed: 0xac_005,
+    wordCount: 12,
+  }), null, 2)}\n`;
+  const arrangement = `${JSON.stringify({
+    format: "guyditor.presenter-arrangement/v1",
+    id: "pre_dddddddddd",
+    name: "presenter_sandwich",
+    version: 1,
+    layerOrder: ["background", "presenter", "foreground"],
+  }, null, 2)}\n`;
+  const model = {
+    format: "guyditor/v1",
+    revision: "rev_00001",
+    project: { id: "prj_aaaaaaaaaa", name: "M2 AC-005 keyed presenter sandwich", created: FIXED_CREATED_AT },
+    settings: {
+      timeline: { fps: "30/1", width: 1920, height: 1080 },
+      audio: { sampleRate: 48_000, channels: 2 },
+      primaryDeliverable: "dlv_aaaaaaaaaa",
+    },
+    transcript: { nextWordOrdinal: 13 },
+    assets,
+    beats: [],
+    sequences: [{
+      id: "seq_aaaaaaaaaa",
+      name: "presenter",
+      clips: [{
+        id: "clp_aaaaaaaaaa",
+        asset: "ast_cccccccccc",
+        source: { in: { frames: 0, fps: "30/1" }, out: { frames: 180, fps: "30/1" } },
+        effects: [{
+          id: "fx_aaaaaaaaaa",
+          kind: "key",
+          params: {
+            schema: "guyditor/key@1",
+            mode: "chroma",
+            chroma: {
+              keyColor: "#00B140",
+              tolerance: 0.35,
+              softness: 0.12,
+              preBlur: 1.5,
+              edge: { erodePx: 1, featherPx: 2 },
+              spill: { mode: "despill", strength: 0.7 },
+            },
+            masks: [],
+          },
+        }],
+      }],
+    }],
+    layers: [{
+      id: "lyr_aaaaaaaaaa", kind: "video", name: "background", order: 0,
+      enabled: true, locked: false, items: [{
+        id: "clp_bbbbbbbbbb", asset: "ast_aaaaaaaaaa", at: "timeline:seq_aaaaaaaaaa@0",
+        duration: { frames: 180, fps: "30/1" },
+        source: { in: { frames: 0, fps: "30/1" }, out: { frames: 180, fps: "30/1" } },
+      }],
+    }, {
+      id: "lyr_bbbbbbbbbb", kind: "video", name: "presenter", order: 10,
+      enabled: true, locked: false, sequence: "seq_aaaaaaaaaa",
+      transform: {
+        anchor: { x: 0.5, y: 0.5 }, position: { x: 0.5, y: 0.5 },
+        scale: { x: 1.5, y: 1.5 }, rotationDeg: 0,
+      },
+    }, {
+      id: "lyr_cccccccccc", kind: "image", name: "foreground", order: 20,
+      enabled: true, locked: false, items: [{
+        id: "clp_cccccccccc", asset: "ast_kkkkkkkkkk", at: "timeline:seq_aaaaaaaaaa@0",
+        duration: { frames: 180, fps: "30/1" },
+      }],
+    }],
+    captions: [],
+    annotations: { sidecar: "annotations", summary: { open: 0, resolved: 0, rejected: 0, reopened: 0 } },
+    deliverables: [{
+      id: "dlv_aaaaaaaaaa", kind: "longform", name: "AC-005 composite",
+      profile: "youtube-longform@1.0.0", sequenceId: "seq_aaaaaaaaaa", status: "draft",
+    }],
+    presets: [{
+      id: "pre_dddddddddd", name: "presenter_sandwich", kind: "layout", version: 1,
+      path: "presets/pre_dddddddddd@1.json",
+      sha256: createHash("sha256").update(arrangement).digest("hex"),
+    }],
+    skills: [],
+    sidecars: [{
+      name: "annotations", path: "sidecars/annotations.yaml", schema: "guyditor.annotations/v1",
+      sha256: createHash("sha256").update(annotations).digest("hex"), inputs: [],
+    }],
+  };
+  const created = await core.createProject(root, model, {
+    appVersion: "0.0.0-fixtures",
+    idFactory: (prefix) => `${prefix}_fixturezzz`,
+    now: () => new Date(FIXED_CREATED_AT),
+  });
+  if (!created.ok) throw created.error;
+  await Promise.all([
+    mkdir(path.join(root, "presets"), { recursive: true }),
+    writeFile(path.join(root, "sidecars/annotations.yaml"), annotations),
+    writeFile(path.join(root, "sidecars/generated-frozen.json"), generation),
+    writeFile(path.join(root, "sidecars/transcript-speech.json"), transcriptText),
+  ]);
+  await writeFile(path.join(root, "presets/pre_dddddddddd@1.json"), arrangement);
 }
 
 function ac003CaptionPreset() {
@@ -1220,6 +1359,7 @@ async function validateOutputs(runFfprobe, fixtureRoot) {
       width: 1280,
     },
     "generated/frozen-overlay.png": { height: 360, width: 640 },
+    "generated/ac005-foreground.png": { height: 1080, width: 1920 },
   };
   for (const [relativePath, expected] of Object.entries(expectations)) {
     await validateMedia(runFfprobe, fixtureRoot, relativePath, expected);
@@ -1278,6 +1418,7 @@ export async function generateFixtures({
       ["stills", () => createStills(runFfmpeg, fixtureRoot)],
       ["disc tracking", () => createDiscTrack(runFfmpeg, fixtureRoot)],
       ["frozen generated overlay", () => createFrozenOverlay(runFfmpeg, fixtureRoot)],
+      ["AC-005 foreground overlay", () => createAc005Foreground(runFfmpeg, fixtureRoot)],
       ["transcripts", () => createTranscripts(fixtureRoot)],
     ];
     for (const [label, create] of steps) {
@@ -1305,7 +1446,7 @@ export async function generateFixtures({
       `fixtures: wrote ${Object.keys(manifest.files).length} files (${totalBytes} bytes) in ${elapsedSeconds.toFixed(2)} s`,
     );
     log(
-      "fixtures: wrote basic, annotated, and AC-003 project templates",
+      "fixtures: wrote basic, annotated, AC-003, and AC-005 project templates",
     );
     return { manifest, regenerated: true };
   } finally {

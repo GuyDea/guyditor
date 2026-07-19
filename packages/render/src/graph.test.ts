@@ -201,19 +201,15 @@ describe("compileRenderGraph", () => {
     );
   });
 
-  it("rejects transitions and multiple video layers with owning parts", () => {
+  it("compiles transitions and multiple video layers into layer timelines", () => {
     const withTransition = project();
     withTransition.sequences[0]!.clips[0]!.transitionAfter = {
       id: "trn_aaaaaaaaaa",
       preset: "hard-cut",
       duration: { frames: 5, fps: "30/1" },
     };
-    expect(() => compile(withTransition)).toThrow(
-      expect.objectContaining({
-        code: "E_RENDER_UNSUPPORTED",
-        message: expect.stringMatching(/transition.*Part 5/i),
-      }),
-    );
+    delete withTransition.sequences[0]!.clips[1]!.gapBefore;
+    expect(() => compile(withTransition)).not.toThrow();
 
     const withLayers = project();
     withLayers.layers.push({
@@ -225,12 +221,8 @@ describe("compileRenderGraph", () => {
       locked: false,
       sequence: "seq_aaaaaaaaaa",
     });
-    expect(() => compile(withLayers)).toThrow(
-      expect.objectContaining({
-        code: "E_RENDER_UNSUPPORTED",
-        message: expect.stringMatching(/multiple video layers.*Part 6/i),
-      }),
-    );
+    const graph = compile(withLayers);
+    expect(graph.nodes.filter(({ kind }) => kind === "composite").length).toBeGreaterThanOrEqual(3);
   });
 
   it.each([
@@ -240,31 +232,6 @@ describe("compileRenderGraph", () => {
       change: (model: GuyditorProject) => {
         model.sequences[0]!.clips[1]!.overlapPrevious = { frames: 5, fps: "30/1" };
         delete model.sequences[0]!.clips[1]!.gapBefore;
-      },
-    },
-    {
-      feature: "items",
-      part: "Part 6",
-      change: (model: GuyditorProject) => {
-        model.layers[0]!.items = [];
-      },
-    },
-    {
-      feature: "key",
-      part: "Part 6",
-      change: (model: GuyditorProject) => {
-        model.sequences[0]!.clips[0]!.effects = [{
-          id: "fx_bbbbbbbbbb",
-          kind: "key",
-          params: {},
-        }];
-      },
-    },
-    {
-      feature: "transform",
-      part: "Part 6",
-      change: (model: GuyditorProject) => {
-        model.layers[0]!.transform = {};
       },
     },
     {
@@ -285,6 +252,97 @@ describe("compileRenderGraph", () => {
       code: "E_RENDER_UNSUPPORTED",
       message: expect.stringMatching(new RegExp(`${feature}.*${part}`, "iu")),
     }));
+  });
+
+  it("orders video and still layers with static transforms and a chroma key", () => {
+    const model = project();
+    model.assets.push({
+      id: "ast_cccccccccc",
+      kind: "image",
+      path: "/tmp/foreground.png",
+      sha256: HASH,
+      probe: { width: 1920, height: 1080 },
+      image: { width: 1920, height: 1080, hasAlpha: true },
+    });
+    model.sequences[0]!.clips[0]!.effects = [
+      {
+        id: "fx_bbbbbbbbbb",
+        kind: "key",
+        params: {
+          schema: "guyditor/key@1",
+          mode: "chroma",
+          chroma: {
+            keyColor: "#1FBF3A",
+            tolerance: 0.35,
+            softness: 0.12,
+            preBlur: 1.5,
+            edge: { erodePx: 1, featherPx: 2 },
+            spill: { mode: "despill", strength: 0.6 },
+          },
+          masks: [],
+        },
+      },
+      {
+        id: "fx_cccccccccc",
+        kind: "transform",
+        params: {
+          crop: { l: 0.05, t: 0.05, r: 0.05, b: 0.05 },
+          scale: 0.8,
+          position: { x: 0.5, y: 0.5 },
+          rotationDeg: 2,
+          opacity: 0.9,
+        },
+      },
+    ];
+    model.layers[0]!.name = "background";
+    model.layers.push(
+      {
+        id: "lyr_bbbbbbbbbb",
+        kind: "video",
+        name: "presenter",
+        order: 10,
+        enabled: true,
+        locked: false,
+        sequence: "seq_aaaaaaaaaa",
+        opacity: 0.8,
+        blend: "screen",
+        transform: {
+          anchor: { x: 0.5, y: 0.5 },
+          position: { x: 0.5, y: 0.5 },
+          scale: { x: 0.75, y: 0.75 },
+          rotationDeg: 0,
+        },
+      },
+      {
+        id: "lyr_cccccccccc",
+        kind: "image",
+        name: "foreground",
+        order: 20,
+        enabled: true,
+        locked: false,
+        items: [{
+          id: "clp_cccccccccc",
+          asset: "ast_cccccccccc",
+          at: "timeline:seq_aaaaaaaaaa@0",
+          duration: { frames: 150, fps: "30/1" },
+        }],
+      },
+    );
+
+    const graph = compile(model);
+    expect(graph.nodes.some(({ kind }) => kind === "key")).toBe(true);
+    expect(graph.nodes.filter(({ kind }) => kind === "transform")).toHaveLength(3);
+    const composites = graph.nodes.filter(({ kind }) => kind === "composite");
+    expect(composites.at(-1)?.params).toMatchObject({
+      mode: "stack",
+      inputSettings: [
+        { layerId: "lyr_aaaaaaaaaa", blend: "normal", opacity: 1 },
+        { layerId: "lyr_bbbbbbbbbb", blend: "screen", opacity: 0.8 },
+        { layerId: "lyr_cccccccccc", blend: "normal", opacity: 1 },
+      ],
+    });
+    expect(graph.nodes.some(({ kind, params }) =>
+      kind === "source" && "still" in params && params.still === true)).toBe(true);
   });
 
   it("emits image2 caption overlays only for the burnin variant", () => {
@@ -371,7 +429,6 @@ describe("compileRenderGraph", () => {
       order: 1,
       enabled: true,
       locked: false,
-      sequence: "seq_aaaaaaaaaa",
       items: [{
         id: "gfx_aaaaaaaaaa",
         template: "tpl_a2c3d4e5f6",

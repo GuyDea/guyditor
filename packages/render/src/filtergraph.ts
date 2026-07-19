@@ -11,10 +11,12 @@ import type {
   AudioChainNodeParams,
   CompositeNodeParams,
   EncodeNodeParams,
+  KeyNodeParams,
   OverlayNodeParams,
   RenderGraph,
   RenderNode,
   SourceNodeParams,
+  TransformNodeParams,
   TrimNodeParams,
 } from "./ir.js";
 
@@ -33,7 +35,7 @@ export interface CompiledFiltergraph {
 function unsupported(feature: string, affected: readonly string[] = []): never {
   throw makeGuyditorError(
     "E_RENDER_UNSUPPORTED",
-    `${feature} is unsupported by the M0 renderer; Part 12 owns this feature.`,
+    `${feature} is unsupported by the M2 renderer; Part 12 owns this feature.`,
     { affected },
   );
 }
@@ -57,13 +59,6 @@ function fraction(numerator: bigint, denominator: bigint): Fraction {
     numerator: (numerator * sign) / divisor,
     denominator: (denominator * sign) / divisor,
   };
-}
-
-function add(left: Fraction, right: Fraction): Fraction {
-  return fraction(
-    left.numerator * right.denominator + right.numerator * left.denominator,
-    left.denominator * right.denominator,
-  );
 }
 
 function subtract(left: Fraction, right: Fraction): Fraction {
@@ -91,6 +86,11 @@ function seconds(value: TrimNodeParams["in"]): Fraction {
   return fraction(BigInt(value.samples), BigInt(value.rate));
 }
 
+function secondsForFrames(frames: number, fps: string): Fraction {
+  const rate = rational(fps);
+  return fraction(BigInt(frames) * rate.denominator, rate.numerator);
+}
+
 function expression(value: Fraction): string {
   return value.denominator === 1n
     ? value.numerator.toString()
@@ -98,24 +98,22 @@ function expression(value: Fraction): string {
 }
 
 function decimal(value: Fraction, digits = 12): string {
-  if (value.numerator < 0n) graphInvalid("FFmpeg command times must not be negative.");
-  const whole = value.numerator / value.denominator;
-  let remainder = value.numerator % value.denominator;
-  if (remainder === 0n) return whole.toString();
+  const negative = value.numerator < 0n;
+  const numerator = negative ? -value.numerator : value.numerator;
+  const whole = numerator / value.denominator;
+  let remainder = numerator % value.denominator;
+  if (remainder === 0n) return `${negative ? "-" : ""}${whole.toString()}`;
   let decimals = "";
   for (let index = 0; index < digits && remainder !== 0n; index += 1) {
     remainder *= 10n;
     decimals += (remainder / value.denominator).toString();
     remainder %= value.denominator;
   }
-  return `${whole.toString()}.${decimals}`;
+  return `${negative ? "-" : ""}${whole.toString()}.${decimals}`;
 }
 
-function safeNumber(value: bigint, feature: string): number {
-  if (value < 0n || value > BigInt(Number.MAX_SAFE_INTEGER)) {
-    unsupported(`${feature} outside exact integer bounds`);
-  }
-  return Number(value);
+function numberText(value: number): string {
+  return String(Math.round(value * 1_000_000) / 1_000_000);
 }
 
 function isVirtual(source: SourceNodeParams): boolean {
@@ -159,122 +157,76 @@ function atempoFilters(speed: NonNullable<TrimNodeParams["speed"]>): string[] {
   return filters;
 }
 
+function nodeLabel(node: RenderNode): string {
+  return `n${node.id.slice(3)}`;
+}
+
+function inputLabel(label: string): string {
+  return `[${label}]`;
+}
+
 export function compileFiltergraph(graph: RenderGraph, outputPath?: string): CompiledFiltergraph {
   validateRenderGraph(graph);
   const byId = new Map(graph.nodes.map((node) => [node.id, node] as const));
-  const composite = graph.nodes.find((node) => node.kind === "composite");
-  const audiochain = graph.nodes.find((node) => node.kind === "audiochain");
   const encode = graph.nodes.find((node) => node.kind === "encode");
-  if (composite === undefined || audiochain === undefined || encode === undefined) {
-    graphInvalid("The M0 graph requires composite, audiochain, and encode nodes.");
-  }
+  const audiochain = graph.nodes.find((node) => node.kind === "audiochain");
+  const stackComposite = graph.nodes.find((node) =>
+    node.kind === "composite" && (node.params as CompositeNodeParams).mode === "stack");
+  if (encode === undefined) graphInvalid("The graph requires an encode node.");
+  if (audiochain === undefined) graphInvalid("The graph requires an audiochain node.");
+  if (stackComposite === undefined) graphInvalid("The graph requires a stack composite node.");
   const encodeParams = params<EncodeNodeParams>(encode, "encode");
+  const encodeVideoInput = encode.inputs[0];
+  const encodeAudioInput = encode.inputs[1];
   const output = localPath(
     outputPath ?? `${graph.deliverableId}-${graph.variant}.${encodeParams.container}`,
     "output",
   );
-  const canvas = params<CompositeNodeParams>(composite, "composite").canvas;
-  const stages = params<AudioChainNodeParams>(audiochain, "audiochain").stages;
-  const overlays = graph.nodes.filter((node) => node.kind === "overlay");
-  if (stages.length > 0) unsupported("audiochain stages", [audiochain.id]);
-  if (composite.inputs.length === 0 || composite.inputs.length !== audiochain.inputs.length) {
-    graphInvalid("Video and audio sequence slot counts must match.");
-  }
-
   const args: string[] = ["-hide_banner", "-nostdin", "-y"];
   const filters: string[] = [];
   const inputIndexBySource = new Map<string, number>();
+  const keyMaskInput = new Map<string, number>();
+  const overlayInput = new Map<string, number>();
   let inputCount = 0;
 
-  function sourceAndTrim(trimId: string): { source: SourceNodeParams; trim: TrimNodeParams } {
-    const trimNode = byId.get(trimId);
-    if (trimNode === undefined) graphInvalid(`Missing trim node ${trimId}.`, [trimId]);
-    const trim = params<TrimNodeParams>(trimNode, "trim");
-    if (trimNode.inputs.length !== 1) graphInvalid(`Trim ${trimId} requires one source input.`, [trimId]);
-    const sourceNode = byId.get(trimNode.inputs[0]!);
-    if (sourceNode === undefined) graphInvalid(`Trim ${trimId} source is missing.`, [trimId]);
+  for (const sourceNode of graph.nodes.filter(({ kind }) => kind === "source")) {
     const source = params<SourceNodeParams>(sourceNode, "source");
-    if (!isVirtual(source) && !inputIndexBySource.has(sourceNode.id)) {
-      const end = seconds(trim.out);
+    if (isVirtual(source)) continue;
+    const trimNode = graph.nodes.find((node) => node.kind === "trim" && node.inputs[0] === sourceNode.id);
+    if (trimNode === undefined) graphInvalid(`Source ${sourceNode.id} has no trim consumer.`, [sourceNode.id]);
+    const trim = params<TrimNodeParams>(trimNode, "trim");
+    if (source.still === true) {
+      args.push("-loop", "1", "-framerate", graph.outputFps, "-i", localPath(source.path, "input"));
+    } else {
       args.push(
         "-ss",
         "0",
         "-to",
-        decimal(end),
+        decimal(seconds(trim.out)),
         "-i",
         localPath(source.path, "input"),
       );
-      inputIndexBySource.set(sourceNode.id, inputCount);
+    }
+    inputIndexBySource.set(sourceNode.id, inputCount);
+    inputCount += 1;
+  }
+
+  for (const keyNode of graph.nodes.filter(({ kind }) => kind === "key")) {
+    const key = params<KeyNodeParams>(keyNode, "key");
+    for (const mask of key.masks ?? []) {
+      const mapKey = `${keyNode.id}:${mask.id}`;
+      if (mask.animated) {
+        args.push("-i", localPath(mask.path, "input"));
+      } else {
+        args.push("-loop", "1", "-framerate", graph.outputFps, "-i", localPath(mask.path, "input"));
+      }
+      keyMaskInput.set(mapKey, inputCount);
       inputCount += 1;
     }
-    return { source, trim };
   }
 
-  let totalDuration = fraction(0n, 1n);
-  const videoLabels: string[] = [];
-  for (const [slot, trimId] of composite.inputs.entries()) {
-    const { source, trim } = sourceAndTrim(trimId);
-    const duration = outputDuration(trim);
-    totalDuration = add(totalDuration, duration);
-    const outputLabel = `v${String(slot)}`;
-    if (isVirtual(source)) {
-      filters.push(
-        `color=c=${canvas.background}:s=${String(canvas.w)}x${String(canvas.h)}` +
-        `:r=${graph.outputFps}:d=${decimal(duration)},setpts=PTS-STARTPTS[${outputLabel}]`,
-      );
-    } else {
-      const sourceNode = byId.get(byId.get(trimId)!.inputs[0]!)!;
-      const inputIndex = inputIndexBySource.get(sourceNode.id);
-      if (inputIndex === undefined) graphInvalid(`No FFmpeg input exists for ${sourceNode.id}.`);
-      if (!("frames" in trim.in) || !("frames" in trim.out)) {
-        graphInvalid(`Video trim ${trimId} must use frame time.`, [trimId]);
-      }
-      const speed = trim.speed === undefined
-        ? "PTS-STARTPTS"
-        : `(PTS-STARTPTS)*${String(trim.speed.den)}/${String(trim.speed.num)}`;
-      filters.push(
-        `[${String(inputIndex)}:v]trim=start_frame=${String(trim.in.frames)}:end_frame=${String(trim.out.frames)},` +
-        `setpts=${speed},fps=${graph.outputFps},` +
-        `scale=${String(canvas.w)}:${String(canvas.h)}:force_original_aspect_ratio=decrease:flags=bicubic,` +
-        `pad=${String(canvas.w)}:${String(canvas.h)}:(ow-iw)/2:(oh-ih)/2:color=${canvas.background},` +
-        `setsar=1[${outputLabel}]`,
-      );
-    }
-    videoLabels.push(`[${outputLabel}]`);
-  }
-
-  const audioLabels: string[] = [];
-  let outputSampleRate: number | undefined;
-  for (const [slot, trimId] of audiochain.inputs.entries()) {
-    const { source, trim } = sourceAndTrim(trimId);
-    if (!("samples" in trim.in) || !("samples" in trim.out)) {
-      graphInvalid(`Audio trim ${trimId} must use sample time.`, [trimId]);
-    }
-    outputSampleRate ??= trim.in.rate;
-    const outputLabel = `a${String(slot)}`;
-    if (isVirtual(source)) {
-      filters.push(
-        `anullsrc=r=${String(trim.in.rate)}:cl=stereo,` +
-        `atrim=start_sample=0:end_sample=${String(trim.out.samples - trim.in.samples)},` +
-        `asetpts=PTS-STARTPTS[${outputLabel}]`,
-      );
-    } else {
-      const sourceNode = byId.get(byId.get(trimId)!.inputs[0]!)!;
-      const inputIndex = inputIndexBySource.get(sourceNode.id);
-      if (inputIndex === undefined) graphInvalid(`No FFmpeg input exists for ${sourceNode.id}.`);
-      const speedFilters = trim.speed === undefined ? [] : atempoFilters(trim.speed);
-      filters.push(
-        `[${String(inputIndex)}:a]atrim=start_sample=${String(trim.in.samples)}:end_sample=${String(trim.out.samples)},` +
-        `asetpts=PTS-STARTPTS${speedFilters.length === 0 ? "" : `,${speedFilters.join(",")}`},` +
-        `aresample=${String(trim.in.rate)},aformat=sample_fmts=fltp:channel_layouts=stereo[${outputLabel}]`,
-      );
-    }
-    audioLabels.push(`[${outputLabel}]`);
-  }
-
-  const overlayInputs = overlays.map((node, index) => {
-    const overlay = params<OverlayNodeParams>(node, "overlay");
-    if (node.inputs.length !== 1) graphInvalid(`Overlay ${node.id} requires one visual input.`, [node.id]);
+  for (const overlayNode of graph.nodes.filter(({ kind }) => kind === "overlay")) {
+    const overlay = params<OverlayNodeParams>(overlayNode, "overlay");
     args.push(
       "-framerate",
       graph.outputFps,
@@ -283,51 +235,450 @@ export function compileFiltergraph(graph: RenderGraph, outputPath?: string): Com
       "-i",
       localPath(overlay.overlayAssetPath, "input"),
     );
-    const inputIndex = inputCount;
+    overlayInput.set(overlayNode.id, inputCount);
     inputCount += 1;
-    return { node, overlay, inputIndex, index };
-  });
+  }
 
-  filters.push(`${videoLabels.join("")}concat=n=${String(videoLabels.length)}:v=1:a=0[${overlayInputs.length === 0 ? "vout" : "vbase"}]`);
-  let visualLabel = "vbase";
-  const outputFpsForOverlay = rational(graph.outputFps);
-  for (const { overlay, inputIndex, index } of overlayInputs) {
-    const overlayLabel = `ov${String(index)}`;
-    const nextLabel = index === overlayInputs.length - 1 ? "vout" : `vo${String(index)}`;
-    const offset = fraction(
-      BigInt(overlay.atOutputFrame) * outputFpsForOverlay.denominator,
-      outputFpsForOverlay.numerator,
+  const labels = new Map<string, string>();
+  let outputSampleRate: number | undefined;
+
+  function compiledNodeLabel(node: RenderNode): string {
+    if (encodeVideoInput === node.id) return "vout";
+    if (encodeAudioInput === node.id) return "aout";
+    return nodeLabel(node);
+  }
+
+  function durationForNode(nodeId: string): Fraction {
+    const node = byId.get(nodeId);
+    if (node === undefined) graphInvalid(`Render node ${nodeId} is missing.`, [nodeId]);
+    if (node.kind === "trim") return outputDuration(params<TrimNodeParams>(node, "trim"));
+    if (node.kind === "composite") {
+      const composite = params<CompositeNodeParams>(node, "composite");
+      return secondsForFrames(composite.durationFrames ?? 1, graph.outputFps);
+    }
+    if (node.inputs.length === 0) graphInvalid(`Node ${node.id} has no duration-bearing input.`, [node.id]);
+    return durationForNode(node.inputs[0]!);
+  }
+
+  function compiledInput(node: RenderNode, index = 0): string {
+    const inputId = node.inputs[index];
+    if (inputId === undefined) graphInvalid(`${node.kind} node ${node.id} is missing input ${String(index)}.`, [node.id]);
+    const label = labels.get(inputId);
+    if (label === undefined) graphInvalid(`Input ${inputId} for ${node.id} is not compiled.`, [node.id, inputId]);
+    return label;
+  }
+
+  function compileTrim(node: RenderNode): void {
+    const trim = params<TrimNodeParams>(node, "trim");
+    const sourceNode = byId.get(node.inputs[0]!);
+    if (sourceNode === undefined) graphInvalid(`Trim ${node.id} source is missing.`, [node.id]);
+    const source = params<SourceNodeParams>(sourceNode, "source");
+    const label = compiledNodeLabel(node);
+    if (source.stream === "video") {
+      const duration = outputDuration(trim);
+      if (isVirtual(source)) {
+        filters.push(
+          `color=c=0x00000000:s=${String(graph.outputSize.w)}x${String(graph.outputSize.h)}` +
+          `:r=${graph.outputFps}:d=${decimal(duration)},format=yuva444p,setpts=PTS-STARTPTS[${label}]`,
+        );
+      } else {
+        const inputIndex = inputIndexBySource.get(sourceNode.id);
+        if (inputIndex === undefined) graphInvalid(`No FFmpeg input exists for ${sourceNode.id}.`);
+        if (!("frames" in trim.in) || !("frames" in trim.out)) {
+          graphInvalid(`Video trim ${node.id} must use frame time.`, [node.id]);
+        }
+        const speed = trim.speed === undefined
+          ? "PTS-STARTPTS"
+          : `(PTS-STARTPTS)*${String(trim.speed.den)}/${String(trim.speed.num)}`;
+        filters.push(
+          `[${String(inputIndex)}:v]trim=start_frame=${String(trim.in.frames)}:` +
+          `end_frame=${String(trim.out.frames)},setpts=${speed},fps=${graph.outputFps},` +
+          `scale=${String(graph.outputSize.w)}:${String(graph.outputSize.h)}:` +
+          "force_original_aspect_ratio=decrease:flags=bicubic," +
+          `${source.preserveAlpha === true ? "format=yuva444p," : ""}` +
+          `pad=${String(graph.outputSize.w)}:${String(graph.outputSize.h)}:` +
+          `(ow-iw)/2:(oh-ih)/2:color=${source.preserveAlpha === true ? "0x00000000" : "black"},` +
+          "setsar=1" +
+          `[${label}]`,
+        );
+      }
+    } else {
+      if (!("samples" in trim.in) || !("samples" in trim.out)) {
+        graphInvalid(`Audio trim ${node.id} must use sample time.`, [node.id]);
+      }
+      outputSampleRate ??= trim.in.rate;
+      if (isVirtual(source)) {
+        filters.push(
+          `anullsrc=r=${String(trim.in.rate)}:cl=stereo,` +
+          `atrim=start_sample=0:end_sample=${String(trim.out.samples - trim.in.samples)},` +
+          `asetpts=PTS-STARTPTS[${label}]`,
+        );
+      } else {
+        const inputIndex = inputIndexBySource.get(sourceNode.id);
+        if (inputIndex === undefined) graphInvalid(`No FFmpeg input exists for ${sourceNode.id}.`);
+        const speedFilters = trim.speed === undefined ? [] : atempoFilters(trim.speed);
+        filters.push(
+          `[${String(inputIndex)}:a]atrim=start_sample=${String(trim.in.samples)}:` +
+          `end_sample=${String(trim.out.samples)},asetpts=PTS-STARTPTS` +
+          `${speedFilters.length === 0 ? "" : `,${speedFilters.join(",")}`},` +
+          `aresample=${String(trim.in.rate)},aformat=sample_fmts=fltp:` +
+          `channel_layouts=stereo[${label}]`,
+        );
+      }
+    }
+    labels.set(node.id, label);
+  }
+
+  function compileTransform(node: RenderNode): void {
+    const transform = params<TransformNodeParams>(node, "transform");
+    if (transform.keyframes.length !== 1 || transform.keyframes[0]!.atOutputFrame !== 0) {
+      unsupported(`keyframed transform ${node.id}`, [node.id]);
+    }
+    const keyframe = transform.keyframes[0]!;
+    const input = compiledInput(node);
+    const label = compiledNodeLabel(node);
+    const body = `${label}body`;
+    const stages: string[] = [];
+    if (keyframe.crop !== undefined) {
+      const [x, y, width, height] = keyframe.crop;
+      stages.push(
+        `crop=iw*${numberText(width)}:ih*${numberText(height)}:` +
+        `iw*${numberText(x)}:ih*${numberText(y)}`,
+      );
+    }
+    if (keyframe.scale !== undefined) {
+      const scale = Array.isArray(keyframe.scale)
+        ? keyframe.scale
+        : [keyframe.scale, keyframe.scale] as const;
+      stages.push(`scale=iw*${numberText(scale[0])}:ih*${numberText(scale[1])}:flags=bicubic`);
+    }
+    if (keyframe.rotateDeg !== undefined && keyframe.rotateDeg !== 0) {
+      stages.push(
+        `rotate=${numberText(keyframe.rotateDeg)}*PI/180:` +
+        "ow=rotw(iw):oh=roth(ih):c=none",
+      );
+    }
+    stages.push("format=yuva444p");
+    if (keyframe.opacity !== undefined) {
+      stages.push(`colorchannelmixer=aa=${numberText(keyframe.opacity)}`);
+    }
+    filters.push(`${inputLabel(input)}${stages.join(",")}[${body}]`);
+    const duration = durationForNode(node.inputs[0]!);
+    const [positionX, positionY] = keyframe.pos ?? [0.5, 0.5];
+    const [anchorX, anchorY] = keyframe.anchor ?? [0.5, 0.5];
+    const base = `${label}base`;
+    filters.push(
+      `color=c=0x00000000:s=${String(graph.outputSize.w)}x${String(graph.outputSize.h)}` +
+      `:r=${graph.outputFps}:d=${decimal(duration)},format=yuva444p[${base}]`,
     );
     filters.push(
-      `[${String(inputIndex)}:v]format=rgba,setpts=PTS-STARTPTS+${decimal(offset)}/TB[${overlayLabel}]`,
+      `[${base}][${body}]overlay=x='${numberText(positionX)}*main_w-` +
+      `${numberText(anchorX)}*overlay_w':y='${numberText(positionY)}*main_h-` +
+      `${numberText(anchorY)}*overlay_h':eof_action=pass:shortest=0[${label}]`,
     );
+    labels.set(node.id, label);
+  }
+
+  function compileAlphaMatte(node: RenderNode, key: KeyNodeParams): void {
+    const visual = compiledInput(node);
+    const matte = compiledInput(node, 1);
+    const label = compiledNodeLabel(node);
+    const alpha = `${label}alpha`;
+    const alphaFilter = key.matteSource === "alpha" ? "alphaextract" : "format=gray";
     filters.push(
-      `[${visualLabel}][${overlayLabel}]overlay=enable='between(n,${String(overlay.atOutputFrame)},` +
-      `${String(overlay.atOutputFrame + overlay.durationFrames - 1)})':eof_action=pass:shortest=0[${nextLabel}]`,
+      `${inputLabel(matte)}${alphaFilter}${key.invertMatte === true ? ",negate" : ""}[${alpha}]`,
     );
-    visualLabel = nextLabel;
+    filters.push(`${inputLabel(visual)}format=yuva444p[${label}visual]`);
+    filters.push(`[${label}visual][${alpha}]alphamerge[${label}]`);
+    labels.set(node.id, label);
   }
-  filters.push(`${audioLabels.join("")}concat=n=${String(audioLabels.length)}:v=0:a=1[aout]`);
-  const filterComplex = filters.join(";");
-  const outputFps = rational(graph.outputFps);
-  const frameFraction = multiply(totalDuration, outputFps);
-  if (frameFraction.numerator % frameFraction.denominator !== 0n) {
-    graphInvalid("The graph duration is not an integer output frame.");
+
+  function compileChromaKey(node: RenderNode, key: KeyNodeParams): void {
+    const input = compiledInput(node);
+    const label = compiledNodeLabel(node);
+    const sharp = `${label}sharp`;
+    const branch = `${label}kb`;
+    let alpha = `${label}a0`;
+    const tolerance = key.tolerance ?? 0;
+    const softness = key.edgeSoftness ?? 0;
+    const similarity = 0.01 + 0.39 * tolerance;
+    const blend = 0.4 * softness;
+    filters.push(`${inputLabel(input)}split=2[${sharp}][${branch}]`);
+    const keyStages = ["format=yuva444p"];
+    if ((key.preBlur ?? 0) > 0) {
+      keyStages.push(`gblur=sigma=${numberText(key.preBlur!)}:planes=0x6`);
+    }
+    keyStages.push(
+      `chromakey=color=0x${(key.keyColor ?? "#00FF00").slice(1).toUpperCase()}:` +
+      `similarity=${numberText(similarity)}:blend=${numberText(blend)}`,
+      "alphaextract",
+    );
+    filters.push(`[${branch}]${keyStages.join(",")}[${alpha}]`);
+    const refinement: string[] = [];
+    for (let index = 0; index < (key.edge?.erodePx ?? 0); index += 1) refinement.push("erosion");
+    if ((key.edge?.featherPx ?? 0) > 0) {
+      refinement.push(`gblur=sigma=${numberText(0.5 * key.edge!.featherPx)}`);
+    }
+    if (refinement.length > 0) {
+      const refined = `${label}a1`;
+      filters.push(`[${alpha}]${refinement.join(",")}[${refined}]`);
+      alpha = refined;
+    }
+    for (const [index, mask] of (key.masks ?? []).entries()) {
+      const inputIndex = keyMaskInput.get(`${node.id}:${mask.id}`);
+      if (inputIndex === undefined) graphInvalid(`Mask input ${mask.id} is missing.`, [node.id, mask.id]);
+      const maskLabel = `${label}m${String(index)}`;
+      const nextAlpha = `${label}am${String(index)}`;
+      filters.push(`[${String(inputIndex)}:v]format=gray[${maskLabel}]`);
+      filters.push(
+        `[${alpha}][${maskLabel}]blend=all_mode=${mask.role === "garbage" ? "multiply" : "lighten"}` +
+        `[${nextAlpha}]`,
+      );
+      alpha = nextAlpha;
+    }
+    filters.push(`[${sharp}]format=yuva444p[${label}s0]`);
+    let current = `${label}f0`;
+    filters.push(`[${label}s0][${alpha}]alphamerge[${current}]`);
+    const spill = key.spill;
+    if (spill !== undefined && spill.mode === "despill") {
+      const next = `${label}f1`;
+      filters.push(
+        `[${current}]despill=type=${spill.channel ?? "green"}:mix=${numberText(spill.strength)}:` +
+        `expand=${numberText(0.5 * spill.strength)}[${next}]`,
+      );
+      current = next;
+    } else if (spill !== undefined && spill.mode === "average") {
+      const next = `${label}f1`;
+      const strength = numberText(spill.strength);
+      const channel = dominantGeqChannel(key.keyColor ?? "#00FF00");
+      filters.push(`[${current}]${averageGeq(channel, strength)}[${next}]`);
+      current = next;
+    }
+    if (key.postColor !== undefined) {
+      const next = `${label}color`;
+      const brightness = Math.max(-1, Math.min(1, 2 ** key.postColor.exposure - 1));
+      const stages = [
+        `eq=contrast=${numberText(key.postColor.contrast)}:` +
+        `brightness=${numberText(brightness)}:saturation=${numberText(key.postColor.saturation)}`,
+      ];
+      if (key.postColor.temperatureK !== undefined) {
+        stages.push(`colortemperature=temperature=${numberText(key.postColor.temperatureK)}`);
+      }
+      filters.push(`[${current}]${stages.join(",")}[${next}]`);
+      current = next;
+    }
+    if (current !== label) filters.push(`[${current}]null[${label}]`);
+    labels.set(node.id, label);
   }
-  const expectedDurationFrames = safeNumber(
-    frameFraction.numerator / frameFraction.denominator,
-    "output frame count",
-  );
+
+  function compileKey(node: RenderNode): void {
+    const key = params<KeyNodeParams>(node, "key");
+    if (key.method === "alphaMatte") compileAlphaMatte(node, key);
+    else if (key.method === "chroma") compileChromaKey(node, key);
+    else unsupported(`neural matte node ${node.id}`, [node.id]);
+  }
+
+  function compileSequential(node: RenderNode, composite: CompositeNodeParams): void {
+    const settings: NonNullable<CompositeNodeParams["inputSettings"]> =
+      composite.inputSettings ?? node.inputs.map(() => ({ durationFrames: 1 }));
+    const inputLabels = node.inputs.map((_, index) => compiledInput(node, index));
+    const label = compiledNodeLabel(node);
+    if (inputLabels.length === 0) {
+      filters.push(
+        `color=c=0x00000000:s=${String(composite.canvas.w)}x${String(composite.canvas.h)}` +
+        `:r=${graph.outputFps}:d=${decimal(secondsForFrames(composite.durationFrames ?? 1, graph.outputFps))},` +
+        `format=yuva444p[${label}]`,
+      );
+    } else if (settings.every(({ transitionFromPreviousFrames }) =>
+      (transitionFromPreviousFrames ?? 0) === 0)) {
+      filters.push(
+        `${inputLabels.map(inputLabel).join("")}concat=n=${String(inputLabels.length)}:v=1:a=0[${label}]`,
+      );
+    } else {
+      let current = inputLabels[0]!;
+      let elapsedFrames = settings[0]!.durationFrames;
+      for (let index = 1; index < inputLabels.length; index += 1) {
+        const transitionFrames = settings[index]!.transitionFromPreviousFrames ?? 0;
+        const next = index === inputLabels.length - 1 ? label : `${label}x${String(index)}`;
+        if (transitionFrames > 0) {
+          const offsetFrames = elapsedFrames - transitionFrames;
+          filters.push(
+            `${inputLabel(current)}${inputLabel(inputLabels[index]!)}xfade=transition=fade:` +
+            `duration=${decimal(secondsForFrames(transitionFrames, graph.outputFps))}:` +
+            `offset=${decimal(secondsForFrames(offsetFrames, graph.outputFps))}[${next}]`,
+          );
+          elapsedFrames += settings[index]!.durationFrames - transitionFrames;
+        } else {
+          filters.push(`${inputLabel(current)}${inputLabel(inputLabels[index]!)}concat=n=2:v=1:a=0[${next}]`);
+          elapsedFrames += settings[index]!.durationFrames;
+        }
+        current = next;
+      }
+    }
+    labels.set(node.id, label);
+  }
+
+  function compileAnchored(node: RenderNode, composite: CompositeNodeParams): void {
+    const duration = secondsForFrames(composite.durationFrames ?? 1, graph.outputFps);
+    const label = compiledNodeLabel(node);
+    let current = `${label}base`;
+    filters.push(
+      `color=c=0x00000000:s=${String(composite.canvas.w)}x${String(composite.canvas.h)}` +
+      `:r=${graph.outputFps}:d=${decimal(duration)},format=yuva444p[${current}]`,
+    );
+    for (const [index] of node.inputs.entries()) {
+      const setting = composite.inputSettings?.[index];
+      const start = setting?.atOutputFrame ?? 0;
+      const end = start + (setting?.durationFrames ?? 1) - 1;
+      const shifted = `${label}i${String(index)}`;
+      const next = index === node.inputs.length - 1 ? label : `${label}o${String(index)}`;
+      filters.push(
+        `${inputLabel(compiledInput(node, index))}setpts=PTS-STARTPTS+` +
+        `${decimal(secondsForFrames(start, graph.outputFps))}/TB[${shifted}]`,
+      );
+      filters.push(
+        `[${current}][${shifted}]overlay=enable='between(n,${String(start)},${String(end)})':` +
+        `eof_action=pass:shortest=0[${next}]`,
+      );
+      current = next;
+    }
+    if (node.inputs.length === 0) filters.push(`[${current}]null[${label}]`);
+    labels.set(node.id, label);
+  }
+
+  function checkerboardSource(composite: CompositeNodeParams, label: string): void {
+    const duration = decimal(secondsForFrames(composite.durationFrames ?? 1, graph.outputFps));
+    filters.push(
+      `nullsrc=s=${String(composite.canvas.w)}x${String(composite.canvas.h)}:` +
+      `r=${graph.outputFps}:d=${duration},format=rgba,` +
+      "geq=r='if(eq(mod(floor(X/32)+floor(Y/32),2),0),102,153)':" +
+      "g='if(eq(mod(floor(X/32)+floor(Y/32),2),0),102,153)':" +
+      "b='if(eq(mod(floor(X/32)+floor(Y/32),2),0),102,153)':a=255" +
+      `[${label}]`,
+    );
+  }
+
+  function compileStack(node: RenderNode, composite: CompositeNodeParams): void {
+    const label = compiledNodeLabel(node);
+    let current = `${label}base`;
+    if (composite.canvas.background === "checkerboard") checkerboardSource(composite, current);
+    else {
+      filters.push(
+        `color=c=${composite.canvas.background}:s=${String(composite.canvas.w)}x${String(composite.canvas.h)}` +
+        `:r=${graph.outputFps}:d=${decimal(secondsForFrames(composite.durationFrames ?? 1, graph.outputFps))},` +
+        `format=yuva444p[${current}]`,
+      );
+    }
+    for (const [index] of node.inputs.entries()) {
+      const setting = composite.inputSettings?.[index];
+      const blend = setting?.blend ?? "normal";
+      const opacity = setting?.opacity ?? 1;
+      let layer = compiledInput(node, index);
+      if (blend === "normal" && opacity !== 1) {
+        const opacityLabel = `${label}op${String(index)}`;
+        filters.push(`${inputLabel(layer)}format=yuva444p,colorchannelmixer=aa=${numberText(opacity)}[${opacityLabel}]`);
+        layer = opacityLabel;
+      }
+      const next = index === node.inputs.length - 1 ? label : `${label}o${String(index)}`;
+      if (blend === "normal") {
+        filters.push(
+          `[${current}]${inputLabel(layer)}overlay=eof_action=pass:shortest=0[${next}]`,
+        );
+      } else {
+        filters.push(
+          `[${current}]${inputLabel(layer)}blend=all_mode=${blend}:all_opacity=${numberText(opacity)}[${next}]`,
+        );
+      }
+      current = next;
+    }
+    if (node.inputs.length === 0) filters.push(`[${current}]null[${label}]`);
+    labels.set(node.id, label);
+  }
+
+  function compileComposite(node: RenderNode): void {
+    const composite = params<CompositeNodeParams>(node, "composite");
+    if (composite.mode === "timeline.anchored") compileAnchored(node, composite);
+    else if (composite.mode === "stack") compileStack(node, composite);
+    else compileSequential(node, composite);
+  }
+
+  function compileOverlay(node: RenderNode): void {
+    const overlay = params<OverlayNodeParams>(node, "overlay");
+    const inputIndex = overlayInput.get(node.id);
+    if (inputIndex === undefined) graphInvalid(`Overlay input for ${node.id} is missing.`, [node.id]);
+    const label = compiledNodeLabel(node);
+    const overlayLabel = `${label}asset`;
+    const offset = secondsForFrames(overlay.atOutputFrame, graph.outputFps);
+    filters.push(`[${String(inputIndex)}:v]format=rgba,setpts=PTS-STARTPTS+${decimal(offset)}/TB[${overlayLabel}]`);
+    filters.push(
+      `${inputLabel(compiledInput(node))}[${overlayLabel}]overlay=enable='between(n,` +
+      `${String(overlay.atOutputFrame)},${String(overlay.atOutputFrame + overlay.durationFrames - 1)})':` +
+      `eof_action=pass:shortest=0[${label}]`,
+    );
+    labels.set(node.id, label);
+  }
+
+  function compileAudiochain(node: RenderNode): void {
+    const audio = params<AudioChainNodeParams>(node, "audiochain");
+    if (audio.stages.length > 0) unsupported("audiochain stages", [node.id]);
+    const inputs = node.inputs.map((_, index) => compiledInput(node, index));
+    const label = compiledNodeLabel(node);
+    if (inputs.length === 0) graphInvalid("An audiochain needs at least one input.", [node.id]);
+    const settings = audio.inputSettings;
+    if (settings === undefined || settings.every(({ transitionFromPreviousSamples }) =>
+      (transitionFromPreviousSamples ?? 0) === 0)) {
+      filters.push(`${inputs.map(inputLabel).join("")}concat=n=${String(inputs.length)}:v=0:a=1[${label}]`);
+    } else {
+      let current = inputs[0]!;
+      for (let index = 1; index < inputs.length; index += 1) {
+        const transitionSamples = settings[index]?.transitionFromPreviousSamples ?? 0;
+        const next = index === inputs.length - 1 ? label : `${label}x${String(index)}`;
+        if (transitionSamples > 0) {
+          filters.push(
+            `${inputLabel(current)}${inputLabel(inputs[index]!)}acrossfade=` +
+            `d=${decimal(fraction(BigInt(transitionSamples), BigInt(outputSampleRate ?? 48_000)))}:` +
+            `c1=tri:c2=tri[${next}]`,
+          );
+        } else {
+          filters.push(`${inputLabel(current)}${inputLabel(inputs[index]!)}concat=n=2:v=0:a=1[${next}]`);
+        }
+        current = next;
+      }
+    }
+    labels.set(node.id, label);
+  }
+
+  for (const node of graph.nodes) {
+    switch (node.kind) {
+      case "source": break;
+      case "trim": compileTrim(node); break;
+      case "transform": compileTransform(node); break;
+      case "key": compileKey(node); break;
+      case "composite": compileComposite(node); break;
+      case "overlay": compileOverlay(node); break;
+      case "audiochain": compileAudiochain(node); break;
+      case "encode": break;
+    }
+  }
+
+  const visualLabel = labels.get(encode.inputs[0]!);
+  const audioLabel = labels.get(encode.inputs[1]!);
+  if (visualLabel === undefined || audioLabel === undefined) {
+    graphInvalid("Encode inputs were not compiled.", encode.inputs);
+  }
+  const stack = params<CompositeNodeParams>(stackComposite, "composite");
+  const expectedDurationFrames = stack.durationFrames ?? 1;
+  const totalDuration = secondsForFrames(expectedDurationFrames, graph.outputFps);
   const codecArgs = Object.entries(encodeParams.vcodecParams)
     .sort(([left], [right]) => left.localeCompare(right))
     .flatMap(([key, value]) => [`-${key}`, String(value)]);
   args.push(
     "-filter_complex",
-    filterComplex,
+    filters.join(";"),
     "-map",
-    "[vout]",
+    inputLabel(visualLabel),
     "-map",
-    "[aout]",
+    inputLabel(audioLabel),
     "-c:v",
     encodeParams.vcodec,
     ...codecArgs,
@@ -364,6 +715,24 @@ export function compileFiltergraph(graph: RenderGraph, outputPath?: string): Com
     args,
     expectedDurationFrames,
     expectedDurationSeconds: expression(totalDuration),
-    filterComplex,
+    filterComplex: filters.join(";"),
   };
+}
+
+function dominantGeqChannel(color: string): "r" | "g" | "b" {
+  const values = {
+    r: Number.parseInt(color.slice(1, 3), 16),
+    g: Number.parseInt(color.slice(3, 5), 16),
+    b: Number.parseInt(color.slice(5, 7), 16),
+  };
+  return Object.entries(values).sort((left, right) => right[1] - left[1])[0]![0] as "r" | "g" | "b";
+}
+
+function averageGeq(channel: "r" | "g" | "b", strength: string): string {
+  const others = channel === "r" ? ["g", "b"] : channel === "g" ? ["r", "b"] : ["r", "g"];
+  const preserved = ["r", "g", "b"].filter((candidate) => candidate !== channel);
+  return `geq=${preserved.map((candidate) => `${candidate}='${candidate}(X,Y)'`).join(":")}:` +
+    `a='alpha(X,Y)':${channel}='min(${channel}(X,Y),` +
+    `(${others[0]}(X,Y)+${others[1]}(X,Y))/2+(1-${strength})*max(0,` +
+    `${channel}(X,Y)-(${others[0]}(X,Y)+${others[1]}(X,Y))/2))'`;
 }

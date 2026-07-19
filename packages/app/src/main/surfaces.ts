@@ -159,6 +159,27 @@ export const IPC_SURFACES: readonly IpcSurface[] = Object.freeze([
     },
   },
   {
+    service: "CompositorModel",
+    methods: {
+      arrangements: { paramsSchema: emptyParams, resultSchema: { type: "array" }, budgetMs: 20 },
+      keyQcReport: {
+        paramsSchema: {
+          type: "object",
+          required: ["clipId"],
+          properties: { clipId: { type: "string", pattern: "^clp_[a-z2-7]{10}$" } },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 20,
+      },
+      captureGuidance: {
+        paramsSchema: assetIdParams,
+        resultSchema: anyResult,
+        budgetMs: 20,
+      },
+    },
+  },
+  {
     service: "TranscriptEngine",
     methods: {
       importSubtitles: {
@@ -272,6 +293,7 @@ export const IPC_SURFACES: readonly IpcSurface[] = Object.freeze([
         budgetMs: 100,
       },
       renderExport: { paramsSchema: { type: "object" }, resultSchema: anyResult, budgetMs: 20 },
+      renderDiagnostic: { paramsSchema: { type: "object" }, resultSchema: anyResult, budgetMs: 20 },
       validateExport: {
         paramsSchema: {
           type: "object",

@@ -165,6 +165,72 @@ export interface Effect {
   params: Record<string, unknown>;
 }
 
+export type BlendMode =
+  | "normal"
+  | "multiply"
+  | "screen"
+  | "overlay"
+  | "darken"
+  | "lighten"
+  | "addition"
+  | "subtract"
+  | "difference";
+
+export interface Transform2D {
+  anchor: { x: number; y: number };
+  position: { x: number; y: number };
+  scale: { x: number; y: number };
+  rotationDeg: number;
+  crop?: { x: number; y: number; w: number; h: number };
+}
+
+export interface ColorCorrection {
+  exposure: number;
+  contrast: number;
+  temperatureK?: number;
+  tint?: number;
+  saturation: number;
+}
+
+export interface ChromaKeyParams {
+  keyColor: string;
+  tolerance: number;
+  softness: number;
+  preBlur: number;
+  edge: { erodePx: number; featherPx: number };
+  spill: { mode: "off" | "despill" | "average"; strength: number };
+}
+
+export interface NeuralMatteParams {
+  model: "rvm_mobilenetv3" | "rvm_resnet50";
+  matteAssetId?: string;
+  downsampleRatio: number;
+  stabilization: {
+    enabled: boolean;
+    alphaMin: number;
+    motionGain: number;
+    minSpeckleArea: number;
+  };
+}
+
+export interface KeyMask {
+  id: string;
+  role: "garbage" | "holdout";
+  shape: "rect" | "ellipse" | "polygon";
+  points: Array<{ x: number; y: number }>;
+  featherPx: number;
+  frames?: { from: number; to: number };
+}
+
+export interface KeySettings {
+  schema: "guyditor/key@1";
+  mode: "off" | "chroma" | "neural";
+  chroma?: ChromaKeyParams;
+  neural?: NeuralMatteParams;
+  masks: KeyMask[];
+  postColor?: ColorCorrection;
+}
+
 export interface Layer {
   id: string;
   kind:
@@ -184,11 +250,11 @@ export interface Layer {
   enabled: boolean;
   locked: boolean;
   opacity?: number;
-  blend?: string;
-  transform?: unknown;
+  blend?: BlendMode;
+  transform?: Transform2D;
   matte?: { layerId: string; source: "alpha" | "luma"; invert?: boolean };
   pip?: unknown;
-  adjustment?: unknown;
+  adjustment?: ColorCorrection;
   ducking?: unknown;
   sequence?: string;
   items?: PlacedItem[];

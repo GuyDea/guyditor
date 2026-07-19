@@ -1,6 +1,6 @@
-export const FIXTURE_GENERATOR_VERSION = "1.2.0";
+export const FIXTURE_GENERATOR_VERSION = "1.3.0";
 
-export const REQUIRED_PROJECT_TEMPLATES = Object.freeze(["basic", "annotated", "ac003"]);
+export const REQUIRED_PROJECT_TEMPLATES = Object.freeze(["basic", "annotated", "ac003", "ac005"]);
 
 export const REQUIRED_PROJECT_TEMPLATE_PATHS = Object.freeze([
   "episode.guyditor.yaml",
@@ -24,6 +24,7 @@ export const REQUIRED_FIXTURE_PATHS = Object.freeze([
   "stills/logo-256.png",
   "disc-track-720p30-8s.mp4",
   "generated/frozen-overlay.png",
+  "generated/ac005-foreground.png",
   "transcripts/short-exact.json",
   "transcripts/drift-2800w-20m.json",
 ]);
@@ -45,6 +46,7 @@ export const REQUIRED_GROUND_TRUTH_KEYS = Object.freeze({
   "stills/logo-256.png": Object.freeze(["height", "width"]),
   "disc-track-720p30-8s.mp4": Object.freeze(["centerPath", "radius"]),
   "generated/frozen-overlay.png": Object.freeze(["frozen", "height", "width"]),
+  "generated/ac005-foreground.png": Object.freeze(["foreground", "height", "width"]),
   "transcripts/short-exact.json": Object.freeze(["duration", "wordCount"]),
   "transcripts/drift-2800w-20m.json": Object.freeze([
     "duration",
@@ -63,6 +65,7 @@ export const EXPECTED_FIXTURE_KINDS = Object.freeze({
   "stills/logo-256.png": "image",
   "disc-track-720p30-8s.mp4": "video",
   "generated/frozen-overlay.png": "image",
+  "generated/ac005-foreground.png": "image",
   "transcripts/short-exact.json": "sidecar",
   "transcripts/drift-2800w-20m.json": "sidecar",
 });
@@ -191,6 +194,11 @@ function validateGroundTruth(errors, fixturePath, truth) {
       expectGroundTruth(errors, fixturePath, truth, "frozen", true);
       expectGroundTruth(errors, fixturePath, truth, "height", 360);
       expectGroundTruth(errors, fixturePath, truth, "width", 640);
+      break;
+    case "generated/ac005-foreground.png":
+      expectGroundTruth(errors, fixturePath, truth, "foreground", true);
+      expectGroundTruth(errors, fixturePath, truth, "height", 1080);
+      expectGroundTruth(errors, fixturePath, truth, "width", 1920);
       break;
     case "transcripts/short-exact.json":
       expectDuration(errors, fixturePath, truth, 576_000);

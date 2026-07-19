@@ -26,11 +26,17 @@ import type {
   TransactionRecord,
 } from "../../../core/src/index.js";
 import {
+  buildCaptureGuidanceReport,
+  enqueueKeyQc,
   loadPeaks,
   MediaEngine,
   MlworkerSupervisor,
+  probeMedia,
   proxyCachePaths,
+  registerKeyQcExecutor,
+  writeCaptureGuidanceReport,
 } from "../../../media/src/index.js";
+import type { KeyQcJobPayload, KeyQcReport } from "../../../media/src/index.js";
 import {
   compileFillerProposal,
   createAnnotationTranscriptSource,
@@ -46,6 +52,7 @@ import { RenderService, TemplateRegistry } from "../../../render/src/index.js";
 import type { ExportReport } from "../../../render/src/index.js";
 import { AuditLog, CostMeter } from "../../../agent/src/index.js";
 import type { BudgetConfig } from "../../../agent/src/index.js";
+import { CompositorModel } from "../../../compositor/src/index.js";
 
 import type {
   ExecuteRequest,
@@ -90,6 +97,7 @@ interface ProjectServices {
   media: MediaEngine;
   transcript: TranscriptEngine;
   annotations: AnnotationService;
+  compositor: CompositorModel;
   render: RenderService;
   templates: TemplateRegistry;
   unsubscribeJobs: () => void;
@@ -321,6 +329,30 @@ export class WindowServiceHost {
       },
     });
     const media = new MediaEngine({ jobQueue: jobs, mlworker: this.#app.mlworker });
+    registerKeyQcExecutor(jobs);
+    const compositor = new CompositorModel({
+      onKeyQcRun: ({ project, clipId, shotBoundaries }) => {
+        const clip = project.sequences.flatMap(({ clips }) => clips).find(({ id }) => id === clipId);
+        if (clip === undefined) throw new Error(`Clip ${clipId} does not exist.`);
+        const asset = project.assets.find(({ id }) => id === clip.asset);
+        const key = clip.effects?.find(({ kind }) => kind === "key");
+        if (asset === undefined || key === undefined) {
+          throw new Error(`Clip ${clipId} has no keyed source asset.`);
+        }
+        enqueueKeyQc(jobs, {
+          projectRoot: store.root,
+          sourcePath: isAbsolute(asset.path) ? asset.path : resolve(store.root, asset.path),
+          clipId,
+          assetId: asset.id,
+          width: asset.video?.width ?? asset.image?.width ?? project.settings.timeline.width,
+          height: asset.video?.height ?? asset.image?.height ?? project.settings.timeline.height,
+          frameCount: Math.max(1, clip.source.out.frames - clip.source.in.frames),
+          fps: clip.source.in.fps,
+          keySettings: key.params as unknown as KeyQcJobPayload["keySettings"],
+          shotBoundaries,
+        });
+      },
+    });
     const transcript = new TranscriptEngine({
       appVersion: this.#app.appVersion,
       project: store,
@@ -363,6 +395,9 @@ export class WindowServiceHost {
         if (job.state === "done" && job.kind === "assist.fillers.detect") {
           void this.#createFillerProposal(job).catch(() => undefined);
         }
+        if (job.state === "done" && job.kind === "keyqc.analyze") {
+          void this.#writeCaptureGuidance(job).catch(() => undefined);
+        }
       }
     });
     registerFillerDetectionExecutor(jobs, {
@@ -379,6 +414,7 @@ export class WindowServiceHost {
       media,
       transcript,
       annotations,
+      compositor,
       render,
       templates,
       unsubscribeJobs,
@@ -500,6 +536,16 @@ export class WindowServiceHost {
               assetIds === undefined ? {} : { assetIds },
             )),
         };
+      case "CompositorModel":
+        return project === undefined ? undefined : {
+          arrangements: () => project.compositor.arrangements(),
+          keyQcReport: ({ clipId }: { clipId: string }) => this.#readAnalysis<KeyQcReport>(
+            `${clipId}.keyqc.json`,
+          ),
+          captureGuidance: ({ assetId }: { assetId: string }) => this.#readAnalysis(
+            `${assetId}.capture.json`,
+          ),
+        };
       case "AnnotationService":
         return project === undefined ? undefined : {
           list: async () => resultValue(await project.annotations.list(project.store)),
@@ -525,6 +571,8 @@ export class WindowServiceHost {
             project.render.templateFrame(params),
           renderExport: (params: Parameters<RenderService["renderExport"]>[0]) =>
             project.render.renderExport(params),
+          renderDiagnostic: (params: Parameters<RenderService["renderDiagnostic"]>[0]) =>
+            project.render.renderDiagnostic(params),
           validateExport: ({ deliverableId, revision }: { deliverableId: string; revision: string }) =>
             project.render.validateExport(deliverableId, revision),
           exportReport: () => latestExportReport(project.store),
@@ -624,6 +672,7 @@ export class WindowServiceHost {
       committer,
       proposalStore: project.store,
       templateProvider: project.templates,
+      operationDispatcher: project.compositor.dispatchOperation,
       auditSink: this.#app.auditLog,
       ...(anchorResolvers === undefined ? {} : { anchorResolvers }),
     });
@@ -701,6 +750,30 @@ export class WindowServiceHost {
       idFactory: makeId,
     }));
     this.publisher.publish({ kind: "proposal.updated", proposalId: proposal.id });
+  }
+
+  async #readAnalysis<Value>(filename: string): Promise<Value | null> {
+    const path = join(this.#requireProject().store.root, "sidecars/analysis", filename);
+    try {
+      return JSON.parse(await readFile(path, "utf8")) as Value;
+    } catch {
+      return null;
+    }
+  }
+
+  async #writeCaptureGuidance(job: JobRecord): Promise<void> {
+    const project = this.#requireProject();
+    const payload = job.payload as unknown as KeyQcJobPayload;
+    const asset = project.store.currentProject.assets.find(({ id }) => id === payload.assetId);
+    const report = await this.#readAnalysis<KeyQcReport>(`${payload.clipId}.keyqc.json`);
+    if (asset === undefined || report === null) return;
+    const probe = await probeMedia(isAbsolute(asset.path) ? asset.path : resolve(project.store.root, asset.path));
+    await writeCaptureGuidanceReport(project.store.root, buildCaptureGuidanceReport({
+      assetId: asset.id,
+      keyIntendedFraction: 1,
+      probe,
+      qcReport: report,
+    }));
   }
 
   #requireProject(): ProjectServices {

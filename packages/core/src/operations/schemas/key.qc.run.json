@@ -1,0 +1,15 @@
+{
+  "$id": "guyditor:op/key.qc.run",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["clipId"],
+  "additionalProperties": false,
+  "properties": {
+    "clipId": { "type": "string", "pattern": "^clp_[a-z2-7]{10}$" },
+    "shotBoundaries": {
+      "type": "array",
+      "items": { "type": "integer", "minimum": 0 },
+      "uniqueItems": true
+    }
+  }
+}

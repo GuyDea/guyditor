@@ -74,6 +74,14 @@ const ORDERS = {
   loop: ["enabled", "crossfade"],
   punchIn: ["level", "anchor"],
   point: ["x", "y"],
+  transform: ["anchor", "position", "scale", "rotationDeg", "crop"],
+  crop: ["x", "y", "w", "h"],
+  colorCorrection: ["exposure", "contrast", "temperatureK", "tint", "saturation"],
+  keySettings: ["schema", "mode", "chroma", "neural", "masks", "postColor"],
+  chroma: ["keyColor", "tolerance", "softness", "preBlur", "edge", "spill"],
+  keyEdge: ["erodePx", "featherPx"],
+  keySpill: ["mode", "strength"],
+  keyMask: ["id", "role", "shape", "points", "featherPx", "frames"],
   layer: [
     "id", "kind", "name", "order", "enabled", "locked", "opacity", "blend",
     "transform", "matte", "pip", "adjustment", "ducking", "sequence", "items",
@@ -173,6 +181,13 @@ function orderFor(
   if (key === "transitionAfter") return ORDERS.transition;
   if (key === "loop") return ORDERS.loop;
   if (key === "punchIn") return ORDERS.punchIn;
+  if (key === "transform") return ORDERS.transform;
+  if (key === "crop" && "w" in value && "h" in value) return ORDERS.crop;
+  if (key === "adjustment" || key === "postColor") return ORDERS.colorCorrection;
+  if (key === "params" && value.schema === "guyditor/key@1") return ORDERS.keySettings;
+  if (key === "chroma") return ORDERS.chroma;
+  if (key === "edge" && "erodePx" in value) return ORDERS.keyEdge;
+  if (key === "spill") return ORDERS.keySpill;
   if (key === "anchor" && "x" in value && "y" in value) return ORDERS.point;
   if (key === "matte") return ORDERS.matte;
   if (key === "duration" && "until" in value) return ORDERS.until;
@@ -192,6 +207,7 @@ function orderFor(
 
   const id = typeof value.id === "string" ? value.id : "";
   const prefix = id.slice(0, id.indexOf("_"));
+  if (prefix === "msk") return ORDERS.keyMask;
   if (prefix === "ast") return ORDERS.asset;
   if (prefix === "beat") return ORDERS.beat;
   if (prefix === "seq") return ORDERS.sequence;

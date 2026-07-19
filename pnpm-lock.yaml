@@ -44,6 +44,9 @@ importers:
       '@guyditor/agent':
         specifier: workspace:*
         version: link:../agent
+      '@guyditor/compositor':
+        specifier: workspace:*
+        version: link:../compositor
       '@guyditor/core':
         specifier: workspace:*
         version: link:../core
@@ -91,7 +94,11 @@ importers:
         specifier: 7.3.6
         version: 7.3.6(@types/node@24.13.3)(lightningcss@1.32.0)(yaml@2.9.0)
 
-  packages/compositor: {}
+  packages/compositor:
+    dependencies:
+      '@guyditor/core':
+        specifier: workspace:*
+        version: link:../core
 
   packages/core:
     dependencies:
@@ -115,6 +122,9 @@ importers:
       '@guyditor/core':
         specifier: workspace:*
         version: link:../core
+      '@guyditor/media':
+        specifier: workspace:*
+        version: link:../media
       '@guyditor/transcript':
         specifier: workspace:*
         version: link:../transcript

@@ -26,7 +26,12 @@ const TOOLCHAIN: ToolchainManifest = {
   os: "linux",
 };
 
-function graph(sourcePath = "/tmp/source.mp4", speedRate?: string, withOverlay = false): RenderGraph {
+function graph(
+  sourcePath = "/tmp/source.mp4",
+  speedRate?: string,
+  withOverlay = false,
+  configure?: (project: GuyditorProject) => void,
+): RenderGraph {
   const project: GuyditorProject = {
     format: "guyditor/v1",
     revision: "rev_00001",
@@ -120,6 +125,8 @@ function graph(sourcePath = "/tmp/source.mp4", speedRate?: string, withOverlay =
     }],
   };
 
+  configure?.(project);
+
   return compileRenderGraph({
     project,
     revision: project.revision,
@@ -210,5 +217,103 @@ describe("compileFiltergraph", () => {
     ]));
     expect(command.filterComplex).toContain("overlay=enable='between(n,12,56)'");
     expect(command.filterComplex).toContain("format=rgba");
+  });
+
+  it("lowers stills, static transforms, chroma stages, and ordered blend/overlay chains", () => {
+    const command = compileFiltergraph(graph(
+      "/tmp/source.mp4",
+      undefined,
+      false,
+      (project) => {
+        project.assets.push({
+          id: "ast_bbbbbbbbbb",
+          kind: "image",
+          path: "/tmp/foreground.png",
+          sha256: HASH,
+          probe: { width: 1920, height: 1080 },
+          image: { width: 1920, height: 1080, hasAlpha: true },
+        });
+        project.sequences[0]!.clips[0]!.effects = [
+          {
+            id: "fx_bbbbbbbbbb",
+            kind: "key",
+            params: {
+              schema: "guyditor/key@1",
+              mode: "chroma",
+              chroma: {
+                keyColor: "#1FBF3A",
+                tolerance: 0.35,
+                softness: 0.12,
+                preBlur: 1.5,
+                edge: { erodePx: 1, featherPx: 2 },
+                spill: { mode: "despill", strength: 0.6 },
+              },
+              masks: [],
+            },
+          },
+          {
+            id: "fx_cccccccccc",
+            kind: "transform",
+            params: {
+              crop: { l: 0.05, t: 0.1, r: 0.05, b: 0.1 },
+              scale: 0.8,
+              position: { x: 0.5, y: 0.5 },
+              rotationDeg: 2,
+              opacity: 0.9,
+            },
+          },
+        ];
+        project.layers.push(
+          {
+            id: "lyr_bbbbbbbbbb",
+            kind: "video",
+            name: "presenter",
+            order: 10,
+            enabled: true,
+            locked: false,
+            sequence: "seq_aaaaaaaaaa",
+            blend: "screen",
+          },
+          {
+            id: "lyr_cccccccccc",
+            kind: "image",
+            name: "foreground",
+            order: 20,
+            enabled: true,
+            locked: false,
+            items: [{
+              id: "clp_cccccccccc",
+              asset: "ast_bbbbbbbbbb",
+              at: "timeline:seq_aaaaaaaaaa@0",
+              duration: { frames: 150, fps: "30/1" },
+            }],
+          },
+        );
+      },
+    ), "/tmp/composite.mp4");
+
+    expect(command.args).toEqual(expect.arrayContaining([
+      "-loop",
+      "1",
+      "-framerate",
+      "30/1",
+      "-i",
+      "/tmp/foreground.png",
+    ]));
+    expect(command.filterComplex).toContain("split=2");
+    expect(command.filterComplex).toContain("gblur=sigma=1.5:planes=0x6");
+    expect(command.filterComplex).toContain(
+      "chromakey=color=0x1FBF3A:similarity=0.1465:blend=0.048",
+    );
+    expect(command.filterComplex).toContain("alphaextract");
+    expect(command.filterComplex).toContain("erosion");
+    expect(command.filterComplex).toContain("gblur=sigma=1");
+    expect(command.filterComplex).toContain("alphamerge");
+    expect(command.filterComplex).toContain("despill=type=green:mix=0.6:expand=0.3");
+    expect(command.filterComplex).toContain("crop=");
+    expect(command.filterComplex).toContain("rotate=");
+    expect(command.filterComplex).toContain("colorchannelmixer=aa=0.9");
+    expect(command.filterComplex).toContain("blend=all_mode=screen");
+    expect(command.filterComplex).toMatch(/overlay=.*\[vout\]/u);
   });
 });

@@ -21,6 +21,14 @@ import enableLayerSchema from "./schemas/layer.enable.json" with { type: "json" 
 import disableLayerSchema from "./schemas/layer.disable.json" with { type: "json" };
 import lockLayerSchema from "./schemas/layer.lock.json" with { type: "json" };
 import unlockLayerSchema from "./schemas/layer.unlock.json" with { type: "json" };
+import setLayerSchema from "./schemas/layer.set.json" with { type: "json" };
+import setLayerTransformSchema from "./schemas/layer.transform.set.json" with { type: "json" };
+import setLayerMatteSchema from "./schemas/layer.matte.set.json" with { type: "json" };
+import setClipKeySchema from "./schemas/clip.key.set.json" with { type: "json" };
+import setClipKeyMaskSchema from "./schemas/clip.key.mask.set.json" with { type: "json" };
+import setClipTransformSchema from "./schemas/clip.transform.set.json" with { type: "json" };
+import arrangeCompositionSchema from "./schemas/composition.arrange.json" with { type: "json" };
+import runKeyQcSchema from "./schemas/key.qc.run.json" with { type: "json" };
 import setTransitionSchema from "./schemas/transition.set.json" with { type: "json" };
 import removeTransitionSchema from "./schemas/transition.remove.json" with { type: "json" };
 import assetIngestSchema from "./schemas/asset.ingest.json" with { type: "json" };
@@ -141,6 +149,7 @@ export interface DispatchedOperationApplication {
 export type OperationDispatcher = (
   project: GuyditorProject,
   input: OperationInput,
+  context: OperationContext,
 ) => Result<DispatchedOperationApplication> |
   Promise<Result<DispatchedOperationApplication>>;
 
@@ -202,6 +211,14 @@ const catalog = new Map<string, CatalogEntry>([
   ["layer.disable", catalogEntry(disableLayerSchema, "low", "none", "Disable layer '{name}'")],
   ["layer.lock", catalogEntry(lockLayerSchema, "low", "none", "Lock layer '{name}'")],
   ["layer.unlock", catalogEntry(unlockLayerSchema, "low", "none", "Unlock layer '{name}'")],
+  ["layer.set", catalogEntry(setLayerSchema, "low", "none", "Set layer '{name}'")],
+  ["layer.transform.set", catalogEntry(setLayerTransformSchema, "normal", "none", "Transform layer '{name}'")],
+  ["layer.matte.set", catalogEntry(setLayerMatteSchema, "normal", "none", "Set matte on layer '{name}'")],
+  ["clip.key.set", catalogEntry(setClipKeySchema, "normal", "none", "Set key on {clip}")],
+  ["clip.key.mask.set", catalogEntry(setClipKeyMaskSchema, "normal", "none", "Set key mask on {clip}")],
+  ["clip.transform.set", catalogEntry(setClipTransformSchema, "normal", "none", "Transform {clip}")],
+  ["composition.arrange", catalogEntry(arrangeCompositionSchema, "normal", "none", "Arrange {sequence}")],
+  ["key.qc.run", catalogEntry(runKeyQcSchema, "low", "none", "Analyze key quality for {clip}")],
   ["clip.audio.gain.set", catalogEntry(setClipAudioGainSchema, "low", "none", "Set {clip} gain to {gainDb} dB")],
   ["clip.audio.fade.set", catalogEntry(setClipAudioFadeSchema, "low", "none", "Set audio fades on {clip}")],
   ["transition.set", catalogEntry(setTransitionSchema, "normal", "none", "Set {kind} ({duration}) between {a} and {b}")],
@@ -598,7 +615,7 @@ export class OperationEngine {
           [requested.op],
         );
       } else {
-        const dispatched = await this.#operationDispatcher(working, normalized);
+        const dispatched = await this.#operationDispatcher(working, normalized, context);
         application = dispatched.ok
           ? success({ ...dispatched.value, mutations: [] })
           : dispatched;

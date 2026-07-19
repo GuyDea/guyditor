@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@guyditor/agent": "workspace:*",
+    "@guyditor/compositor": "workspace:*",
     "@guyditor/core": "workspace:*",
     "@guyditor/media": "workspace:*",
     "@guyditor/render": "workspace:*",

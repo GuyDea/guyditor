@@ -4,6 +4,7 @@ import type { TransactionRecord } from "../../../../core/src/index.js";
 import { errorMessage } from "../ipc.js";
 import { useSelectionStore } from "../state/view-state.js";
 import { Panel } from "./Panel.js";
+import { KeyInspector } from "./KeyInspector.js";
 import type { WorkspacePanelProps } from "./types.js";
 
 function actorLabel(transaction: TransactionRecord): string {
@@ -14,6 +15,7 @@ export function InspectorPanel({
   snapshot,
   annotations,
   transcripts,
+  refreshProject,
   setNotice,
 }: WorkspacePanelProps): React.JSX.Element {
   const selectedClipId = useSelectionStore((state) => state.selectedClipId);
@@ -79,6 +81,7 @@ export function InspectorPanel({
         <button type="button" data-testid="project-copy-path" disabled={snapshot === null} onClick={() => snapshot === null ? undefined : void copyText(snapshot.projectPath, "project path")}>Copy path</button>
         <button type="button" data-testid="history-open" disabled={snapshot === null} onClick={() => void openHistory()}>History</button>
       </div>
+      <KeyInspector snapshot={snapshot} refreshProject={refreshProject} setNotice={setNotice} />
       {value === null ? (
         <p className="empty-copy">Select a clip, layer, word, or annotation.</p>
       ) : (

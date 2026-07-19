@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { deriveTimeline } from "../../../../core/src/project/derive.js";
 import { convertTimeRounding } from "../../../../core/src/time/index.js";
@@ -8,11 +8,13 @@ import type {
   AnnotationShape,
   Clip,
   FrameTime,
+  KeySettings,
 } from "../../../../core/src/index.js";
 import captionFontUrl from "../../../../render/assets/fonts/Inconsolata.otf?url";
 import { paintCaptionFrame } from "../../../../render/src/caption-painter.js";
 import type { CaptionPaintContext } from "../../../../render/src/caption-painter.js";
 import type { CaptionFrameSpec } from "../../../../transcript/src/index.js";
+import { ChromaPreviewCanvas } from "../chroma-preview.js";
 import {
   errorMessage,
   executeDirect,
@@ -141,6 +143,7 @@ export function PreviewPanel({
   const [tool, setTool] = useState<AnnotationShape>("pin");
   const [body, setBody] = useState("");
   const [context, setContext] = useState<unknown>(null);
+  const [chromaAvailable, setChromaAvailable] = useState(true);
   const playhead = usePreviewStore((state) => state.playhead);
   const playing = usePreviewStore((state) => state.playing);
   const settled = usePreviewStore((state) => state.settled);
@@ -149,6 +152,8 @@ export function PreviewPanel({
   const setPlaying = usePreviewStore((state) => state.setPlaying);
   const setSettled = usePreviewStore((state) => state.setSettled);
   const setWarning = usePreviewStore((state) => state.setWarning);
+  const diagnosticBackground = usePreviewStore((state) => state.diagnosticBackground);
+  const previewKeySettings = usePreviewStore((state) => state.previewKeySettings);
   const selectAnnotation = useSelectionStore((state) => state.selectAnnotation);
   const selectWord = useSelectionStore((state) => state.selectWord);
   const fps = snapshot?.master.settings.timeline.fps ?? playhead.fps;
@@ -160,6 +165,43 @@ export function PreviewPanel({
   const deliverable = snapshot?.master.deliverables.find(
     ({ id }) => id === snapshot.master.settings.primaryDeliverable,
   );
+  const persistedKeySettings = active?.clip.effects?.find(({ kind }) => kind === "key")
+    ?.params as unknown as KeySettings | undefined;
+  const keySettings = previewKeySettings ?? persistedKeySettings ?? null;
+  const keyPreviewActive = keySettings?.mode === "chroma" && chromaAvailable;
+  const handleChromaReady = useCallback((): void => setChromaAvailable(true), []);
+  const handleChromaUnavailable = useCallback((message: string): void => {
+    setChromaAvailable(false);
+    setWarning(message);
+  }, [setWarning]);
+
+  useEffect(() => {
+    setChromaAvailable(true);
+  }, [keySettings]);
+
+  useEffect(() => {
+    const sample = (): void => {
+      const video = videoRef.current;
+      if (video === null || playing || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+        const error = "Pause on a settled presenter frame before sampling the key color.";
+        setNotice(error);
+        window.dispatchEvent(new CustomEvent("guyditor:key-eyedropper-result", { detail: { error } }));
+        return;
+      }
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, video.videoWidth);
+      canvas.height = Math.max(1, video.videoHeight);
+      const context = canvas.getContext("2d", { willReadFrequently: true });
+      if (context === null) return;
+      context.drawImage(video, 0, 0);
+      const pixel = context.getImageData(Math.floor(canvas.width / 2), Math.floor(canvas.height / 2), 1, 1).data;
+      const color = `#${[pixel[0], pixel[1], pixel[2]].map((channel) =>
+        channel!.toString(16).padStart(2, "0")).join("")}`.toUpperCase();
+      window.dispatchEvent(new CustomEvent("guyditor:key-eyedropper-result", { detail: { color } }));
+    };
+    window.addEventListener("guyditor:key-eyedropper-request", sample);
+    return () => window.removeEventListener("guyditor:key-eyedropper-request", sample);
+  }, [playing, setNotice]);
 
   useEffect(() => {
     let current = true;
@@ -369,12 +411,20 @@ export function PreviewPanel({
       eyebrow="Proxy / settled frame"
       actions={<span className="quality-badge" data-testid="preview-quality">PROXY</span>}
     >
-      <div className="preview-surface" data-testid="preview-surface" data-settled={settled}>
+      <div
+        className="preview-surface"
+        data-testid="preview-surface"
+        data-settled={settled}
+        data-diagnostic={diagnosticBackground}
+      >
+        {keyPreviewActive ? <div className="diagnostic-backdrop" aria-hidden="true" /> : null}
         {proxy === null ? (
           <div className="black-frame"><span>{active === undefined ? "GAP" : "PROXY PENDING"}</span></div>
         ) : (
           <video
             ref={videoRef}
+            className="preview-video-source"
+            data-keyed={keyPreviewActive}
             src={proxy.url}
             muted
             playsInline
@@ -394,6 +444,12 @@ export function PreviewPanel({
             onEnded={() => setPlayhead({ frames: Math.min(duration - 1, playhead.frames + 1), fps })}
           />
         )}
+        <ChromaPreviewCanvas
+          videoRef={videoRef}
+          settings={keySettings}
+          onReady={handleChromaReady}
+          onUnavailable={handleChromaUnavailable}
+        />
         {graphicsFrame === null ? null : (
           <img
             className="graphic-overlay"
@@ -533,7 +589,7 @@ export function PreviewPanel({
         {annotations.length === 0 ? <li className="empty-copy">No annotations.</li> : null}
       </ol>
       {context === null ? null : <pre className="context-json" data-testid="annotation-context-json">{JSON.stringify(context, null, 2)}</pre>}
-      <small className="m2-note">Proxy playback shares deterministic caption and graphics painters with final export. WebGL compositing, HQ, comparison images, freehand, and spotlight remain later M2 work.</small>
+      <small className="m2-note">Proxy playback uses the normative BT.709 chroma-distance formula in WebGL; HQ diagnostics use the FFmpeg render path.</small>
     </Panel>
   );
 }
