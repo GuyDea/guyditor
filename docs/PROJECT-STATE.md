@@ -11,19 +11,20 @@ To resume: open Claude Code in this directory and say "continue the Guyditor bui
   536 unit/property tests, 19 Playwright e2e, golden + contract suites,
   AC-001/002/003/004/005/006 automated, AC-009 harness).
   Gate reports: `docs/gates/`. Requirement coverage: `docs/traceability.md`.
-- **Branch `impl/restyle-001`** (current): amendment 001 task in progress — restyle
-  adapter interface, Kling adapter (deterministic stub mode until credentials exist),
-  ≤10s segmentation planner with cost preflight. Work may sit **uncommitted** in the
-  working tree awaiting Claude's review; do not discard it.
+- **Branch `impl/restyle-001`** (current, clean): amendment 001 step 1 **committed**
+  (5bb1d55) — restyle adapter interface, Kling adapter (deterministic stub mode until
+  credentials exist; live wire format isolated + PROVIDER-VERIFY flagged), ≤10s
+  segmentation planner with whole-plan cost preflight, provenance freezing,
+  staleness, and the plan review UI.
 - **Amendments** (`docs/amendments/`): 001 segmented AI restyle (accepted; in
   progress), 002 global progress visibility (accepted; implemented as FR-907).
 
 ## What Claude does on resume
 
-1. Review the uncommitted task-29 work (or resume the Codex session to finish it),
-   run the full verification chain, commit.
-2. Next task: FR-609 seam application (punch-in alternation + infographic
-   interstitial templates on chunk boundaries).
+1. Next task: FR-609 seam application (punch-in alternation + infographic
+   interstitial templates on chunk boundaries), completing amendment 001.
+2. Verify the Kling wire format against live docs/credentials (one file:
+   `packages/agent/src/adapters/kling-api.ts`).
 3. Then: M3 campaign (shorts, vertical recomposition, publish kits).
 
 ## Waiting on the creator (Martin)
