@@ -237,6 +237,40 @@ export const IPC_SURFACES: readonly IpcSurface[] = Object.freeze([
         resultSchema: anyResult,
         budgetMs: 50,
       },
+      graphicsFrame: {
+        paramsSchema: {
+          type: "object",
+          required: ["deliverableId", "revision", "frame"],
+          properties: {
+            deliverableId: { type: "string", pattern: "^dlv_[a-z2-7]{10}$" },
+            revision: { type: "string", pattern: "^rev_[0-9]{5}$" },
+            frame: { type: "integer", minimum: 0 },
+          },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 100,
+      },
+      templateCatalog: {
+        paramsSchema: emptyParams,
+        resultSchema: { type: "array" },
+        budgetMs: 100,
+      },
+      templateFrame: {
+        paramsSchema: {
+          type: "object",
+          required: ["templateId"],
+          properties: {
+            templateId: { type: "string", pattern: "^tpl_[a-z2-7]{10}$" },
+            params: { type: "object" },
+            seed: { type: "integer", minimum: 0, maximum: 4294967295 },
+            frame: { type: "integer", minimum: 0 },
+          },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 100,
+      },
       renderExport: { paramsSchema: { type: "object" }, resultSchema: anyResult, budgetMs: 20 },
       validateExport: {
         paramsSchema: {

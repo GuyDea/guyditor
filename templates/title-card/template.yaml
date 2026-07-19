@@ -1,0 +1,30 @@
+schema: guyditor/template/v1
+id: tpl_b2c3d4e5f6
+name: Editorial title card
+kind: title
+version: 1.0.0
+engine: overlay/v1
+entry: render.ts
+min_guyditor: 1.0.0
+duration:
+  mode: fixed
+  default: { frames: 120, fps: "30/1" }
+params:
+  type: object
+  additionalProperties: false
+  required: [eyebrow, title, subtitle, accent]
+  properties:
+    eyebrow: { type: string, maxLength: 40, default: "CHAPTER 01" }
+    title: { type: string, minLength: 1, maxLength: 80, default: "Designing for motion" }
+    subtitle: { type: string, maxLength: 120, default: "A practical field guide" }
+    accent: { type: string, pattern: "^#[0-9A-Fa-f]{6}$", default: "#FF6B57" }
+preview:
+  file: preview.png
+  params:
+    eyebrow: CHAPTER 01
+    title: Designing for motion
+    subtitle: A practical field guide
+    accent: "#FF6B57"
+fonts:
+  - { family: Inconsolata Guyditor, file: fonts/Inconsolata.otf, weight: 600 }
+safe_area_aware: true

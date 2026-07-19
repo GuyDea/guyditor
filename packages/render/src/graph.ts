@@ -39,7 +39,10 @@ export interface CompileRenderGraphOptions {
   profile: RenderProfile;
   profileSha256: string;
   toolchain: ToolchainManifest;
+  /** Caption overlays retained under the M1 field name for graph compatibility. */
   overlays?: readonly OverlayNodeParams[];
+  /** Deliberate graphics are part of every output variant, including clean. */
+  graphicOverlays?: readonly OverlayNodeParams[];
 }
 
 function unsupported(feature: string, part: string, affected: readonly string[] = []): never {
@@ -160,14 +163,21 @@ function assertSupportedSubset(project: GuyditorProject, deliverableId: string, 
   }
   for (const layer of project.layers.filter((item) => item.enabled)) {
     if (layer.items !== undefined) {
-      const overlayLayer = layer.kind === "text" || layer.kind === "image" || layer.kind === "animation";
-      unsupported(
-        overlayLayer ? `overlay items layer ${layer.id}` : `items layers (${layer.id})`,
-        overlayLayer ? "Part 7" : "Part 6",
-        [layer.id],
-      );
+      const graphicsLayer = (layer.kind === "text" || layer.kind === "animation") &&
+        layer.items.every((item) => /^gfx_[a-z2-7]{10}$/u.test(item.id) && item.template !== undefined);
+      if (!graphicsLayer) {
+        const overlayLayer = layer.kind === "text" || layer.kind === "image" || layer.kind === "animation";
+        unsupported(
+          overlayLayer ? `overlay items layer ${layer.id}` : `items layers (${layer.id})`,
+          overlayLayer ? "Part 7" : "Part 6",
+          [layer.id],
+        );
+      }
     }
-    if (layer.kind !== "video" && layer.kind !== "caption") {
+    if (
+      layer.kind !== "video" && layer.kind !== "caption" &&
+      layer.kind !== "text" && layer.kind !== "animation"
+    ) {
       unsupported(`${layer.kind} layer ${layer.id}`, "Part 6", [layer.id]);
     }
     if (layer.transform !== undefined || layer.opacity !== undefined || layer.blend !== undefined ||
@@ -327,6 +337,9 @@ export function compileRenderGraph(options: CompileRenderGraphOptions): RenderGr
     },
   } satisfies CompositeNodeParams);
   let visualRoot = composite;
+  for (const overlay of options.graphicOverlays ?? []) {
+    visualRoot = pushNode(nodes, nextId, "overlay", [visualRoot.id], structuredClone(overlay));
+  }
   if (variant === "burnin") {
     for (const overlay of options.overlays ?? []) {
       visualRoot = pushNode(nodes, nextId, "overlay", [visualRoot.id], structuredClone(overlay));

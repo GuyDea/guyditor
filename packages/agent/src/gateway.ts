@@ -23,6 +23,7 @@ import type {
   OperationInput,
   ProjectStore,
   Proposal,
+  TemplateProvider,
 } from "../../core/src/index.js";
 import type { DataClass } from "./audit-types.js";
 import type { AuditLog } from "./audit-log.js";
@@ -60,6 +61,7 @@ export interface AgentGatewayOptions {
   policySnapshot?: object;
   transcript?: AnnotationTranscriptSource;
   sessionIdFactory?: () => string;
+  templateProvider?: TemplateProvider;
 }
 
 export interface StartedAgentGateway {
@@ -143,6 +145,7 @@ export class AgentGateway {
   readonly #director: GatewayDirector;
   readonly #policySnapshot: object;
   readonly #transcript: AnnotationTranscriptSource | undefined;
+  readonly #templateProvider: TemplateProvider | undefined;
   readonly #sessions: SessionManager;
   readonly #transports = new Map<string, ActiveTransport>();
   #http: Server | undefined;
@@ -160,6 +163,7 @@ export class AgentGateway {
     };
     this.#policySnapshot = structuredClone(options.policySnapshot ?? {});
     this.#transcript = options.transcript;
+    this.#templateProvider = options.templateProvider;
     this.#sessions = new SessionManager(this.#audit, {
       ...(options.sessionIdFactory === undefined
         ? {}
@@ -395,6 +399,9 @@ export class AgentGateway {
           appVersion: "0.0.0",
           proposalStore: this.#project,
           auditSink: this.#audit,
+          ...(this.#templateProvider === undefined
+            ? {}
+            : { templateProvider: this.#templateProvider }),
         });
         const result = await engine.createProposal({
           operations: ops as OperationInput[],

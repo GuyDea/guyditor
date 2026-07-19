@@ -9,6 +9,9 @@
   "dependencies": {
     "@guyditor/core": "workspace:*",
     "@guyditor/transcript": "workspace:*",
-    "@napi-rs/canvas": "1.0.2"
+    "@napi-rs/canvas": "1.0.2",
+    "ajv": "^8.20.0",
+    "esbuild": "0.28.1",
+    "yaml": "^2.9.0"
   }
 }

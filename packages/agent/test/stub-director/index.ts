@@ -7,6 +7,7 @@ import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type {
   AnnotationContextPackage,
   JobOverview,
+  OperationInput,
   Proposal,
 } from "../../../core/src/index.js";
 
@@ -20,6 +21,8 @@ export interface StubDirectorOptions {
   clipId: string;
   gatewayStateFile: string;
   trimFrames?: number;
+  operations?: OperationInput[];
+  title?: string;
 }
 
 export interface StubDirectorResult {
@@ -89,9 +92,9 @@ export async function runStubDirector(
     const proposal = toolValue<Proposal>(await client.callTool({
       name: "proposal_create",
       arguments: {
-        title: `Trim the clip to address ${options.annotationId}: ${context.annotation?.body ?? "review note"}`,
+        title: options.title ?? `Trim the clip to address ${options.annotationId}: ${context.annotation?.body ?? "review note"}`,
         addresses: [options.annotationId],
-        ops: [{
+        ops: options.operations ?? [{
           op: "clip.trim",
           params: {
             clipId: options.clipId,

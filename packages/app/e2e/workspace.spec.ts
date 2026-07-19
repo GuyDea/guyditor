@@ -154,9 +154,49 @@ test("removes a selected transcript range through the canonical sidecar operatio
   try {
     await launched.page.getByTestId("transcript-word-w000002").click();
     await launched.page.getByTestId("transcript-range-remove").click();
-    await expect(launched.page.getByTestId("shell-status")).toContainText("Removed transcript range");
+    const journalPath = join(launched.projectPath!, "history/transactions.jsonl");
+    await expect.poll(() => readFile(journalPath, "utf8"))
+      .toContain('"op":"transcript.range.remove"');
+  } finally {
+    await launched.electronApp.close();
+    await rm(template, { recursive: true, force: true });
+  }
+});
+
+test("places a schema-driven lower third at a word and previews the journaled graphic", async () => {
+  const template = await createWorkspaceProject({ transcript: true });
+  const launched = await launchApp({ projectTemplate: template });
+  try {
+    await launched.page.getByTestId("transcript-word-w000002").click();
+    const catalog = await launched.page.evaluate(() =>
+      window.guyditor.call<Array<{ builtinName?: string }>>(
+        "RenderService",
+        "templateCatalog",
+        {},
+      ));
+    expect(catalog.map(({ builtinName }) => builtinName)).toEqual([
+      "lower-third",
+      "title-card",
+      "callout-box",
+      "full-frame-infographic",
+    ]);
+    await expect(launched.page.getByTestId("graphics-panel")).toContainText("Brand lower third");
+    await launched.page.getByTestId("template-lower-third").click();
+    await launched.page.getByLabel("title *", { exact: true }).fill("Word anchored title");
+    await launched.page.getByTestId("graphic-anchor").selectOption("word");
+    await launched.page.getByTestId("graphic-add").click();
+
+    await expect(launched.page.getByTestId("graphic-instance-list"))
+      .toContainText("Word anchored title");
+    const overlay = launched.page.getByTestId("preview-graphic-overlay");
+    await expect(overlay).toBeVisible();
+    await expect(overlay).toHaveAttribute("src", /^data:image\/png;base64,/u);
     const journal = await readFile(join(launched.projectPath!, "history/transactions.jsonl"), "utf8");
-    expect(journal).toContain('"op":"transcript.range.remove"');
+    expect(journal).toContain('"op":"graphic.add"');
+    expect(journal).toContain("word:w000002");
+    const master = await readFile(join(launched.projectPath!, "episode.guyditor.yaml"), "utf8");
+    expect(master).toContain("tpl_a2c3d4e5f6");
+    expect(master).toContain("Word anchored title");
   } finally {
     await launched.electronApp.close();
     await rm(template, { recursive: true, force: true });

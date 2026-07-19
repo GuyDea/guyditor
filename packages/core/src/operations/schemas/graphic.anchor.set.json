@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["graphicId", "anchor"],
+  "properties": {
+    "graphicId": { "type": "string", "pattern": "^gfx_[a-z2-7]{10}$" },
+    "anchor": {
+      "type": "string",
+      "pattern": "^(ann:ann_[a-z2-7]{10}|(word:w[0-9]{6}(#(start|end))?|beat:beat_[a-z2-7]{10}|clip:clp_[a-z2-7]{10}@[0-9]+|timeline:(seq_[a-z2-7]{10}@[0-9]+|[0-9]+@[0-9]+/[1-9][0-9]*))([+-][0-9]+)?)$"
+    }
+  }
+}

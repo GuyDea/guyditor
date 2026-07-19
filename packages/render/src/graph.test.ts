@@ -150,7 +150,8 @@ function compile(
   model = project(),
   quality: "proxy" | "high" = "high",
   variant: "burnin" | "clean" = "clean",
-  overlays: Array<{ overlayAssetPath: string; overlaySha256: string; atOutputFrame: number; durationFrames: number }> = [],
+  captionOverlays: Array<{ overlayAssetPath: string; overlaySha256: string; atOutputFrame: number; durationFrames: number }> = [],
+  graphicOverlays: Array<{ overlayAssetPath: string; overlaySha256: string; atOutputFrame: number; durationFrames: number }> = [],
 ) {
   return compileRenderGraph({
     project: model,
@@ -161,7 +162,8 @@ function compile(
     profile: PROFILE,
     profileSha256: HASH,
     toolchain: TOOLCHAIN,
-    overlays,
+    overlays: captionOverlays,
+    graphicOverlays,
   });
 }
 
@@ -308,6 +310,20 @@ describe("compileRenderGraph", () => {
     expect(burnin.nodes.at(-1)?.inputs[0]).toBe(burnin.nodes.find(({ kind }) => kind === "overlay")?.id);
   });
 
+  it("emits deliberate graphics overlays in clean and burnin variants", () => {
+    const graphic = {
+      overlayAssetPath: "/tmp/graphics/%08d.png",
+      overlaySha256: HASH,
+      atOutputFrame: 30,
+      durationFrames: 90,
+    };
+
+    expect(compile(project(), "high", "clean", [], [graphic]).nodes
+      .find(({ kind }) => kind === "overlay")?.params).toEqual(graphic);
+    expect(compile(project(), "high", "burnin", [], [graphic]).nodes
+      .find(({ kind }) => kind === "overlay")?.params).toEqual(graphic);
+  });
+
   it("uses a deterministic black visual slot for an audio-only speech clip", () => {
     const model = project();
     model.assets = [{
@@ -346,7 +362,7 @@ describe("compileRenderGraph", () => {
     }));
   });
 
-  it("rejects an items-backed text overlay with Part 7 ownership", () => {
+  it("accepts template-backed graphics layers and rejects non-template placed items", () => {
     const model = project();
     model.layers.push({
       id: "lyr_bbbbbbbbbb",
@@ -355,8 +371,24 @@ describe("compileRenderGraph", () => {
       order: 1,
       enabled: true,
       locked: false,
-      items: [],
+      sequence: "seq_aaaaaaaaaa",
+      items: [{
+        id: "gfx_aaaaaaaaaa",
+        template: "tpl_a2c3d4e5f6",
+        at: "timeline:30@30/1",
+        duration: { frames: 90, fps: "30/1" },
+        params: { title: "A graphic" },
+        seed: 1,
+      }],
     });
+
+    expect(() => compile(model)).not.toThrow();
+    model.layers[1]!.items![0] = {
+      id: "gfx_aaaaaaaaaa",
+      asset: "ast_aaaaaaaaaa",
+      at: "timeline:30@30/1",
+      duration: { frames: 90, fps: "30/1" },
+    };
     expect(() => compile(model)).toThrow(expect.objectContaining({
       code: "E_RENDER_UNSUPPORTED",
       message: expect.stringMatching(/overlay.*Part 7/iu),

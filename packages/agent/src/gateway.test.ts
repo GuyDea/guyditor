@@ -9,6 +9,7 @@ import {
   AnnotationService,
   createProject,
   JobQueue,
+  success,
 } from "../../core/src/index.js";
 import type {
   IdPrefix,
@@ -201,5 +202,73 @@ describe("AgentGateway", () => {
       "tool.call:proposal_get",
       "tool.result:proposal_get",
     ]);
+  });
+
+  it("validates agent-authored graphic proposals through the shared template provider", async () => {
+    const store = await annotatedProject();
+    const userDirectory = await mkdtemp(join(tmpdir(), "guyditor-graphics-gateway-user-"));
+    temporaryDirectories.push(userDirectory);
+    const audit = new AuditLog({ userDir: userDirectory });
+    const { queue: jobs } = JobQueue.open(":memory:");
+    const descriptor = {
+      schema: "guyditor/template/v1" as const,
+      id: "tpl_a2c3d4e5f6",
+      name: "Brand lower third",
+      kind: "lower_third" as const,
+      version: "1.0.0",
+      engine: "overlay/v1" as const,
+      duration: { mode: "fixed" as const, default: { frames: 90, fps: "24/1" } },
+      params: {
+        type: "object",
+        additionalProperties: false,
+        required: ["title"],
+        properties: { title: { type: "string" } },
+      },
+      contentHash: "b".repeat(64),
+    };
+    const gateway = new AgentGateway({
+      auditLog: audit,
+      jobQueue: jobs,
+      project: store,
+      stateDirectory: join(userDirectory, "state"),
+      sessionIdFactory: () => "ses_bbbbbbbbbb",
+      templateProvider: {
+        latest: () => success(descriptor),
+        get: () => success(descriptor),
+      },
+    });
+    const started = await gateway.start();
+    try {
+      const result = await runStubDirector({
+        annotationId: "ann_bbbbbbbbbb",
+        clipId: "clp_aaaaaaaaaa",
+        gatewayStateFile: started.stateFile,
+        title: "Add an anchored lower third",
+        operations: [{
+          op: "graphic.add",
+          params: {
+            templateId: descriptor.id,
+            anchor: "timeline:seq_aaaaaaaaaa@8",
+            duration: "intrinsic",
+            params: { title: "Agent composition" },
+            seed: 17,
+          },
+        }],
+      });
+
+      expect(result.proposal.status).toBe("ready");
+      expect(result.proposal.operations).toMatchObject([{
+        op: "graphic.add",
+        params: {
+          templateId: descriptor.id,
+          anchor: "timeline:seq_aaaaaaaaaa@8",
+          seed: 17,
+        },
+      }]);
+      expect(store.currentProject.templates).toBeUndefined();
+    } finally {
+      await gateway.close();
+      jobs.close();
+    }
   });
 });

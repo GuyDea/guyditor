@@ -160,7 +160,7 @@ small { color: var(--muted); }
 .panel-actions button, .panel-actions select { min-height: 23px; padding: 2px 6px; font-size: 9px; }
 .icon-button { width: 23px; padding: 0 !important; font: 700 13px/1 ui-monospace, monospace; }
 .panel-body { height: calc(100% - 38px); min-height: 0; overflow: auto; }
-.panel-media { grid-column: 1; grid-row: 1; resize: horizontal; }
+.left-stack { grid-column: 1; grid-row: 1; min-width: 0; min-height: 0; display: grid; grid-template-rows: minmax(120px, .72fr) minmax(190px, 1.28fr); gap: 1px; background: #354149; resize: horizontal; }
 .center-stack { grid-column: 2; grid-row: 1; min-width: 0; min-height: 0; display: grid; grid-template-rows: minmax(190px, 1.35fr) minmax(115px, .8fr); gap: 1px; background: #354149; }
 .right-stack { grid-column: 3; grid-row: 1; min-width: 0; min-height: 0; display: grid; grid-template-rows: minmax(190px, 1.25fr) minmax(115px, .75fr); gap: 1px; background: #354149; resize: horizontal; }
 .panel-timeline { grid-column: 1 / -1; grid-row: 2; }
@@ -205,11 +205,35 @@ small { color: var(--muted); }
 .asset-copy strong { margin-bottom: 3px; font-size: 9px; }
 .asset-copy small { margin-bottom: 5px; font: 500 7px/1 ui-monospace, monospace; }
 
+.panel-graphics .panel-body { background: #10171b; }
+.template-rack { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; padding: 6px; border-bottom: 1px solid var(--line); }
+.template-rack button { min-width: 0; display: grid; grid-template-columns: 42px minmax(0, 1fr); grid-template-rows: auto auto; gap: 2px 6px; padding: 4px; text-align: left; }
+.template-rack img { grid-row: 1 / 3; width: 42px; aspect-ratio: 16 / 9; object-fit: cover; border: 1px solid #3b474e; background: #080b0d; }
+.template-rack span, .template-rack small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.template-rack span { align-self: end; font-size: 7px; }
+.template-rack small { font: 500 6px/1 ui-monospace, monospace; text-transform: uppercase; }
+.graphic-compose { padding: 6px; border-bottom: 1px solid var(--line); }
+.template-live-preview { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border: 1px solid #3b474e; background: #020304; }
+.template-param-grid, .graphic-placement { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; margin-top: 6px; }
+.template-param-grid label, .graphic-placement label { min-width: 0; display: grid; gap: 3px; color: var(--muted); font: 600 6px/1 ui-monospace, monospace; text-transform: uppercase; }
+.template-param-grid input, .template-param-grid select, .graphic-placement input, .graphic-placement select { min-width: 0; width: 100%; min-height: 22px; padding: 2px 4px; font-size: 7px; }
+.template-param-grid input[type="color"] { padding: 2px; }
+.template-param-grid .graphic-checkbox { display: flex; align-items: center; gap: 5px; }
+.template-param-grid .graphic-checkbox input { width: auto; min-height: auto; }
+.graphic-actions { display: flex; gap: 4px; margin-top: 6px; }
+.graphic-actions button { min-height: 22px; padding: 2px 6px; font-size: 7px; }
+.graphic-instance-list { display: grid; gap: 3px; padding: 6px; }
+.graphic-instance-list button { min-width: 0; display: block; padding: 5px; text-align: left; }
+.graphic-instance-list strong, .graphic-instance-list small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.graphic-instance-list strong { font-size: 7px; }
+.graphic-instance-list small { margin-top: 3px; font: 500 6px/1 ui-monospace, monospace; }
+
 .panel-preview .panel-body { overflow: auto; background: #11171b; }
 .preview-surface { position: relative; width: min(100%, 680px); aspect-ratio: 16 / 9; margin: 7px auto 0; overflow: hidden; border: 1px solid #3b474e; background: #020304; }
 .preview-surface video, .black-frame { width: 100%; height: 100%; object-fit: contain; }
 .black-frame { display: grid; place-items: center; color: #414b51; background: #010203; font: 650 10px/1 ui-monospace, monospace; letter-spacing: .18em; }
 .caption-overlay { position: absolute; inset: 0; width: 100%; height: 100%; }
+.graphic-overlay { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: fill; pointer-events: none; }
 .annotation-overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; fill: none; stroke: var(--amber); stroke-width: .5; vector-effect: non-scaling-stroke; }
 .settled-badge { position: absolute; top: 6px; right: 6px; max-width: calc(100% - 12px); padding: 3px 5px; border-radius: 3px; color: var(--green); background: rgb(5 14 11 / 78%); font: 600 7px/1.2 ui-monospace, monospace; text-transform: uppercase; }
 .settled-badge[data-state="running"] { color: var(--amber); }

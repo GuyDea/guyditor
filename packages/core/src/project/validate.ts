@@ -344,6 +344,30 @@ function validateAnchorSyntax(project: GuyditorProject): Result<GuyditorProject>
   return undefined;
 }
 
+function validateTemplateGraphics(project: GuyditorProject): Result<GuyditorProject> | undefined {
+  for (const layer of project.layers) {
+    for (const item of layer.items ?? []) {
+      if (item.template === undefined || !/^tpl_[a-z2-7]{10}$/u.test(item.template)) continue;
+      if (!/^gfx_[a-z2-7]{10}$/u.test(item.id)) {
+        return invariantFailure("template graphic gfx_ identity", [layer.id, item.id]);
+      }
+      if (layer.kind !== "text" && layer.kind !== "animation") {
+        return invariantFailure("template graphic text or animation layer", [layer.id, item.id]);
+      }
+      if (
+        item.seed === undefined || !Number.isInteger(item.seed) ||
+        item.seed < 0 || item.seed > 0xffff_ffff
+      ) {
+        return invariantFailure("template graphic stored uint32 seed", [item.id]);
+      }
+      if (project.templates?.[item.template] === undefined) {
+        return invariantFailure("template graphic exact project pin", [item.id, item.template]);
+      }
+    }
+  }
+  return undefined;
+}
+
 export function validateProject(value: unknown): Result<GuyditorProject> {
   if (!validateShape(value)) return schemaFailure(validateShape.errors);
 
@@ -355,6 +379,7 @@ export function validateProject(value: unknown): Result<GuyditorProject> {
     validateGeneratedAssets,
     validateAnnotationSidecar,
     validateAnchorSyntax,
+    validateTemplateGraphics,
   ] as const;
 
   for (const check of checks) {

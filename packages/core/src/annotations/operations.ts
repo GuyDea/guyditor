@@ -591,7 +591,7 @@ function convertAnnotation(
   }
   const item: PlacedItem = {
     id: itemId,
-    ...(assetId === undefined ? { template: templateId! } : { asset: assetId }),
+    ...(assetId === undefined ? { template: templateId!, seed: 0 } : { asset: assetId }),
     at: `ann:${annotation.id}`,
     duration: structuredClone(duration),
     source: { annotationId: annotation.id },

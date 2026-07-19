@@ -4,6 +4,7 @@ import type { FrameTime } from "../../../../core/src/index.js";
 
 export type PanelId =
   | "media"
+  | "graphics"
   | "preview"
   | "transcript"
   | "inspector"
@@ -115,6 +116,7 @@ export const useTimelineViewStore = create<TimelineViewState>((set) => ({
 
 const expandedPanels: Record<PanelId, boolean> = {
   media: false,
+  graphics: false,
   preview: false,
   transcript: false,
   inspector: false,

@@ -26,6 +26,7 @@ import {
   DEFAULT_CAPTION_STYLE,
   buildWordTimelineMap,
   compileCaptionTrack,
+  createTranscriptWordLookup,
   loadPinnedCaptionPreset,
   parseTranscriptSidecar,
   resolveCaptionStyle,
@@ -58,6 +59,18 @@ import {
   createCaptionTextMeasurer,
   renderCaptionOverlaySequence,
 } from "./caption-overlay.js";
+import {
+  GRAPHIC_OVERLAY_RENDERER_VERSION,
+  renderGraphicFrame,
+  renderGraphicOverlaySequence,
+} from "./graphic-overlay.js";
+import {
+  loadTemplateRuntime,
+  renderTemplatePng,
+  TEMPLATE_RENDERER_VERSION,
+} from "./template-runtime.js";
+import { TemplateRegistry } from "./template-registry.js";
+import type { TemplateCatalogEntry } from "./template-registry.js";
 
 const RENDER_PACKAGE_VERSION = "0.0.0";
 
@@ -144,6 +157,7 @@ export interface RenderServiceOptions {
   store: ProjectStore;
   jobQueue: JobQueue;
   profilesRoot?: string | URL;
+  templateRegistry?: TemplateRegistry;
 }
 
 interface PreparedExport {
@@ -239,6 +253,12 @@ function isProposalRevision(revision: string): boolean {
   return /^prp_[a-z2-7]{10}$/u.test(revision);
 }
 
+function requirePreviewFrame(frame: number, label: string): void {
+  if (!Number.isSafeInteger(frame) || frame < 0) {
+    throw new RangeError(`${label} preview frame must be a non-negative safe integer.`);
+  }
+}
+
 function platform(): ToolchainManifest["os"] {
   if (process.platform === "darwin" || process.platform === "win32" || process.platform === "linux") {
     return process.platform;
@@ -253,7 +273,10 @@ async function toolchainManifest(): Promise<ToolchainManifest> {
     ffmpeg: { version: ffmpeg.version, buildSha256: await sha256(ffmpeg.path) },
     ffprobe: { version: ffprobe.version, buildSha256: await sha256(ffprobe.path) },
     renderPackage: RENDER_PACKAGE_VERSION,
-    overlayRenderer: captionOverlayToolchain(),
+    overlayRenderer: {
+      ...captionOverlayToolchain(),
+      version: `${captionOverlayToolchain().version}+${GRAPHIC_OVERLAY_RENDERER_VERSION}+${TEMPLATE_RENDERER_VERSION}`,
+    },
     encoderThreads: 1,
     os: platform(),
   };
@@ -306,6 +329,7 @@ export class RenderService {
   readonly #store: ProjectStore;
   readonly #jobQueue: JobQueue;
   readonly #profilesRoot: string | URL;
+  readonly #templateRegistry: TemplateRegistry;
   readonly #prepared = new Map<string, PreparedExport>();
 
   public constructor(options: RenderServiceOptions) {
@@ -313,6 +337,9 @@ export class RenderService {
     this.#store = options.store;
     this.#jobQueue = options.jobQueue;
     this.#profilesRoot = options.profilesRoot ?? resolve("profiles");
+    this.#templateRegistry = options.templateRegistry ?? new TemplateRegistry({
+      projectRoot: join(this.#projectRoot, "templates"),
+    });
     this.#jobQueue.registerExecutor("render.export", async (job, context) => {
       const prepared = this.#prepared.get(job.jobId);
       if (prepared === undefined) {
@@ -343,9 +370,7 @@ export class RenderService {
     deliverableId: string;
     frame: number;
   }): Promise<CaptionFrameSpec> {
-    if (!Number.isSafeInteger(request.frame) || request.frame < 0) {
-      throw new RangeError("Caption preview frame must be a non-negative safe integer.");
-    }
+    requirePreviewFrame(request.frame, "Caption");
     const project = await this.#loadProject(request.revision);
     await this.#verifySidecars(project);
     const deliverable = project.deliverables.find(({ id }) => id === request.deliverableId);
@@ -360,6 +385,87 @@ export class RenderService {
     return model?.captionsAtFrame(request.frame) ?? {
       cues: [],
       styleResolved: resolveCaptionStyle(DEFAULT_CAPTION_STYLE, {}),
+    };
+  }
+
+  public async templateCatalog(): Promise<TemplateCatalogEntry[]> {
+    const catalog = await this.#templateRegistry.list();
+    if (!catalog.ok) throw catalog.error;
+    return Promise.all(catalog.value.map(async (entry) => ({
+      ...entry,
+      previewDataUrl: `data:image/png;base64,${(await readFile(entry.previewPath)).toString("base64")}`,
+    })));
+  }
+
+  public async templateFrame(request: {
+    templateId: string;
+    params?: Record<string, unknown>;
+    seed?: number;
+    frame?: number;
+  }): Promise<{ dataUrl: string; width: number; height: number }> {
+    const descriptor = await this.#templateRegistry.latest(request.templateId);
+    if (!descriptor.ok) throw descriptor.error;
+    const pkg = await this.#templateRegistry.package(
+      descriptor.value.id,
+      descriptor.value.version,
+      descriptor.value.contentHash,
+    );
+    if (!pkg.ok) throw pkg.error;
+    const runtime = await loadTemplateRuntime(pkg.value);
+    if (!runtime.ok) throw runtime.error;
+    const totalFrames = pkg.value.manifest.duration.default?.frames ?? 120;
+    const frame = request.frame ?? Math.round(totalFrames * 0.38);
+    const png = renderTemplatePng(runtime.value, {
+      params: request.params ?? pkg.value.manifest.preview.params,
+      seed: request.seed ?? 0x4755_5944,
+      frame: Math.max(0, Math.min(totalFrames - 1, frame)),
+      totalFrames,
+      fps: pkg.value.manifest.duration.default?.fps ?? "30/1",
+      width: 640,
+      height: 360,
+      safeArea: { top: 22, right: 32, bottom: 22, left: 32 },
+      brand: { palette: {} },
+    });
+    if (!png.ok) throw png.error;
+    return {
+      dataUrl: `data:image/png;base64,${png.value.toString("base64")}`,
+      width: 640,
+      height: 360,
+    };
+  }
+
+  public async graphicsFrame(request: {
+    revision: string;
+    deliverableId: string;
+    frame: number;
+  }): Promise<{ dataUrl: string; width: number; height: number }> {
+    requirePreviewFrame(request.frame, "Graphics");
+    const project = await this.#loadProject(request.revision);
+    await this.#verifySidecars(project);
+    const deliverable = project.deliverables.find(({ id }) => id === request.deliverableId);
+    if (deliverable === undefined) {
+      throw makeGuyditorError(
+        "E_RENDER_DELIVERABLE_NOT_FOUND",
+        `Deliverable ${request.deliverableId} does not exist at ${project.revision}.`,
+        { affected: [request.deliverableId, project.revision] },
+      );
+    }
+    const sidecars = await this.#captionSidecars(project);
+    const png = await renderGraphicFrame({
+      project,
+      sequenceId: deliverable.sequenceId,
+      registry: this.#templateRegistry,
+      anchorDependencies: { wordLookup: createTranscriptWordLookup(sidecars) },
+      width: project.settings.timeline.width,
+      height: project.settings.timeline.height,
+      fps: project.settings.timeline.fps,
+      frame: request.frame,
+      brand: { palette: {} },
+    });
+    return {
+      dataUrl: `data:image/png;base64,${png.toString("base64")}`,
+      width: project.settings.timeline.width,
+      height: project.settings.timeline.height,
     };
   }
 
@@ -551,6 +657,43 @@ export class RenderService {
           status: "fail",
           message: errorMessage(error),
           affected: [deliverable.captionsTrackId],
+        });
+      }
+    }
+    const graphics = project.layers.flatMap((layer) =>
+      layer.enabled &&
+      (layer.sequence === undefined || layer.sequence === deliverable.sequenceId) &&
+      (layer.kind === "text" || layer.kind === "animation")
+        ? (layer.items ?? []).filter(({ template }) => template !== undefined)
+        : []);
+    if (graphics.length > 0) {
+      try {
+        const sidecars = await this.#captionSidecars(project);
+        await renderGraphicFrame({
+          project,
+          sequenceId: deliverable.sequenceId,
+          registry: this.#templateRegistry,
+          anchorDependencies: { wordLookup: createTranscriptWordLookup(sidecars) },
+          width: project.settings.timeline.width,
+          height: project.settings.timeline.height,
+          fps: project.settings.timeline.fps,
+          frame: 0,
+          brand: { palette: {} },
+        });
+        checks.push({
+          id: "VAL-GRAPHICS",
+          status: "pass",
+          message: `${String(graphics.length)} deliberate graphic instance(s) resolve to pinned deterministic templates.`,
+          affected: graphics.map(({ id }) => id),
+        });
+      } catch (error: unknown) {
+        checks.push({
+          id: "VAL-GRAPHICS",
+          status: "fail",
+          message: errorMessage(error),
+          affected: isGuyditorError(error)
+            ? error.affected
+            : graphics.map(({ id }) => id),
         });
       }
     }
@@ -767,6 +910,27 @@ export class RenderService {
         }];
       }
     }
+    const transcriptSidecars = await this.#captionSidecars(project);
+    const graphicPlan = await renderGraphicOverlaySequence({
+      project,
+      sequenceId: deliverable.sequenceId,
+      registry: this.#templateRegistry,
+      anchorDependencies: { wordLookup: createTranscriptWordLookup(transcriptSidecars) },
+      width: project.settings.timeline.width,
+      height: project.settings.timeline.height,
+      fps: project.settings.timeline.fps,
+      brand: { palette: {} },
+      cacheRoot: join(this.#projectRoot, ".guyditor/cache/render/graphics"),
+    });
+    const graphicOverlays: Parameters<typeof compileRenderGraph>[0]["graphicOverlays"] =
+      graphicPlan === undefined
+        ? []
+        : [{
+            overlayAssetPath: graphicPlan.pathPattern,
+            overlaySha256: graphicPlan.overlaySha256,
+            atOutputFrame: graphicPlan.atOutputFrame,
+            durationFrames: graphicPlan.durationFrames,
+          }];
     const graph = compileRenderGraph({
       project,
       revision: project.revision,
@@ -777,6 +941,7 @@ export class RenderService {
       profileSha256: profile.sha256,
       toolchain: await toolchainManifest(),
       overlays,
+      graphicOverlays,
     });
     const outputPath = exportOutputPath(
       resolve(req.outputDir),

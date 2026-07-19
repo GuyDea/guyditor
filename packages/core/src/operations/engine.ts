@@ -1,5 +1,6 @@
 import { Ajv2020 } from "ajv/dist/2020.js";
 import type { ErrorObject, ValidateFunction } from "ajv";
+import { randomBytes } from "node:crypto";
 
 import trimSchema from "./schemas/clip.trim.json" with { type: "json" };
 import splitSchema from "./schemas/clip.split.json" with { type: "json" };
@@ -55,6 +56,14 @@ import annotationResolveSchema from "./schemas/annotation.resolve.json" with { t
 import annotationRejectSchema from "./schemas/annotation.reject.json" with { type: "json" };
 import annotationReopenSchema from "./schemas/annotation.reopen.json" with { type: "json" };
 import annotationConvertSchema from "./schemas/annotation.convert.json" with { type: "json" };
+import graphicAddSchema from "./schemas/graphic.add.json" with { type: "json" };
+import graphicParamSetSchema from "./schemas/graphic.param.set.json" with { type: "json" };
+import graphicAnchorSetSchema from "./schemas/graphic.anchor.set.json" with { type: "json" };
+import graphicRetimeSchema from "./schemas/graphic.retime.json" with { type: "json" };
+import graphicRemoveSchema from "./schemas/graphic.remove.json" with { type: "json" };
+import templatePinSchema from "./schemas/template.pin.json" with { type: "json" };
+import templateInstallSchema from "./schemas/template.install.json" with { type: "json" };
+import templateUninstallSchema from "./schemas/template.uninstall.json" with { type: "json" };
 import {
   AnchorResolverRegistry,
   computeAnchorTransitions,
@@ -84,6 +93,7 @@ import type {
   IdPrefix,
 } from "../project/index.js";
 import type { TransactionRecord } from "../store/types.js";
+import type { TemplateProvider } from "../templates/index.js";
 import { applyClipOperation } from "./clip.js";
 import type { ClipApplication } from "./clip.js";
 import { applyLayerOperation } from "./layer.js";
@@ -91,6 +101,7 @@ import { applyTransitionOperation } from "./transition.js";
 import { applyAssetOperation } from "./asset.js";
 import { applyAnchorOperation } from "./anchor.js";
 import { assessBatchRisk, buildSemanticDiff } from "./diff.js";
+import { applyGraphicOperation, applyTemplateOperation } from "./graphic.js";
 import type {
   AppliedOperation,
   AuditSink,
@@ -145,6 +156,8 @@ export interface OperationEngineOptions {
   approvedTransitionPresets?: readonly string[];
   continuityGuard?: ContinuityGuard;
   auditSink?: AuditSink;
+  templateProvider?: TemplateProvider;
+  seedFactory?: () => number;
 }
 
 const ajv = new Ajv2020({ allErrors: true, strict: true });
@@ -334,6 +347,54 @@ const catalog = new Map<string, CatalogEntry>([
     "none",
     "Converted annotation {id} to overlay {itemId} on {layerId}",
   )],
+  ["graphic.add", catalogEntry(
+    graphicAddSchema,
+    "normal",
+    "none",
+    "Add {template.name} '{params.title}' at {anchor}",
+  )],
+  ["graphic.param.set", catalogEntry(
+    graphicParamSetSchema,
+    "low",
+    "none",
+    "Update graphic {graphicId} parameters",
+  )],
+  ["graphic.anchor.set", catalogEntry(
+    graphicAnchorSetSchema,
+    "normal",
+    "none",
+    "Move graphic {graphicId} to {anchor}",
+  )],
+  ["graphic.retime", catalogEntry(
+    graphicRetimeSchema,
+    "normal",
+    "none",
+    "Retime graphic {graphicId}",
+  )],
+  ["graphic.remove", catalogEntry(
+    graphicRemoveSchema,
+    "normal",
+    "none",
+    "Remove graphic {graphicId}",
+  )],
+  ["template.pin", catalogEntry(
+    templatePinSchema,
+    "consequential",
+    "none",
+    "Pin template {templateId} to {version}",
+  )],
+  ["template.install", catalogEntry(
+    templateInstallSchema,
+    "low",
+    "none",
+    "Install template package",
+  )],
+  ["template.uninstall", catalogEntry(
+    templateUninstallSchema,
+    "low",
+    "none",
+    "Uninstall template {templateId}@{version}",
+  )],
 ]);
 
 const RISK_RANK: Record<RiskClass, number> = {
@@ -388,6 +449,8 @@ export class OperationEngine {
   readonly #approvedTransitionPresets: ReadonlySet<string>;
   readonly #continuityGuard: ContinuityGuard | undefined;
   readonly #auditSink: AuditSink | undefined;
+  readonly #templateProvider: TemplateProvider | undefined;
+  readonly #seedFactory: () => number;
   readonly #autoAcceptsBySession = new Map<string, number>();
   readonly #undoStack: Array<{
     transactionId: string;
@@ -418,6 +481,8 @@ export class OperationEngine {
     this.#approvedTransitionPresets = new Set(options.approvedTransitionPresets ?? []);
     this.#continuityGuard = options.continuityGuard;
     this.#auditSink = options.auditSink;
+    this.#templateProvider = options.templateProvider;
+    this.#seedFactory = options.seedFactory ?? (() => randomBytes(4).readUInt32BE(0));
   }
 
   public get currentProject(): GuyditorProject {
@@ -499,6 +564,33 @@ export class OperationEngine {
         application = applyLayerOperation(working, normalized, this.#idFactory);
       } else if (requested.op.startsWith("transition.")) {
         application = applyTransitionOperation(working, normalized, this.#idFactory);
+      } else if (requested.op.startsWith("graphic.")) {
+        application = this.#templateProvider === undefined
+          ? operationFailure(
+              "E_TEMPLATE_PROVIDER_UNAVAILABLE",
+              "Template graphics require an installed template provider.",
+              [requested.op],
+            )
+          : await applyGraphicOperation(
+              working,
+              normalized,
+              this.#templateProvider,
+              this.#idFactory,
+              this.#seedFactory,
+            );
+      } else if (requested.op.startsWith("template.")) {
+        application = this.#templateProvider === undefined
+          ? operationFailure(
+              "E_TEMPLATE_PROVIDER_UNAVAILABLE",
+              "Template operations require an installed template provider.",
+              [requested.op],
+            )
+          : await applyTemplateOperation(
+              working,
+              normalized,
+              this.#templateProvider,
+              context.dryRun,
+            );
       } else if (this.#operationDispatcher === undefined) {
         application = operationFailure(
           "E_OP_DISPATCH_UNAVAILABLE",

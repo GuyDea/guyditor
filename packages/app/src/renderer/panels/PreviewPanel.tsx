@@ -136,6 +136,7 @@ export function PreviewPanel({
   const captionCanvasRef = useRef<HTMLCanvasElement>(null);
   const [proxy, setProxy] = useState<ProxyResolution | null>(null);
   const [captionFrame, setCaptionFrame] = useState<CaptionFrameSpec | null>(null);
+  const [graphicsFrame, setGraphicsFrame] = useState<string | null>(null);
   const [captionFontReady, setCaptionFontReady] = useState(false);
   const [tool, setTool] = useState<AnnotationShape>("pin");
   const [body, setBody] = useState("");
@@ -188,6 +189,27 @@ export function PreviewPanel({
     }).catch((error: unknown) => {
       if (current) {
         setCaptionFrame(null);
+        setNotice(errorMessage(error));
+      }
+    });
+    return () => { current = false; };
+  }, [deliverable?.id, playhead.frames, setNotice, snapshot?.revision]);
+
+  useEffect(() => {
+    let current = true;
+    if (snapshot === null || deliverable === undefined) {
+      setGraphicsFrame(null);
+      return () => { current = false; };
+    }
+    void window.guyditor.call<{ dataUrl: string }>("RenderService", "graphicsFrame", {
+      deliverableId: deliverable.id,
+      revision: snapshot.revision,
+      frame: playhead.frames,
+    }).then(({ dataUrl }) => {
+      if (current) setGraphicsFrame(dataUrl);
+    }).catch((error: unknown) => {
+      if (current) {
+        setGraphicsFrame(null);
         setNotice(errorMessage(error));
       }
     });
@@ -372,6 +394,14 @@ export function PreviewPanel({
             onEnded={() => setPlayhead({ frames: Math.min(duration - 1, playhead.frames + 1), fps })}
           />
         )}
+        {graphicsFrame === null ? null : (
+          <img
+            className="graphic-overlay"
+            src={graphicsFrame}
+            alt=""
+            data-testid="preview-graphic-overlay"
+          />
+        )}
         <canvas
           ref={captionCanvasRef}
           className="caption-overlay"
@@ -503,7 +533,7 @@ export function PreviewPanel({
         {annotations.length === 0 ? <li className="empty-copy">No annotations.</li> : null}
       </ol>
       {context === null ? null : <pre className="context-json" data-testid="annotation-context-json">{JSON.stringify(context, null, 2)}</pre>}
-      <small className="m2-note">M1 single-layer proxy playback. WebGL compositing, HQ, comparison images, freehand, and spotlight arrive in M2.</small>
+      <small className="m2-note">Proxy playback shares deterministic caption and graphics painters with final export. WebGL compositing, HQ, comparison images, freehand, and spotlight remain later M2 work.</small>
     </Panel>
   );
 }

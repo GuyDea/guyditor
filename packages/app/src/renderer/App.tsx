@@ -5,6 +5,7 @@ import type { ExportReport } from "../../../render/src/index.js";
 import type { TranscriptSidecar } from "../../../transcript/src/index.js";
 import type { JobOverview, JobStatus, ProjectSnapshot } from "../shared/ipc.js";
 import { GlobalProgress } from "./GlobalProgress.js";
+import { GraphicsPanel } from "./panels/GraphicsPanel.js";
 import { errorMessage, getSnapshot, redoLast, undoLast } from "./ipc.js";
 import { InspectorPanel } from "./panels/InspectorPanel.js";
 import { MediaBrowserPanel } from "./panels/MediaBrowserPanel.js";
@@ -209,8 +210,8 @@ export function App(): React.JSX.Element {
         const index = Math.max(0, annotations.findIndex(({ id }) => id === selected));
         const next = annotations[(index + (event.shiftKey ? -1 : 1) + annotations.length) % annotations.length];
         if (next !== undefined) selectAnnotation(next.id);
-      } else if (/^[1-7]$/u.test(event.key)) {
-        const id = (["media", "preview", "transcript", "inspector", "agent", "timeline", "status"] as PanelId[])[Number(event.key) - 1];
+      } else if (/^[1-8]$/u.test(event.key)) {
+        const id = (["media", "preview", "transcript", "inspector", "agent", "timeline", "status", "graphics"] as PanelId[])[Number(event.key) - 1];
         if (id !== undefined) {
           focusPanel(id);
           document.querySelector<HTMLElement>(`[data-panel="${id}"]`)?.focus();
@@ -282,7 +283,10 @@ export function App(): React.JSX.Element {
         </div>
       </header>
       <div className="workspace-layout">
-        <MediaBrowserPanel {...panelProps} />
+        <div className="left-stack">
+          <MediaBrowserPanel {...panelProps} />
+          <GraphicsPanel {...panelProps} />
+        </div>
         <div className="center-stack">
           <PreviewPanel {...panelProps} />
           <TranscriptPanel {...panelProps} />

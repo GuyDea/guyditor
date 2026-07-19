@@ -1,4 +1,50 @@
 export { compileFiltergraph } from "./filtergraph.js";
+export {
+  TemplateRegistry,
+  templateDescriptor,
+  validateTemplatePackage,
+} from "./template-registry.js";
+export type {
+  LoadedTemplatePackage,
+  TemplateCatalogEntry,
+  TemplateFontDeclaration,
+  TemplateManifest,
+  TemplateRegistryOptions,
+} from "./template-registry.js";
+export { createSeededRng } from "./seeded-rng.js";
+export {
+  TEMPLATE_CANVAS_VERSION,
+  TEMPLATE_RENDERER_VERSION,
+  loadTemplateRuntime,
+  renderTemplatePng,
+  resolveTemplateDuration,
+} from "./template-runtime.js";
+export type { LoadedTemplateRuntime } from "./template-runtime.js";
+export {
+  GRAPHIC_OVERLAY_RENDERER_VERSION,
+  graphicOverlayToolchain,
+  renderGraphicFrame,
+  renderGraphicOverlaySequence,
+} from "./graphic-overlay.js";
+export type {
+  GraphicFrameOptions,
+  GraphicOverlayOptions,
+  GraphicOverlayPlan,
+  GraphicSequenceOptions,
+} from "./graphic-overlay.js";
+export type {
+  BrandContext,
+  DurationSpec,
+  OverlayCanvas2D,
+  OverlayImage,
+  ResolvedFont,
+  ResolvedFontMap,
+  SeededRng,
+  TemplateModule,
+  TemplateRenderContext,
+  TemplateRenderOptions,
+  TemplateStaticContext,
+} from "./template-contract.js";
 export { paintCaptionFrame } from "./caption-painter.js";
 export type { CaptionPaintContext } from "./caption-painter.js";
 export {

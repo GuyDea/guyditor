@@ -9,7 +9,7 @@ export default defineConfig({
       outDir: resolve(import.meta.dirname, "dist/main"),
       rollupOptions: {
         input: resolve(import.meta.dirname, "src/main/index.ts"),
-        external: ["@napi-rs/canvas"],
+        external: ["@napi-rs/canvas", "esbuild"],
       },
     },
   },

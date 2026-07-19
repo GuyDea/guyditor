@@ -1,4 +1,5 @@
 import { cpus } from "node:os";
+import { existsSync } from "node:fs";
 import { access, readFile, readdir } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -41,7 +42,7 @@ import {
   TranscriptEngine,
 } from "../../../transcript/src/index.js";
 import { loadTranscriptWorkspace } from "../../../transcript/src/operations.js";
-import { RenderService } from "../../../render/src/index.js";
+import { RenderService, TemplateRegistry } from "../../../render/src/index.js";
 import type { ExportReport } from "../../../render/src/index.js";
 import { AuditLog, CostMeter } from "../../../agent/src/index.js";
 import type { BudgetConfig } from "../../../agent/src/index.js";
@@ -90,12 +91,22 @@ interface ProjectServices {
   transcript: TranscriptEngine;
   annotations: AnnotationService;
   render: RenderService;
+  templates: TemplateRegistry;
   unsubscribeJobs: () => void;
 }
 
 function resultValue<Value>(result: Result<Value>): Value {
   if (!result.ok) throw result.error;
   return result.value;
+}
+
+function builtinsRoot(): string {
+  const candidates = [
+    resolve("templates"),
+    resolve("../..", "templates"),
+    resolve(import.meta.dirname, "../../../../templates"),
+  ];
+  return candidates.find((candidate) => existsSync(candidate)) ?? candidates[0]!;
 }
 
 function concurrency(value: number | "auto"): number {
@@ -247,6 +258,10 @@ export class AppServiceHost {
   public get profilesRoot(): string {
     return this.#options.profilesRoot ?? resolve("profiles");
   }
+
+  public get userDirectory(): string {
+    return this.#options.userDirectory;
+  }
 }
 
 export class WindowServiceHost {
@@ -317,11 +332,18 @@ export class WindowServiceHost {
         audioPath: (assetId) => projectAudioPath(store, assetId),
       },
     });
+    const templates = new TemplateRegistry({
+      builtinsRoot: builtinsRoot(),
+      userRoot: join(this.#app.userDirectory, "templates"),
+      projectRoot: join(store.root, "templates"),
+      compiledRoot: join(this.#app.userDirectory, "templates", ".compiled"),
+    });
     const render = new RenderService({
       projectRoot: store.root,
       store,
       jobQueue: jobs,
       profilesRoot: this.#app.profilesRoot,
+      templateRegistry: templates,
     });
     const unsubscribeJobs = jobs.onChange(({ kind, job }) => {
       if (kind === "job.progress") {
@@ -358,6 +380,7 @@ export class WindowServiceHost {
       transcript,
       annotations,
       render,
+      templates,
       unsubscribeJobs,
     };
     return this.snapshot();
@@ -495,6 +518,11 @@ export class WindowServiceHost {
           cacheStats: () => project.render.cacheStats(),
           captionFrame: (params: Parameters<RenderService["captionFrame"]>[0]) =>
             project.render.captionFrame(params),
+          graphicsFrame: (params: Parameters<RenderService["graphicsFrame"]>[0]) =>
+            project.render.graphicsFrame(params),
+          templateCatalog: () => project.render.templateCatalog(),
+          templateFrame: (params: Parameters<RenderService["templateFrame"]>[0]) =>
+            project.render.templateFrame(params),
           renderExport: (params: Parameters<RenderService["renderExport"]>[0]) =>
             project.render.renderExport(params),
           validateExport: ({ deliverableId, revision }: { deliverableId: string; revision: string }) =>
@@ -595,6 +623,7 @@ export class WindowServiceHost {
       appVersion: this.#app.appVersion,
       committer,
       proposalStore: project.store,
+      templateProvider: project.templates,
       auditSink: this.#app.auditLog,
       ...(anchorResolvers === undefined ? {} : { anchorResolvers }),
     });
@@ -662,6 +691,7 @@ export class WindowServiceHost {
       committer: project.store,
       proposalStore: project.store,
       operationDispatcher: workspace.dispatcher,
+      templateProvider: project.templates,
       anchorResolvers: resolvers,
       auditSink: this.#app.auditLog,
     });

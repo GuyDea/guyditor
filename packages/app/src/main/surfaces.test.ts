@@ -29,7 +29,13 @@ describe("workspace IPC surfaces", () => {
       MediaEngine: ["ingest", "pickAndIngest", "resolveProxy", "readPeaks"],
       TranscriptEngine: ["enqueueFillerDetection"],
       AnnotationService: ["list", "get", "contextPackage"],
-      RenderService: ["renderExport", "exportReport"],
+      RenderService: [
+        "renderExport",
+        "exportReport",
+        "graphicsFrame",
+        "templateCatalog",
+        "templateFrame",
+      ],
     };
 
     for (const [service, names] of Object.entries(expected)) {
