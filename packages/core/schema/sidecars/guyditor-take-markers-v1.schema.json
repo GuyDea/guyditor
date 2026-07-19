@@ -1,0 +1,67 @@
+{
+  "$id": "https://guyditor.dev/schema/sidecars/guyditor-take-markers-v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "assetId", "markers", "takes"],
+  "properties": {
+    "format": { "const": "guyditor.take-markers/v1" },
+    "assetId": { "$ref": "#/$defs/assetId" },
+    "markers": { "type": "array", "items": { "$ref": "#/$defs/marker" } },
+    "takes": { "type": "array", "items": { "$ref": "#/$defs/take" } }
+  },
+  "$defs": {
+    "assetId": { "type": "string", "pattern": "^ast_[a-z2-7]{10}$" },
+    "markerId": { "type": "string", "pattern": "^mrk_[a-z2-7]{10}$" },
+    "takeId": { "type": "string", "pattern": "^tak_[a-z2-7]{10}$" },
+    "fps": { "type": "string", "pattern": "^[1-9][0-9]*/[1-9][0-9]*$" },
+    "pointTime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["frame", "fps"],
+      "properties": {
+        "frame": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "fps": { "$ref": "#/$defs/fps" }
+      }
+    },
+    "rangeTime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "end", "fps"],
+      "properties": {
+        "start": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "end": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "fps": { "$ref": "#/$defs/fps" }
+      }
+    },
+    "marker": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "assetId", "at", "type", "source"],
+      "properties": {
+        "id": { "$ref": "#/$defs/markerId" },
+        "assetId": { "$ref": "#/$defs/assetId" },
+        "at": { "oneOf": [{ "$ref": "#/$defs/pointTime" }, { "$ref": "#/$defs/rangeTime" }] },
+        "type": { "enum": ["take-start", "take-end", "good", "bad", "mistake", "note", "chapter", "spoken"] },
+        "note": { "type": "string" },
+        "anchor": { "type": "string", "pattern": "^word:w[0-9]{6}$" },
+        "detected": { "type": "boolean" },
+        "source": { "enum": ["json", "notes", "spoken"] }
+      }
+    },
+    "take": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "assetId", "index", "range", "quality", "notes", "sourceMarkerIds"],
+      "properties": {
+        "id": { "$ref": "#/$defs/takeId" },
+        "assetId": { "$ref": "#/$defs/assetId" },
+        "index": { "type": "integer", "minimum": 1, "maximum": 999999 },
+        "range": { "$ref": "#/$defs/rangeTime" },
+        "quality": { "enum": ["good", "bad", "flubbed", "unrated"] },
+        "notes": { "type": "array", "items": { "type": "string" } },
+        "sourceMarkerIds": { "type": "array", "items": { "$ref": "#/$defs/markerId" } }
+      }
+    }
+  }
+}

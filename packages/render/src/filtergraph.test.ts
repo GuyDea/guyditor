@@ -26,7 +26,12 @@ const TOOLCHAIN: ToolchainManifest = {
   os: "linux",
 };
 
-function graph(sourcePath = "/tmp/source.mp4", speedRate?: string): RenderGraph {
+function graph(
+  sourcePath = "/tmp/source.mp4",
+  speedRate?: string,
+  withOverlay = false,
+  configure?: (project: GuyditorProject) => void,
+): RenderGraph {
   const project: GuyditorProject = {
     format: "guyditor/v1",
     revision: "rev_00001",
@@ -120,19 +125,85 @@ function graph(sourcePath = "/tmp/source.mp4", speedRate?: string): RenderGraph 
     }],
   };
 
+  configure?.(project);
+
   return compileRenderGraph({
     project,
     revision: project.revision,
     deliverableId: "dlv_aaaaaaaaaa",
-    variant: "clean",
+    variant: withOverlay ? "burnin" : "clean",
     quality: "high",
     profile: PROFILE,
     profileSha256: HASH,
     toolchain: TOOLCHAIN,
+    overlays: withOverlay ? [{
+      overlayAssetPath: "/tmp/caption-frames/%08d.png",
+      overlaySha256: HASH,
+      atOutputFrame: 12,
+      durationFrames: 45,
+    }] : [],
   });
 }
 
 describe("compileFiltergraph", () => {
+  it("lowers piecewise-linear transform keyframes to FFmpeg frame expressions", () => {
+    const rendered = graph();
+    const sourceComposite = rendered.nodes.find(({ kind }) => kind === "composite");
+    if (sourceComposite === undefined) throw new Error("missing visual composite");
+    const transform = {
+      id: "rn_aaaaaaaaaa",
+      kind: "transform" as const,
+      inputs: [sourceComposite.id],
+      params: {
+        keyframes: [
+          { atOutputFrame: 0, scale: [0.24, 0.24] as [number, number], pos: [0.84, 0.84] as [number, number], anchor: [0.5, 0.5] as [number, number], opacity: 1 },
+          { atOutputFrame: 30, scale: [0.32, 0.32] as [number, number], pos: [0.2, 0.8] as [number, number], anchor: [0.5, 0.5] as [number, number], opacity: 0.8 },
+          { atOutputFrame: 60, scale: [1, 1] as [number, number], pos: [0.5, 0.5] as [number, number], anchor: [0.5, 0.5] as [number, number], opacity: 1 },
+        ],
+        interpolation: "linear" as const,
+      },
+    };
+    const top = rendered.nodes.find(({ kind, params }) =>
+      kind === "composite" && "mode" in params && params.mode === "stack");
+    if (top === undefined) throw new Error("missing stack composite");
+    top.inputs = top.inputs.map((id) => id === sourceComposite.id ? transform.id : id);
+    rendered.nodes.splice(rendered.nodes.indexOf(top), 0, transform);
+
+    const command = compileFiltergraph(rendered, "/tmp/keyframed.mp4");
+    expect(command.filterComplex).toContain("eval=frame");
+    expect(command.filterComplex).toContain("if(lt(n,30)");
+    expect(command.filterComplex).toContain("if(lt(n,60)");
+    expect(command.filterComplex).not.toContain("keyframed transform");
+  });
+
+  it("uses deterministic raster mask/underlay/chrome sequences for final PiP assembly", () => {
+    const rendered = graph("/tmp/source.mp4", undefined, false, (project) => {
+      project.layers[0]!.pip = {
+        style: { mask: { shape: "rounded", cornerRadius: 0.08 } },
+        placement: { base: { anchor: "bottom_right", width: "24%", margin: "4%" } },
+        keyframes: [],
+      };
+    });
+    const pipNode = rendered.nodes.find(({ kind }) => kind === "pip");
+    if (pipNode === undefined || !("styleKeyframes" in pipNode.params)) throw new Error("missing PiP node");
+    pipNode.params.rasterAssets = {
+      maskPath: "/tmp/pip/mask/%08d.png",
+      underlayPath: "/tmp/pip/underlay/%08d.png",
+      chromePath: "/tmp/pip/chrome/%08d.png",
+      sha256: HASH,
+      durationFrames: 150,
+    };
+    const command = compileFiltergraph(rendered, "/tmp/pip.mp4");
+    expect(command.args).toEqual(expect.arrayContaining([
+      "/tmp/pip/mask/%08d.png",
+      "/tmp/pip/underlay/%08d.png",
+      "/tmp/pip/chrome/%08d.png",
+    ]));
+    expect(command.filterComplex).toContain("blend=all_mode=multiply");
+    expect(command.filterComplex).toContain("alphamerge");
+    expect(command.filterComplex).not.toContain("geq=");
+  });
+
   it("lowers trims, a black-and-silent gap, concat, and profile encoding once", () => {
     const command = compileFiltergraph(graph(), "/tmp/output.mp4");
     const args = command.args;
@@ -190,5 +261,117 @@ describe("compileFiltergraph", () => {
     const deliverableId = "dlv_aaaaaaaaaa";
 
     expect(command.args.at(-1)).toBe(`${deliverableId}-clean.mp4`);
+  });
+
+  it("adds an exact-fps image2 input and frame-enabled alpha overlay", () => {
+    const command = compileFiltergraph(graph("/tmp/source.mp4", undefined, true), "/tmp/burnin.mp4");
+    expect(command.args).toEqual(expect.arrayContaining([
+      "-framerate",
+      "30/1",
+      "-start_number",
+      "0",
+      "-i",
+      "/tmp/caption-frames/%08d.png",
+    ]));
+    expect(command.filterComplex).toContain("overlay=enable='between(n,12,56)'");
+    expect(command.filterComplex).toContain("format=rgba");
+  });
+
+  it("lowers stills, static transforms, chroma stages, and ordered blend/overlay chains", () => {
+    const command = compileFiltergraph(graph(
+      "/tmp/source.mp4",
+      undefined,
+      false,
+      (project) => {
+        project.assets.push({
+          id: "ast_bbbbbbbbbb",
+          kind: "image",
+          path: "/tmp/foreground.png",
+          sha256: HASH,
+          probe: { width: 1920, height: 1080 },
+          image: { width: 1920, height: 1080, hasAlpha: true },
+        });
+        project.sequences[0]!.clips[0]!.effects = [
+          {
+            id: "fx_bbbbbbbbbb",
+            kind: "key",
+            params: {
+              schema: "guyditor/key@1",
+              mode: "chroma",
+              chroma: {
+                keyColor: "#1FBF3A",
+                tolerance: 0.35,
+                softness: 0.12,
+                preBlur: 1.5,
+                edge: { erodePx: 1, featherPx: 2 },
+                spill: { mode: "despill", strength: 0.6 },
+              },
+              masks: [],
+            },
+          },
+          {
+            id: "fx_cccccccccc",
+            kind: "transform",
+            params: {
+              crop: { l: 0.05, t: 0.1, r: 0.05, b: 0.1 },
+              scale: 0.8,
+              position: { x: 0.5, y: 0.5 },
+              rotationDeg: 2,
+              opacity: 0.9,
+            },
+          },
+        ];
+        project.layers.push(
+          {
+            id: "lyr_bbbbbbbbbb",
+            kind: "video",
+            name: "presenter",
+            order: 10,
+            enabled: true,
+            locked: false,
+            sequence: "seq_aaaaaaaaaa",
+            blend: "screen",
+          },
+          {
+            id: "lyr_cccccccccc",
+            kind: "image",
+            name: "foreground",
+            order: 20,
+            enabled: true,
+            locked: false,
+            items: [{
+              id: "clp_cccccccccc",
+              asset: "ast_bbbbbbbbbb",
+              at: "timeline:seq_aaaaaaaaaa@0",
+              duration: { frames: 150, fps: "30/1" },
+            }],
+          },
+        );
+      },
+    ), "/tmp/composite.mp4");
+
+    expect(command.args).toEqual(expect.arrayContaining([
+      "-loop",
+      "1",
+      "-framerate",
+      "30/1",
+      "-i",
+      "/tmp/foreground.png",
+    ]));
+    expect(command.filterComplex).toContain("split=2");
+    expect(command.filterComplex).toContain("gblur=sigma=1.5:planes=0x6");
+    expect(command.filterComplex).toContain(
+      "chromakey=color=0x1FBF3A:similarity=0.1465:blend=0.048",
+    );
+    expect(command.filterComplex).toContain("alphaextract");
+    expect(command.filterComplex).toContain("erosion");
+    expect(command.filterComplex).toContain("gblur=sigma=1");
+    expect(command.filterComplex).toContain("alphamerge");
+    expect(command.filterComplex).toContain("despill=type=green:mix=0.6:expand=0.3");
+    expect(command.filterComplex).toContain("crop=");
+    expect(command.filterComplex).toContain("rotate=");
+    expect(command.filterComplex).toContain("colorchannelmixer=aa=0.9");
+    expect(command.filterComplex).toContain("blend=all_mode=screen");
+    expect(command.filterComplex).toMatch(/overlay=.*\[vout\]/u);
   });
 });

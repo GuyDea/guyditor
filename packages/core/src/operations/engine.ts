@@ -1,5 +1,6 @@
 import { Ajv2020 } from "ajv/dist/2020.js";
 import type { ErrorObject, ValidateFunction } from "ajv";
+import { randomBytes } from "node:crypto";
 
 import trimSchema from "./schemas/clip.trim.json" with { type: "json" };
 import splitSchema from "./schemas/clip.split.json" with { type: "json" };
@@ -13,6 +14,16 @@ import setClipGapSchema from "./schemas/clip.gap.set.json" with { type: "json" }
 import setClipOverlapSchema from "./schemas/clip.overlap.set.json" with { type: "json" };
 import setClipAudioGainSchema from "./schemas/clip.audio.gain.set.json" with { type: "json" };
 import setClipAudioFadeSchema from "./schemas/clip.audio.fade.set.json" with { type: "json" };
+import setClipAudioOffsetSchema from "./schemas/clip.audio.offset.set.json" with { type: "json" };
+import setClipAudioChannelsSchema from "./schemas/clip.audio.channels.set.json" with { type: "json" };
+import setClipAudioChainSchema from "./schemas/clip.audio.chain.set.json" with { type: "json" };
+import setSequenceAudioMasterSchema from "./schemas/sequence.audio.master.set.json" with { type: "json" };
+import setClipLoopSchema from "./schemas/clip.loop.set.json" with { type: "json" };
+import setClipAnchorSchema from "./schemas/clip.anchor.set.json" with { type: "json" };
+import setLayerDuckingSchema from "./schemas/layer.ducking.set.json" with { type: "json" };
+import setLayerDuckingOverrideSchema from "./schemas/layer.ducking.override.json" with { type: "json" };
+import setClipColorSchema from "./schemas/clip.color.set.json" with { type: "json" };
+import applyClipLookSchema from "./schemas/clip.look.apply.json" with { type: "json" };
 import addLayerSchema from "./schemas/layer.add.json" with { type: "json" };
 import removeLayerSchema from "./schemas/layer.remove.json" with { type: "json" };
 import reorderLayerSchema from "./schemas/layer.reorder.json" with { type: "json" };
@@ -20,10 +31,29 @@ import enableLayerSchema from "./schemas/layer.enable.json" with { type: "json" 
 import disableLayerSchema from "./schemas/layer.disable.json" with { type: "json" };
 import lockLayerSchema from "./schemas/layer.lock.json" with { type: "json" };
 import unlockLayerSchema from "./schemas/layer.unlock.json" with { type: "json" };
+import setLayerSchema from "./schemas/layer.set.json" with { type: "json" };
+import setLayerTransformSchema from "./schemas/layer.transform.set.json" with { type: "json" };
+import setLayerMatteSchema from "./schemas/layer.matte.set.json" with { type: "json" };
+import setPipStyleSchema from "./schemas/pip.style.set.json" with { type: "json" };
+import placePipSchema from "./schemas/pip.place.json" with { type: "json" };
+import addPipKeyframeSchema from "./schemas/pip.keyframe.add.json" with { type: "json" };
+import removePipKeyframeSchema from "./schemas/pip.keyframe.remove.json" with { type: "json" };
+import applyPipPresetSchema from "./schemas/pip.preset.apply.json" with { type: "json" };
+import solvePipAvoidSchema from "./schemas/pip.avoid.solve.json" with { type: "json" };
+import markRegionSchema from "./schemas/region.mark.json" with { type: "json" };
+import setClipKeySchema from "./schemas/clip.key.set.json" with { type: "json" };
+import setClipKeyMaskSchema from "./schemas/clip.key.mask.set.json" with { type: "json" };
+import setClipTransformSchema from "./schemas/clip.transform.set.json" with { type: "json" };
+import setClipPunchInSchema from "./schemas/clip.punchin.set.json" with { type: "json" };
+import switchClipSourceSchema from "./schemas/clip.source.switch.json" with { type: "json" };
+import arrangeCompositionSchema from "./schemas/composition.arrange.json" with { type: "json" };
+import runKeyQcSchema from "./schemas/key.qc.run.json" with { type: "json" };
 import setTransitionSchema from "./schemas/transition.set.json" with { type: "json" };
 import removeTransitionSchema from "./schemas/transition.remove.json" with { type: "json" };
 import assetIngestSchema from "./schemas/asset.ingest.json" with { type: "json" };
 import assetRemoveSchema from "./schemas/asset.remove.json" with { type: "json" };
+import assetMarkersAttachSchema from "./schemas/asset.markers.attach.json" with { type: "json" };
+import assetTakesSetSchema from "./schemas/asset.takes.set.json" with { type: "json" };
 import transcriptCreateSchema from "./schemas/transcript.create.json" with { type: "json" };
 import transcriptWordCorrectSchema from "./schemas/transcript.word.correct.json" with { type: "json" };
 import transcriptWordReplaceSchema from "./schemas/transcript.word.replace.json" with { type: "json" };
@@ -38,6 +68,17 @@ import transcriptRangeRemoveSchema from "./schemas/transcript.range.remove.json"
 import transcriptRangeRetainSchema from "./schemas/transcript.range.retain.json" with { type: "json" };
 import transcriptRangeCreateClipSchema from "./schemas/transcript.range.createClip.json" with { type: "json" };
 import transcriptRangeShortCandidateSchema from "./schemas/transcript.range.shortCandidate.json" with { type: "json" };
+import pickupSpliceSchema from "./schemas/pickup.splice.json" with { type: "json" };
+import projectWatchFoldersSetSchema from "./schemas/project.watchFolders.set.json" with { type: "json" };
+import captionTrackAddSchema from "./schemas/caption.track.add.json" with { type: "json" };
+import captionTrackRemoveSchema from "./schemas/caption.track.remove.json" with { type: "json" };
+import captionTrackSetSchema from "./schemas/caption.track.set.json" with { type: "json" };
+import captionStyleSetSchema from "./schemas/caption.style.set.json" with { type: "json" };
+import captionBreakSetSchema from "./schemas/caption.break.set.json" with { type: "json" };
+import captionBreakClearSchema from "./schemas/caption.break.clear.json" with { type: "json" };
+import captionWordEmphasisSetSchema from "./schemas/caption.word.emphasis.set.json" with { type: "json" };
+import captionCueRetimeSchema from "./schemas/caption.cue.retime.json" with { type: "json" };
+import captionPresetUpgradeSchema from "./schemas/caption.preset.upgrade.json" with { type: "json" };
 import anchorRebindSchema from "./schemas/anchor.rebind.json" with { type: "json" };
 import annotationCreateSchema from "./schemas/annotation.create.json" with { type: "json" };
 import annotationUpdateSchema from "./schemas/annotation.update.json" with { type: "json" };
@@ -46,6 +87,14 @@ import annotationResolveSchema from "./schemas/annotation.resolve.json" with { t
 import annotationRejectSchema from "./schemas/annotation.reject.json" with { type: "json" };
 import annotationReopenSchema from "./schemas/annotation.reopen.json" with { type: "json" };
 import annotationConvertSchema from "./schemas/annotation.convert.json" with { type: "json" };
+import graphicAddSchema from "./schemas/graphic.add.json" with { type: "json" };
+import graphicParamSetSchema from "./schemas/graphic.param.set.json" with { type: "json" };
+import graphicAnchorSetSchema from "./schemas/graphic.anchor.set.json" with { type: "json" };
+import graphicRetimeSchema from "./schemas/graphic.retime.json" with { type: "json" };
+import graphicRemoveSchema from "./schemas/graphic.remove.json" with { type: "json" };
+import templatePinSchema from "./schemas/template.pin.json" with { type: "json" };
+import templateInstallSchema from "./schemas/template.install.json" with { type: "json" };
+import templateUninstallSchema from "./schemas/template.uninstall.json" with { type: "json" };
 import {
   AnchorResolverRegistry,
   computeAnchorTransitions,
@@ -75,13 +124,20 @@ import type {
   IdPrefix,
 } from "../project/index.js";
 import type { TransactionRecord } from "../store/types.js";
+import type { TemplateProvider } from "../templates/index.js";
 import { applyClipOperation } from "./clip.js";
 import type { ClipApplication } from "./clip.js";
+import {
+  applyAudioColorOperation,
+  isAudioColorOperation,
+} from "./audio-color.js";
 import { applyLayerOperation } from "./layer.js";
 import { applyTransitionOperation } from "./transition.js";
 import { applyAssetOperation } from "./asset.js";
+import { applyProjectOperation } from "./project.js";
 import { applyAnchorOperation } from "./anchor.js";
 import { assessBatchRisk, buildSemanticDiff } from "./diff.js";
+import { applyGraphicOperation, applyTemplateOperation } from "./graphic.js";
 import type {
   AppliedOperation,
   AuditSink,
@@ -121,6 +177,7 @@ export interface DispatchedOperationApplication {
 export type OperationDispatcher = (
   project: GuyditorProject,
   input: OperationInput,
+  context: OperationContext,
 ) => Result<DispatchedOperationApplication> |
   Promise<Result<DispatchedOperationApplication>>;
 
@@ -136,6 +193,8 @@ export interface OperationEngineOptions {
   approvedTransitionPresets?: readonly string[];
   continuityGuard?: ContinuityGuard;
   auditSink?: AuditSink;
+  templateProvider?: TemplateProvider;
+  seedFactory?: () => number;
 }
 
 const ajv = new Ajv2020({ allErrors: true, strict: true });
@@ -163,6 +222,9 @@ function catalogEntry(
 const catalog = new Map<string, CatalogEntry>([
   ["asset.ingest", catalogEntry(assetIngestSchema, "normal", "none", "Ingest {n} assets")],
   ["asset.remove", catalogEntry(assetRemoveSchema, "normal", "none", "Remove {n} assets")],
+  ["asset.markers.attach", catalogEntry(assetMarkersAttachSchema, "low", "none", "Attach {n} markers to {asset}")],
+  ["asset.takes.set", catalogEntry(assetTakesSetSchema, "low", "none", "Set take metadata for {asset}")],
+  ["project.watchFolders.set", catalogEntry(projectWatchFoldersSetSchema, "low", "none", "Configure {n} capture watch folders")],
   ["clip.trim", catalogEntry(trimSchema, "normal", "none", "Trim {clip}")],
   ["clip.split", catalogEntry(splitSchema, "normal", "none", "Split {clip}")],
   ["clip.join", catalogEntry(joinSchema, "normal", "none", "Join {clips}")],
@@ -180,10 +242,38 @@ const catalog = new Map<string, CatalogEntry>([
   ["layer.disable", catalogEntry(disableLayerSchema, "low", "none", "Disable layer '{name}'")],
   ["layer.lock", catalogEntry(lockLayerSchema, "low", "none", "Lock layer '{name}'")],
   ["layer.unlock", catalogEntry(unlockLayerSchema, "low", "none", "Unlock layer '{name}'")],
+  ["layer.set", catalogEntry(setLayerSchema, "low", "none", "Set layer '{name}'")],
+  ["layer.transform.set", catalogEntry(setLayerTransformSchema, "normal", "none", "Transform layer '{name}'")],
+  ["layer.matte.set", catalogEntry(setLayerMatteSchema, "normal", "none", "Set matte on layer '{name}'")],
+  ["pip.style.set", catalogEntry(setPipStyleSchema, "normal", "none", "Style PiP on {layerId}")],
+  ["pip.place", catalogEntry(placePipSchema, "normal", "none", "Place {layerId} {placement.anchor}")],
+  ["pip.keyframe.add", catalogEntry(addPipKeyframeSchema, "normal", "none", "Add PiP keyframe at {keyframe.at}")],
+  ["pip.keyframe.remove", catalogEntry(removePipKeyframeSchema, "normal", "none", "Remove PiP keyframe {keyframeId}")],
+  ["pip.preset.apply", catalogEntry(applyPipPresetSchema, "normal", "none", "Apply PiP preset {presetId}@{version} at {at}")],
+  ["pip.avoid.solve", catalogEntry(solvePipAvoidSchema, "low", "none", "Plan collision avoidance for {layerId}")],
+  ["region.mark", catalogEntry(markRegionSchema, "low", "none", "Mark avoid region")],
+  ["clip.key.set", catalogEntry(setClipKeySchema, "normal", "none", "Set key on {clip}")],
+  ["clip.key.mask.set", catalogEntry(setClipKeyMaskSchema, "normal", "none", "Set key mask on {clip}")],
+  ["clip.transform.set", catalogEntry(setClipTransformSchema, "normal", "none", "Transform {clip}")],
+  ["clip.punchin.set", catalogEntry(setClipPunchInSchema, "normal", "none", "Punch in {clip} to {level}x")],
+  ["clip.source.switch", catalogEntry(switchClipSourceSchema, "normal", "none", "Switch {clip} to synchronized source {assetId}")],
+  ["composition.arrange", catalogEntry(arrangeCompositionSchema, "normal", "none", "Arrange {sequence}")],
+  ["key.qc.run", catalogEntry(runKeyQcSchema, "low", "none", "Analyze key quality for {clip}")],
   ["clip.audio.gain.set", catalogEntry(setClipAudioGainSchema, "low", "none", "Set {clip} gain to {gainDb} dB")],
   ["clip.audio.fade.set", catalogEntry(setClipAudioFadeSchema, "low", "none", "Set audio fades on {clip}")],
+  ["clip.audio.offset.set", catalogEntry(setClipAudioOffsetSchema, "normal", "none", "Shift {clip} audio by {offset}")],
+  ["clip.audio.channels.set", catalogEntry(setClipAudioChannelsSchema, "low", "none", "Use {mapping} channel(s) on {clip}")],
+  ["clip.audio.chain.set", catalogEntry(setClipAudioChainSchema, "normal", "none", "Set audio chain on {target}")],
+  ["sequence.audio.master.set", catalogEntry(setSequenceAudioMasterSchema, "normal", "none", "Set master loudness target {targetLufs} LUFS / {truePeakDb} dBTP")],
+  ["clip.loop.set", catalogEntry(setClipLoopSchema, "low", "none", "Loop {clip} with {loopCrossfade} crossfade")],
+  ["clip.anchor.set", catalogEntry(setClipAnchorSchema, "normal", "none", "Anchor {clip} start to {anchor}")],
+  ["layer.ducking.set", catalogEntry(setLayerDuckingSchema, "low", "none", "Set ducking on {layer}")],
+  ["layer.ducking.override", catalogEntry(setLayerDuckingOverrideSchema, "low", "none", "Set manual ducking points on {layer}")],
+  ["clip.color.set", catalogEntry(setClipColorSchema, "low", "none", "Adjust color on {clip}")],
+  ["clip.look.apply", catalogEntry(applyClipLookSchema, "low", "none", "Apply look {presetId}@{presetVersion} to {target}")],
   ["transition.set", catalogEntry(setTransitionSchema, "normal", "none", "Set {kind} ({duration}) between {a} and {b}")],
   ["transition.remove", catalogEntry(removeTransitionSchema, "normal", "none", "Remove {kind} between {a} and {b}")],
+  ["pickup.splice", catalogEntry(pickupSpliceSchema, "normal", "realign", "Replace {wordRange} with pickup {pickupAssetId}")],
   ["transcript.create", catalogEntry(
     transcriptCreateSchema,
     "low",
@@ -268,6 +358,15 @@ const catalog = new Map<string, CatalogEntry>([
     "none",
     "Mark {wordRange} as short-form candidate",
   )],
+  ["caption.track.add", catalogEntry(captionTrackAddSchema, "low", "shift", "Add caption track {name}")],
+  ["caption.track.remove", catalogEntry(captionTrackRemoveSchema, "low", "shift", "Remove caption track {captionId}")],
+  ["caption.track.set", catalogEntry(captionTrackSetSchema, "low", "shift", "Configure caption track {captionId}")],
+  ["caption.style.set", catalogEntry(captionStyleSetSchema, "low", "shift", "Style caption track {captionId}")],
+  ["caption.break.set", catalogEntry(captionBreakSetSchema, "low", "shift", "Set caption break after {afterWordId}")],
+  ["caption.break.clear", catalogEntry(captionBreakClearSchema, "low", "shift", "Clear caption break after {afterWordId}")],
+  ["caption.word.emphasis.set", catalogEntry(captionWordEmphasisSetSchema, "low", "shift", "Set caption emphasis on {wordId}")],
+  ["caption.cue.retime", catalogEntry(captionCueRetimeSchema, "low", "retime", "Nudge caption cue {firstWordId}")],
+  ["caption.preset.upgrade", catalogEntry(captionPresetUpgradeSchema, "normal", "shift", "Upgrade caption preset on {captionId}")],
   ["anchor.rebind", catalogEntry(
     anchorRebindSchema,
     "normal",
@@ -315,6 +414,54 @@ const catalog = new Map<string, CatalogEntry>([
     "normal",
     "none",
     "Converted annotation {id} to overlay {itemId} on {layerId}",
+  )],
+  ["graphic.add", catalogEntry(
+    graphicAddSchema,
+    "normal",
+    "none",
+    "Add {template.name} '{params.title}' at {anchor}",
+  )],
+  ["graphic.param.set", catalogEntry(
+    graphicParamSetSchema,
+    "low",
+    "none",
+    "Update graphic {graphicId} parameters",
+  )],
+  ["graphic.anchor.set", catalogEntry(
+    graphicAnchorSetSchema,
+    "normal",
+    "none",
+    "Move graphic {graphicId} to {anchor}",
+  )],
+  ["graphic.retime", catalogEntry(
+    graphicRetimeSchema,
+    "normal",
+    "none",
+    "Retime graphic {graphicId}",
+  )],
+  ["graphic.remove", catalogEntry(
+    graphicRemoveSchema,
+    "normal",
+    "none",
+    "Remove graphic {graphicId}",
+  )],
+  ["template.pin", catalogEntry(
+    templatePinSchema,
+    "consequential",
+    "none",
+    "Pin template {templateId} to {version}",
+  )],
+  ["template.install", catalogEntry(
+    templateInstallSchema,
+    "low",
+    "none",
+    "Install template package",
+  )],
+  ["template.uninstall", catalogEntry(
+    templateUninstallSchema,
+    "low",
+    "none",
+    "Uninstall template {templateId}@{version}",
   )],
 ]);
 
@@ -370,6 +517,8 @@ export class OperationEngine {
   readonly #approvedTransitionPresets: ReadonlySet<string>;
   readonly #continuityGuard: ContinuityGuard | undefined;
   readonly #auditSink: AuditSink | undefined;
+  readonly #templateProvider: TemplateProvider | undefined;
+  readonly #seedFactory: () => number;
   readonly #autoAcceptsBySession = new Map<string, number>();
   readonly #undoStack: Array<{
     transactionId: string;
@@ -400,6 +549,8 @@ export class OperationEngine {
     this.#approvedTransitionPresets = new Set(options.approvedTransitionPresets ?? []);
     this.#continuityGuard = options.continuityGuard;
     this.#auditSink = options.auditSink;
+    this.#templateProvider = options.templateProvider;
+    this.#seedFactory = options.seedFactory ?? (() => randomBytes(4).readUInt32BE(0));
   }
 
   public get currentProject(): GuyditorProject {
@@ -471,7 +622,11 @@ export class OperationEngine {
 
       const normalized = { op: requested.op, params };
       let application: Result<ClipApplication>;
-      if (requested.op.startsWith("asset.")) {
+      if (isAudioColorOperation(requested.op)) {
+        application = applyAudioColorOperation(working, normalized, this.#idFactory);
+      } else if (requested.op.startsWith("project.")) {
+        application = applyProjectOperation(working, normalized);
+      } else if (requested.op.startsWith("asset.")) {
         application = applyAssetOperation(working, normalized);
       } else if (requested.op === "anchor.rebind") {
         application = applyAnchorOperation(working, normalized);
@@ -481,6 +636,33 @@ export class OperationEngine {
         application = applyLayerOperation(working, normalized, this.#idFactory);
       } else if (requested.op.startsWith("transition.")) {
         application = applyTransitionOperation(working, normalized, this.#idFactory);
+      } else if (requested.op.startsWith("graphic.")) {
+        application = this.#templateProvider === undefined
+          ? operationFailure(
+              "E_TEMPLATE_PROVIDER_UNAVAILABLE",
+              "Template graphics require an installed template provider.",
+              [requested.op],
+            )
+          : await applyGraphicOperation(
+              working,
+              normalized,
+              this.#templateProvider,
+              this.#idFactory,
+              this.#seedFactory,
+            );
+      } else if (requested.op.startsWith("template.")) {
+        application = this.#templateProvider === undefined
+          ? operationFailure(
+              "E_TEMPLATE_PROVIDER_UNAVAILABLE",
+              "Template operations require an installed template provider.",
+              [requested.op],
+            )
+          : await applyTemplateOperation(
+              working,
+              normalized,
+              this.#templateProvider,
+              context.dryRun,
+            );
       } else if (this.#operationDispatcher === undefined) {
         application = operationFailure(
           "E_OP_DISPATCH_UNAVAILABLE",
@@ -488,7 +670,7 @@ export class OperationEngine {
           [requested.op],
         );
       } else {
-        const dispatched = await this.#operationDispatcher(working, normalized);
+        const dispatched = await this.#operationDispatcher(working, normalized, context);
         application = dispatched.ok
           ? success({ ...dispatched.value, mutations: [] })
           : dispatched;

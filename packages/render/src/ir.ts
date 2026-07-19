@@ -2,6 +2,8 @@ export type RenderNodeKind =
   | "source"
   | "trim"
   | "transform"
+  | "color"
+  | "pip"
   | "key"
   | "composite"
   | "overlay"
@@ -12,8 +14,23 @@ export interface RenderNode {
   id: string;
   kind: RenderNodeKind;
   inputs: string[];
-  params: SourceNodeParams | TrimNodeParams | TransformNodeParams | KeyNodeParams
+  params: SourceNodeParams | TrimNodeParams | TransformNodeParams | ColorNodeParams | PipNodeParams | KeyNodeParams
         | CompositeNodeParams | OverlayNodeParams | AudioChainNodeParams | EncodeNodeParams;
+}
+
+export interface PipNodeParams {
+  style: import("../../core/src/index.js").PipStyle;
+  styleKeyframes: Array<{
+    atOutputFrame: number;
+    style: import("../../core/src/index.js").PipStyle | Partial<import("../../core/src/index.js").PipStyle>;
+  }>;
+  rasterAssets?: {
+    maskPath: string;
+    underlayPath: string;
+    chromePath: string;
+    sha256: string;
+    durationFrames: number;
+  };
 }
 
 export interface RenderGraph {
@@ -33,6 +50,8 @@ export interface SourceNodeParams {
   stream: "video" | "audio";
   path: string;
   useProxy: boolean;
+  still?: boolean;
+  preserveAlpha?: boolean;
 }
 
 export interface TrimNodeParams {
@@ -46,8 +65,9 @@ export interface TransformNodeParams {
   keyframes: Array<{
     atOutputFrame: number;
     crop?: [number, number, number, number];
-    scale?: number;
+    scale?: number | [number, number];
     pos?: [number, number];
+    anchor?: [number, number];
     rotateDeg?: number;
     opacity?: number;
   }>;
@@ -55,18 +75,53 @@ export interface TransformNodeParams {
   easePresetId?: string;
 }
 
+export interface ColorNodeParams {
+  correction: import("../../core/src/index.js").ColorCorrection;
+  source: "clip" | "look" | "adjustment" | "layer-look";
+}
+
 export interface KeyNodeParams {
-  method: "chroma" | "neuralMatte";
+  method: "chroma" | "neuralMatte" | "alphaMatte";
   keyColor?: string;
   tolerance?: number;
   edgeSoftness?: number;
   spillSuppression?: number;
   garbageMaskAssetId?: string;
   matteAssetId?: string;
+  preBlur?: number;
+  edge?: { erodePx: number; featherPx: number };
+  spill?: { mode: "off" | "despill" | "average"; strength: number; channel?: "green" | "blue" };
+  masks?: Array<{
+    id: string;
+    role: "garbage" | "holdout";
+    path: string;
+    sha256: string;
+    animated: boolean;
+  }>;
+  postColor?: {
+    exposure: number;
+    contrast: number;
+    temperatureK?: number;
+    tint?: number;
+    saturation: number;
+  };
+  matteSource?: "alpha" | "luma";
+  invertMatte?: boolean;
 }
 
 export interface CompositeNodeParams {
   canvas: { w: number; h: number; background: string };
+  mode?: "timeline.sequential" | "timeline.anchored" | "stack";
+  durationFrames?: number;
+  inputSettings?: Array<{
+    atOutputFrame?: number;
+    durationFrames: number;
+    transitionFromPreviousFrames?: number;
+    layerId?: string;
+    blend?: "normal" | "multiply" | "screen" | "overlay" | "darken"
+      | "lighten" | "addition" | "subtract" | "difference";
+    opacity?: number;
+  }>;
 }
 
 export interface OverlayNodeParams {
@@ -77,11 +132,25 @@ export interface OverlayNodeParams {
 }
 
 export interface AudioChainNodeParams {
-  stages: Array<{
-    stage: "gain" | "fade" | "channelmap" | "denoise" | "eq" | "compress"
-      | "limit" | "duck" | "loudnorm";
-    params: Record<string, number | string | boolean>;
+  mode?: "sequential" | "anchored" | "mix";
+  durationSamples?: number;
+  inputSettings?: Array<{
+    durationSamples: number;
+    transitionFromPreviousSamples?: number;
+    atOutputSample?: number;
+    offsetSamples?: number;
+    loop?: boolean;
+    loopCrossfadeSamples?: number;
+    loopDurationSamples?: number;
+    stages: AudioStage[];
   }>;
+  stages: AudioStage[];
+}
+
+export interface AudioStage {
+  stage: "gain" | "fade" | "channelmap" | "denoise" | "eq" | "compress"
+    | "limit" | "duck" | "loudnorm";
+  params: Record<string, number | string | boolean>;
 }
 
 export interface EncodeNodeParams {

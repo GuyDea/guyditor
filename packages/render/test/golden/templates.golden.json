@@ -1,0 +1,42 @@
+{
+  "builtins": {
+    "callout-box": {
+      "contentHash": "e57dee8ee1d2e2414e8f949f7cc9d1b1fb892c90dca304bba2d4fa1f9bd2f2ed",
+      "frameSha256": "669a3d97a76d4bae85c4ad893b1aa3ef43cc99c76ee7aaf74b6eee9e1ffe8928"
+    },
+    "full-frame-infographic": {
+      "contentHash": "ebaf26d6c3908d3b1598c098325afa4fb03317976db314f411ebbbac58b44c62",
+      "frameSha256": "818bc11faeab020900695b22f836dcafe6a431aa475486557871b8528e968d6d"
+    },
+    "lower-third": {
+      "contentHash": "7462180887a517e0aa7dd6943694757f56fb4ee43c3275d6c04f123ce9ee6966",
+      "frameSha256": "4ce8ca152d59a6e955f897335f651ea7f8d1ac8dd55395c83beec3c671a7d50a"
+    },
+    "title-card": {
+      "contentHash": "eb797b7ba17f8ed4129b6379054439e8c709d43e826669ff22da7126f41549a7",
+      "frameSha256": "0621fcd798ff27463b0d8de094bab0b7e650a27c6a9376643cb092c2ba14c16b"
+    }
+  },
+  "anchored": {
+    "previewFrameSha256": "93216cf06ffacf96b833f91e3397fa25b72042c55e21ee83978aa44907c37900",
+    "overlaySha256": "952457c34285147696c9d90b4ed216ada556a3a5c0d1697feaab4218a8445252",
+    "frameHashes": [
+      "0f46679b9d07cc0ab7197d6209e0760622bb63b77e1d6d98c2c2ccf8ce14adc7",
+      "9d8fb80c5bfbce8bd45d23975b1f9e66bce60c373730106f807ae91180cd8f4c",
+      "93216cf06ffacf96b833f91e3397fa25b72042c55e21ee83978aa44907c37900",
+      "93216cf06ffacf96b833f91e3397fa25b72042c55e21ee83978aa44907c37900",
+      "93216cf06ffacf96b833f91e3397fa25b72042c55e21ee83978aa44907c37900",
+      "93216cf06ffacf96b833f91e3397fa25b72042c55e21ee83978aa44907c37900",
+      "93216cf06ffacf96b833f91e3397fa25b72042c55e21ee83978aa44907c37900",
+      "93216cf06ffacf96b833f91e3397fa25b72042c55e21ee83978aa44907c37900",
+      "93216cf06ffacf96b833f91e3397fa25b72042c55e21ee83978aa44907c37900",
+      "93216cf06ffacf96b833f91e3397fa25b72042c55e21ee83978aa44907c37900",
+      "2396bab4e835f4205f04098cb799259cf544d71aac0fa7bb256a8677e7e10090",
+      "0f46679b9d07cc0ab7197d6209e0760622bb63b77e1d6d98c2c2ccf8ce14adc7"
+    ]
+  },
+  "finalVideo": {
+    "graphicFrame": 15,
+    "dhash": "7e7e7e7e7ec19c8c"
+  }
+}

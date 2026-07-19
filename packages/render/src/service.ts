@@ -4,6 +4,7 @@ import {
   access,
   mkdir,
   readFile,
+  rename,
   rm,
   stat,
   writeFile,
@@ -11,25 +12,47 @@ import {
 import { dirname, extname, isAbsolute, join, resolve } from "node:path";
 
 import {
+  deriveTimeline,
   makeGuyditorError,
   parseProjectYaml,
+  resolveAnchor,
 } from "../../core/src/index.js";
 import type {
+  CaptionTrack,
+  Deliverable,
   GuyditorError,
   GuyditorProject,
   JobExecutorContext,
   JobQueue,
+  KeySettings,
   ProjectStore,
 } from "../../core/src/index.js";
+import {
+  DEFAULT_CAPTION_STYLE,
+  buildWordTimelineMap,
+  compileCaptionTrack,
+  createTranscriptWordLookup,
+  loadPinnedCaptionPreset,
+  parseTranscriptSidecar,
+  resolveCaptionStyle,
+  serializeSubtitles,
+} from "../../transcript/src/index.js";
+import type {
+  CaptionFrameSpec,
+  CaptionRenderModel,
+  TranscriptSidecar,
+} from "../../transcript/src/index.js";
 import {
   probeMedia,
   resolveFfmpeg,
   resolveFfprobe,
   runFfmpeg,
 } from "../../media/src/index.js";
+import type { LoudnessTarget } from "../../media/src/index.js";
 
 import { compileFiltergraph } from "./filtergraph.js";
 import { compileRenderGraph } from "./graph.js";
+import type { DiagnosticBackground } from "./graph.js";
 import type {
   EncodeNodeParams,
   RenderGraph,
@@ -38,6 +61,31 @@ import type {
 } from "./ir.js";
 import { loadRenderProfile } from "./profile.js";
 import type { LoadedRenderProfile } from "./profile.js";
+import {
+  captionOverlayToolchain,
+  createCaptionTextMeasurer,
+  renderCaptionOverlaySequence,
+} from "./caption-overlay.js";
+import {
+  GRAPHIC_OVERLAY_RENDERER_VERSION,
+  renderGraphicFrame,
+  renderGraphicOverlaySequence,
+} from "./graphic-overlay.js";
+import {
+  loadTemplateRuntime,
+  renderTemplatePng,
+  TEMPLATE_RENDERER_VERSION,
+} from "./template-runtime.js";
+import { TemplateRegistry } from "./template-registry.js";
+import type { TemplateCatalogEntry } from "./template-registry.js";
+import { rasterizeKeyMasks } from "./key-mask.js";
+import { rasterizePipAssets } from "./pip-assets.js";
+import type { RasterizedPipAssets } from "./pip-assets.js";
+import type { SpeechInterval } from "./ducking.js";
+import {
+  measureDeliveredLoudness,
+  normalizeMasterLoudness,
+} from "./loudness.js";
 
 const RENDER_PACKAGE_VERSION = "0.0.0";
 
@@ -48,12 +96,32 @@ export interface RenderRequest {
   quality: "proxy" | "high";
 }
 
+export interface DiagnosticRenderRequest {
+  revision: string;
+  deliverableId: string;
+  inspectedLayerId: string;
+  diagnosticBackground: Exclude<DiagnosticBackground, "none">;
+  saturatedColor?: string;
+  outputDir: string;
+}
+
+export interface DiagnosticRenderResult {
+  jobId: string;
+  outputPath: string;
+}
+
 export interface ExportRequest {
   revision: string;
   deliverableId: string;
   variants: Array<"burnin" | "clean">;
   outputDir: string;
   skipValidationWarnings?: boolean;
+}
+
+export interface ExportEnqueueResult {
+  jobId: string;
+  jobIds: string[];
+  subtitlePaths: { srt: string; vtt: string } | null;
 }
 
 export interface FunctionalEquivalenceSpec {
@@ -118,6 +186,7 @@ export interface RenderServiceOptions {
   store: ProjectStore;
   jobQueue: JobQueue;
   profilesRoot?: string | URL;
+  templateRegistry?: TemplateRegistry;
 }
 
 interface PreparedExport {
@@ -129,6 +198,21 @@ interface PreparedExport {
   request: ExportRequest;
   validation: ExportValidationResult;
   variant: "burnin" | "clean";
+  loudness?: {
+    audioKey: string;
+    measurementPath: string;
+    normalizedPath: string;
+    sampleRate: number;
+    target: LoudnessTarget;
+  };
+}
+
+interface PrepareOptions {
+  diagnostic?: {
+    background: Exclude<DiagnosticBackground, "none">;
+    inspectedLayerId: string;
+    saturatedColor?: string;
+  };
 }
 
 function renderUnsupported(feature: string, part: string, affected: readonly string[] = []): GuyditorError {
@@ -157,6 +241,41 @@ function commandFailureMessage(error: unknown): string {
     if (lines.length > 0) return `${message}: ${lines.join(" | ")}`;
   }
   return message;
+}
+
+function exactSamplesForSeconds(
+  value: { num: number; den: number },
+  sampleRate: number,
+  feature: string,
+): number {
+  if (
+    !Number.isSafeInteger(value.num) || !Number.isSafeInteger(value.den) || value.den <= 0 ||
+    !Number.isSafeInteger(sampleRate) || sampleRate <= 0
+  ) {
+    throw makeGuyditorError(
+      "E_RENDER_GRAPH_INVALID",
+      `${feature} has an invalid rational time.`,
+      { affected: [feature] },
+    );
+  }
+  const numerator = BigInt(value.num) * BigInt(sampleRate);
+  const denominator = BigInt(value.den);
+  if (numerator < 0n || numerator % denominator !== 0n) {
+    throw makeGuyditorError(
+      "E_RENDER_UNSUPPORTED",
+      `${feature} cannot be represented at ${String(sampleRate)} Hz without rounding.`,
+      { affected: [feature] },
+    );
+  }
+  const samples = numerator / denominator;
+  if (samples > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw makeGuyditorError(
+      "E_RENDER_UNSUPPORTED",
+      `${feature} is outside exact sample bounds.`,
+      { affected: [feature] },
+    );
+  }
+  return Number(samples);
 }
 
 function isGuyditorError(error: unknown): error is GuyditorError {
@@ -198,8 +317,25 @@ function profilePin(pin: string): { id: string; version: string } {
     : { id: pin.slice(0, separator), version: pin.slice(separator + 1) };
 }
 
+function captionPreset(
+  deliverable: Deliverable,
+  project: GuyditorProject,
+): { presetId: string; version: number } {
+  const track = project.captions.find(({ id }) => id === deliverable.captionsTrackId);
+  if (track === undefined) {
+    throw new TypeError(`Caption track ${deliverable.captionsTrackId ?? "<unset>"} does not exist.`);
+  }
+  return track.preset;
+}
+
 function isProposalRevision(revision: string): boolean {
   return /^prp_[a-z2-7]{10}$/u.test(revision);
+}
+
+function requirePreviewFrame(frame: number, label: string): void {
+  if (!Number.isSafeInteger(frame) || frame < 0) {
+    throw new RangeError(`${label} preview frame must be a non-negative safe integer.`);
+  }
 }
 
 function platform(): ToolchainManifest["os"] {
@@ -217,9 +353,8 @@ async function toolchainManifest(): Promise<ToolchainManifest> {
     ffprobe: { version: ffprobe.version, buildSha256: await sha256(ffprobe.path) },
     renderPackage: RENDER_PACKAGE_VERSION,
     overlayRenderer: {
-      version: "not-used-m0",
-      canvasVersion: "not-used-m0",
-      fontHashes: {},
+      ...captionOverlayToolchain(),
+      version: `${captionOverlayToolchain().version}+${GRAPHIC_OVERLAY_RENDERER_VERSION}+${TEMPLATE_RENDERER_VERSION}`,
     },
     encoderThreads: 1,
     os: platform(),
@@ -258,11 +393,22 @@ export function exportReportPath(outputPath: string): string {
   return `${outputPath.slice(0, -extension.length)}.export-report.json`;
 }
 
+export function subtitleOutputPaths(
+  outputDir: string,
+  deliverableId: string,
+): { srt: string; vtt: string } {
+  return {
+    srt: join(outputDir, `${deliverableId}.srt`),
+    vtt: join(outputDir, `${deliverableId}.vtt`),
+  };
+}
+
 export class RenderService {
   readonly #projectRoot: string;
   readonly #store: ProjectStore;
   readonly #jobQueue: JobQueue;
   readonly #profilesRoot: string | URL;
+  readonly #templateRegistry: TemplateRegistry;
   readonly #prepared = new Map<string, PreparedExport>();
 
   public constructor(options: RenderServiceOptions) {
@@ -270,6 +416,9 @@ export class RenderService {
     this.#store = options.store;
     this.#jobQueue = options.jobQueue;
     this.#profilesRoot = options.profilesRoot ?? resolve("profiles");
+    this.#templateRegistry = options.templateRegistry ?? new TemplateRegistry({
+      projectRoot: join(this.#projectRoot, "templates"),
+    });
     this.#jobQueue.registerExecutor("render.export", async (job, context) => {
       const prepared = this.#prepared.get(job.jobId);
       if (prepared === undefined) {
@@ -288,6 +437,23 @@ export class RenderService {
         variant: prepared.variant,
       };
     });
+    this.#jobQueue.registerExecutor("render.diagnostic", async (job, context) => {
+      const prepared = this.#prepared.get(job.jobId);
+      if (prepared === undefined) {
+        throw makeGuyditorError(
+          "E_RENDER_SEGMENT_FAILED",
+          `Diagnostic render job ${job.jobId} has no compiled graph in this process.`,
+          { affected: [job.jobId], retry: "safe" },
+        );
+      }
+      await this.#execute(job.jobId, prepared, context);
+      return {
+        deliverableId: prepared.request.deliverableId,
+        outputPath: prepared.outputPath,
+        revision: prepared.graph.revision,
+        variant: "diagnostic",
+      };
+    });
   }
 
   public async renderPreview(req: RenderRequest): Promise<{ jobId: string }> {
@@ -295,17 +461,151 @@ export class RenderService {
     throw renderUnsupported("preview rendering", "Part 12");
   }
 
-  public async renderExport(req: ExportRequest): Promise<{ jobId: string }> {
+  public async renderDiagnostic(req: DiagnosticRenderRequest): Promise<DiagnosticRenderResult> {
+    const request: ExportRequest = {
+      revision: req.revision,
+      deliverableId: req.deliverableId,
+      outputDir: req.outputDir,
+      variants: ["clean"],
+      skipValidationWarnings: true,
+    };
+    const prepared = await this.#prepare(request, "clean", {
+      diagnostic: {
+        background: req.diagnosticBackground,
+        inspectedLayerId: req.inspectedLayerId,
+        ...(req.saturatedColor === undefined ? {} : { saturatedColor: req.saturatedColor }),
+      },
+    });
+    const job = this.#jobQueue.enqueue({
+      kind: "render.diagnostic",
+      title: `Render ${req.diagnosticBackground} key diagnostic for ${req.inspectedLayerId}`,
+      cancellable: true,
+      payload: {
+        background: req.diagnosticBackground,
+        deliverableId: req.deliverableId,
+        inspectedLayerId: req.inspectedLayerId,
+        outputPath: prepared.outputPath,
+        revision: prepared.graph.revision,
+      },
+    });
+    this.#prepared.set(job.jobId, prepared);
+    return { jobId: job.jobId, outputPath: prepared.outputPath };
+  }
+
+  public async captionFrame(request: {
+    revision: string;
+    deliverableId: string;
+    frame: number;
+  }): Promise<CaptionFrameSpec> {
+    requirePreviewFrame(request.frame, "Caption");
+    const project = await this.#loadProject(request.revision);
+    await this.#verifySidecars(project);
+    const deliverable = project.deliverables.find(({ id }) => id === request.deliverableId);
+    if (deliverable === undefined) {
+      throw makeGuyditorError(
+        "E_RENDER_DELIVERABLE_NOT_FOUND",
+        `Deliverable ${request.deliverableId} does not exist at ${project.revision}.`,
+        { affected: [request.deliverableId, project.revision] },
+      );
+    }
+    const model = await this.#captionModel(project, deliverable);
+    return model?.captionsAtFrame(request.frame) ?? {
+      cues: [],
+      styleResolved: resolveCaptionStyle(DEFAULT_CAPTION_STYLE, {}),
+    };
+  }
+
+  public async templateCatalog(): Promise<TemplateCatalogEntry[]> {
+    const catalog = await this.#templateRegistry.list();
+    if (!catalog.ok) throw catalog.error;
+    return Promise.all(catalog.value.map(async (entry) => ({
+      ...entry,
+      previewDataUrl: `data:image/png;base64,${(await readFile(entry.previewPath)).toString("base64")}`,
+    })));
+  }
+
+  public async templateFrame(request: {
+    templateId: string;
+    params?: Record<string, unknown>;
+    seed?: number;
+    frame?: number;
+  }): Promise<{ dataUrl: string; width: number; height: number }> {
+    const descriptor = await this.#templateRegistry.latest(request.templateId);
+    if (!descriptor.ok) throw descriptor.error;
+    const pkg = await this.#templateRegistry.package(
+      descriptor.value.id,
+      descriptor.value.version,
+      descriptor.value.contentHash,
+    );
+    if (!pkg.ok) throw pkg.error;
+    const runtime = await loadTemplateRuntime(pkg.value);
+    if (!runtime.ok) throw runtime.error;
+    const totalFrames = pkg.value.manifest.duration.default?.frames ?? 120;
+    const frame = request.frame ?? Math.round(totalFrames * 0.38);
+    const png = renderTemplatePng(runtime.value, {
+      params: request.params ?? pkg.value.manifest.preview.params,
+      seed: request.seed ?? 0x4755_5944,
+      frame: Math.max(0, Math.min(totalFrames - 1, frame)),
+      totalFrames,
+      fps: pkg.value.manifest.duration.default?.fps ?? "30/1",
+      width: 640,
+      height: 360,
+      safeArea: { top: 22, right: 32, bottom: 22, left: 32 },
+      brand: { palette: {} },
+    });
+    if (!png.ok) throw png.error;
+    return {
+      dataUrl: `data:image/png;base64,${png.value.toString("base64")}`,
+      width: 640,
+      height: 360,
+    };
+  }
+
+  public async graphicsFrame(request: {
+    revision: string;
+    deliverableId: string;
+    frame: number;
+  }): Promise<{ dataUrl: string; width: number; height: number }> {
+    requirePreviewFrame(request.frame, "Graphics");
+    const project = await this.#loadProject(request.revision);
+    await this.#verifySidecars(project);
+    const deliverable = project.deliverables.find(({ id }) => id === request.deliverableId);
+    if (deliverable === undefined) {
+      throw makeGuyditorError(
+        "E_RENDER_DELIVERABLE_NOT_FOUND",
+        `Deliverable ${request.deliverableId} does not exist at ${project.revision}.`,
+        { affected: [request.deliverableId, project.revision] },
+      );
+    }
+    const sidecars = await this.#captionSidecars(project);
+    const png = await renderGraphicFrame({
+      project,
+      sequenceId: deliverable.sequenceId,
+      registry: this.#templateRegistry,
+      anchorDependencies: { wordLookup: createTranscriptWordLookup(sidecars) },
+      width: project.settings.timeline.width,
+      height: project.settings.timeline.height,
+      fps: project.settings.timeline.fps,
+      frame: request.frame,
+      brand: { palette: {} },
+    });
+    return {
+      dataUrl: `data:image/png;base64,${png.toString("base64")}`,
+      width: project.settings.timeline.width,
+      height: project.settings.timeline.height,
+    };
+  }
+
+  public async renderExport(req: ExportRequest): Promise<ExportEnqueueResult> {
     if (isProposalRevision(req.revision)) {
       throw renderUnsupported(`proposal revision ${req.revision}`, "Part 5", [req.revision]);
     }
-    if (req.variants.length !== 1) {
-      throw renderUnsupported("zero or multiple export variants in one job", "Part 12", [req.deliverableId]);
+    const variants = [...new Set(req.variants)];
+    if (variants.length === 0) {
+      throw renderUnsupported("an export without a variant", "Part 12", [req.deliverableId]);
     }
-    const variant = req.variants[0]!;
-    const prepared = await this.#prepare(req, variant);
-    const validation = await this.validateExport(req.deliverableId, prepared.graph.revision);
-    prepared.validation = validation;
+    const preparedExports = await Promise.all(variants.map((variant) => this.#prepare(req, variant)));
+    const validation = await this.validateExport(req.deliverableId, preparedExports[0]!.graph.revision);
     if (
       validation.outcome === "blocked" ||
       (validation.outcome === "warnings" && req.skipValidationWarnings !== true)
@@ -320,19 +620,30 @@ export class RenderService {
         },
       );
     }
-    const job = this.#jobQueue.enqueue({
-      kind: "render.export",
-      title: `Render ${req.deliverableId} ${variant}`,
-      cancellable: true,
-      payload: {
-        deliverableId: req.deliverableId,
-        outputPath: prepared.outputPath,
-        revision: prepared.graph.revision,
-        variant,
-      },
+    const jobs = preparedExports.map((prepared) => {
+      prepared.validation = structuredClone(validation);
+      const job = this.#jobQueue.enqueue({
+        kind: "render.export",
+        title: `Render ${req.deliverableId} ${prepared.variant}`,
+        cancellable: true,
+        payload: {
+          deliverableId: req.deliverableId,
+          outputPath: prepared.outputPath,
+          revision: prepared.graph.revision,
+          variant: prepared.variant,
+        },
+      });
+      this.#prepared.set(job.jobId, prepared);
+      return job;
     });
-    this.#prepared.set(job.jobId, prepared);
-    return { jobId: job.jobId };
+    const first = jobs[0]!;
+    return {
+      jobId: first.jobId,
+      jobIds: jobs.map(({ jobId }) => jobId),
+      subtitlePaths: preparedExports[0]!.project.deliverables.find(({ id }) => id === req.deliverableId)?.captionsTrackId === undefined
+        ? null
+        : subtitleOutputPaths(resolve(req.outputDir), req.deliverableId),
+    };
   }
 
   public async validateExport(
@@ -424,9 +735,104 @@ export class RenderService {
         affected: [sidecar.path],
       });
     }
+    if (deliverable.captionsTrackId !== undefined) {
+      try {
+        const model = await this.#captionModel(project, deliverable);
+        if (model !== undefined) {
+          const orphaned = model.diagnostics.orphanedAnchors;
+          const overflow = model.cues.flatMap(({ overflow }) => overflow);
+          checks.push({
+            id: "VAL-CAPTION-ANCHORS",
+            status: orphaned.length === 0 ? "pass" : "fail",
+            message: orphaned.length === 0
+              ? "Caption word anchors resolve on the derived timeline."
+              : `${String(orphaned.length)} caption override anchors are orphaned.`,
+            affected: orphaned.length === 0 ? [deliverable.captionsTrackId] : orphaned.map(({ anchor }) => anchor),
+          });
+          checks.push({
+            id: "VAL-CAPTION-OVERFLOW",
+            status: overflow.length === 0 ? "pass" : "fail",
+            message: overflow.length === 0
+              ? "Caption words fit the configured safe width."
+              : `${String(overflow.length)} caption words exceed the configured safe width.`,
+            affected: overflow.length === 0 ? [deliverable.captionsTrackId] : overflow,
+          });
+          const ambiguous = model.diagnostics.ambiguousRanges;
+          checks.push({
+            id: "VAL-CAPTION-AMBIGUITY",
+            status: ambiguous.length === 0 ? "pass" : "warn",
+            message: ambiguous.length === 0
+              ? "Caption speech mapping is unambiguous."
+              : `${String(ambiguous.length)} overlapping speech ranges need review.`,
+            affected: ambiguous.length === 0
+              ? [deliverable.captionsTrackId]
+              : [...new Set(ambiguous.flatMap(({ layerIds }) => layerIds))],
+          });
+          const provisional = model.diagnostics.provisionalAssetIds ?? [];
+          checks.push({
+            id: "VAL-CAPTION-PROVISIONAL",
+            status: provisional.length === 0 ? "pass" : "warn",
+            message: provisional.length === 0
+              ? "Caption timing comes from canonical aligned transcripts."
+              : `${String(provisional.length)} imported subtitle transcript needs audio realignment.`,
+            affected: provisional.length === 0 ? [deliverable.captionsTrackId] : provisional,
+          });
+        }
+      } catch (error: unknown) {
+        checks.push({
+          id: "VAL-CAPTION-COMPILE",
+          status: "fail",
+          message: errorMessage(error),
+          affected: [deliverable.captionsTrackId],
+        });
+      }
+    }
+    const graphics = project.layers.flatMap((layer) =>
+      layer.enabled &&
+      (layer.sequence === undefined || layer.sequence === deliverable.sequenceId) &&
+      (layer.kind === "text" || layer.kind === "animation")
+        ? (layer.items ?? []).filter(({ template }) => template !== undefined)
+        : []);
+    if (graphics.length > 0) {
+      try {
+        const sidecars = await this.#captionSidecars(project);
+        await renderGraphicFrame({
+          project,
+          sequenceId: deliverable.sequenceId,
+          registry: this.#templateRegistry,
+          anchorDependencies: { wordLookup: createTranscriptWordLookup(sidecars) },
+          width: project.settings.timeline.width,
+          height: project.settings.timeline.height,
+          fps: project.settings.timeline.fps,
+          frame: 0,
+          brand: { palette: {} },
+        });
+        checks.push({
+          id: "VAL-GRAPHICS",
+          status: "pass",
+          message: `${String(graphics.length)} deliberate graphic instance(s) resolve to pinned deterministic templates.`,
+          affected: graphics.map(({ id }) => id),
+        });
+      } catch (error: unknown) {
+        checks.push({
+          id: "VAL-GRAPHICS",
+          status: "fail",
+          message: errorMessage(error),
+          affected: isGuyditorError(error)
+            ? error.affected
+            : graphics.map(({ id }) => id),
+        });
+      }
+    }
     try {
       const profile = await loadRenderProfile(deliverable.profile, this.#profilesRoot);
       const resolved = this.#withResolvedAssetPaths(project);
+      const sidecars = await this.#captionSidecars(project);
+      const anchorFrames = await this.#renderAnchorFrames(
+        resolved,
+        deliverable,
+        sidecars,
+      );
       compileRenderGraph({
         project: resolved,
         revision: resolved.revision,
@@ -436,6 +842,8 @@ export class RenderService {
         profile: profile.profile,
         profileSha256: profile.sha256,
         toolchain: await toolchainManifest(),
+        anchorFrames,
+        speechIntervals: this.#speechIntervals(resolved, deliverable, sidecars),
       });
       checks.push({
         id: "VAL-200",
@@ -541,7 +949,164 @@ export class RenderService {
     }
   }
 
-  async #prepare(req: ExportRequest, variant: "burnin" | "clean"): Promise<PreparedExport> {
+  async #captionSidecars(project: GuyditorProject): Promise<TranscriptSidecar[]> {
+    const sidecars: TranscriptSidecar[] = [];
+    for (const reference of project.sidecars) {
+      if (reference.schema !== "guyditor.transcript/v1") continue;
+      sidecars.push(parseTranscriptSidecar(await readFile(
+        resolvedMediaPath(this.#projectRoot, reference.path),
+        "utf8",
+      )));
+    }
+    return sidecars;
+  }
+
+  async #renderAnchorFrames(
+    project: GuyditorProject,
+    deliverable: Deliverable,
+    sidecars: readonly TranscriptSidecar[],
+  ): Promise<Record<string, number>> {
+    const audioSequenceIds = new Set(project.layers.flatMap((layer) =>
+      layer.enabled &&
+      (layer.kind === "audio" || layer.kind === "music" || layer.kind === "ambience" || layer.kind === "sfx") &&
+      layer.sequence !== undefined
+        ? [layer.sequence]
+        : []));
+    const anchors = [...new Set([
+      ...project.layers.flatMap(({ pip }) => pip?.keyframes.map(({ at }) => at) ?? []),
+      ...project.layers.flatMap(({ ducking }) => ducking?.overrides.map(({ at }) => at) ?? []),
+      ...project.sequences
+        .filter(({ id }) => audioSequenceIds.has(id))
+        .flatMap(({ clips }) => clips.flatMap(({ anchor }) => anchor === undefined ? [] : [anchor])),
+    ])];
+    const frames: Record<string, number> = {};
+    const dependencies = { wordLookup: createTranscriptWordLookup(sidecars) };
+    for (const anchor of anchors) {
+      const resolution = await resolveAnchor(project, anchor, deliverable.sequenceId, dependencies);
+      if (!resolution.ok) throw resolution.error;
+      if (resolution.value.status !== "resolved" || resolution.value.timeline === undefined) {
+        throw makeGuyditorError(
+          "E_RENDER_GRAPH_INVALID",
+          `Render anchor ${anchor} is orphaned and cannot be resolved.`,
+          { affected: [anchor] },
+        );
+      }
+      frames[anchor] = resolution.value.timeline.frames;
+    }
+    return frames;
+  }
+
+  #speechIntervals(
+    project: GuyditorProject,
+    deliverable: Deliverable,
+    sidecars: readonly TranscriptSidecar[],
+  ): SpeechInterval[] {
+    const sourceLayerIds = project.layers
+      .filter((layer) =>
+        layer.enabled && layer.sequence === deliverable.sequenceId &&
+        (layer.kind === "video" || layer.kind === "audio"))
+      .map(({ id }) => id);
+    if (sourceLayerIds.length === 0 || sidecars.length === 0) return [];
+    const track: CaptionTrack = {
+      id: "cap_aaaaaaaaaa",
+      name: "Derived ducking speech map",
+      sourceLayerIds,
+      preset: { presetId: "pre_aaaaaaaaaa", version: 0 },
+      styleOverrides: {},
+      breakOverrides: [],
+      emphasisOverrides: [],
+      timingOffsets: [],
+      enabled: true,
+    };
+    const timeline = buildWordTimelineMap({
+      project,
+      sequenceId: deliverable.sequenceId,
+      track,
+      sidecars,
+    });
+    const sampleRate = project.settings.audio.sampleRate;
+    return timeline.instances.map(({ start, end, wordId }) => ({
+      start: {
+        samples: exactSamplesForSeconds(start, sampleRate, `speech start ${wordId}`),
+        rate: sampleRate,
+      },
+      end: {
+        samples: exactSamplesForSeconds(end, sampleRate, `speech end ${wordId}`),
+        rate: sampleRate,
+      },
+    }));
+  }
+
+  async #rasterizedPips(
+    project: GuyditorProject,
+    deliverable: Deliverable,
+    anchorFrames: Readonly<Record<string, number>>,
+  ): Promise<Record<string, RasterizedPipAssets>> {
+    const timeline = deriveTimeline(project, deliverable.sequenceId);
+    if (!timeline.ok) throw timeline.error;
+    const [durationNumerator = "0", durationDenominator = "1"] = timeline.value.duration.split("/");
+    const [fpsNumerator = "1", fpsDenominator = "1"] = project.settings.timeline.fps.split("/");
+    const durationFrames = Number(
+      BigInt(durationNumerator) * BigInt(fpsNumerator) /
+      (BigInt(durationDenominator) * BigInt(fpsDenominator)),
+    );
+    const entries = await Promise.all(project.layers.flatMap((layer) =>
+      layer.enabled && layer.pip !== undefined
+        ? [rasterizePipAssets({
+            pip: layer.pip,
+            compWidth: project.settings.timeline.width,
+            compHeight: project.settings.timeline.height,
+            durationFrames: Math.max(1, durationFrames),
+            anchorFrames,
+            cacheRoot: join(this.#projectRoot, ".guyditor/cache/render/pip"),
+          }).then((assets) => [layer.id, assets] as const)]
+        : []));
+    return Object.fromEntries(entries);
+  }
+
+  async #captionModel(
+    project: GuyditorProject,
+    deliverable: Deliverable,
+  ): Promise<CaptionRenderModel | undefined> {
+    const captionId = deliverable.captionsTrackId;
+    if (captionId === undefined) return undefined;
+    const track = project.captions.find(({ id }) => id === captionId);
+    if (track === undefined || !track.enabled) return undefined;
+    const pin = project.presets.find(({ id, version }) =>
+      id === track.preset.presetId && version === track.preset.version);
+    if (pin === undefined) throw new TypeError(`Caption preset ${track.preset.presetId}@${String(track.preset.version)} is not pinned.`);
+    const preset = await loadPinnedCaptionPreset(this.#projectRoot, pin);
+    const style = resolveCaptionStyle(preset.style, track.styleOverrides);
+    const sidecars = await this.#captionSidecars(project);
+    const timeline = buildWordTimelineMap({
+      project,
+      sequenceId: deliverable.sequenceId,
+      track,
+      sidecars,
+    });
+    const safeArea = style.safeArea === "none"
+      ? { x: 0, y: 0, w: 1, h: 1 }
+      : { x: 0.05, y: 0.05, w: 0.9, h: 0.9 };
+    return compileCaptionTrack({
+      track,
+      timeline,
+      sidecars,
+      style,
+      safeArea,
+      output: {
+        width: project.settings.timeline.width,
+        height: project.settings.timeline.height,
+        fps: project.settings.timeline.fps,
+      },
+      measureText: createCaptionTextMeasurer(),
+    });
+  }
+
+  async #prepare(
+    req: ExportRequest,
+    variant: "burnin" | "clean",
+    options: PrepareOptions = {},
+  ): Promise<PreparedExport> {
     const loaded = await this.#loadProject(req.revision);
     await this.#verifySidecars(loaded);
     const project = this.#withResolvedAssetPaths(loaded);
@@ -554,6 +1119,64 @@ export class RenderService {
       );
     }
     const profile = await loadRenderProfile(deliverable.profile, this.#profilesRoot);
+    const captionModel = await this.#captionModel(project, deliverable);
+    let overlays: Parameters<typeof compileRenderGraph>[0]["overlays"] = [];
+    if (captionModel !== undefined) {
+      await mkdir(resolve(req.outputDir), { recursive: true });
+      const subtitlePaths = subtitleOutputPaths(resolve(req.outputDir), req.deliverableId);
+      await Promise.all([
+        writeFile(subtitlePaths.srt, serializeSubtitles(captionModel, {
+          format: "srt",
+          vttWordTimestamps: false,
+          vttPositioning: false,
+          includeSpeakerLabels: false,
+        }), "utf8"),
+        writeFile(subtitlePaths.vtt, serializeSubtitles(captionModel, {
+          format: "vtt",
+          vttWordTimestamps: true,
+          vttPositioning: true,
+          includeSpeakerLabels: false,
+        }), "utf8"),
+      ]);
+      if (variant === "burnin" && captionModel.cues.length > 0) {
+        const plan = await renderCaptionOverlaySequence({
+          model: captionModel,
+          cacheRoot: join(this.#projectRoot, ".guyditor/cache/render/overlays"),
+          versions: { preset: captionPreset(deliverable, project), captionRevision: project.revision },
+        });
+        overlays = [{
+          overlayAssetPath: plan.pathPattern,
+          overlaySha256: plan.overlaySha256,
+          atOutputFrame: plan.atOutputFrame,
+          durationFrames: plan.durationFrames,
+        }];
+      }
+    }
+    const transcriptSidecars = await this.#captionSidecars(project);
+    const graphicPlan = await renderGraphicOverlaySequence({
+      project,
+      sequenceId: deliverable.sequenceId,
+      registry: this.#templateRegistry,
+      anchorDependencies: { wordLookup: createTranscriptWordLookup(transcriptSidecars) },
+      width: project.settings.timeline.width,
+      height: project.settings.timeline.height,
+      fps: project.settings.timeline.fps,
+      brand: { palette: {} },
+      cacheRoot: join(this.#projectRoot, ".guyditor/cache/render/graphics"),
+    });
+    const graphicOverlays: Parameters<typeof compileRenderGraph>[0]["graphicOverlays"] =
+      graphicPlan === undefined
+        ? []
+        : [{
+            overlayAssetPath: graphicPlan.pathPattern,
+            overlaySha256: graphicPlan.overlaySha256,
+            atOutputFrame: graphicPlan.atOutputFrame,
+            durationFrames: graphicPlan.durationFrames,
+          }];
+    const maskAssets = await this.#rasterizedMasks(project, deliverable);
+    const anchorFrames = await this.#renderAnchorFrames(project, deliverable, transcriptSidecars);
+    const speechIntervals = this.#speechIntervals(project, deliverable, transcriptSidecars);
+    const pipAssets = await this.#rasterizedPips(project, deliverable, anchorFrames);
     const graph = compileRenderGraph({
       project,
       revision: project.revision,
@@ -563,13 +1186,45 @@ export class RenderService {
       profile: profile.profile,
       profileSha256: profile.sha256,
       toolchain: await toolchainManifest(),
+      overlays,
+      graphicOverlays,
+      maskAssets,
+      anchorFrames,
+      speechIntervals,
+      pipAssets,
+      ...(options.diagnostic === undefined ? {} : {
+        diagnosticBackground: options.diagnostic.background,
+        diagnosticSaturatedColor: options.diagnostic.saturatedColor,
+        inspectedLayerId: options.diagnostic.inspectedLayerId,
+      }),
     });
-    const outputPath = exportOutputPath(
-      resolve(req.outputDir),
-      req.deliverableId,
-      variant,
-      profile.profile.container,
-    );
+    const outputPath = options.diagnostic === undefined
+      ? exportOutputPath(resolve(req.outputDir), req.deliverableId, variant, profile.profile.container)
+      : join(
+          resolve(req.outputDir),
+          `${req.deliverableId}-${options.diagnostic.inspectedLayerId}-${options.diagnostic.background}.${profile.profile.container}`,
+        );
+    const sequence = project.sequences.find(({ id }) => id === deliverable.sequenceId);
+    const hasProgramAudio = graph.nodes.some((node) => {
+      if (node.kind !== "source") return false;
+      const source = node.params as SourceNodeParams;
+      return source.stream === "audio" && source.path.length > 0;
+    });
+    const sampleRate = project.settings.audio.sampleRate;
+    const target: LoudnessTarget = {
+      integratedLufs: sequence?.audio?.targetLufs ?? -14,
+      truePeakDbtp: sequence?.audio?.truePeakDb ?? -1,
+      loudnessRangeLu: 11,
+    };
+    const audioKey = createHash("sha256").update(JSON.stringify({
+      revision: graph.revision,
+      deliverableId: graph.deliverableId,
+      sampleRate,
+      target,
+      audioNodes: graph.nodes.filter((node) =>
+        node.kind === "audiochain" ||
+        (node.kind === "source" && (node.params as SourceNodeParams).stream === "audio")),
+    })).digest("hex");
     return {
       command: compileFiltergraph(graph, outputPath),
       graph,
@@ -586,7 +1241,65 @@ export class RenderService {
         outcome: "pass",
       },
       variant,
+      ...(options.diagnostic === undefined && hasProgramAudio ? {
+        loudness: {
+          audioKey,
+          measurementPath: join(this.#projectRoot, ".guyditor/cache/render/measure", `${audioKey}.json`),
+          normalizedPath: join(
+            this.#projectRoot,
+            ".guyditor/cache/render/audio",
+            `${audioKey}-${variant}.wav`,
+          ),
+          sampleRate,
+          target,
+        },
+      } : {}),
     };
+  }
+
+  async #rasterizedMasks(
+    project: GuyditorProject,
+    deliverable: Deliverable,
+  ): Promise<NonNullable<Parameters<typeof compileRenderGraph>[0]["maskAssets"]>> {
+    const sequence = project.sequences.find(({ id }) => id === deliverable.sequenceId);
+    if (sequence === undefined) return {};
+    const candidates = [
+      ...sequence.clips.map((clip) => ({
+        assetId: clip.asset,
+        durationFrames: Math.max(1, clip.source.out.frames - clip.source.in.frames),
+        effects: clip.effects ?? [],
+      })),
+      ...project.layers.flatMap((layer) => (layer.items ?? []).flatMap((item) => {
+        if (item.asset === undefined) return [];
+        const durationFrames = typeof item.duration === "object" && "frames" in item.duration
+          ? item.duration.frames
+          : item.source !== undefined && "in" in item.source
+            ? item.source.out.frames - item.source.in.frames
+            : 1;
+        return [{ assetId: item.asset, durationFrames: Math.max(1, durationFrames), effects: item.effects ?? [] }];
+      })),
+    ];
+    const result: Record<string, { path: string; sha256: string; animated?: boolean }> = {};
+    for (const candidate of candidates) {
+      const asset = project.assets.find(({ id }) => id === candidate.assetId);
+      if (asset === undefined) continue;
+      for (const effect of candidate.effects.filter(({ kind }) => kind === "key")) {
+        const settings = effect.params as unknown as KeySettings;
+        if (settings.masks.length === 0) continue;
+        const rendered = await rasterizeKeyMasks({
+          masks: settings.masks,
+          width: asset.video?.width ?? asset.image?.width ?? project.settings.timeline.width,
+          height: asset.video?.height ?? asset.image?.height ?? project.settings.timeline.height,
+          durationFrames: candidate.durationFrames,
+          fps: project.settings.timeline.fps,
+          cacheRoot: join(this.#projectRoot, ".guyditor/cache/masks"),
+        });
+        for (const mask of rendered) {
+          result[mask.id] = { path: mask.path, sha256: mask.sha256, animated: mask.animated };
+        }
+      }
+    }
+    return result;
   }
 
   async #execute(
@@ -606,6 +1319,7 @@ export class RenderService {
           context.reportProgress(Math.min(0.99, Number(scaled) / 1_000_000));
         },
       });
+      await this.#normalizeMasterAudio(jobId, prepared, context);
       const probe = await probeMedia(prepared.outputPath);
       if (
         probe.video === undefined ||
@@ -640,6 +1354,107 @@ export class RenderService {
           affected: [prepared.request.deliverableId],
           retry: "safe",
           suggestion: "Inspect the FFmpeg error and retry the render job.",
+        },
+      );
+    }
+  }
+
+  async #normalizeMasterAudio(
+    jobId: string,
+    prepared: PreparedExport,
+    context: JobExecutorContext,
+  ): Promise<void> {
+    const loudness = prepared.loudness;
+    if (loudness === undefined) return;
+    const run = async (args: readonly string[]) => runFfmpeg(args, { signal: context.signal });
+    const normalization = await normalizeMasterLoudness({
+      inputPath: prepared.outputPath,
+      outputPath: loudness.normalizedPath,
+      measurementPath: loudness.measurementPath,
+      target: loudness.target,
+      sampleRate: loudness.sampleRate,
+      run,
+    });
+
+    const temporaryPath = `${prepared.outputPath}.${jobId}.loudness.${prepared.profile.profile.container}`;
+    try {
+      await runFfmpeg([
+        "-hide_banner",
+        "-nostdin",
+        "-y",
+        "-i",
+        prepared.outputPath,
+        "-i",
+        loudness.normalizedPath,
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a:0",
+        "-c:v",
+        "copy",
+        "-c:a",
+        prepared.profile.profile.audio.codec,
+        "-b:a",
+        prepared.profile.profile.audio.bitrate,
+        "-ar",
+        String(loudness.sampleRate),
+        "-ac",
+        "2",
+        "-shortest",
+        temporaryPath,
+      ], { signal: context.signal });
+      await rename(temporaryPath, prepared.outputPath);
+    } finally {
+      await rm(temporaryPath, { force: true }).catch(() => undefined);
+    }
+
+    const delivered = await measureDeliveredLoudness(prepared.outputPath, run);
+    const integratedDelta = Math.abs(delivered.integratedLufs - loudness.target.integratedLufs);
+    const integratedPass = integratedDelta <= 0.5;
+    const peakPass = delivered.truePeakDbtp <= loudness.target.truePeakDbtp;
+    const integratedStatus = normalization.limiterApplied
+      ? "warn"
+      : integratedPass ? "pass" : "fail";
+    prepared.validation.checks.push({
+      id: "VAL-500",
+      status: integratedStatus,
+      message: normalization.limiterApplied
+        ? `Delivered master is ${delivered.integratedLufs} LUFS; true-peak protection limited the linear correction toward ${loudness.target.integratedLufs} LUFS.`
+        : integratedPass
+          ? `Delivered master is ${delivered.integratedLufs} LUFS, within 0.5 LU of ${loudness.target.integratedLufs} LUFS.`
+        : `Delivered master is ${delivered.integratedLufs} LUFS, outside 0.5 LU of ${loudness.target.integratedLufs} LUFS.`,
+      affected: [prepared.request.deliverableId],
+      measured: {
+        integratedLufs: delivered.integratedLufs,
+        targetLufs: loudness.target.integratedLufs,
+        deltaLu: integratedDelta,
+      },
+    });
+    if (integratedStatus === "warn" && prepared.validation.outcome === "pass") {
+      prepared.validation.outcome = "warnings";
+    }
+    prepared.validation.checks.push({
+      id: "VAL-501",
+      status: peakPass ? "pass" : "fail",
+      message: peakPass
+        ? `Delivered true peak ${delivered.truePeakDbtp} dBTP is at or below ${loudness.target.truePeakDbtp} dBTP.`
+        : `Delivered true peak ${delivered.truePeakDbtp} dBTP exceeds ${loudness.target.truePeakDbtp} dBTP.`,
+      affected: [prepared.request.deliverableId],
+      measured: {
+        truePeakDbtp: delivered.truePeakDbtp,
+        targetTruePeakDbtp: loudness.target.truePeakDbtp,
+      },
+    });
+    if (integratedStatus === "fail" || !peakPass) {
+      prepared.validation.outcome = "blocked";
+      throw makeGuyditorError(
+        "E_EXPORT_VALIDATION_FAILED",
+        `Delivered audio failed loudness validation for ${prepared.request.deliverableId}: ` +
+        `I ${String(delivered.integratedLufs)} LUFS (target ${String(loudness.target.integratedLufs)}), ` +
+        `TP ${String(delivered.truePeakDbtp)} dBTP (ceiling ${String(loudness.target.truePeakDbtp)}).`,
+        {
+          affected: [prepared.request.deliverableId],
+          suggestion: "Inspect the cached loudnorm measurement and master audio chain.",
         },
       );
     }

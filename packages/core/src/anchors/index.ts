@@ -13,6 +13,7 @@ export type {
   OrphanedAnchorRecord,
 } from "./bookkeeping.js";
 export type { StoredAnchorPath, StoredAnchorReference } from "./owners.js";
+export { storedAnchors } from "./owners.js";
 export type {
   AnchorLastResolved,
   AnchorRange,

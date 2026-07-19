@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object", "additionalProperties": false, "minProperties": 2, "required": ["captionId"],
+  "properties": {
+    "captionId": { "type": "string", "pattern": "^cts_[a-z2-7]{10}$" },
+    "sourceLayerIds": { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "^lyr_[a-z2-7]{10}$" } },
+    "preset": {
+      "type": "object", "additionalProperties": false, "required": ["presetId", "version"],
+      "properties": { "presetId": { "type": "string", "pattern": "^pre_[a-z2-7]{10}$" }, "version": { "type": "integer", "minimum": 1 } }
+    },
+    "enabled": { "type": "boolean" }
+  }
+}

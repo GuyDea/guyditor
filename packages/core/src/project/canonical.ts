@@ -71,13 +71,52 @@ const ORDERS = {
   transition: ["id", "preset", "duration", "params", "intent"],
   effect: ["id", "kind", "params"],
   clipAudio: ["gainDb", "fadeIn", "fadeInCurve", "fadeOut", "fadeOutCurve", "mute", "offset", "channels", "chain"],
+  layerAudio: ["chain"],
+  audioChain: ["nodes"],
+  audioChainNode: [
+    "type", "enabled", "mapping", "strengthDb", "gainDb", "bands",
+    "thresholdDb", "ratio", "attackMs", "releaseMs", "makeupDb", "ceilingDb",
+  ],
+  eqBand: ["freqHz", "gainDb", "q"],
   loop: ["enabled", "crossfade"],
   punchIn: ["level", "anchor"],
   point: ["x", "y"],
+  transform: ["anchor", "position", "scale", "rotationDeg", "crop"],
+  crop: ["x", "y", "w", "h"],
+  colorCorrection: ["exposure", "contrast", "temperatureK", "tint", "saturation"],
+  keySettings: ["schema", "mode", "chroma", "neural", "masks", "postColor"],
+  chroma: ["keyColor", "tolerance", "softness", "preBlur", "edge", "spill"],
+  keyEdge: ["erodePx", "featherPx"],
+  keySpill: ["mode", "strength"],
+  keyMask: ["id", "role", "shape", "points", "featherPx", "frames"],
+  shapeMask: ["shape", "cornerRadius", "featherPx"],
+  pipStyle: ["mask", "border", "shadow", "background", "deviceFrame"],
+  pipBorder: ["widthPx", "color", "opacity"],
+  pipShadow: ["dx", "dy", "blurPx", "color", "opacity"],
+  pipBackground: ["color", "blurSigma", "padPx"],
+  deviceFrame: ["templateId", "params"],
+  pip: ["style", "placement", "keyframes", "avoid"],
+  responsivePlacement: ["base", "overrides"],
+  placement: [
+    "anchor", "width", "height", "margin", "margin_x", "margin_y",
+    "offset_x", "offset_y", "aspect", "fit",
+  ],
+  pipKeyframe: ["id", "at", "placement", "style", "transition"],
+  pipTransition: ["preset", "durationFrames", "params"],
+  avoidConfig: [
+    "enabled", "sources", "softOverlapMax", "holdFrames", "fallbackAnchors",
+    "moveTransition",
+  ],
+  moveTransition: ["preset", "durationFrames"],
+  avoidRegion: ["id", "source", "hardness", "rect", "frames", "fromAnnotation"],
+  normalizedRect: ["x", "y", "w", "h"],
   layer: [
     "id", "kind", "name", "order", "enabled", "locked", "opacity", "blend",
-    "transform", "matte", "pip", "adjustment", "ducking", "sequence", "items",
+    "transform", "matte", "pip", "adjustment", "audio", "ducking", "look", "sequence", "items",
   ],
+  ducking: ["enabled", "mode", "duckDb", "attackMs", "releaseMs", "holdMs", "minGapMs", "overrides"],
+  duckingPoint: ["at", "gainDb"],
+  look: ["presetId", "presetVersion", "exposure", "contrast", "temperatureK", "tint", "saturation"],
   matte: ["layerId", "source", "invert"],
   placedItem: [
     "id", "asset", "template", "at", "duration", "anchorMetadata", "source", "effects",
@@ -119,6 +158,7 @@ const REGISTRY_SORT_KEYS = new Map<string, string>([
   ["presets", "id"],
   ["skills", "id"],
   ["sidecars", "name"],
+  ["avoidRegions", "id"],
 ]);
 
 const ISO_8601_TIMESTAMP =
@@ -169,10 +209,28 @@ function orderFor(
   if (key === "rights") return ORDERS.rights;
   if (key === "chapter") return ORDERS.chapter;
   if (key === "audio" && includesPath(path, "clips")) return ORDERS.clipAudio;
+  if (key === "audio" && includesPath(path, "layers")) return ORDERS.layerAudio;
   if (key === "audio" && includesPath(path, "sequences")) return ORDERS.sequenceAudio;
+  if (key === "chain") return ORDERS.audioChain;
+  if (typeof value.type === "string" && [
+    "channelSelect", "noiseReduction", "gain", "eq", "compression", "limiting",
+  ].includes(value.type)) return ORDERS.audioChainNode;
+  if ("freqHz" in value && "gainDb" in value && "q" in value) return ORDERS.eqBand;
   if (key === "transitionAfter") return ORDERS.transition;
   if (key === "loop") return ORDERS.loop;
   if (key === "punchIn") return ORDERS.punchIn;
+  if (key === "transform") return ORDERS.transform;
+  if (key === "crop" && "w" in value && "h" in value) return ORDERS.crop;
+  if (key === "adjustment" || key === "postColor") return ORDERS.colorCorrection;
+  if (key === "ducking") return ORDERS.ducking;
+  if (typeof path.at(-1) === "number" && path.at(-2) === "overrides" && includesPath(path, "ducking")) {
+    return ORDERS.duckingPoint;
+  }
+  if (key === "look") return ORDERS.look;
+  if (key === "params" && value.schema === "guyditor/key@1") return ORDERS.keySettings;
+  if (key === "chroma") return ORDERS.chroma;
+  if (key === "edge" && "erodePx" in value) return ORDERS.keyEdge;
+  if (key === "spill") return ORDERS.keySpill;
   if (key === "anchor" && "x" in value && "y" in value) return ORDERS.point;
   if (key === "matte") return ORDERS.matte;
   if (key === "duration" && "until" in value) return ORDERS.until;
@@ -183,6 +241,20 @@ function orderFor(
     return ORDERS.anchorMetadataEntry;
   }
   if (key === "preset" && "presetId" in value) return ORDERS.captionPreset;
+  if (key === "pip") return ORDERS.pip;
+  if (key === "style" && includesPath(path, "pip")) return ORDERS.pipStyle;
+  if (key === "mask" && includesPath(path, "pip")) return ORDERS.shapeMask;
+  if (key === "border" && includesPath(path, "pip")) return ORDERS.pipBorder;
+  if (key === "shadow" && includesPath(path, "pip")) return ORDERS.pipShadow;
+  if (key === "background" && includesPath(path, "pip")) return ORDERS.pipBackground;
+  if (key === "deviceFrame") return ORDERS.deviceFrame;
+  if (key === "placement" && "base" in value) return ORDERS.responsivePlacement;
+  if (key === "base" && includesPath(path, "placement")) return ORDERS.placement;
+  if (key === "placement" && includesPath(path, "keyframes")) return ORDERS.placement;
+  if (key === "transition" && includesPath(path, "keyframes")) return ORDERS.pipTransition;
+  if (key === "avoid" && includesPath(path, "pip")) return ORDERS.avoidConfig;
+  if (key === "moveTransition") return ORDERS.moveTransition;
+  if (key === "rect" && includesPath(path, "avoidRegions")) return ORDERS.normalizedRect;
   if (key === "summary" && includesPath(path, "annotations")) return ORDERS.annotationSummary;
   if (key === "generatedBy") return ORDERS.generatedBy;
   if (typeof path.at(-1) === "number" && path.at(-2) === "inputs" && includesPath(path, "sidecars")) {
@@ -192,6 +264,9 @@ function orderFor(
 
   const id = typeof value.id === "string" ? value.id : "";
   const prefix = id.slice(0, id.indexOf("_"));
+  if (prefix === "msk") return ORDERS.keyMask;
+  if (prefix === "kfr") return ORDERS.pipKeyframe;
+  if (prefix === "avr") return ORDERS.avoidRegion;
   if (prefix === "ast") return ORDERS.asset;
   if (prefix === "beat") return ORDERS.beat;
   if (prefix === "seq") return ORDERS.sequence;

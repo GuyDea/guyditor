@@ -1,0 +1,22 @@
+{
+  "$id": "guyditor:op/composition.arrange",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["sequenceId", "arrangementRef", "assignments"],
+  "additionalProperties": false,
+  "properties": {
+    "sequenceId": { "type": "string", "pattern": "^seq_[a-z2-7]{10}$" },
+    "arrangementRef": { "type": "string", "minLength": 1 },
+    "assignments": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": { "pattern": "^[a-z][a-z0-9_]*$" },
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^(ast|lyr)_[a-z2-7]{10}$"
+      }
+    },
+    "at": { "type": "string" },
+    "restoreLayers": { "type": "array", "items": { "type": "object" } }
+  }
+}

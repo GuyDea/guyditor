@@ -6,6 +6,7 @@ import { join, resolve } from "node:path";
 import {
   AnnotationService,
   createProject,
+  JobQueue,
   OperationEngine,
 } from "../../../core/src/index.js";
 import type { ProjectStore, Result } from "../../../core/src/index.js";
@@ -17,6 +18,9 @@ const EMPTY_ANNOTATIONS = "format: guyditor.annotations/v1\nannotations: []\n";
 export interface WorkspaceProjectOptions {
   transcript?: boolean;
   proposal?: boolean;
+  queuedJob?: boolean;
+  audioPost?: boolean;
+  jumpCut?: boolean;
 }
 
 async function valueOf<Value>(result: Promise<Result<Value>>): Promise<Value> {
@@ -42,11 +46,47 @@ export async function createWorkspaceProject(
   model.assets[0]!.probe.audio = { rate: 48_000, channels: 1 };
   model.sidecars[0]!.inputs = [];
   model.sidecars[0]!.sha256 = createHash("sha256").update(EMPTY_ANNOTATIONS).digest("hex");
+  if (options.jumpCut === true) {
+    model.sequences[0]!.clips[1]!.source = {
+      in: { frames: 48, fps: "24/1" },
+      out: { frames: 72, fps: "24/1" },
+    };
+    model.presets.push({
+      id: "pre_smoothcut2",
+      name: "smooth-cut",
+      kind: "transition",
+      version: 1,
+      path: "presets/pre_smoothcut2@1.yaml",
+      sha256: "b".repeat(64),
+    });
+  }
+  if (options.audioPost === true) {
+    model.sequences[0]!.audio = { targetLufs: -16, truePeakDb: -1.5 };
+    model.layers.push({
+      id: "lyr_bbbbbbbbbb",
+      kind: "music",
+      name: "Music bed",
+      order: 1,
+      enabled: true,
+      locked: false,
+      sequence: "seq_aaaaaaaaaa",
+    });
+  }
   const created = await valueOf(Promise.resolve(createProject(root, model)));
   await writeFile(join(root, "sidecars/annotations.yaml"), EMPTY_ANNOTATIONS, "utf8");
 
   if (options.transcript === true) await addTranscript(created);
   if (options.proposal === true) await addProposal(created);
+  if (options.queuedJob === true) {
+    const { queue } = JobQueue.open(join(root, ".guyditor/jobs.sqlite"));
+    queue.enqueue({
+      kind: "manual.wait",
+      title: "Manual cancellable hold",
+      payload: null,
+      cancellable: true,
+    });
+    queue.close();
+  }
   return root;
 }
 

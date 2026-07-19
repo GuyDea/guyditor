@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { mkdir, open, readFile, rename, unlink } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, extname, join, resolve } from "node:path";
 
 import {
   AnchorResolverRegistry,
@@ -11,6 +11,8 @@ import {
   success,
 } from "../../core/src/index.js";
 import type {
+  Asset,
+  CreateProposalRequest,
   GuyditorProject,
   IdPrefix,
   JobQueue,
@@ -22,6 +24,7 @@ import type {
   OperationBatchResult,
   OperationContext,
   ProjectStore,
+  Proposal,
   Result,
   SidecarRef,
   TransactionRecord,
@@ -50,6 +53,8 @@ import type {
   WordLocation,
   WordResolution,
 } from "./types.js";
+import { importSubtitleText } from "./captions/subtitles.js";
+import type { ImportedSubtitle } from "./captions/types.js";
 
 const TRANSCRIPT_SCHEMA = "guyditor.transcript/v1";
 export const ALIGNMENT_CONFIDENCE_THRESHOLD = 0.35;
@@ -80,6 +85,11 @@ export interface TranscriptMutationResult {
   sidecar: TranscriptSidecar;
   transactionId?: string;
   alignmentJobId?: string;
+}
+
+export interface SubtitleImportResult extends ImportedSubtitle {
+  assetId: string;
+  transactionId?: string;
 }
 
 function transcriptFailure(
@@ -696,6 +706,109 @@ export class TranscriptEngine {
     }
   }
 
+  public async importSubtitles(path: string): Promise<Result<SubtitleImportResult>> {
+    const project = this.#project;
+    if (project === undefined) {
+      return transcriptFailure(
+        "E_TRANSCRIPT_PROJECT_NOT_ATTACHED",
+        "TranscriptEngine.importSubtitles(path) requires a project in TranscriptEngineOptions.",
+        [path],
+      );
+    }
+    const extension = extname(path).toLowerCase();
+    const format = extension === ".srt" ? "srt" : extension === ".vtt" ? "vtt" : undefined;
+    if (format === undefined) {
+      return transcriptFailure(
+        "E_SUBTITLE_FORMAT",
+        `Subtitle import supports .srt and .vtt files, not ${extension || "an extensionless path"}.`,
+        [path],
+      );
+    }
+    try {
+      const bytes = await readFile(path);
+      const assetId = this.#idFactory("ast");
+      const jobId = this.#idFactory("job");
+      const assetSha256 = createHash("sha256").update(bytes).digest("hex");
+      const now = this.#now().toISOString();
+      const imported = importSubtitleText(bytes.toString("utf8"), {
+        format,
+        assetId,
+        firstWordOrdinal: project.currentProject.transcript.nextWordOrdinal,
+        sampleRate: project.currentProject.settings.audio.sampleRate,
+        now,
+        jobId,
+      });
+      const content = serializeTranscriptSidecar(imported.sidecar);
+      const contentHash = createHash("sha256").update(content).digest("hex");
+      const reference: SidecarRef = {
+        name: sidecarName(assetId),
+        path: sidecarPath(assetId),
+        schema: TRANSCRIPT_SCHEMA,
+        sha256: contentHash,
+        generatedBy: { tool: `${format}-import`, version: "1", job: jobId },
+        inputs: [{ asset: assetId, sha256: assetSha256 }],
+      };
+      const asset: Asset = {
+        id: assetId,
+        kind: "subtitle",
+        path: resolve(path),
+        sha256: assetSha256,
+        bytes: bytes.byteLength,
+        container: format,
+        probe: {},
+        analyses: {},
+        integrity: "ok",
+        ingest: { at: now, ffprobeVersion: "subtitle-parser/1", via: "manual" },
+      };
+      const createOperation: OperationInput = {
+        op: "transcript.create",
+        params: {
+          assetId,
+          sidecar: { path: reference.path, sha256: contentHash },
+          engine: imported.sidecar.provenance.engine,
+          alignment: null,
+          jobId,
+        },
+      };
+      const anchorResolvers = new AnchorResolverRegistry();
+      anchorResolvers.registerWordLookup(createTranscriptWordLookup([imported.sidecar]));
+      const engine = new OperationEngine(project.currentProject, {
+        appVersion: this.#appVersion,
+        committer: new SidecarCommitter(project, new Map([[reference.path, content]])),
+        idFactory: (prefix: IdPrefix) => this.#idFactory(prefix),
+        now: this.#now,
+        operationDispatcher: createDispatcher(
+          createOperation,
+          imported.nextWordOrdinal,
+          reference,
+        ),
+        anchorResolvers,
+      });
+      const committed = await engine.execute([
+        { op: "asset.ingest", params: { assets: [asset] } },
+        createOperation,
+      ], {
+        baseRevision: project.currentProject.revision,
+        origin: "ui",
+        dryRun: false,
+      });
+      if (!committed.ok) return committed;
+      return success({
+        ...imported,
+        assetId,
+        ...(committed.value.transactionId === undefined
+          ? {}
+          : { transactionId: committed.value.transactionId }),
+      });
+    } catch (error: unknown) {
+      return transcriptFailure(
+        "E_SUBTITLE_IMPORT",
+        `Could not import subtitles from ${path}: ${errorMessage(error)}`,
+        [path],
+      );
+    }
+  }
+
   public async realign(
     project: ProjectStore,
     request: TranscriptRealignRequest,
@@ -854,6 +967,61 @@ export class TranscriptEngine {
       ...context,
       baseRevision: project.currentProject.revision,
     });
+  }
+
+  public async createProposal(
+    project: ProjectStore,
+    request: CreateProposalRequest,
+  ): Promise<Result<Proposal>> {
+    const workspace = await loadTranscriptWorkspace(
+      project,
+      (prefix) => this.#idFactory(prefix),
+    );
+    if (!workspace.ok) return workspace;
+    const anchorResolvers = new AnchorResolverRegistry();
+    anchorResolvers.registerWordLookup(createTranscriptWordLookup(workspace.value.sidecars));
+    const engine = new OperationEngine(project.currentProject, {
+      appVersion: this.#appVersion,
+      committer: new SidecarCommitter(project, workspace.value.writes),
+      proposalStore: project,
+      idFactory: (prefix: IdPrefix) => this.#idFactory(prefix),
+      now: this.#now,
+      operationDispatcher: workspace.value.dispatcher,
+      anchorResolvers,
+      continuityGuard: createTranscriptContinuityGuard({
+        sidecars: workspace.value.sidecars,
+        ...(this.#loadPeaks === undefined ? {} : { loadPeaks: this.#loadPeaks }),
+      }),
+    });
+    return engine.createProposal(request);
+  }
+
+  public async acceptProposal(
+    project: ProjectStore,
+    proposalId: string,
+    resolvedBy: string,
+  ): Promise<Result<Proposal>> {
+    const workspace = await loadTranscriptWorkspace(
+      project,
+      (prefix) => this.#idFactory(prefix),
+    );
+    if (!workspace.ok) return workspace;
+    const anchorResolvers = new AnchorResolverRegistry();
+    anchorResolvers.registerWordLookup(createTranscriptWordLookup(workspace.value.sidecars));
+    const engine = new OperationEngine(project.currentProject, {
+      appVersion: this.#appVersion,
+      committer: new SidecarCommitter(project, workspace.value.writes),
+      proposalStore: project,
+      idFactory: (prefix: IdPrefix) => this.#idFactory(prefix),
+      now: this.#now,
+      operationDispatcher: workspace.value.dispatcher,
+      anchorResolvers,
+      continuityGuard: createTranscriptContinuityGuard({
+        sidecars: workspace.value.sidecars,
+        ...(this.#loadPeaks === undefined ? {} : { loadPeaks: this.#loadPeaks }),
+      }),
+    });
+    return engine.acceptProposal(proposalId, resolvedBy);
   }
 
   public findWord(wordId: string): Promise<Result<WordLocation | undefined>> {

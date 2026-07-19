@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["graphicId", "patch"],
+  "properties": {
+    "graphicId": { "type": "string", "pattern": "^gfx_[a-z2-7]{10}$" },
+    "patch": { "type": "object" }
+  }
+}

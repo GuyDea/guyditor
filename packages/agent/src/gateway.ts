@@ -13,14 +13,17 @@ import { z } from "zod";
 
 import {
   buildAnnotationContext,
+  JobQueue,
   OperationEngine,
 } from "../../core/src/index.js";
 import type {
   AnnotationContextPackage,
   AnnotationTranscriptSource,
+  JobOverview,
   OperationInput,
   ProjectStore,
   Proposal,
+  TemplateProvider,
 } from "../../core/src/index.js";
 import type { DataClass } from "./audit-types.js";
 import type { AuditLog } from "./audit-log.js";
@@ -38,6 +41,7 @@ const PROPOSAL_ID = /^prp_[a-z2-7]{10}$/u;
 
 export const AC004_GATEWAY_TOOLS = Object.freeze([
   "context_package",
+  "progress_overview",
   "proposal_create",
   "proposal_get",
 ] as const);
@@ -50,12 +54,14 @@ export interface GatewayDirector {
 
 export interface AgentGatewayOptions {
   auditLog: AuditLog;
+  jobQueue: Pick<JobQueue, "overview">;
   project: ProjectStore;
   stateDirectory?: string;
   director?: GatewayDirector;
   policySnapshot?: object;
   transcript?: AnnotationTranscriptSource;
   sessionIdFactory?: () => string;
+  templateProvider?: TemplateProvider;
 }
 
 export interface StartedAgentGateway {
@@ -133,11 +139,13 @@ function sendJson(response: ServerResponse, status: number, value: unknown): voi
 
 export class AgentGateway {
   readonly #audit: AuditLog;
+  readonly #jobs: Pick<JobQueue, "overview">;
   readonly #project: ProjectStore;
   readonly #stateDirectory: string;
   readonly #director: GatewayDirector;
   readonly #policySnapshot: object;
   readonly #transcript: AnnotationTranscriptSource | undefined;
+  readonly #templateProvider: TemplateProvider | undefined;
   readonly #sessions: SessionManager;
   readonly #transports = new Map<string, ActiveTransport>();
   #http: Server | undefined;
@@ -145,6 +153,7 @@ export class AgentGateway {
 
   public constructor(options: AgentGatewayOptions) {
     this.#audit = options.auditLog;
+    this.#jobs = options.jobQueue;
     this.#project = options.project;
     this.#stateDirectory = options.stateDirectory ?? join(homedir(), ".guyditor", "state");
     this.#director = options.director ?? {
@@ -154,6 +163,7 @@ export class AgentGateway {
     };
     this.#policySnapshot = structuredClone(options.policySnapshot ?? {});
     this.#transcript = options.transcript;
+    this.#templateProvider = options.templateProvider;
     this.#sessions = new SessionManager(this.#audit, {
       ...(options.sessionIdFactory === undefined
         ? {}
@@ -334,6 +344,21 @@ export class AgentGateway {
 
   #mcpServer(session: GatewaySession): McpServer {
     const server = new McpServer({ name: "guyditor-agent-gateway", version: "0.0.0" });
+    server.registerTool("progress_overview", {
+      description: "Read all running, queued, creator-blocked, and external project work.",
+      inputSchema: {},
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    }, async (_params, extra) => this.#toolCall(
+      session,
+      "progress_overview",
+      String(extra.requestId),
+      {},
+      async () => ({
+        value: await this.#jobs.overview(),
+        dataClasses: ["metadata" as const],
+      }),
+    ));
+
     server.registerTool("context_package", {
       description: "Read the context package for one review annotation.",
       inputSchema: { annotationId: z.string().regex(ANNOTATION_ID) },
@@ -374,6 +399,9 @@ export class AgentGateway {
           appVersion: "0.0.0",
           proposalStore: this.#project,
           auditSink: this.#audit,
+          ...(this.#templateProvider === undefined
+            ? {}
+            : { templateProvider: this.#templateProvider }),
         });
         const result = await engine.createProposal({
           operations: ops as OperationInput[],
@@ -416,7 +444,7 @@ export class AgentGateway {
     return server;
   }
 
-  async #toolCall<Value extends AnnotationContextPackage | Proposal>(
+  async #toolCall<Value extends AnnotationContextPackage | JobOverview | Proposal>(
     session: GatewaySession,
     tool: typeof AC004_GATEWAY_TOOLS[number],
     callId: string,

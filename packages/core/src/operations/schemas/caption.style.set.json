@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object", "additionalProperties": false, "required": ["captionId", "styleOverrides"],
+  "properties": {
+    "captionId": { "type": "string", "pattern": "^cts_[a-z2-7]{10}$" },
+    "styleOverrides": { "type": "object" },
+    "replace": { "type": "boolean" }
+  }
+}

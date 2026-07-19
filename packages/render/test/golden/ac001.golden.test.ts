@@ -123,7 +123,8 @@ describe("AC-001 golden composition", () => {
         variants: ["clean"],
         outputDir,
       });
-      expect(await terminal(queue, jobId)).toMatchObject({ state: "done" });
+      const completed = await terminal(queue, jobId);
+      expect(completed, completed.error?.message).toMatchObject({ state: "done" });
       const output = exportOutputPath(outputDir, manifest.deliverable, "clean", "mp4");
       const comparisons = manifest.frames.map((frame) => {
         const actual = dhashFrame(output, frame.at.frames);

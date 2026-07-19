@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { deriveTimeline } from "../../../../core/src/project/derive.js";
 import { convertTimeRounding } from "../../../../core/src/time/index.js";
@@ -8,7 +8,23 @@ import type {
   AnnotationShape,
   Clip,
   FrameTime,
+  KeySettings,
 } from "../../../../core/src/index.js";
+import captionFontUrl from "../../../../render/assets/fonts/Inconsolata.otf?url";
+import { paintCaptionFrame } from "../../../../render/src/caption-painter.js";
+import type { CaptionPaintContext } from "../../../../render/src/caption-painter.js";
+import type { CaptionFrameSpec } from "../../../../transcript/src/index.js";
+import { ChromaPreviewCanvas } from "../chroma-preview.js";
+import { pipPlaceOperation } from "../../../../compositor/src/pip-operation.js";
+import { PipPreviewCanvas } from "../pip-preview.js";
+import {
+  createLoudnessMeter,
+} from "../loudness-meter.js";
+import type {
+  LoudnessFrame,
+  LoudnessMeterController,
+  LoudnessTargetOverlay,
+} from "../loudness-meter.js";
 import {
   errorMessage,
   executeDirect,
@@ -20,12 +36,19 @@ import {
 } from "../preview-controller.js";
 import { usePreviewStore, useSelectionStore } from "../state/view-state.js";
 import { Panel } from "./Panel.js";
+import { LoudnessMeter } from "./LoudnessMeter.js";
 import type { WorkspacePanelProps } from "./types.js";
 
 interface ProxyResolution { path: string; url: string }
 
 const BASE32 = "abcdefghijklmnopqrstuvwxyz234567";
 const DRAWING_TOOLS: AnnotationShape[] = ["note", "pin", "rect", "ellipse", "arrow", "range"];
+const EMPTY_LOUDNESS_FRAME: LoudnessFrame = {
+  momentaryLufs: -Infinity,
+  shortTermLufs: -Infinity,
+  integratedLufs: null,
+  truePeakDbtp: [],
+};
 
 function annotationId(): string {
   const bytes = new Uint8Array(10);
@@ -126,13 +149,24 @@ export function PreviewPanel({
   transcripts,
   annotations,
   refreshAnnotations,
+  refreshProject,
   setNotice,
 }: WorkspacePanelProps): React.JSX.Element {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const loudnessControllerRef = useRef<LoudnessMeterController | null>(null);
+  const loudnessFrameSinkRef = useRef<(frame: LoudnessFrame) => void>(() => undefined);
+  const captionCanvasRef = useRef<HTMLCanvasElement>(null);
   const [proxy, setProxy] = useState<ProxyResolution | null>(null);
+  const [captionFrame, setCaptionFrame] = useState<CaptionFrameSpec | null>(null);
+  const [graphicsFrame, setGraphicsFrame] = useState<string | null>(null);
+  const [captionFontReady, setCaptionFontReady] = useState(false);
   const [tool, setTool] = useState<AnnotationShape>("pin");
   const [body, setBody] = useState("");
   const [context, setContext] = useState<unknown>(null);
+  const [chromaAvailable, setChromaAvailable] = useState(true);
+  const [pipAnchorFrames, setPipAnchorFrames] = useState<Record<string, number>>({});
+  const [loudnessFrame, setLoudnessFrame] = useState<LoudnessFrame>(EMPTY_LOUDNESS_FRAME);
+  const [loudnessAvailable, setLoudnessAvailable] = useState(true);
   const playhead = usePreviewStore((state) => state.playhead);
   const playing = usePreviewStore((state) => state.playing);
   const settled = usePreviewStore((state) => state.settled);
@@ -141,13 +175,185 @@ export function PreviewPanel({
   const setPlaying = usePreviewStore((state) => state.setPlaying);
   const setSettled = usePreviewStore((state) => state.setSettled);
   const setWarning = usePreviewStore((state) => state.setWarning);
+  const diagnosticBackground = usePreviewStore((state) => state.diagnosticBackground);
+  const previewKeySettings = usePreviewStore((state) => state.previewKeySettings);
   const selectAnnotation = useSelectionStore((state) => state.selectAnnotation);
+  const selectWord = useSelectionStore((state) => state.selectWord);
+  const selectedLayerId = useSelectionStore((state) => state.selectedLayerId);
   const fps = snapshot?.master.settings.timeline.fps ?? playhead.fps;
   const duration = totalFrames(snapshot);
   const active = snapshot === null ? undefined : activeClip(snapshot, playhead.frames);
   const currentSourceFrame = active === undefined
     ? undefined
     : sourceFrame(active.clip, playhead.frames, active.timelineStart, fps);
+  const deliverable = snapshot?.master.deliverables.find(
+    ({ id }) => id === snapshot.master.settings.primaryDeliverable,
+  );
+  const persistedKeySettings = active?.clip.effects?.find(({ kind }) => kind === "key")
+    ?.params as unknown as KeySettings | undefined;
+  const keySettings = previewKeySettings ?? persistedKeySettings ?? null;
+  const keyPreviewActive = keySettings?.mode === "chroma" && chromaAvailable;
+  const selectedPipLayer = snapshot?.master.layers.find((candidate) =>
+    candidate.id === selectedLayerId && candidate.pip !== undefined);
+  const selectedPip = selectedPipLayer?.pip;
+  const sequence = snapshot?.master.sequences.find(({ id }) => id === deliverable?.sequenceId);
+  const loudnessTarget: LoudnessTargetOverlay = {
+    integratedLufs: sequence?.audio?.targetLufs ?? -14,
+    toleranceLu: 1,
+    truePeakDbtp: sequence?.audio?.truePeakDb ?? -1,
+    profileId: "sequence-master",
+  };
+  loudnessFrameSinkRef.current = setLoudnessFrame;
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (video === null) return;
+    let cancelled = false;
+    void createLoudnessMeter(video, (frame) => loudnessFrameSinkRef.current(frame))
+      .then((controller) => {
+        if (cancelled) void controller.dispose();
+        else loudnessControllerRef.current = controller;
+      })
+      .catch(() => {
+        if (!cancelled) setLoudnessAvailable(false);
+      });
+    return () => {
+      cancelled = true;
+      const controller = loudnessControllerRef.current;
+      loudnessControllerRef.current = null;
+      if (controller !== null) void controller.dispose();
+    };
+  }, []);
+
+  useEffect(() => {
+    let current = true;
+    if (snapshot === null || selectedPip === undefined || deliverable === undefined) {
+      setPipAnchorFrames({});
+      return () => { current = false; };
+    }
+    void Promise.all(selectedPip.keyframes.map(async ({ at }) => {
+      const resolution = await window.guyditor.call<{
+        status: "resolved" | "orphaned";
+        timeline?: FrameTime;
+      }>("OperationEngine", "resolveAnchor", {
+        anchor: at,
+        scope: deliverable.sequenceId,
+      });
+      return resolution.status === "resolved" && resolution.timeline !== undefined
+        ? [at, resolution.timeline.frames] as const
+        : undefined;
+    })).then((entries) => {
+      if (current) setPipAnchorFrames(Object.fromEntries(entries.filter((entry) => entry !== undefined)));
+    });
+    return () => { current = false; };
+  }, [deliverable, selectedPip, snapshot]);
+  const handleChromaReady = useCallback((): void => setChromaAvailable(true), []);
+  const handleChromaUnavailable = useCallback((message: string): void => {
+    setChromaAvailable(false);
+    setWarning(message);
+  }, [setWarning]);
+
+  useEffect(() => {
+    setChromaAvailable(true);
+  }, [keySettings]);
+
+  useEffect(() => {
+    const sample = (): void => {
+      const video = videoRef.current;
+      if (video === null || playing || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+        const error = "Pause on a settled presenter frame before sampling the key color.";
+        setNotice(error);
+        window.dispatchEvent(new CustomEvent("guyditor:key-eyedropper-result", { detail: { error } }));
+        return;
+      }
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, video.videoWidth);
+      canvas.height = Math.max(1, video.videoHeight);
+      const context = canvas.getContext("2d", { willReadFrequently: true });
+      if (context === null) return;
+      context.drawImage(video, 0, 0);
+      const pixel = context.getImageData(Math.floor(canvas.width / 2), Math.floor(canvas.height / 2), 1, 1).data;
+      const color = `#${[pixel[0], pixel[1], pixel[2]].map((channel) =>
+        channel!.toString(16).padStart(2, "0")).join("")}`.toUpperCase();
+      window.dispatchEvent(new CustomEvent("guyditor:key-eyedropper-result", { detail: { color } }));
+    };
+    window.addEventListener("guyditor:key-eyedropper-request", sample);
+    return () => window.removeEventListener("guyditor:key-eyedropper-request", sample);
+  }, [playing, setNotice]);
+
+  useEffect(() => {
+    let current = true;
+    const face = new FontFace("Inconsolata Guyditor", `url(${captionFontUrl})`);
+    void face.load().then((loaded) => {
+      if (!current) return;
+      document.fonts.add(loaded);
+      setCaptionFontReady(true);
+    }).catch(() => {
+      if (current) setCaptionFontReady(false);
+    });
+    return () => { current = false; };
+  }, []);
+
+  useEffect(() => {
+    let current = true;
+    if (snapshot === null || deliverable === undefined) {
+      setCaptionFrame(null);
+      return () => { current = false; };
+    }
+    void window.guyditor.call<CaptionFrameSpec>("RenderService", "captionFrame", {
+      deliverableId: deliverable.id,
+      revision: snapshot.revision,
+      frame: playhead.frames,
+    }).then((frame) => {
+      if (current) setCaptionFrame(frame);
+    }).catch((error: unknown) => {
+      if (current) {
+        setCaptionFrame(null);
+        setNotice(errorMessage(error));
+      }
+    });
+    return () => { current = false; };
+  }, [deliverable?.id, playhead.frames, setNotice, snapshot?.revision]);
+
+  useEffect(() => {
+    let current = true;
+    if (snapshot === null || deliverable === undefined) {
+      setGraphicsFrame(null);
+      return () => { current = false; };
+    }
+    void window.guyditor.call<{ dataUrl: string }>("RenderService", "graphicsFrame", {
+      deliverableId: deliverable.id,
+      revision: snapshot.revision,
+      frame: playhead.frames,
+    }).then(({ dataUrl }) => {
+      if (current) setGraphicsFrame(dataUrl);
+    }).catch((error: unknown) => {
+      if (current) {
+        setGraphicsFrame(null);
+        setNotice(errorMessage(error));
+      }
+    });
+    return () => { current = false; };
+  }, [deliverable?.id, playhead.frames, setNotice, snapshot?.revision]);
+
+  useEffect(() => {
+    const canvas = captionCanvasRef.current;
+    if (canvas === null || snapshot === null) return;
+    const { width, height } = snapshot.master.settings.timeline;
+    if (canvas.width !== width) canvas.width = width;
+    if (canvas.height !== height) canvas.height = height;
+    const context = canvas.getContext("2d");
+    if (context === null) return;
+    context.clearRect(0, 0, width, height);
+    if (captionFrame !== null && captionFontReady) {
+      paintCaptionFrame(
+        context as unknown as CaptionPaintContext,
+        captionFrame,
+        width,
+        height,
+      );
+    }
+  }, [captionFontReady, captionFrame, snapshot]);
 
   useEffect(() => {
     let current = true;
@@ -283,31 +489,94 @@ export function PreviewPanel({
       eyebrow="Proxy / settled frame"
       actions={<span className="quality-badge" data-testid="preview-quality">PROXY</span>}
     >
-      <div className="preview-surface" data-testid="preview-surface" data-settled={settled}>
+      <div
+        className="preview-surface"
+        data-testid="preview-surface"
+        data-settled={settled}
+        data-diagnostic={diagnosticBackground}
+      >
+        {keyPreviewActive ? <div className="diagnostic-backdrop" aria-hidden="true" /> : null}
+        <video
+          ref={videoRef}
+          className="preview-video-source"
+          data-keyed={keyPreviewActive}
+          data-empty={proxy === null}
+          src={proxy?.url}
+          playsInline
+          data-testid="preview-video"
+          onTimeUpdate={(event) => {
+            if (!playing || active === undefined) return;
+            const timelineRate = fpsNumber(fps);
+            const sourceRate = fpsNumber(active.clip.source.in.fps);
+            const relative = Math.round(
+              (event.currentTarget.currentTime - active.clip.source.in.frames / sourceRate) * timelineRate,
+            );
+            setPlayhead({
+              frames: Math.max(0, Math.min(duration - 1, active.timelineStart + relative)),
+              fps,
+            });
+          }}
+          onEnded={() => setPlayhead({ frames: Math.min(duration - 1, playhead.frames + 1), fps })}
+        />
         {proxy === null ? (
           <div className="black-frame"><span>{active === undefined ? "GAP" : "PROXY PENDING"}</span></div>
-        ) : (
-          <video
-            ref={videoRef}
-            src={proxy.url}
-            muted
-            playsInline
-            data-testid="preview-video"
-            onTimeUpdate={(event) => {
-              if (!playing || active === undefined) return;
-              const timelineRate = fpsNumber(fps);
-              const sourceRate = fpsNumber(active.clip.source.in.fps);
-              const relative = Math.round(
-                (event.currentTarget.currentTime - active.clip.source.in.frames / sourceRate) * timelineRate,
-              );
-              setPlayhead({
-                frames: Math.max(0, Math.min(duration - 1, active.timelineStart + relative)),
-                fps,
-              });
+        ) : null}
+        <ChromaPreviewCanvas
+          videoRef={videoRef}
+          settings={keySettings}
+          onReady={handleChromaReady}
+          onUnavailable={handleChromaUnavailable}
+        />
+        {selectedPipLayer === undefined || selectedPip === undefined || snapshot === null ? null : (
+          <PipPreviewCanvas
+            videoRef={videoRef}
+            pip={selectedPip}
+            avoidRegions={snapshot.master.avoidRegions ?? []}
+            frame={playhead.frames}
+            anchorFrames={pipAnchorFrames}
+            composition={{
+              width: snapshot.master.settings.timeline.width,
+              height: snapshot.master.settings.timeline.height,
             }}
-            onEnded={() => setPlayhead({ frames: Math.min(duration - 1, playhead.frames + 1), fps })}
+            onPlace={async (placement) => {
+              try {
+                await executeDirect(
+                  [pipPlaceOperation(selectedPipLayer.id, placement)],
+                  `Drag ${selectedPipLayer.name} PiP`,
+                );
+                await refreshProject();
+                setNotice(`Placed ${selectedPipLayer.name} with semantic constraints.`);
+              } catch (error: unknown) {
+                setNotice(errorMessage(error));
+              }
+            }}
           />
         )}
+        {graphicsFrame === null ? null : (
+          <img
+            className="graphic-overlay"
+            src={graphicsFrame}
+            alt=""
+            data-testid="preview-graphic-overlay"
+          />
+        )}
+        <canvas
+          ref={captionCanvasRef}
+          className="caption-overlay"
+          data-testid="preview-caption-overlay"
+          aria-label="Caption overlay"
+          onClick={(event) => {
+            if (captionFrame === null) return;
+            const bounds = event.currentTarget.getBoundingClientRect();
+            const x = (event.clientX - bounds.left) / bounds.width;
+            const y = (event.clientY - bounds.top) / bounds.height;
+            const word = captionFrame.cues.flatMap(({ lines }) =>
+              lines.flatMap(({ words }) => words)).find(({ box }) =>
+                x >= box.x && x <= box.x + box.w &&
+                y >= box.y && y <= box.y + box.h);
+            if (word !== undefined) selectWord(word.wordId);
+          }}
+        />
         <svg className="annotation-overlay" viewBox="0 0 100 56.25" aria-label="Annotation overlay">
           {annotations.filter(({ state }) => state === "open" || state === "reopened").map((annotation) => (
             <AnnotationMark key={annotation.id} annotation={annotation} />
@@ -321,7 +590,10 @@ export function PreviewPanel({
         <button
           type="button"
           data-testid="preview-play-toggle"
-          onClick={() => setPlaying(!playing)}
+          onClick={() => {
+            if (!playing) void loudnessControllerRef.current?.resume();
+            setPlaying(!playing);
+          }}
         >
           {playing ? "Pause" : "Play"}
         </button>
@@ -351,6 +623,15 @@ export function PreviewPanel({
           {formatTimecode(playhead.frames, fps)}
         </output>
       </div>
+      <LoudnessMeter
+        available={loudnessAvailable}
+        frame={loudnessFrame}
+        target={loudnessTarget}
+        onReset={() => {
+          loudnessControllerRef.current?.reset();
+          setLoudnessFrame(EMPTY_LOUDNESS_FRAME);
+        }}
+      />
       <div className="word-position" data-testid="preview-word-position">
         {wordAtPosition(transcripts, active?.clip.asset, currentSourceFrame, active?.clip.source.in.fps)}
       </div>
@@ -422,7 +703,7 @@ export function PreviewPanel({
         {annotations.length === 0 ? <li className="empty-copy">No annotations.</li> : null}
       </ol>
       {context === null ? null : <pre className="context-json" data-testid="annotation-context-json">{JSON.stringify(context, null, 2)}</pre>}
-      <small className="m2-note">M1 single-layer proxy playback. WebGL compositing, HQ, comparison images, freehand, and spotlight arrive in M2.</small>
+      <small className="m2-note">Proxy playback uses the normative BT.709 chroma-distance formula in WebGL; HQ diagnostics use the FFmpeg render path.</small>
     </Panel>
   );
 }

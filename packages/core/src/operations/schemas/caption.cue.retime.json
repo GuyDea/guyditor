@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object", "additionalProperties": false, "minProperties": 3, "required": ["captionId", "firstWordId"],
+  "properties": {
+    "captionId": { "type": "string", "pattern": "^cts_[a-z2-7]{10}$" },
+    "firstWordId": { "type": "string", "pattern": "^w[0-9]{6}$" },
+    "startMs": { "type": "integer" },
+    "endMs": { "type": "integer" },
+    "clear": { "const": true }
+  }
+}

@@ -1,10 +1,32 @@
 export { resolveFfmpeg, resolveFfprobe } from "./binaries.js";
+export {
+  CAPTURE_STABILITY_POLICY,
+  CaptureWatcher,
+  parseCaptureFilename,
+} from "./capture-watcher.js";
+export type {
+  CaptureFileConvention,
+  CaptureStabilityPolicy,
+  CaptureWatcherOptions,
+  CaptureWatcherWarning,
+} from "./capture-watcher.js";
 export type { ResolvedBinary } from "./binaries.js";
 export { estimateProjectCacheUse } from "./cache.js";
 export type {
   CacheUseEstimate,
   ProjectedProxySize,
 } from "./cache.js";
+export {
+  buildCaptureGuidanceReport,
+  writeCaptureGuidanceReport,
+} from "./capture-guidance.js";
+export type {
+  BuildCaptureGuidanceInput,
+  CaptureGuidanceMetrics,
+  CaptureGuidanceReport,
+  CaptureGuidanceWarning,
+  CaptureGuidanceWarningCode,
+} from "./capture-guidance.js";
 export {
   peaksDecodeCommand,
   proxyCommand,
@@ -41,7 +63,41 @@ export type {
   IngestSource,
   IngestWarning,
   MediaEngineOptions,
+  PickupImportResult,
 } from "./ingest.js";
+export {
+  ebur128MeasureCommand,
+  loudnormMeasureCommand,
+  loudnormNormalizeCommand,
+  parseEbur128Summary,
+  parseLoudnormMeasurement,
+} from "./loudness.js";
+export type {
+  Ebur128Measurement,
+  LoudnessTarget,
+  LoudnormMeasurement,
+} from "./loudness.js";
+export {
+  analyzeKeyQcFrame,
+  applyChromaKeyAlpha,
+  buildKeyQcReport,
+  enqueueKeyQc,
+  extractRgbaFrame,
+  keyQcSampleFrames,
+  registerKeyQcExecutor,
+  runKeyQc,
+} from "./key-qc.js";
+export type {
+  AnalyzeKeyQcFrameInput,
+  BuildKeyQcReportInput,
+  KeyQcJobPayload,
+  KeyQcMetrics,
+  KeyQcReport,
+  KeyQcWarning,
+  KeyQcWarningCode,
+  RgbaFrame,
+  RunKeyQcInput,
+} from "./key-qc.js";
 export {
   PEAK_SAMPLE_RATE,
   PEAK_SAMPLES_PER_PEAK,

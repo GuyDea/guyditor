@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["region"],
+  "properties": {
+    "region": {
+      "type": "object",
+      "required": ["source", "hardness", "rect"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^avr_[a-z2-7]{10}$" },
+        "source": { "const": "marked" },
+        "hardness": { "enum": ["hard", "soft"] },
+        "rect": {
+          "type": "object", "additionalProperties": false, "required": ["x", "y", "w", "h"],
+          "properties": {
+            "x": { "type": "number", "minimum": 0, "maximum": 1 },
+            "y": { "type": "number", "minimum": 0, "maximum": 1 },
+            "w": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
+            "h": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 }
+          }
+        },
+        "frames": {
+          "type": "object", "additionalProperties": false, "required": ["from", "to"],
+          "properties": {
+            "from": { "type": "integer", "minimum": 0 },
+            "to": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "fromAnnotation": { "type": "string", "pattern": "^ann_[a-z2-7]{10}$" }
+      }
+    },
+    "restoreRegions": { "type": "array" }
+  }
+}

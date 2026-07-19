@@ -1,0 +1,66 @@
+{
+  "$id": "guyditor:op/pickup.splice",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "wordRange", "pickupAssetId", "pickupRange", "roomTonePaddingMs",
+    "repairedWordIds", "wordUpdates", "alignmentConfidence"
+  ],
+  "properties": {
+    "wordRange": {
+      "type": "object", "additionalProperties": false,
+      "required": ["fromWord", "toWord"],
+      "properties": {
+        "fromWord": { "$ref": "#/$defs/wordId" },
+        "toWord": { "$ref": "#/$defs/wordId" }
+      }
+    },
+    "pickupAssetId": { "type": "string", "pattern": "^ast_[a-z2-7]{10}$" },
+    "pickupRange": {
+      "type": "object", "additionalProperties": false,
+      "required": ["in", "out"],
+      "properties": {
+        "in": { "$ref": "#/$defs/sampleTime" },
+        "out": { "$ref": "#/$defs/sampleTime" }
+      }
+    },
+    "roomTonePaddingMs": { "type": "integer", "minimum": 0, "maximum": 5000 },
+    "repairedWordIds": {
+      "type": "array", "minItems": 1, "uniqueItems": true,
+      "items": { "$ref": "#/$defs/wordId" }
+    },
+    "wordUpdates": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["wordId", "word"],
+        "properties": {
+          "wordId": { "$ref": "#/$defs/wordId" },
+          "word": { "type": "object" }
+        }
+      }
+    },
+    "alignmentConfidence": { "type": "number", "minimum": 0, "maximum": 1 },
+    "trigger": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "markerId": { "type": "string", "pattern": "^mrk_[a-z2-7]{10}$" },
+        "annotationId": { "type": "string", "pattern": "^ann_[a-z2-7]{10}$" }
+      },
+      "minProperties": 1
+    },
+    "restore": { "type": "object" }
+  },
+  "$defs": {
+    "wordId": { "type": "string", "pattern": "^w[0-9]{6}$" },
+    "sampleTime": {
+      "type": "object", "additionalProperties": false,
+      "required": ["samples", "rate"],
+      "properties": {
+        "samples": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "rate": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 }
+      }
+    }
+  }
+}

@@ -8,6 +8,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   AnnotationService,
   createProject,
+  JobQueue,
+  success,
 } from "../../core/src/index.js";
 import type {
   IdPrefix,
@@ -111,8 +113,10 @@ describe("AgentGateway", () => {
         return () => new Date(`2026-07-19T08:02:${String(second++).padStart(2, "0")}.000Z`);
       })(),
     });
+    const { queue: jobs } = JobQueue.open(":memory:");
     const gateway = new AgentGateway({
       auditLog: audit,
+      jobQueue: jobs,
       project: store,
       stateDirectory,
       director: {
@@ -161,9 +165,11 @@ describe("AgentGateway", () => {
 
       expect(result.tools).toEqual([
         "context_package",
+        "progress_overview",
         "proposal_create",
         "proposal_get",
       ]);
+      expect(result.progress).toMatchObject({ idle: true, aggregateFraction: 1 });
       expect(result.context.requestedFor.annotationId).toBe("ann_bbbbbbbbbb");
       expect(result.context.position.timelineFrame).toEqual({ frames: 8, fps: "24/1" });
       expect(result.proposal.id).toMatch(/^prp_[a-z2-7]{10}$/u);
@@ -180,12 +186,15 @@ describe("AgentGateway", () => {
       expect(persisted.status).toBe("ready");
     } finally {
       await gateway.close();
+      jobs.close();
     }
 
     const replay = audit.readSession("ses_bbbbbbbbbb");
     expect(replay.warnings).toEqual([]);
     expect(replay.records.filter(({ type }) => type === "tool.call" || type === "tool.result")
       .map((record) => `${record.type}:${"tool" in record ? record.tool : ""}`)).toEqual([
+      "tool.call:progress_overview",
+      "tool.result:progress_overview",
       "tool.call:context_package",
       "tool.result:context_package",
       "tool.call:proposal_create",
@@ -193,5 +202,73 @@ describe("AgentGateway", () => {
       "tool.call:proposal_get",
       "tool.result:proposal_get",
     ]);
+  });
+
+  it("validates agent-authored graphic proposals through the shared template provider", async () => {
+    const store = await annotatedProject();
+    const userDirectory = await mkdtemp(join(tmpdir(), "guyditor-graphics-gateway-user-"));
+    temporaryDirectories.push(userDirectory);
+    const audit = new AuditLog({ userDir: userDirectory });
+    const { queue: jobs } = JobQueue.open(":memory:");
+    const descriptor = {
+      schema: "guyditor/template/v1" as const,
+      id: "tpl_a2c3d4e5f6",
+      name: "Brand lower third",
+      kind: "lower_third" as const,
+      version: "1.0.0",
+      engine: "overlay/v1" as const,
+      duration: { mode: "fixed" as const, default: { frames: 90, fps: "24/1" } },
+      params: {
+        type: "object",
+        additionalProperties: false,
+        required: ["title"],
+        properties: { title: { type: "string" } },
+      },
+      contentHash: "b".repeat(64),
+    };
+    const gateway = new AgentGateway({
+      auditLog: audit,
+      jobQueue: jobs,
+      project: store,
+      stateDirectory: join(userDirectory, "state"),
+      sessionIdFactory: () => "ses_bbbbbbbbbb",
+      templateProvider: {
+        latest: () => success(descriptor),
+        get: () => success(descriptor),
+      },
+    });
+    const started = await gateway.start();
+    try {
+      const result = await runStubDirector({
+        annotationId: "ann_bbbbbbbbbb",
+        clipId: "clp_aaaaaaaaaa",
+        gatewayStateFile: started.stateFile,
+        title: "Add an anchored lower third",
+        operations: [{
+          op: "graphic.add",
+          params: {
+            templateId: descriptor.id,
+            anchor: "timeline:seq_aaaaaaaaaa@8",
+            duration: "intrinsic",
+            params: { title: "Agent composition" },
+            seed: 17,
+          },
+        }],
+      });
+
+      expect(result.proposal.status).toBe("ready");
+      expect(result.proposal.operations).toMatchObject([{
+        op: "graphic.add",
+        params: {
+          templateId: descriptor.id,
+          anchor: "timeline:seq_aaaaaaaaaa@8",
+          seed: 17,
+        },
+      }]);
+      expect(store.currentProject.templates).toBeUndefined();
+    } finally {
+      await gateway.close();
+      jobs.close();
+    }
   });
 });

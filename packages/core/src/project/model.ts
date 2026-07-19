@@ -31,8 +31,8 @@ export interface GuyditorProject {
   annotations: AnnotationIndex;
   deliverables: Deliverable[];
   templates?: Record<string, { version: string; contentHash: string }>;
-  avoidRegions?: unknown[];
-  watchFolders?: unknown[];
+  avoidRegions?: AvoidRegion[];
+  watchFolders?: WatchFolderConfig[];
   presets: PresetPin[];
   skills: SkillPin[];
   sidecars: SidecarRef[];
@@ -43,6 +43,14 @@ export interface ProjectSettings {
   audio: { sampleRate: number; channels: number };
   primaryDeliverable: string;
   automation?: unknown;
+}
+
+export interface WatchFolderConfig {
+  path: string;
+  convention: "guyditor" | "flat";
+  ignore?: string[];
+  autoIngest: boolean;
+  autoJobs: { proxy: boolean; analysis: boolean; transcription: boolean };
 }
 
 export interface Asset {
@@ -97,7 +105,7 @@ export interface Asset {
   takes?: string[];
   markers?: string[];
   analyses?: Record<string, unknown>;
-  sync?: unknown;
+  sync?: SyncDecision;
   integrity?: "ok" | "missing" | "mismatch";
   ingest?: {
     at: string;
@@ -106,6 +114,17 @@ export interface Asset {
   };
   provenance?: { sidecar: string };
   rights?: { source: string; license: string; restrictions?: string };
+}
+
+export interface SyncDecision {
+  referenceAssetId: string;
+  method: "timecode" | "waveform" | "manual";
+  offset: SampleTime;
+  confidence?: number;
+  drift?: { framesPerMinute: number; corrected: false };
+  evidence: Record<string, unknown>;
+  decidedBy: "system" | "creator" | "agent";
+  decidedAt: string;
 }
 
 export interface Beat {
@@ -121,6 +140,50 @@ export interface Sequence {
   name: string;
   clips: Clip[];
   audio?: { targetLufs: number; truePeakDb: number };
+}
+
+export interface AudioChain {
+  nodes: AudioChainNode[];
+}
+
+export type AudioChainNode =
+  | { type: "channelSelect"; enabled: boolean; mapping: "left" | "right" | "mix" | number[] }
+  | { type: "noiseReduction"; enabled: boolean; strengthDb: number }
+  | { type: "gain"; enabled: boolean; gainDb: number }
+  | { type: "eq"; enabled: boolean; bands: Array<{ freqHz: number; gainDb: number; q: number }> }
+  | {
+      type: "compression";
+      enabled: boolean;
+      thresholdDb: number;
+      ratio: number;
+      attackMs: number;
+      releaseMs: number;
+      makeupDb: number;
+    }
+  | { type: "limiting"; enabled: boolean; ceilingDb: number };
+
+export interface DuckingConfig {
+  enabled: boolean;
+  mode: "auto" | "manual";
+  duckDb: number;
+  attackMs: number;
+  releaseMs: number;
+  holdMs: number;
+  minGapMs: number;
+}
+
+export interface DuckingOverridePoint {
+  at: SemanticAnchor;
+  gainDb: number;
+}
+
+export interface DuckingSettings extends DuckingConfig {
+  overrides: DuckingOverridePoint[];
+}
+
+export interface LookApplication extends ColorCorrection {
+  presetId: string;
+  presetVersion: number;
 }
 
 export interface Clip {
@@ -140,7 +203,7 @@ export interface Clip {
     mute?: boolean;
     offset?: SampleTime;
     channels?: "left" | "right" | "mix" | number[];
-    chain?: unknown;
+    chain?: AudioChain;
   };
   loop?: { enabled: boolean; crossfade?: FrameTime };
   anchor?: SemanticAnchor;
@@ -165,6 +228,162 @@ export interface Effect {
   params: Record<string, unknown>;
 }
 
+export type BlendMode =
+  | "normal"
+  | "multiply"
+  | "screen"
+  | "overlay"
+  | "darken"
+  | "lighten"
+  | "addition"
+  | "subtract"
+  | "difference";
+
+export interface Transform2D {
+  anchor: { x: number; y: number };
+  position: { x: number; y: number };
+  scale: { x: number; y: number };
+  rotationDeg: number;
+  crop?: { x: number; y: number; w: number; h: number };
+}
+
+export interface ColorCorrection {
+  exposure: number;
+  contrast: number;
+  temperatureK?: number;
+  tint?: number;
+  saturation: number;
+}
+
+export interface ChromaKeyParams {
+  keyColor: string;
+  tolerance: number;
+  softness: number;
+  preBlur: number;
+  edge: { erodePx: number; featherPx: number };
+  spill: { mode: "off" | "despill" | "average"; strength: number };
+}
+
+export interface NeuralMatteParams {
+  model: "rvm_mobilenetv3" | "rvm_resnet50";
+  matteAssetId?: string;
+  downsampleRatio: number;
+  stabilization: {
+    enabled: boolean;
+    alphaMin: number;
+    motionGain: number;
+    minSpeckleArea: number;
+  };
+}
+
+export interface KeyMask {
+  id: string;
+  role: "garbage" | "holdout";
+  shape: "rect" | "ellipse" | "polygon";
+  points: Array<{ x: number; y: number }>;
+  featherPx: number;
+  frames?: { from: number; to: number };
+}
+
+export interface KeySettings {
+  schema: "guyditor/key@1";
+  mode: "off" | "chroma" | "neural";
+  chroma?: ChromaKeyParams;
+  neural?: NeuralMatteParams;
+  masks: KeyMask[];
+  postColor?: ColorCorrection;
+}
+
+export type AnchorName =
+  | "top_left"
+  | "top"
+  | "top_right"
+  | "left"
+  | "center"
+  | "right"
+  | "bottom_left"
+  | "bottom"
+  | "bottom_right";
+
+export interface ShapeMask {
+  shape: "none" | "rect" | "rounded" | "circle" | "ellipse";
+  cornerRadius?: number;
+  featherPx?: number;
+}
+
+export interface PipStyle {
+  mask: ShapeMask;
+  border?: { widthPx: number; color: string; opacity: number };
+  shadow?: {
+    dx: number;
+    dy: number;
+    blurPx: number;
+    color: string;
+    opacity: number;
+  };
+  background?: { color?: string; blurSigma?: number; padPx?: number };
+  deviceFrame?: { templateId: string; params?: Record<string, unknown> };
+}
+
+export interface PlacementConstraints {
+  anchor: AnchorName;
+  width?: string;
+  height?: string;
+  margin?: string;
+  margin_x?: string;
+  margin_y?: string;
+  offset_x?: string;
+  offset_y?: string;
+  aspect?: string;
+  fit?: "contain" | "cover" | "stretch";
+}
+
+export type AspectClass = "16:9" | "9:16" | "1:1" | "4:5";
+
+export interface ResponsivePlacement {
+  base: PlacementConstraints;
+  overrides?: Partial<Record<AspectClass, Partial<PlacementConstraints>>>;
+}
+
+export interface PipTransition {
+  preset: string;
+  durationFrames: number;
+  params?: { direction?: "left" | "right" | "up" | "down"; overshoot?: number };
+}
+
+export interface PipKeyframe {
+  id: string;
+  at: SemanticAnchor;
+  placement: PlacementConstraints;
+  style?: Partial<PipStyle>;
+  transition?: PipTransition;
+}
+
+export interface AvoidSolverConfig {
+  enabled: boolean;
+  sources: Array<AvoidRegion["source"]>;
+  softOverlapMax: number;
+  holdFrames: number;
+  fallbackAnchors: AnchorName[];
+  moveTransition: { preset: string; durationFrames: number };
+}
+
+export interface PipConfig {
+  style: PipStyle;
+  placement: ResponsivePlacement;
+  keyframes: PipKeyframe[];
+  avoid?: AvoidSolverConfig;
+}
+
+export interface AvoidRegion {
+  id: string;
+  source: "caption" | "face" | "subject" | "marked" | "safe_area" | "cursor" | "diagram";
+  hardness: "hard" | "soft";
+  rect: { x: number; y: number; w: number; h: number };
+  frames?: { from: number; to: number };
+  fromAnnotation?: string;
+}
+
 export interface Layer {
   id: string;
   kind:
@@ -184,12 +403,14 @@ export interface Layer {
   enabled: boolean;
   locked: boolean;
   opacity?: number;
-  blend?: string;
-  transform?: unknown;
+  blend?: BlendMode;
+  transform?: Transform2D;
   matte?: { layerId: string; source: "alpha" | "luma"; invert?: boolean };
-  pip?: unknown;
-  adjustment?: unknown;
-  ducking?: unknown;
+  pip?: PipConfig;
+  adjustment?: ColorCorrection;
+  audio?: { chain?: AudioChain };
+  ducking?: DuckingSettings;
+  look?: LookApplication;
   sequence?: string;
   items?: PlacedItem[];
 }
@@ -213,15 +434,79 @@ export interface CaptionTrack {
   name: string;
   sourceLayerIds: string[];
   preset: { presetId: string; version: number };
-  styleOverrides?: Record<string, unknown>;
-  breakOverrides?: unknown[];
-  emphasisOverrides?: { wordId: string; emphasis: boolean }[];
-  timingOffsets?: {
+  styleOverrides: Partial<CaptionStyle>;
+  breakOverrides: CueBreakOverride[];
+  emphasisOverrides: { wordId: string; emphasis: boolean }[];
+  timingOffsets: {
     firstWordId: string;
     startMs?: number;
     endMs?: number;
   }[];
   enabled: boolean;
+}
+
+export interface CueBreakOverride {
+  afterWordId: string;
+  kind: "line" | "cue" | "join";
+}
+
+export interface CaptionStyle {
+  typeface: {
+    family: string;
+    fontAssetId: string;
+    fallbackAssetIds: string[];
+  };
+  sizePct: number;
+  weight: 100 | 200 | 300 | 400 | 500 | 600 | 700 | 800 | 900;
+  italic: boolean;
+  letterSpacingPct: number;
+  lineSpacing: number;
+  color: string;
+  outline: { color: string; widthPct: number } | null;
+  shadow: {
+    color: string;
+    dxPct: number;
+    dyPct: number;
+    blurPct: number;
+  } | null;
+  background: {
+    color: string;
+    padXPct: number;
+    padYPct: number;
+    radiusPct: number;
+    scope: "word" | "line" | "block";
+  } | null;
+  transform: "none" | "upper" | "lower" | "title";
+  wordsPerLine: number;
+  maxLines: 1 | 2 | 3;
+  maxWidthPct: number;
+  placement: {
+    anchor: "top" | "middle" | "bottom";
+    offsetYPct: number;
+    align: "left" | "center" | "right";
+  };
+  safeArea: "platform" | "none";
+  highlight: {
+    mode: "per-word" | "per-line" | "none";
+    style: "color" | "scale" | "weight" | "underline" | "background";
+    color?: string;
+    scale?: number;
+    weight?: number;
+    pastWords: "keep" | "dim";
+    dimOpacity?: number;
+    maxGapMs: number;
+    holdMs: number;
+    leadInMs: number;
+  };
+  emphasisStyle: {
+    style: "color" | "scale" | "weight" | "underline";
+    color?: string;
+    scale?: number;
+    weight?: number;
+  };
+  cueGapMs: number;
+  maxCueDurationMs: number;
+  speakerStyles: Record<string, Partial<CaptionStyle>>;
 }
 
 export interface AnnotationIndex {

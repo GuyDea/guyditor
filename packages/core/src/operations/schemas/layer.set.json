@@ -1,0 +1,25 @@
+{
+  "$id": "guyditor:op/layer.set",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["layerId", "patch"],
+  "additionalProperties": false,
+  "properties": {
+    "layerId": { "type": "string", "pattern": "^lyr_[a-z2-7]{10}$" },
+    "patch": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "opacity": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+        "blend": {
+          "oneOf": [
+            { "enum": ["normal", "multiply", "screen", "overlay", "darken", "lighten", "addition", "subtract", "difference"] },
+            { "type": "null" }
+          ]
+        }
+      }
+    }
+  }
+}

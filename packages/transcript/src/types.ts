@@ -53,6 +53,7 @@ export interface TranscriptWord {
 export interface TranscriptSidecar {
   schema: "guyditor.transcript/v1";
   assetId: string;
+  provisional?: boolean;
   audio: { rate: number; channels: number; streamIndex: number };
   language: string;
   languageProbability: number;

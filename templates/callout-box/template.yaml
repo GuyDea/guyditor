@@ -1,0 +1,29 @@
+schema: guyditor/template/v1
+id: tpl_c2d3e4f5g6
+name: Pointer callout
+kind: callout
+version: 1.0.0
+engine: overlay/v1
+entry: render.ts
+min_guyditor: 1.0.0
+duration:
+  mode: intrinsic
+params:
+  type: object
+  additionalProperties: false
+  required: [label, body, accent, pointer]
+  properties:
+    label: { type: string, maxLength: 32, default: "NOTE" }
+    body: { type: string, minLength: 1, maxLength: 140, default: "Keep this area clear." }
+    accent: { type: string, pattern: "^#[0-9A-Fa-f]{6}$", default: "#FFD166" }
+    pointer: { type: string, enum: [top, right, bottom, left], default: bottom }
+preview:
+  file: preview.png
+  params:
+    label: NOTE
+    body: Keep this area clear.
+    accent: "#FFD166"
+    pointer: bottom
+fonts:
+  - { family: Inconsolata Guyditor, file: fonts/Inconsolata.otf, weight: 600 }
+safe_area_aware: true

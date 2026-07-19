@@ -24,11 +24,21 @@ describe("workspace IPC surfaces", () => {
         "acceptProposal",
         "rejectProposal",
         "supersedeProposal",
+        "listJumpCuts",
+        "proposeJumpCutConcealment",
       ],
-      MediaEngine: ["ingest", "pickAndIngest", "resolveProxy", "readPeaks"],
-      TranscriptEngine: ["enqueueFillerDetection"],
+      JobQueue: ["overview"],
+      MediaEngine: ["ingest", "pickAndIngest", "resolveProxy", "readPeaks", "importPickup"],
+      TranscriptEngine: ["enqueueFillerDetection", "proposePickup"],
+      CaptureWatcher: ["list", "configure", "reconcile", "listTakes"],
       AnnotationService: ["list", "get", "contextPackage"],
-      RenderService: ["renderExport", "exportReport"],
+      RenderService: [
+        "renderExport",
+        "exportReport",
+        "graphicsFrame",
+        "templateCatalog",
+        "templateFrame",
+      ],
     };
 
     for (const [service, names] of Object.entries(expected)) {
@@ -40,5 +50,6 @@ describe("workspace IPC surfaces", () => {
         expect(method?.budgetMs).toBeGreaterThan(0);
       }
     }
+    expect(methods.get("JobQueue")?.get("overview")?.budgetMs).toBe(20);
   });
 });

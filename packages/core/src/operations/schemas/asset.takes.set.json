@@ -1,0 +1,29 @@
+{
+  "$id": "guyditor:op/asset.takes.set",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["assetId", "takeIds", "sidecar"],
+  "properties": {
+    "assetId": { "type": "string", "pattern": "^ast_[a-z2-7]{10}$" },
+    "takeIds": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^tak_[a-z2-7]{10}$" }
+    },
+    "sidecar": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path", "sha256"],
+          "properties": {
+            "path": { "type": "string", "pattern": "^sidecars/takes/ast_[a-z2-7]{10}\\.takes\\.json$" },
+            "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+          }
+        }
+      ]
+    }
+  }
+}

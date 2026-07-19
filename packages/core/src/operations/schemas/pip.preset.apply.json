@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["layerId", "at", "placement", "presetId", "version", "durationFrames"],
+  "properties": {
+    "layerId": { "type": "string", "pattern": "^lyr_[a-z2-7]{10}$" },
+    "keyframeId": { "type": "string", "pattern": "^kfr_[a-z2-7]{10}$" },
+    "at": { "type": "string", "minLength": 1 },
+    "placement": { "type": "object" },
+    "presetId": { "type": "string", "pattern": "^pre_[a-z2-7]{10}$" },
+    "version": { "type": "integer", "minimum": 1 },
+    "durationFrames": { "type": "integer", "minimum": 1 },
+    "params": { "type": "object" },
+    "restorePip": { "type": ["object", "null"] },
+    "restorePresets": { "type": "array" }
+  }
+}

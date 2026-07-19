@@ -39,6 +39,16 @@ export const M1_COMMANDS = Object.freeze([
   Object.freeze({ args: ["test:ac", "--", "m1"], command: "pnpm" }),
 ]);
 
+export const M2_PARTIAL_COMMANDS = Object.freeze([
+  Object.freeze({ args: ["fixtures"], command: "pnpm" }),
+  Object.freeze({ args: ["check:conventions"], command: "pnpm" }),
+  Object.freeze({ args: ["-r", "typecheck"], command: "pnpm" }),
+  Object.freeze({ args: ["-r", "lint"], command: "pnpm" }),
+  Object.freeze({ args: ["exec", "vitest", "run", "--project", "unit"], command: "pnpm" }),
+  Object.freeze({ args: ["test:golden"], command: "pnpm" }),
+  Object.freeze({ args: ["test:ac", "--", "m2"], command: "pnpm" }),
+]);
+
 const DEFERRED_M0_STEPS = Object.freeze([
   "remaining milestone contract, golden, e2e, and AC coverage beyond the implemented M0/M1 suites",
   "milestone traceability-status enforcement",
@@ -72,6 +82,34 @@ export const M1_SHIP_IDS = Object.freeze([
 ]);
 
 export const M1_AC_IDS = Object.freeze(["AC-001", "AC-002", "AC-004", "AC-009"]);
+
+export const M2_PARTIAL_IDS = Object.freeze([
+  "FR-009",
+  "FR-010",
+  "FR-011",
+  "FR-205",
+  "FR-206",
+  "FR-207",
+  "FR-208",
+  "FR-1101",
+  "FR-306",
+  "FR-311",
+  "FR-500",
+  "FR-501",
+  "FR-502",
+  "FR-504",
+  "FR-505",
+  "FR-506",
+  "FR-507",
+  "FR-508",
+  "FR-509",
+  "FR-510",
+  "AC-003",
+  "AC-005",
+  "AC-006",
+]);
+
+const M2_PARTIAL_STATUS_IDS = new Set(["FR-1101", "FR-505", "FR-510"]);
 
 // The M1 table explicitly permits scoped rows ("core" and "foundation"), and the
 // coordinator ruling permits evidence-backed partial rows. The three required M1
@@ -139,6 +177,24 @@ export function validateM1Traceability(markdown) {
   return errors;
 }
 
+export function validateM2PartialTraceability(markdown) {
+  const rows = traceabilityRows(markdown);
+  const errors = [];
+  for (const id of M2_PARTIAL_IDS) {
+    const row = rows.get(id);
+    if (row === undefined) {
+      errors.push(`${id}: traceability row is missing`);
+      continue;
+    }
+    const expected = M2_PARTIAL_STATUS_IDS.has(id) ? "partial" : "implemented";
+    if (row.status !== expected) {
+      errors.push(`${id}: M2 partial gate requires status ${expected} (received ${row.status})`);
+    }
+    if (row.evidence.length === 0) errors.push(`${id}: test evidence is required`);
+  }
+  return errors;
+}
+
 export function validateDogfoodReport(markdown) {
   const required = [
     [/episode title/iu, "episode title"],
@@ -159,7 +215,9 @@ function emitGateReport({ date, dogfoodSkipped, milestone, traceabilityCount }) 
   const dogfood = dogfoodSkipped
     ? "skipped by coordinator (`--skip-dogfood`); TODO before creator sign-off"
     : "complete";
-  const commandRows = (milestone === "m1" ? M1_COMMANDS : M0_COMMANDS)
+  const commandRows = (milestone === "m2"
+    ? M2_PARTIAL_COMMANDS
+    : milestone === "m1" ? M1_COMMANDS : M0_COMMANDS)
     .map(({ command, args }) => `| \`${commandText(command, args)}\` | pass |`)
     .join("\n");
   writeFileSync(outputPath, [
@@ -171,7 +229,7 @@ function emitGateReport({ date, dogfoodSkipped, milestone, traceabilityCount }) 
     "|---|---|",
     commandRows,
     `| Fixture manifest | pass |`,
-    `| Traceability | pass — ${String(traceabilityCount)} M1 requirement/AC rows checked |`,
+    `| Traceability | pass — ${String(traceabilityCount)} ${milestone.toUpperCase()} requirement/AC rows checked |`,
     `| Dogfood | ${dogfood} |`,
     "",
   ].join("\n"), "utf8");
@@ -193,12 +251,14 @@ export function runGate(
     writeGateReport = emitGateReport,
   } = {},
 ) {
-  if (milestone !== "m0" && milestone !== "m1") {
+  if (milestone !== "m0" && milestone !== "m1" && milestone !== "m2") {
     error(`gate ${milestone ?? "<missing>"}: gate not yet defined`);
     return 1;
   }
 
-  const commands = milestone === "m0" ? M0_COMMANDS : M1_COMMANDS;
+  const commands = milestone === "m0"
+    ? M0_COMMANDS
+    : milestone === "m1" ? M1_COMMANDS : M2_PARTIAL_COMMANDS;
   for (const { command, args } of commands) {
     const display = commandText(command, args);
     const executable = platform === "win32" && command === "pnpm" ? `${command}.cmd` : command;
@@ -252,12 +312,22 @@ export function runGate(
     error(`gate m1: could not read docs/traceability.md: ${traceabilityError.message}`);
     return 1;
   }
-  const traceabilityErrors = validateM1Traceability(traceability);
+  const traceabilityErrors = milestone === "m1"
+    ? validateM1Traceability(traceability)
+    : validateM2PartialTraceability(traceability);
   if (traceabilityErrors.length > 0) {
-    error(`gate m1: traceability failed: ${traceabilityErrors.join("; ")}`);
+    error(`gate ${milestone}: traceability failed: ${traceabilityErrors.join("; ")}`);
     return 1;
   }
-  log(`gate m1: traceability passed for ${String(M1_SHIP_IDS.length + M1_AC_IDS.length)} rows`);
+  const traceabilityCount = milestone === "m1"
+    ? M1_SHIP_IDS.length + M1_AC_IDS.length
+    : M2_PARTIAL_IDS.length;
+  log(`gate ${milestone}: traceability passed for ${String(traceabilityCount)} rows`);
+
+  if (milestone === "m2") {
+    log("gate m2: partial milestone scope passed (captions, keyframed transforms, compositing/keying, PiP, AC-003, AC-005, AC-006)");
+    return 0;
+  }
 
   if (skipDogfood) {
     log("!!! TODO: M1 DOGFOOD WAS SKIPPED — RUN THE REAL CREATOR EPISODE BEFORE SIGN-OFF !!!");
@@ -283,7 +353,7 @@ export function runGate(
       date: currentDate(),
       dogfoodSkipped: skipDogfood,
       milestone,
-      traceabilityCount: M1_SHIP_IDS.length + M1_AC_IDS.length,
+      traceabilityCount,
     });
   } catch (reportError) {
     error(`gate m1: could not emit gate report: ${reportError.message}`);

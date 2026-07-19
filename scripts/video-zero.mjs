@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import {
   access,
+  copyFile,
   mkdir,
   readFile,
   rm,
@@ -11,6 +12,11 @@ import {
 } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+
+import {
+  CAPTION_FONT_PATH,
+  ensureCaptionFont,
+} from "./setup-caption-font.mjs";
 
 const REPOSITORY_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const FIXTURE_ROOT = path.join(REPOSITORY_ROOT, ".fixtures");
@@ -76,6 +82,10 @@ async function buildRuntime() {
     );
   }
   const runtimeModules = path.join(RUNTIME_ROOT, "node_modules");
+  const runtimeFont = path.join(RUNTIME_ROOT, "render/assets/fonts/Inconsolata.otf");
+  await ensureCaptionFont();
+  await mkdir(path.dirname(runtimeFont), { recursive: true });
+  await copyFile(CAPTION_FONT_PATH, runtimeFont);
   await mkdir(runtimeModules, { recursive: true });
   await Promise.all([
     symlink(

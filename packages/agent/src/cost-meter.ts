@@ -110,6 +110,16 @@ export interface RecordedCost {
   status: CostStatus;
 }
 
+export interface OutstandingCostConfirmation {
+  confirmToken: string;
+  projectId: string;
+  taskId: string;
+  level: BudgetLevel;
+  message: string;
+  estimatedUsd: number;
+  createdAt: string;
+}
+
 export interface CostMeterOptions {
   userDir?: string;
   auditLog: AuditLog;
@@ -183,6 +193,7 @@ export class CostMeter {
   readonly #now: () => Date;
   readonly #confirmTokenFactory: () => string;
   readonly #lastTaskByProject = new Map<string, string>();
+  readonly #outstandingConfirmations = new Map<string, OutstandingCostConfirmation>();
   #closed = false;
 
   private constructor(database: DatabaseSync, databasePath: string, options: CostMeterOptions) {
@@ -241,11 +252,22 @@ export class CostMeter {
       const warning = this.#budgets[level].warnUsd;
       if (warning !== null && projected[level] > warning) {
         this.#budgetEvent(context, level, "warn", warning, projected[level]);
+        const confirmToken = this.#confirmTokenFactory();
+        const message = `${level} projected spend $${projected[level].toFixed(2)} exceeds warning $${warning.toFixed(2)}.`;
+        this.#outstandingConfirmations.set(confirmToken, {
+          confirmToken,
+          projectId: context.projectId,
+          taskId: context.taskId,
+          level,
+          message,
+          estimatedUsd: estimate.amount,
+          createdAt: this.#now().toISOString(),
+        });
         return {
           verdict: "warn",
           level,
-          message: `${level} projected spend $${projected[level].toFixed(2)} exceeds warning $${warning.toFixed(2)}.`,
-          confirmToken: this.#confirmTokenFactory(),
+          message,
+          confirmToken,
         };
       }
     }
@@ -304,6 +326,12 @@ export class CostMeter {
       actual.actualUsd,
       this.#now().toISOString(),
     );
+    for (const [confirmToken, confirmation] of this.#outstandingConfirmations) {
+      if (
+        confirmation.projectId === actual.context.projectId &&
+        confirmation.taskId === actual.context.taskId
+      ) this.#outstandingConfirmations.delete(confirmToken);
+    }
     return {
       externalCall: external,
       charge,
@@ -322,6 +350,14 @@ export class CostMeter {
       "taskId",
     );
     return this.statusForTask(projectId, latest ?? "");
+  }
+
+  public outstandingConfirmations(projectId: string): OutstandingCostConfirmation[] {
+    this.#ensureOpen();
+    return [...this.#outstandingConfirmations.values()]
+      .filter((confirmation) => confirmation.projectId === projectId)
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+      .map((confirmation) => structuredClone(confirmation));
   }
 
   public statusForTask(projectId: string, taskId: string): CostStatus {
@@ -355,6 +391,7 @@ export class CostMeter {
   public close(): void {
     if (this.#closed) return;
     this.#closed = true;
+    this.#outstandingConfirmations.clear();
     this.#database.close();
   }
 

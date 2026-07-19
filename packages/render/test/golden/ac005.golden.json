@@ -1,0 +1,13 @@
+{
+  "id": "AC-005",
+  "project": "ac005",
+  "deliverable": "dlv_aaaaaaaaaa",
+  "sampleFrame": 60,
+  "edgeGreenExcessMax": 0.08,
+  "backgroundAlphaMax": 0,
+  "frames": [
+    { "frame": 30, "dhash": "fe00000000000088", "maxDistance": 6 },
+    { "frame": 90, "dhash": "fe00000000000088", "maxDistance": 6 },
+    { "frame": 150, "dhash": "7e00000000000088", "maxDistance": 6 }
+  ]
+}

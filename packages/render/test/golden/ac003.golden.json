@@ -1,0 +1,15 @@
+{
+  "id": "ac003-m2-caption-correction",
+  "project": "ac003",
+  "deliverable": "dlv_aaaaaaaaaa",
+  "frames": [
+    { "wordId": "w000005", "correctedText": "precise", "frame": 56, "dhash": "0000000000000000", "maxDistance": 2, "overlaySha256": "4739502f1927294a8cafe02cb584a16801c1ed63b3cfdc7a88d9af793251fd1f" },
+    { "wordId": "w000021", "correctedText": "caption", "frame": 261, "dhash": "0000000000000000", "maxDistance": 2, "overlaySha256": "2743837580896eb5bd638c4d8e0f632625e26532724bbc7dd18997ef72bc9545" },
+    { "wordId": "w000040", "correctedText": "sync", "frame": 506, "dhash": "0000000000000000", "maxDistance": 2, "overlaySha256": "552249b450c7fe5ba4fbbea5504d73172acd46c05bd9e0d767f5ad52cd1747f7" }
+  ],
+  "toolVersions": {
+    "overlayRenderer": "caption-overlay/v1",
+    "canvas": "1.0.2",
+    "fontSha256": "1561e616c414a1b82d6e6dfbd18e5726fd65028913ade191e5fa38b6ec375a1a"
+  }
+}

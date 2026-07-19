@@ -49,6 +49,7 @@ export interface RevisionLock {
   presets: { id: string; version: number; sha256: string }[];
   skills: { id: string; version: string; contentHash: string }[];
   profiles: { id: string; version: string }[];
+  templates: { id: string; version: string; contentHash: string }[];
   tools: { name: string; version: string }[];
 }
 

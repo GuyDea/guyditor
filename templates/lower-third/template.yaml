@@ -1,0 +1,30 @@
+schema: guyditor/template/v1
+id: tpl_a2c3d4e5f6
+name: Brand lower third
+kind: lower_third
+version: 1.0.0
+engine: overlay/v1
+entry: render.ts
+min_guyditor: 1.0.0
+duration:
+  mode: fixed
+  default: { frames: 120, fps: "30/1" }
+params:
+  type: object
+  additionalProperties: false
+  required: [title, subtitle, accent, position]
+  properties:
+    title: { type: string, minLength: 1, maxLength: 72, default: "Ada Lovelace" }
+    subtitle: { type: string, maxLength: 96, default: "Creative director" }
+    accent: { type: string, pattern: "^#[0-9A-Fa-f]{6}$", default: "#77E7C4" }
+    position: { type: string, enum: [left, right], default: left }
+preview:
+  file: preview.png
+  params:
+    title: Ada Lovelace
+    subtitle: Creative director
+    accent: "#77E7C4"
+    position: left
+fonts:
+  - { family: Inconsolata Guyditor, file: fonts/Inconsolata.otf, weight: 600 }
+safe_area_aware: true

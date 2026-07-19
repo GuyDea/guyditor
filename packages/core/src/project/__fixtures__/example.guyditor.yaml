@@ -57,7 +57,7 @@ layers:                                      # ---- audio and video layers ----
 captions:                                    # ---- caption tracks: pinned preset + sparse overrides (Part 4 §4.8) ----
   - { id: cts_main2q3r4s, name: main-captions, sourceLayerIds: [lyr_base5a4b2c],
       preset: { presetId: pre_capstyle77, version: 7 },          # versioned caption preset pin
-      styleOverrides: { wordsPerLine: 5 }, enabled: true }
+      styleOverrides: { wordsPerLine: 5 }, breakOverrides: [], emphasisOverrides: [], timingOffsets: [], enabled: true }
 annotations:                                 # ---- sidecar reference + state summary; records live in the sidecar (Part 8 §8.1) ----
   sidecar: annotations
   summary: { open: 1, resolved: 1, rejected: 0, reopened: 0 }

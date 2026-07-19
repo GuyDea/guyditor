@@ -1,0 +1,25 @@
+{
+  "$id": "guyditor:op/layer.matte.set",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["layerId", "matte"],
+  "additionalProperties": false,
+  "properties": {
+    "layerId": { "type": "string", "pattern": "^lyr_[a-z2-7]{10}$" },
+    "matte": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": ["layerId", "source"],
+          "additionalProperties": false,
+          "properties": {
+            "layerId": { "type": "string", "pattern": "^lyr_[a-z2-7]{10}$" },
+            "source": { "enum": ["alpha", "luma"] },
+            "invert": { "type": "boolean" }
+          }
+        }
+      ]
+    }
+  }
+}

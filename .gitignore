@@ -5,6 +5,7 @@ dist/
 *.tsbuildinfo
 *.log
 .guyditor-demo/
+packages/render/assets/fonts/Inconsolata.otf
 workers/mlworker/.venv/
 workers/mlworker/.uv-cache/
 workers/mlworker/.uv-python/

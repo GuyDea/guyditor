@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["graphicId", "duration"],
+  "properties": {
+    "graphicId": { "type": "string", "pattern": "^gfx_[a-z2-7]{10}$" },
+    "duration": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["frames", "fps"],
+          "properties": {
+            "frames": { "type": "integer", "minimum": 1 },
+            "fps": { "type": "string", "pattern": "^[0-9]+/[1-9][0-9]*$" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["until"],
+          "properties": {
+            "until": {
+              "type": "string",
+              "pattern": "^(ann:ann_[a-z2-7]{10}|(word:w[0-9]{6}(#(start|end))?|beat:beat_[a-z2-7]{10}|clip:clp_[a-z2-7]{10}@[0-9]+|timeline:(seq_[a-z2-7]{10}@[0-9]+|[0-9]+@[0-9]+/[1-9][0-9]*))([+-][0-9]+)?)$"
+            }
+          }
+        },
+        { "const": "intrinsic" }
+      ]
+    }
+  }
+}

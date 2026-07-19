@@ -6,6 +6,8 @@ import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 
 import type {
   AnnotationContextPackage,
+  JobOverview,
+  OperationInput,
   Proposal,
 } from "../../../core/src/index.js";
 
@@ -19,10 +21,13 @@ export interface StubDirectorOptions {
   clipId: string;
   gatewayStateFile: string;
   trimFrames?: number;
+  operations?: OperationInput[];
+  title?: string;
 }
 
 export interface StubDirectorResult {
   tools: string[];
+  progress: JobOverview;
   context: AnnotationContextPackage;
   proposal: Proposal;
   status: Proposal;
@@ -76,6 +81,10 @@ export async function runStubDirector(
   await client.connect(transport as unknown as Transport);
   try {
     const tools = (await client.listTools()).tools.map(({ name }) => name).sort();
+    const progress = toolValue<JobOverview>(await client.callTool({
+      name: "progress_overview",
+      arguments: {},
+    }));
     const context = toolValue<AnnotationContextPackage>(await client.callTool({
       name: "context_package",
       arguments: { annotationId: options.annotationId },
@@ -83,9 +92,9 @@ export async function runStubDirector(
     const proposal = toolValue<Proposal>(await client.callTool({
       name: "proposal_create",
       arguments: {
-        title: `Trim the clip to address ${options.annotationId}: ${context.annotation?.body ?? "review note"}`,
+        title: options.title ?? `Trim the clip to address ${options.annotationId}: ${context.annotation?.body ?? "review note"}`,
         addresses: [options.annotationId],
-        ops: [{
+        ops: options.operations ?? [{
           op: "clip.trim",
           params: {
             clipId: options.clipId,
@@ -103,7 +112,7 @@ export async function runStubDirector(
       name: "proposal_get",
       arguments: { proposalId: proposal.id },
     }));
-    return { tools, context, proposal, status };
+    return { tools, progress, context, proposal, status };
   } finally {
     await client.close();
   }

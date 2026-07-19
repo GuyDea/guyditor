@@ -1,0 +1,15 @@
+{
+  "$id": "guyditor:op/clip.audio.channels.set",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object", "additionalProperties": false, "required": ["clipId", "mapping"],
+  "properties": {
+    "clipId": { "type": "string", "pattern": "^clp_[a-z2-7]{10}$" },
+    "mapping": {
+      "oneOf": [
+        { "type": "null" },
+        { "enum": ["left", "right", "mix"] },
+        { "type": "array", "minItems": 1, "items": { "type": "integer", "minimum": 0 } }
+      ]
+    }
+  }
+}

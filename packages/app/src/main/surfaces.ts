@@ -102,6 +102,31 @@ export const IPC_SURFACES: readonly IpcSurface[] = Object.freeze([
         resultSchema: anyResult,
         budgetMs: 150,
       },
+      listJumpCuts: {
+        paramsSchema: {
+          type: "object",
+          required: ["sequenceId"],
+          properties: { sequenceId: { type: "string", pattern: "^seq_[a-z2-7]{10}$" } },
+          additionalProperties: false,
+        },
+        resultSchema: { type: "array" },
+        budgetMs: 20,
+      },
+      proposeJumpCutConcealment: {
+        paramsSchema: {
+          type: "object",
+          required: ["sequenceId"],
+          properties: {
+            sequenceId: { type: "string", pattern: "^seq_[a-z2-7]{10}$" },
+            beforeClipId: { type: "string", pattern: "^clp_[a-z2-7]{10}$" },
+            config: { type: "object" },
+            faceTracks: { type: "object" },
+          },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 150,
+      },
     },
   },
   {
@@ -127,6 +152,7 @@ export const IPC_SURFACES: readonly IpcSurface[] = Object.freeze([
         resultSchema: { type: "array" },
         budgetMs: 20,
       },
+      overview: { paramsSchema: emptyParams, resultSchema: anyResult, budgetMs: 20 },
       cancel: { paramsSchema: jobIdParams, resultSchema: anyResult, budgetMs: 20 },
       retry: { paramsSchema: jobIdParams, resultSchema: anyResult, budgetMs: 20 },
     },
@@ -155,11 +181,55 @@ export const IPC_SURFACES: readonly IpcSurface[] = Object.freeze([
       readPeaks: { paramsSchema: assetIdParams, resultSchema: anyResult, budgetMs: 50 },
       estimateCacheUse: { paramsSchema: emptyParams, resultSchema: anyResult, budgetMs: 20 },
       mlworkerState: { paramsSchema: emptyParams, resultSchema: anyResult, budgetMs: 20 },
+      importPickup: {
+        paramsSchema: {
+          type: "object",
+          required: ["path", "slug"],
+          properties: {
+            path: { type: "string", minLength: 1 },
+            slug: { type: "string", minLength: 1 },
+          },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 100,
+      },
+    },
+  },
+  {
+    service: "CompositorModel",
+    methods: {
+      arrangements: { paramsSchema: emptyParams, resultSchema: { type: "array" }, budgetMs: 20 },
+      keyQcReport: {
+        paramsSchema: {
+          type: "object",
+          required: ["clipId"],
+          properties: { clipId: { type: "string", pattern: "^clp_[a-z2-7]{10}$" } },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 20,
+      },
+      captureGuidance: {
+        paramsSchema: assetIdParams,
+        resultSchema: anyResult,
+        budgetMs: 20,
+      },
     },
   },
   {
     service: "TranscriptEngine",
     methods: {
+      importSubtitles: {
+        paramsSchema: {
+          type: "object",
+          required: ["path"],
+          properties: { path: { type: "string", minLength: 1 } },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 50,
+      },
       findWord: {
         paramsSchema: {
           type: "object",
@@ -194,6 +264,65 @@ export const IPC_SURFACES: readonly IpcSurface[] = Object.freeze([
         resultSchema: anyResult,
         budgetMs: 20,
       },
+      proposePickup: {
+        paramsSchema: {
+          type: "object",
+          required: ["targetAssetId", "pickupAssetId", "fromWord", "toWord"],
+          properties: {
+            targetAssetId: { type: "string", pattern: "^ast_[a-z2-7]{10}$" },
+            pickupAssetId: { type: "string", pattern: "^ast_[a-z2-7]{10}$" },
+            fromWord: { type: "string", pattern: "^w[0-9]{6}$" },
+            toWord: { type: "string", pattern: "^w[0-9]{6}$" },
+            roomTonePaddingMs: { type: "integer", minimum: 0, maximum: 5000 },
+          },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 150,
+      },
+    },
+  },
+  {
+    service: "CaptureWatcher",
+    methods: {
+      list: { paramsSchema: emptyParams, resultSchema: { type: "array" }, budgetMs: 20 },
+      configure: {
+        paramsSchema: {
+          type: "object",
+          required: ["watchFolders"],
+          properties: {
+            watchFolders: {
+              type: "array",
+              items: {
+                type: "object",
+                required: ["path", "convention", "autoIngest", "autoJobs"],
+                properties: {
+                  path: { type: "string", minLength: 1 },
+                  convention: { enum: ["guyditor", "flat"] },
+                  ignore: { type: "array", items: { type: "string" } },
+                  autoIngest: { type: "boolean" },
+                  autoJobs: {
+                    type: "object",
+                    required: ["proxy", "analysis", "transcription"],
+                    properties: {
+                      proxy: { type: "boolean" },
+                      analysis: { type: "boolean" },
+                      transcription: { type: "boolean" },
+                    },
+                    additionalProperties: false,
+                  },
+                },
+                additionalProperties: false,
+              },
+            },
+          },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 200,
+      },
+      reconcile: { paramsSchema: emptyParams, resultSchema: anyResult, budgetMs: 200 },
+      listTakes: { paramsSchema: emptyParams, resultSchema: { type: "array" }, budgetMs: 50 },
     },
   },
   {
@@ -212,7 +341,56 @@ export const IPC_SURFACES: readonly IpcSurface[] = Object.freeze([
     service: "RenderService",
     methods: {
       cacheStats: { paramsSchema: emptyParams, resultSchema: anyResult, budgetMs: 20 },
+      captionFrame: {
+        paramsSchema: {
+          type: "object",
+          required: ["deliverableId", "revision", "frame"],
+          properties: {
+            deliverableId: { type: "string", pattern: "^dlv_[a-z2-7]{10}$" },
+            revision: { type: "string", pattern: "^rev_[0-9]{5}$" },
+            frame: { type: "integer", minimum: 0 },
+          },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 50,
+      },
+      graphicsFrame: {
+        paramsSchema: {
+          type: "object",
+          required: ["deliverableId", "revision", "frame"],
+          properties: {
+            deliverableId: { type: "string", pattern: "^dlv_[a-z2-7]{10}$" },
+            revision: { type: "string", pattern: "^rev_[0-9]{5}$" },
+            frame: { type: "integer", minimum: 0 },
+          },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 100,
+      },
+      templateCatalog: {
+        paramsSchema: emptyParams,
+        resultSchema: { type: "array" },
+        budgetMs: 100,
+      },
+      templateFrame: {
+        paramsSchema: {
+          type: "object",
+          required: ["templateId"],
+          properties: {
+            templateId: { type: "string", pattern: "^tpl_[a-z2-7]{10}$" },
+            params: { type: "object" },
+            seed: { type: "integer", minimum: 0, maximum: 4294967295 },
+            frame: { type: "integer", minimum: 0 },
+          },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 100,
+      },
       renderExport: { paramsSchema: { type: "object" }, resultSchema: anyResult, budgetMs: 20 },
+      renderDiagnostic: { paramsSchema: { type: "object" }, resultSchema: anyResult, budgetMs: 20 },
       validateExport: {
         paramsSchema: {
           type: "object",

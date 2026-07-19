@@ -33,6 +33,7 @@ import type {
   GuyditorProject,
   IdPrefix,
   SkillPin,
+  WatchFolderConfig,
 } from "../project/index.js";
 import type { Rational } from "../time/index.js";
 import {
@@ -69,18 +70,6 @@ export interface ProjectStoreOptions {
   idFactory?: (prefix: IdPrefix) => string;
   now?: () => Date;
   profilesDirectory?: string;
-}
-
-export interface WatchFolderConfig {
-  path: string;
-  convention: "guyditor" | "flat";
-  ignore?: string[];
-  autoIngest: boolean;
-  autoJobs: {
-    proxy: boolean;
-    analysis: boolean;
-    transcription: boolean;
-  };
 }
 
 export interface CreateProjectRequest {
@@ -451,6 +440,9 @@ function revisionLock(
       .map(({ id, version, contentHash }) => ({ id, version, contentHash }))
       .sort((left, right) => left.id.localeCompare(right.id)),
     profiles: [...profiles.values()].sort((left, right) => left.id.localeCompare(right.id)),
+    templates: Object.entries(project.templates ?? {})
+      .map(([id, { version, contentHash }]) => ({ id, version, contentHash }))
+      .sort((left, right) => left.id.localeCompare(right.id)),
     tools: reproducibilityTools === undefined
       ? [{ name: "guyditor", version: appVersion }]
       : structuredClone(reproducibilityTools),
@@ -886,11 +878,16 @@ async function readRevisionLock(
     typeof value["masterSha256"] !== "string" ||
     !recordArray(value["assets"]) || !recordArray(value["sidecars"]) ||
     !recordArray(value["presets"]) || !recordArray(value["skills"]) ||
-    !recordArray(value["profiles"]) || !recordArray(value["tools"]) ||
+    !recordArray(value["profiles"]) ||
+    !(value["templates"] === undefined || recordArray(value["templates"])) ||
+    !recordArray(value["tools"]) ||
     !value["presets"].every((pin) =>
       typeof pin["id"] === "string" && typeof pin["version"] === "number" &&
       typeof pin["sha256"] === "string") ||
     !value["skills"].every((pin) =>
+      typeof pin["id"] === "string" && typeof pin["version"] === "string" &&
+      typeof pin["contentHash"] === "string") ||
+    !(value["templates"] ?? []).every((pin) =>
       typeof pin["id"] === "string" && typeof pin["version"] === "string" &&
       typeof pin["contentHash"] === "string") ||
     !value["tools"].every((tool) =>
@@ -898,7 +895,10 @@ async function readRevisionLock(
   ) {
     return storeFailure("E_PROJECT_REVISION", `Revision lock ${revision} is invalid.`);
   }
-  return success(value as unknown as RevisionLock);
+  return success({
+    ...(value as unknown as Omit<RevisionLock, "templates">),
+    templates: (value["templates"] ?? []) as RevisionLock["templates"],
+  });
 }
 
 function objectIds(value: unknown, ids = new Set<string>()): Set<string> {

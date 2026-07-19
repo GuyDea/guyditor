@@ -210,7 +210,7 @@ export function validateTranscriptSidecar(value: unknown): TranscriptSidecar {
       "segments",
       "words",
     ],
-    [],
+    ["provisional"],
     "/",
   );
   if (source["schema"] !== "guyditor.transcript/v1") {
@@ -218,6 +218,10 @@ export function validateTranscriptSidecar(value: unknown): TranscriptSidecar {
   }
   const assetId = stringValue(source["assetId"], "/assetId");
   if (!ASSET_ID_PATTERN.test(assetId)) invalid("/assetId", "malformed asset ID");
+  const provisional = source["provisional"];
+  if (provisional !== undefined && typeof provisional !== "boolean") {
+    invalid("/provisional", "expected a boolean");
+  }
   const audioSource = record(source["audio"], "/audio");
   exactKeys(audioSource, ["rate", "channels", "streamIndex"], [], "/audio");
   const audio = {
@@ -292,6 +296,7 @@ export function validateTranscriptSidecar(value: unknown): TranscriptSidecar {
   return {
     schema: "guyditor.transcript/v1",
     assetId,
+    ...(provisional === undefined ? {} : { provisional }),
     audio,
     language: stringValue(source["language"], "/language"),
     languageProbability: boundedProbability(source["languageProbability"], "/languageProbability"),
@@ -366,6 +371,9 @@ export function serializeTranscriptSidecar(value: unknown): string {
     "{",
     `  \"schema\": ${JSON.stringify(sidecar.schema)},`,
     `  \"assetId\": ${JSON.stringify(sidecar.assetId)},`,
+    ...(sidecar.provisional === undefined
+      ? []
+      : [`  \"provisional\": ${JSON.stringify(sidecar.provisional)},`]),
     `  \"audio\": ${JSON.stringify({
       rate: sidecar.audio.rate,
       channels: sidecar.audio.channels,

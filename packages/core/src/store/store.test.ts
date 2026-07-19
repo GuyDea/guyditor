@@ -96,6 +96,9 @@ function committedModel(): GuyditorProject {
   const model = structuredClone(projectFixture());
   model.revision = "rev_00002";
   model.sequences[0]!.clips[0]!.source.out.frames = 23;
+  model.templates = {
+    tpl_a2c3d4e5f6: { version: "1.0.0", contentHash: "b".repeat(64) },
+  };
   return model;
 }
 
@@ -192,6 +195,11 @@ describe("ProjectStore", () => {
       presets: [{ id: "pre_aaaaaaaaaa", version: 1, sha256: "a".repeat(64) }],
       skills: [{ id: "skl_aaaaaaaaaa", version: "1.0.0", contentHash: "a".repeat(64) }],
       profiles: [{ id: "youtube", version: "1.0.0" }],
+      templates: [{
+        id: "tpl_a2c3d4e5f6",
+        version: "1.0.0",
+        contentHash: "b".repeat(64),
+      }],
       tools: [{ name: "guyditor", version: "0.0.0-test" }],
     });
     expect(lockText).toBe(`${JSON.stringify(sortedJson(lock))}\n`);

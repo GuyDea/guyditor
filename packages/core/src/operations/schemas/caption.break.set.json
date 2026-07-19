@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object", "additionalProperties": false, "required": ["captionId", "afterWordId", "kind"],
+  "properties": {
+    "captionId": { "type": "string", "pattern": "^cts_[a-z2-7]{10}$" },
+    "afterWordId": { "type": "string", "pattern": "^w[0-9]{6}$" },
+    "kind": { "enum": ["line", "cue", "join"] }
+  }
+}

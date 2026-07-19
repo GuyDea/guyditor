@@ -1,0 +1,3 @@
+00:00:00.0625 TAKE 3 first line
+00:00:01.5 FLUB said 2019, meant 2016
+00:00:02 GOOD clean ending

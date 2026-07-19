@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { AnnotationService, createProject, OperationEngine } from "../../../core/src/index.js";
-import type { Proposal, Result } from "../../../core/src/index.js";
+import type { JobOverview, Proposal, Result } from "../../../core/src/index.js";
 import { projectFixture } from "../../../core/src/project/test-fixtures.js";
 import { TranscriptEngine } from "../../../transcript/src/index.js";
 import { describe, expect, it } from "vitest";
@@ -65,6 +65,55 @@ describe("AppServiceHost", () => {
     });
     expect(await readFile(join(root, "history/transactions.jsonl"), "utf8"))
       .toContain('"op":"clip.trim"');
+
+    await windowHost.close();
+    await appHost.close();
+  });
+
+  it("creates jump-cut concealment as a ready proposal without changing accepted state", async () => {
+    const root = await mkdtemp(join(tmpdir(), "guyditor-host-jumpcut-"));
+    const userDirectory = await mkdtemp(join(tmpdir(), "guyditor-host-user-"));
+    const model = projectFixture();
+    model.assets[0]!.probe.height = 2160;
+    model.assets[0]!.probe.width = 3840;
+    model.assets[0]!.video = {
+      codec: "h264",
+      width: 3840,
+      height: 2160,
+      fps: "24/1",
+      pixFmt: "yuv420p",
+      hasAlpha: false,
+      rotation: 0,
+    };
+    model.sequences[0]!.clips[1]!.source = {
+      in: { frames: 48, fps: "24/1" },
+      out: { frames: 72, fps: "24/1" },
+    };
+    const created = await createProject(root, model);
+    if (!created.ok) throw created.error;
+    const appHost = testAppHost(userDirectory);
+    const windowHost = appHost.createWindowHost({
+      publisher: new WindowEventPublisher(() => undefined),
+    });
+    await windowHost.openProject(root);
+    const propose = windowHost.resolveService("OperationEngine")?.["proposeJumpCutConcealment"];
+    if (typeof propose !== "function") throw new Error("concealment proposal service is unavailable");
+
+    const planned = await Reflect.apply(propose, undefined, [{
+      sequenceId: "seq_aaaaaaaaaa",
+      faceTracks: { ast_aaaaaaaaaa: { usable: true, framingStatic: true } },
+    }]) as { kind: string; proposal?: Proposal };
+
+    expect(planned.kind).toBe("proposal");
+    expect(planned.proposal).toMatchObject({
+      status: "ready",
+      operations: [{
+        op: "clip.punchin.set",
+        params: { clipId: "clp_bbbbbbbbbb", level: 1.12, anchor: "face-track" },
+      }],
+    });
+    expect(windowHost.snapshot().revision).toBe("rev_00001");
+    expect(windowHost.snapshot().master.sequences[0]!.clips[1]!.punchIn).toBeUndefined();
 
     await windowHost.close();
     await appHost.close();
@@ -205,7 +254,7 @@ describe("AppServiceHost", () => {
           extent: { frames: 0, fps: "24/1" },
           canvasRef: { sequenceId: "seq_aaaaaaaaaa", aspect: "16:9" },
           state: "open",
-          blocking: false,
+          blocking: true,
           author: { kind: "human", id: "creator" },
           createdAt: "2026-07-19T00:00:00.000Z",
           history: [],
@@ -246,6 +295,23 @@ describe("AppServiceHost", () => {
     expect(await Reflect.apply(list, projectService, [{}])).toEqual([
       expect.objectContaining({ id: proposal.id, status: "ready" }),
     ]);
+    const overviewMethod = windowHost.resolveService("JobQueue")?.["overview"];
+    if (typeof overviewMethod !== "function") throw new Error("overview is unavailable");
+    const overview = await Reflect.apply(overviewMethod, undefined, []) as JobOverview;
+    expect(overview.waitingOnCreator).toMatchObject({
+      proposals: [{
+        proposalId: proposal.id,
+        title: "Tighten the ending",
+        createdAt: proposal.createdAt,
+      }],
+      annotations: [{
+        annotationId: "ann_bbbbbbbbbb",
+        code: "VAL-400",
+        message: "Tighten the annotated ending",
+        sequenceId: "seq_aaaaaaaaaa",
+      }],
+    });
+    expect(overview.idle).toBe(false);
     const accept = windowHost.resolveService("OperationEngine")?.["acceptProposal"];
     if (typeof accept !== "function") throw new Error("acceptProposal is unavailable");
     const accepted = await Reflect.apply(accept, undefined, [{ proposalId: proposal.id }]) as Proposal;

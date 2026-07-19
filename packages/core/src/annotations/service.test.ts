@@ -401,6 +401,7 @@ describe("AnnotationService", () => {
     expect(store.currentProject.layers[1]!.items?.[0]).toMatchObject({
       id: "gfx_aaaaaaaaaa",
       template: "tpl_aaaaaaaaaa",
+      seed: 0,
       at: "ann:ann_aaaaaaaaaa",
       duration: { frames: 48, fps: "24/1" },
       source: { annotationId: "ann_aaaaaaaaaa" },

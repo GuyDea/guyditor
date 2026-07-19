@@ -499,7 +499,6 @@ function convertAnnotation(
       order: Math.max(-1, ...layers.map(({ order }) => order)) + 1,
       enabled: true,
       locked: false,
-      sequence: annotation.canvasRef.sequenceId,
       items: [],
     };
     layers.push(layer);
@@ -591,12 +590,13 @@ function convertAnnotation(
   }
   const item: PlacedItem = {
     id: itemId,
-    ...(assetId === undefined ? { template: templateId! } : { asset: assetId }),
+    ...(assetId === undefined ? { template: templateId!, seed: 0 } : { asset: assetId }),
     at: `ann:${annotation.id}`,
     duration: structuredClone(duration),
     source: { annotationId: annotation.id },
     params: conversionParams(annotation, styleOverrides),
   };
+  delete layer.sequence;
   layer.items = [...(layer.items ?? []), item];
   workspace.pendingConversions.push({ annotationId, itemId });
   const model = { ...project, assets: modelAssets, layers, sidecars: modelSidecars };

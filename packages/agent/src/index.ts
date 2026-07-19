@@ -22,6 +22,7 @@ export type {
   CostMeterOptions,
   CostStatus,
   ExternalCallActual,
+  OutstandingCostConfirmation,
   Preflight,
   RecordedCost,
 } from "./cost-meter.js";

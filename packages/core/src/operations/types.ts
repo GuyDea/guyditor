@@ -136,7 +136,8 @@ export type SemanticEntityType =
   | "deliverable"
   | "preset"
   | "skill"
-  | "sidecar";
+  | "sidecar"
+  | "avoid-region";
 
 export interface SemanticDiff {
   base: string;

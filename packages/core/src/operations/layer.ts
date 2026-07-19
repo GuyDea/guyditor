@@ -63,15 +63,25 @@ function applyAdd(
   }
   const restore = input.params["restore"] as Layer | undefined;
   const layer: Layer = restore === undefined
-    ? {
-        id: layerId,
-        kind,
-        name,
-        order: insertedOrder(project.layers, index),
-        enabled: true,
-        locked: false,
-        items: [],
-      }
+    ? kind === "adjustment"
+      ? {
+          id: layerId,
+          kind,
+          name,
+          order: insertedOrder(project.layers, index),
+          enabled: true,
+          locked: false,
+          adjustment: { exposure: 0, contrast: 1, saturation: 1 },
+        }
+      : {
+          id: layerId,
+          kind,
+          name,
+          order: insertedOrder(project.layers, index),
+          enabled: true,
+          locked: false,
+          items: [],
+        }
     : structuredClone(restore);
   if (layer.id !== layerId || layer.kind !== kind || layer.name !== name) {
     return layerFailure(
@@ -296,6 +306,162 @@ function applyState(
   });
 }
 
+function mutableLayer(
+  project: GuyditorProject,
+  layerId: string,
+): Result<{ layer: Layer; index: number }> {
+  const index = project.layers.findIndex(({ id }) => id === layerId);
+  const layer = project.layers[index];
+  if (layer === undefined) {
+    return layerFailure("E_OP_NOT_FOUND", `Layer ${layerId} does not exist.`, [layerId]);
+  }
+  if (layer.locked) {
+    return layerFailure("E_OP_LAYER_LOCKED", `Layer ${layerId} is locked.`, [layerId]);
+  }
+  return success({ layer, index });
+}
+
+function replaceLayer(
+  project: GuyditorProject,
+  index: number,
+  replacement: Layer,
+): GuyditorProject {
+  const layers = project.layers.slice();
+  layers[index] = replacement;
+  return { ...project, layers };
+}
+
+function applySet(
+  project: GuyditorProject,
+  input: OperationInput,
+): Result<ClipApplication> {
+  const layerId = input.params["layerId"] as string;
+  const located = mutableLayer(project, layerId);
+  if (!located.ok) return located;
+  const { layer, index } = located.value;
+  const patch = input.params["patch"] as {
+    name?: string;
+    opacity?: number | null;
+    blend?: Layer["blend"] | null;
+  };
+  const replacement = { ...layer };
+  const inversePatch: Record<string, unknown> = {};
+  const fields: SemanticFieldDelta[] = [];
+  for (const key of Object.keys(patch) as Array<keyof typeof patch>) {
+    const before = layer[key];
+    const after = patch[key];
+    inversePatch[key] = before ?? null;
+    if (after === null) delete replacement[key];
+    else if (after !== undefined) Object.assign(replacement, { [key]: after });
+    fields.push({
+      field: key,
+      ...(before === undefined ? {} : { before }),
+      ...(after === null ? {} : { after }),
+    });
+  }
+  return success({
+    model: replaceLayer(project, index, replacement),
+    inverse: [{ op: "layer.set", params: { layerId, patch: inversePatch } }],
+    affected: [layerId],
+    summary: `Set layer '${replacement.name}'`,
+    mutations: [{
+      entityId: layerId,
+      entityType: "layer",
+      change: "modified",
+      fields,
+    }],
+  });
+}
+
+function applyTransformSet(
+  project: GuyditorProject,
+  input: OperationInput,
+): Result<ClipApplication> {
+  const layerId = input.params["layerId"] as string;
+  const located = mutableLayer(project, layerId);
+  if (!located.ok) return located;
+  const { layer, index } = located.value;
+  const transform = input.params["transform"] as NonNullable<Layer["transform"]> | null;
+  if (
+    transform?.crop !== undefined &&
+    (transform.crop.x + transform.crop.w > 1 || transform.crop.y + transform.crop.h > 1)
+  ) {
+    return layerFailure(
+      "E_OP_RANGE_OUT_OF_BOUNDS",
+      "Transform crop must remain within normalized source bounds.",
+      [layerId],
+    );
+  }
+  const replacement = { ...layer };
+  if (transform === null) delete replacement.transform;
+  else replacement.transform = structuredClone(transform);
+  return success({
+    model: replaceLayer(project, index, replacement),
+    inverse: [{
+      op: "layer.transform.set",
+      params: { layerId, transform: layer.transform ?? null },
+    }],
+    affected: [layerId],
+    summary: `Transform layer '${layer.name}'`,
+    mutations: [{
+      entityId: layerId,
+      entityType: "layer",
+      change: "modified",
+      fields: [{
+        field: "transform",
+        ...(layer.transform === undefined ? {} : { before: layer.transform }),
+        ...(transform === null ? {} : { after: transform }),
+      }],
+    }],
+  });
+}
+
+function applyMatteSet(
+  project: GuyditorProject,
+  input: OperationInput,
+): Result<ClipApplication> {
+  const layerId = input.params["layerId"] as string;
+  const located = mutableLayer(project, layerId);
+  if (!located.ok) return located;
+  const { layer, index } = located.value;
+  const matte = input.params["matte"] as NonNullable<Layer["matte"]> | null;
+  if (matte !== null) {
+    const target = project.layers.find(({ id }) => id === matte.layerId);
+    if (target === undefined) {
+      return layerFailure("E_OP_NOT_FOUND", `Matte layer ${matte.layerId} does not exist.`, [
+        layerId,
+        matte.layerId,
+      ]);
+    }
+    if (target.kind !== "matte" || target.id === layerId) {
+      return layerFailure(
+        "E_OP_LAYER_TARGET",
+        `Layer ${matte.layerId} must be another matte layer.`,
+        [layerId, matte.layerId],
+      );
+    }
+  }
+  const replacement = { ...layer };
+  if (matte === null) delete replacement.matte;
+  else replacement.matte = structuredClone(matte);
+  return success({
+    model: replaceLayer(project, index, replacement),
+    inverse: [{ op: "layer.matte.set", params: { layerId, matte: layer.matte ?? null } }],
+    affected: [layerId],
+    summary: `${matte === null ? "Detach" : "Set"} matte on layer '${layer.name}'`,
+    mutations: [{
+      entityId: layerId,
+      entityType: "layer",
+      change: "modified",
+      fields: [{
+        field: "matte",
+        ...(layer.matte === undefined ? {} : { before: layer.matte }),
+        ...(matte === null ? {} : { after: matte }),
+      }],
+    }],
+  });
+}
+
 export function applyLayerOperation(
   project: GuyditorProject,
   input: OperationInput,
@@ -304,5 +470,8 @@ export function applyLayerOperation(
   if (input.op === "layer.add") return applyAdd(project, input, idFactory);
   if (input.op === "layer.remove") return applyRemove(project, input);
   if (input.op === "layer.reorder") return applyReorder(project, input);
+  if (input.op === "layer.set") return applySet(project, input);
+  if (input.op === "layer.transform.set") return applyTransformSet(project, input);
+  if (input.op === "layer.matte.set") return applyMatteSet(project, input);
   return applyState(project, input);
 }

@@ -18,14 +18,19 @@ import type {
   JobChangeListener,
   JobExecutor,
   JobFilter,
+  JobDependencyNode,
+  JobOverview,
+  JobOverviewSources,
   JobQueueOptions,
   JobRecord,
   JobState,
+  JobStatus,
   JsonValue,
 } from "./types.js";
 import { makeId } from "../project/ids.js";
 
 const PROGRESS_WRITE_INTERVAL_MS = 250;
+const JOB_ID = /^job_[a-z2-7]{10}$/u;
 
 const JOBS_SCHEMA_DDL = `
 CREATE TABLE IF NOT EXISTS jobs (
@@ -46,7 +51,8 @@ CREATE TABLE IF NOT EXISTS jobs (
   startedAt TEXT,
   finishedAt TEXT,
   etaSeconds REAL CHECK(etaSeconds IS NULL OR etaSeconds >= 0.0),
-  attempt INTEGER NOT NULL CHECK(attempt >= 1)
+  attempt INTEGER NOT NULL CHECK(attempt >= 1),
+  dependsOn TEXT CHECK(dependsOn IS NULL OR json_valid(dependsOn))
 ) STRICT;
 `;
 
@@ -124,11 +130,23 @@ function nullableNumberValue(
 }
 
 function rowToJob(row: Record<string, unknown>): JobRecord {
+  const dependsOnText = nullableStringValue(row, "dependsOn");
+  const dependsOnValue = dependsOnText === undefined
+    ? []
+    : JSON.parse(dependsOnText) as unknown;
+  if (
+    !Array.isArray(dependsOnValue) ||
+    !dependsOnValue.every((dependency): dependency is string =>
+      typeof dependency === "string" && JOB_ID.test(dependency))
+  ) {
+    throw new Error("Invalid jobs.sqlite value for dependsOn.");
+  }
   const job: JobRecord = {
     jobId: stringValue(row, "id"),
     kind: stringValue(row, "kind"),
     state: stringValue(row, "state") as JobState,
     progress: numberValue(row, "progress"),
+    dependsOn: [...dependsOnValue],
     title: stringValue(row, "title"),
     cancellable: numberValue(row, "cancellable") === 1,
     payload: JSON.parse(stringValue(row, "payload")) as JsonValue,
@@ -145,6 +163,23 @@ function rowToJob(row: Record<string, unknown>): JobRecord {
   if (finishedAt !== undefined) job.finishedAt = finishedAt;
   if (etaSeconds !== undefined) job.etaSeconds = etaSeconds;
   return job;
+}
+
+function publicJobStatus(job: JobRecord): JobStatus {
+  return {
+    jobId: job.jobId,
+    kind: job.kind,
+    state: job.state,
+    progress: job.progress,
+    dependsOn: [...job.dependsOn],
+    ...(job.error === undefined ? {} : { error: structuredClone(job.error) }),
+    title: job.title,
+    cancellable: job.cancellable,
+    createdAt: job.createdAt,
+    ...(job.startedAt === undefined ? {} : { startedAt: job.startedAt }),
+    ...(job.finishedAt === undefined ? {} : { finishedAt: job.finishedAt }),
+    ...(job.etaSeconds === undefined ? {} : { etaSeconds: job.etaSeconds }),
+  };
 }
 
 function isGuyditorError(error: unknown): error is GuyditorError {
@@ -188,17 +223,33 @@ function queueConcurrency(options: JobQueueOptions): number {
   return concurrency;
 }
 
+function migrateJobsSchema(database: DatabaseSync): void {
+  const columns = database.prepare("PRAGMA table_info(jobs)").all();
+  if (!columns.some((column) => column["name"] === "dependsOn")) {
+    database.exec(`
+      ALTER TABLE jobs
+      ADD COLUMN dependsOn TEXT CHECK(dependsOn IS NULL OR json_valid(dependsOn));
+    `);
+  }
+}
+
 export class JobQueue {
   readonly #database: DatabaseSync;
   readonly #concurrency: number;
+  readonly #overviewSources: JobOverviewSources;
   readonly #executors = new Map<string, JobExecutor>();
   readonly #listeners = new Set<JobChangeListener>();
   readonly #active = new Map<string, ActiveJob>();
   #closed = false;
 
-  private constructor(database: DatabaseSync, concurrency: number) {
+  private constructor(
+    database: DatabaseSync,
+    concurrency: number,
+    overviewSources: JobOverviewSources,
+  ) {
     this.#database = database;
     this.#concurrency = concurrency;
+    this.#overviewSources = overviewSources;
   }
 
   public static open(
@@ -211,6 +262,7 @@ export class JobQueue {
     try {
       database.exec("PRAGMA journal_mode = WAL;");
       database.exec(JOBS_SCHEMA_DDL);
+      migrateJobsSchema(database);
 
       const interrupted = makeGuyditorError(
         "E_JOB_INTERRUPTED",
@@ -237,7 +289,7 @@ export class JobQueue {
       }
 
       return {
-        queue: new JobQueue(database, concurrency),
+        queue: new JobQueue(database, concurrency, options.overviewSources ?? {}),
         recoveryNeeded: running.length > 0,
       };
     } catch (error: unknown) {
@@ -254,6 +306,18 @@ export class JobQueue {
     this.#ensureOpen();
     if (input.kind.length === 0) throw new TypeError("Job kind must not be empty.");
     if (input.title.length === 0) throw new TypeError("Job title must not be empty.");
+    const dependsOn = input.dependsOn ?? [];
+    if (new Set(dependsOn).size !== dependsOn.length) {
+      throw new TypeError("Job dependencies must not contain duplicates.");
+    }
+    for (const dependencyId of dependsOn) {
+      if (!JOB_ID.test(dependencyId)) {
+        throw new TypeError(`Invalid job dependency ID ${dependencyId}.`);
+      }
+      if (this.get(dependencyId) === undefined) {
+        throw new TypeError(`Job dependency ${dependencyId} does not exist.`);
+      }
+    }
 
     let jobId = createJobId();
     const exists = this.#database.prepare("SELECT 1 FROM jobs WHERE id = ?");
@@ -262,8 +326,8 @@ export class JobQueue {
     this.#database.prepare(`
       INSERT INTO jobs (
         id, kind, state, progress, title, cancellable, payload, error,
-        createdAt, startedAt, finishedAt, etaSeconds, attempt
-      ) VALUES (?, ?, 'queued', 0.0, ?, ?, ?, NULL, ?, NULL, NULL, NULL, 1)
+        createdAt, startedAt, finishedAt, etaSeconds, attempt, dependsOn
+      ) VALUES (?, ?, 'queued', 0.0, ?, ?, ?, NULL, ?, NULL, NULL, NULL, 1, ?)
     `).run(
       jobId,
       input.kind,
@@ -271,6 +335,7 @@ export class JobQueue {
       input.cancellable ? 1 : 0,
       jsonText(input.payload),
       createdAt,
+      dependsOn.length === 0 ? null : JSON.stringify(dependsOn),
     );
     const job = this.get(jobId);
     if (job === undefined) throw new Error(`Failed to read enqueued job ${jobId}.`);
@@ -303,6 +368,77 @@ export class JobQueue {
     if (kind.length === 0) throw new TypeError("Executor kind must not be empty.");
     this.#executors.set(kind, executor);
     this.#scheduleSoon();
+  }
+
+  public async overview(): Promise<JobOverview> {
+    this.#ensureOpen();
+    const jobs = this.#database.prepare("SELECT * FROM jobs ORDER BY rowid").all()
+      .map(rowToJob);
+    const byId = new Map(jobs.map((job) => [job.jobId, job] as const));
+    const dependencyNode = (jobId: string, ancestors: ReadonlySet<string>): JobDependencyNode => {
+      const job = byId.get(jobId);
+      if (job === undefined) {
+        return {
+          jobId,
+          kind: "missing",
+          title: `Missing dependency ${jobId}`,
+          state: "failed",
+          dependencies: [],
+        };
+      }
+      const nextAncestors = new Set(ancestors);
+      nextAncestors.add(jobId);
+      return {
+        jobId: job.jobId,
+        kind: job.kind,
+        title: job.title,
+        state: job.state,
+        dependencies: job.dependsOn
+          .filter((dependencyId) => !nextAncestors.has(dependencyId))
+          .map((dependencyId) => dependencyNode(dependencyId, nextAncestors)),
+      };
+    };
+    const runningJobs = jobs.filter((job) => job.state === "running");
+    const queuedJobs = jobs.filter((job) => job.state === "queued");
+    const retryableJobs = jobs.filter((job) => job.state === "failed");
+    const [proposals, annotations, confirmations, external] = await Promise.all([
+      Promise.resolve(this.#overviewSources.proposals?.() ?? []),
+      Promise.resolve(this.#overviewSources.annotations?.() ?? []),
+      Promise.resolve(this.#overviewSources.confirmations?.() ?? []),
+      Promise.resolve(this.#overviewSources.external?.() ?? []),
+    ]);
+    this.#ensureOpen();
+    const active = [...runningJobs, ...queuedJobs];
+    const totalWeight = active.reduce((total, job) =>
+      total + (job.etaSeconds !== undefined && job.etaSeconds > 0 ? job.etaSeconds : 1), 0);
+    const weightedProgress = active.reduce((total, job) => {
+      const weight = job.etaSeconds !== undefined && job.etaSeconds > 0
+        ? job.etaSeconds
+        : 1;
+      return total + job.progress * weight;
+    }, 0);
+    const waitingOnCreator = {
+      proposals: structuredClone([...proposals]),
+      annotations: structuredClone([...annotations]),
+      confirmations: structuredClone([...confirmations]),
+    };
+    const waitingOnExternal = structuredClone([...external]);
+    return {
+      running: runningJobs.map(publicJobStatus),
+      queued: queuedJobs.map((job) => ({
+        ...publicJobStatus(job),
+        dependencyChain: job.dependsOn.map((dependencyId) =>
+          dependencyNode(dependencyId, new Set([job.jobId]))),
+      })),
+      retryable: retryableJobs.map(publicJobStatus),
+      waitingOnCreator,
+      waitingOnExternal,
+      aggregateFraction: totalWeight === 0 ? 1 : weightedProgress / totalWeight,
+      idle: active.length === 0 && retryableJobs.length === 0 &&
+        waitingOnCreator.proposals.length === 0 &&
+        waitingOnCreator.annotations.length === 0 &&
+        waitingOnCreator.confirmations.length === 0 && waitingOnExternal.length === 0,
+    };
   }
 
   public cancel(jobId: string): Result<JobRecord> {
@@ -341,6 +477,7 @@ export class JobQueue {
       return jobFailure("E_JOB_NOT_FOUND", `Job ${jobId} does not exist.`, jobId);
     }
     this.#emit({ kind: "job.state", job: cancelled });
+    this.#scheduleSoon();
     return success(cancelled);
   }
 
@@ -358,18 +495,63 @@ export class JobQueue {
       );
     }
 
-    this.#database.prepare(`
+    const jobs = this.list();
+    const byId = new Map(jobs.map((entry) => [entry.jobId, entry] as const));
+    const requeue = new Set<string>([jobId]);
+    const addFailedAncestors = (entry: JobRecord): void => {
+      for (const dependencyId of entry.dependsOn) {
+        const dependency = byId.get(dependencyId);
+        if (
+          dependency === undefined ||
+          (dependency.state !== "failed" && dependency.state !== "cancelled") ||
+          requeue.has(dependencyId)
+        ) continue;
+        requeue.add(dependencyId);
+        addFailedAncestors(dependency);
+      }
+    };
+    addFailedAncestors(job);
+    let expanded = true;
+    while (expanded) {
+      expanded = false;
+      for (const entry of jobs) {
+        if (
+          entry.state !== "failed" ||
+          entry.error?.code !== "E_JOB_DEPENDENCY_FAILED" ||
+          requeue.has(entry.jobId) ||
+          !entry.dependsOn.some((dependencyId) => requeue.has(dependencyId))
+        ) continue;
+        requeue.add(entry.jobId);
+        expanded = true;
+      }
+    }
+
+    const reset = this.#database.prepare(`
       UPDATE jobs
       SET state = 'queued', progress = 0.0, error = NULL,
           startedAt = NULL, finishedAt = NULL, etaSeconds = NULL,
           attempt = attempt + 1
       WHERE id = ? AND state IN ('failed', 'cancelled')
-    `).run(jobId);
+    `);
+    this.#database.exec("BEGIN IMMEDIATE;");
+    try {
+      for (const entry of jobs) {
+        if (requeue.has(entry.jobId)) reset.run(entry.jobId);
+      }
+      this.#database.exec("COMMIT;");
+    } catch (error: unknown) {
+      this.#database.exec("ROLLBACK;");
+      throw error;
+    }
+    for (const entry of jobs) {
+      if (!requeue.has(entry.jobId)) continue;
+      const updated = this.get(entry.jobId);
+      if (updated?.state === "queued") this.#emit({ kind: "job.state", job: updated });
+    }
     const queued = this.get(jobId);
     if (queued === undefined) {
       return jobFailure("E_JOB_NOT_FOUND", `Job ${jobId} does not exist.`, jobId);
     }
-    this.#emit({ kind: "job.state", job: queued });
     this.#scheduleSoon();
     return success(queued);
   }
@@ -399,10 +581,14 @@ export class JobQueue {
   }
 
   #schedule(): void {
+    this.#failBlockedDependencies();
     while (this.#active.size < this.#concurrency) {
-      const next = this.list({ state: "queued" })
+      const jobs = this.list();
+      const byId = new Map(jobs.map((job) => [job.jobId, job] as const));
+      const next = jobs.filter((job) => job.state === "queued")
         .find((job) =>
-          this.#executors.has(job.kind) && !this.#active.has(job.jobId),
+          this.#executors.has(job.kind) && !this.#active.has(job.jobId) &&
+          job.dependsOn.every((dependencyId) => byId.get(dependencyId)?.state === "done"),
         );
       if (next === undefined) return;
       const executor = this.#executors.get(next.kind);
@@ -438,6 +624,61 @@ export class JobQueue {
         continue;
       }
       void this.#execute(running, executor, active);
+    }
+  }
+
+  #failBlockedDependencies(): void {
+    const jobs = this.list();
+    const byId = new Map(jobs.map((job) => [job.jobId, job] as const));
+    const blocked = new Map<string, string[]>();
+    let expanded = true;
+    while (expanded) {
+      expanded = false;
+      for (const job of jobs) {
+        if (job.state !== "queued" || blocked.has(job.jobId)) continue;
+        const failedDependencies = job.dependsOn.filter((dependencyId) => {
+          const dependency = byId.get(dependencyId);
+          return dependency === undefined || dependency.state === "failed" ||
+            dependency.state === "cancelled" || blocked.has(dependencyId);
+        });
+        if (failedDependencies.length === 0) continue;
+        blocked.set(job.jobId, failedDependencies);
+        expanded = true;
+      }
+    }
+    if (blocked.size === 0) return;
+
+    const fail = this.#database.prepare(`
+      UPDATE jobs
+      SET state = 'failed', error = ?, finishedAt = ?, etaSeconds = NULL
+      WHERE id = ? AND state = 'queued'
+    `);
+    const finishedAt = new Date().toISOString();
+    this.#database.exec("BEGIN IMMEDIATE;");
+    try {
+      for (const job of jobs) {
+        const failedDependencies = blocked.get(job.jobId);
+        if (failedDependencies === undefined) continue;
+        const envelope = makeGuyditorError(
+          "E_JOB_DEPENDENCY_FAILED",
+          `Job ${job.jobId} cannot run because ${failedDependencies.join(", ")} failed or was cancelled.`,
+          {
+            affected: [job.jobId, ...failedDependencies],
+            retry: "safe",
+            suggestion: "Retry this job to re-queue its dependency chain.",
+          },
+        );
+        fail.run(JSON.stringify(envelope), finishedAt, job.jobId);
+      }
+      this.#database.exec("COMMIT;");
+    } catch (error: unknown) {
+      this.#database.exec("ROLLBACK;");
+      throw error;
+    }
+    for (const job of jobs) {
+      if (!blocked.has(job.jobId)) continue;
+      const failed = this.get(job.jobId);
+      if (failed !== undefined) this.#emit({ kind: "job.state", job: failed });
     }
   }
 

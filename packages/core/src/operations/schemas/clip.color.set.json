@@ -1,0 +1,27 @@
+{
+  "$id": "guyditor:op/clip.color.set",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object", "additionalProperties": false, "required": ["clipId"],
+  "properties": {
+    "clipId": { "type": "string", "pattern": "^clp_[a-z2-7]{10}$" },
+    "effectId": { "type": "string", "pattern": "^fx_[a-z2-7]{10}$" },
+    "exposureEv": { "type": "number", "minimum": -4, "maximum": 4 },
+    "contrast": { "type": "number", "minimum": 0, "maximum": 2 },
+    "whiteBalance": {
+      "type": "object", "additionalProperties": false, "required": ["tempK", "tint"],
+      "properties": {
+        "tempK": { "type": "number", "minimum": 1000, "maximum": 40000 },
+        "tint": { "type": "number", "minimum": -1, "maximum": 1 }
+      }
+    },
+    "saturation": { "type": "number", "minimum": 0, "maximum": 2 },
+    "reset": { "const": true }
+  },
+  "oneOf": [
+    {
+      "required": ["exposureEv", "contrast", "whiteBalance", "saturation"],
+      "properties": { "exposureEv": {}, "contrast": {}, "whiteBalance": {}, "saturation": {} }
+    },
+    { "required": ["reset"], "properties": { "reset": {} } }
+  ]
+}

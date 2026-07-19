@@ -1,0 +1,51 @@
+{
+  "$id": "guyditor:op/clip.transform.set",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["clipId"],
+  "additionalProperties": false,
+  "properties": {
+    "clipId": { "type": "string", "pattern": "^clp_[a-z2-7]{10}$" },
+    "effectId": { "type": "string", "pattern": "^fx_[a-z2-7]{10}$" },
+    "crop": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["l", "t", "r", "b"],
+          "properties": {
+            "l": { "type": "number", "minimum": 0, "maximum": 1 },
+            "t": { "type": "number", "minimum": 0, "maximum": 1 },
+            "r": { "type": "number", "minimum": 0, "maximum": 1 },
+            "b": { "type": "number", "minimum": 0, "maximum": 1 }
+          }
+        }
+      ]
+    },
+    "scale": { "type": ["number", "null"], "exclusiveMinimum": 0 },
+    "position": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["x", "y"],
+          "properties": {
+            "x": { "type": "number", "minimum": 0, "maximum": 1 },
+            "y": { "type": "number", "minimum": 0, "maximum": 1 }
+          }
+        }
+      ]
+    },
+    "rotationDeg": { "type": ["number", "null"] },
+    "opacity": { "type": ["number", "null"], "minimum": 0, "maximum": 1 }
+  },
+  "anyOf": [
+    { "properties": { "crop": {} }, "required": ["crop"] },
+    { "properties": { "scale": {} }, "required": ["scale"] },
+    { "properties": { "position": {} }, "required": ["position"] },
+    { "properties": { "rotationDeg": {} }, "required": ["rotationDeg"] },
+    { "properties": { "opacity": {} }, "required": ["opacity"] }
+  ]
+}

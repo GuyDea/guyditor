@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -146,6 +146,50 @@ describe("JobQueue persistence", () => {
     const recovered = JobQueue.open(path);
     expect(recovered.recoveryNeeded).toBe(true);
     recovered.queue.close();
+  });
+
+  it("adds nullable dependency metadata when opening a pre-amendment database", async () => {
+    const path = await databasePath();
+    await mkdir(join(path, ".."), { recursive: true });
+    const legacy = new DatabaseSync(path);
+    legacy.exec(`
+      CREATE TABLE jobs (
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,
+        state TEXT NOT NULL,
+        progress REAL NOT NULL,
+        title TEXT NOT NULL,
+        cancellable INTEGER NOT NULL,
+        payload TEXT NOT NULL,
+        error TEXT,
+        createdAt TEXT NOT NULL,
+        startedAt TEXT,
+        finishedAt TEXT,
+        etaSeconds REAL,
+        attempt INTEGER NOT NULL
+      ) STRICT;
+      INSERT INTO jobs (
+        id, kind, state, progress, title, cancellable, payload, error,
+        createdAt, startedAt, finishedAt, etaSeconds, attempt
+      ) VALUES (
+        'job_aaaaaaaaaa', 'legacy', 'queued', 0.0, 'Legacy job', 1, '{}', NULL,
+        '2026-07-19T00:00:00.000Z', NULL, NULL, NULL, 1
+      );
+    `);
+    legacy.close();
+
+    const { queue } = JobQueue.open(path);
+    expect(queue.get("job_aaaaaaaaaa")).toMatchObject({
+      jobId: "job_aaaaaaaaaa",
+      dependsOn: [],
+    });
+    queue.close();
+
+    const inspection = new DatabaseSync(path, { readOnly: true });
+    const column = inspection.prepare("PRAGMA table_info(jobs)").all()
+      .find((entry) => entry["name"] === "dependsOn");
+    expect(column).toMatchObject({ name: "dependsOn", notnull: 0 });
+    inspection.close();
   });
 });
 
@@ -330,6 +374,175 @@ describe("JobQueue execution", () => {
     expect(startOrder).toEqual([supported.jobId, unsupported.jobId]);
     queue.close();
   });
+
+  it("starts a dependency chain only after each prerequisite completes", async () => {
+    const path = await databasePath();
+    const { queue } = JobQueue.open(path, { concurrency: 3 });
+    const ingestGate = deferred();
+    const proxyGate = deferred();
+    const transcribeGate = deferred();
+    const startOrder: string[] = [];
+    queue.registerExecutor("ingest", async (job) => {
+      startOrder.push(job.jobId);
+      await ingestGate.promise;
+      return null;
+    });
+    queue.registerExecutor("proxy.generate", async (job) => {
+      startOrder.push(job.jobId);
+      await proxyGate.promise;
+      return null;
+    });
+    queue.registerExecutor("transcribe", async (job) => {
+      startOrder.push(job.jobId);
+      await transcribeGate.promise;
+      return null;
+    });
+    const ingest = queue.enqueue({
+      kind: "ingest",
+      title: "Ingest asset",
+      payload: null,
+      cancellable: true,
+    });
+    const proxy = queue.enqueue({
+      kind: "proxy.generate",
+      title: "Generate proxy",
+      payload: null,
+      cancellable: true,
+      dependsOn: [ingest.jobId],
+    });
+    const transcribe = queue.enqueue({
+      kind: "transcribe",
+      title: "Transcribe asset",
+      payload: null,
+      cancellable: true,
+      dependsOn: [proxy.jobId],
+    });
+
+    await waitFor(() => startOrder.length === 1);
+    expect(startOrder).toEqual([ingest.jobId]);
+    expect(queue.get(proxy.jobId)).toMatchObject({
+      state: "queued",
+      dependsOn: [ingest.jobId],
+    });
+    expect(queue.get(transcribe.jobId)).toMatchObject({
+      state: "queued",
+      dependsOn: [proxy.jobId],
+    });
+
+    ingestGate.resolve();
+    await waitFor(() => startOrder.length === 2);
+    expect(startOrder).toEqual([ingest.jobId, proxy.jobId]);
+    proxyGate.resolve();
+    await waitFor(() => startOrder.length === 3);
+    expect(startOrder).toEqual([ingest.jobId, proxy.jobId, transcribe.jobId]);
+    transcribeGate.resolve();
+    await waitFor(() => queue.get(transcribe.jobId)?.state === "done");
+    queue.close();
+  });
+
+  it("fails descendants when a dependency fails and retries the affected chain", async () => {
+    const path = await databasePath();
+    const { queue } = JobQueue.open(path, { concurrency: 3 });
+    queue.registerExecutor("chain.root", async (job) => {
+      if (job.attempt === 1) throw new Error("root failed");
+      return null;
+    });
+    queue.registerExecutor("chain.middle", async () => null);
+    queue.registerExecutor("chain.leaf", async () => null);
+    const root = queue.enqueue({
+      kind: "chain.root",
+      title: "Root",
+      payload: null,
+      cancellable: true,
+    });
+    const middle = queue.enqueue({
+      kind: "chain.middle",
+      title: "Middle",
+      payload: null,
+      cancellable: true,
+      dependsOn: [root.jobId],
+    });
+    const leaf = queue.enqueue({
+      kind: "chain.leaf",
+      title: "Leaf",
+      payload: null,
+      cancellable: true,
+      dependsOn: [middle.jobId],
+    });
+    const propagationSnapshots: Array<[string | undefined, string | undefined]> = [];
+    queue.onChange(({ job }) => {
+      if (job.error?.code !== "E_JOB_DEPENDENCY_FAILED") return;
+      propagationSnapshots.push([
+        queue.get(middle.jobId)?.state,
+        queue.get(leaf.jobId)?.state,
+      ]);
+    });
+
+    await waitFor(() => queue.get(leaf.jobId)?.state === "failed");
+    expect(propagationSnapshots).not.toHaveLength(0);
+    expect(propagationSnapshots.every((states) =>
+      states[0] === "failed" && states[1] === "failed"
+    )).toBe(true);
+    expect(queue.get(middle.jobId)).toMatchObject({
+      state: "failed",
+      error: {
+        code: "E_JOB_DEPENDENCY_FAILED",
+        retry: "safe",
+        affected: [middle.jobId, root.jobId],
+      },
+    });
+    expect(queue.get(leaf.jobId)).toMatchObject({
+      state: "failed",
+      error: { code: "E_JOB_DEPENDENCY_FAILED", retry: "safe" },
+    });
+
+    const requeuedEvents: string[] = [];
+    queue.onChange(({ job }) => {
+      if (job.state === "queued" && job.attempt === 2) requeuedEvents.push(job.jobId);
+    });
+    expect(queue.retry(root.jobId)).toMatchObject({
+      ok: true,
+      value: { jobId: root.jobId, state: "queued", attempt: 2 },
+    });
+    expect(requeuedEvents).toEqual([root.jobId, middle.jobId, leaf.jobId]);
+    await waitFor(() => queue.get(leaf.jobId)?.state === "done");
+    expect(queue.get(middle.jobId)).toMatchObject({ state: "done", attempt: 2 });
+    expect(queue.get(leaf.jobId)).toMatchObject({ state: "done", attempt: 2 });
+    queue.close();
+  });
+
+  it("treats cancellation as dependency failure and leaf retry re-queues ancestors", async () => {
+    const path = await databasePath();
+    const { queue } = JobQueue.open(path, { concurrency: 2 });
+    const root = queue.enqueue({
+      kind: "chain.cancelled-root",
+      title: "Cancelled root",
+      payload: null,
+      cancellable: true,
+    });
+    const leaf = queue.enqueue({
+      kind: "chain.cancelled-leaf",
+      title: "Cancelled leaf",
+      payload: null,
+      cancellable: true,
+      dependsOn: [root.jobId],
+    });
+    expect(queue.cancel(root.jobId).ok).toBe(true);
+    await waitFor(() => queue.get(leaf.jobId)?.state === "failed");
+    expect(queue.get(leaf.jobId)).toMatchObject({
+      error: { code: "E_JOB_DEPENDENCY_FAILED", retry: "safe" },
+    });
+
+    queue.registerExecutor("chain.cancelled-root", async () => null);
+    queue.registerExecutor("chain.cancelled-leaf", async () => null);
+    expect(queue.retry(leaf.jobId)).toMatchObject({
+      ok: true,
+      value: { jobId: leaf.jobId, state: "queued", attempt: 2 },
+    });
+    await waitFor(() => queue.get(leaf.jobId)?.state === "done");
+    expect(queue.get(root.jobId)).toMatchObject({ state: "done", attempt: 2 });
+    queue.close();
+  });
 });
 
 describe("JobQueue lifecycle controls", () => {
@@ -509,6 +722,129 @@ describe("JobQueue lifecycle controls", () => {
     gates[2]!.resolve();
     await waitFor(() => jobs.every(({ jobId }) => queue.get(jobId)?.state === "done"));
     expect(maximumActive).toBe(2);
+    queue.close();
+  });
+});
+
+describe("JobQueue overview", () => {
+  it("groups active work and creator waits with ETA-weighted aggregate progress", async () => {
+    const path = await databasePath();
+    const release = deferred();
+    const { queue } = JobQueue.open(path, {
+      concurrency: 1,
+      overviewSources: {
+        proposals: async () => [{
+          proposalId: "prp_aaaaaaaaaa",
+          title: "Review tighter opening",
+          createdAt: "2026-07-19T10:00:00.000Z",
+        }],
+        annotations: async () => [{
+          annotationId: "ann_aaaaaaaaaa",
+          code: "VAL-400",
+          message: "Resolve the blocking framing note.",
+          sequenceId: "seq_aaaaaaaaaa",
+        }],
+        confirmations: () => [{
+          confirmToken: "confirm-overview",
+          taskId: "generation-task",
+          level: "task" as const,
+          message: "Confirm projected spend.",
+          estimatedUsd: 1.25,
+          createdAt: "2026-07-19T10:01:00.000Z",
+        }],
+      },
+    });
+    queue.registerExecutor("overview.running", async (_job, { reportProgress }) => {
+      reportProgress(0.5, 9);
+      await release.promise;
+      return null;
+    });
+    queue.registerExecutor("overview.queued", async () => null);
+    const running = queue.enqueue({
+      kind: "overview.running",
+      title: "Running overview job",
+      payload: null,
+      cancellable: true,
+    });
+    const queued = queue.enqueue({
+      kind: "overview.queued",
+      title: "Queued overview job",
+      payload: null,
+      cancellable: true,
+      dependsOn: [running.jobId],
+    });
+    await waitFor(() => queue.get(running.jobId)?.progress === 0.5);
+
+    const overview = await queue.overview();
+    expect(overview.running).toEqual([
+      expect.objectContaining({
+        jobId: running.jobId,
+        state: "running",
+        progress: 0.5,
+        etaSeconds: 9,
+      }),
+    ]);
+    expect(overview.queued).toEqual([
+      expect.objectContaining({
+        jobId: queued.jobId,
+        state: "queued",
+        dependencyChain: [{
+          jobId: running.jobId,
+          kind: "overview.running",
+          title: "Running overview job",
+          state: "running",
+          dependencies: [],
+        }],
+      }),
+    ]);
+    expect(overview.waitingOnCreator).toEqual({
+      proposals: [expect.objectContaining({ proposalId: "prp_aaaaaaaaaa" })],
+      annotations: [expect.objectContaining({ annotationId: "ann_aaaaaaaaaa" })],
+      confirmations: [expect.objectContaining({ confirmToken: "confirm-overview" })],
+    });
+    expect(overview.waitingOnExternal).toEqual([]);
+    expect(overview.aggregateFraction).toBeCloseTo(0.45, 8);
+    expect(overview.idle).toBe(false);
+
+    release.resolve();
+    await waitFor(() => queue.get(queued.jobId)?.state === "done");
+    queue.close();
+  });
+
+  it("reports a complete aggregate and idle when every group is empty", async () => {
+    const { queue } = JobQueue.open(":memory:");
+    await expect(queue.overview()).resolves.toEqual({
+      running: [],
+      queued: [],
+      retryable: [],
+      waitingOnCreator: { proposals: [], annotations: [], confirmations: [] },
+      waitingOnExternal: [],
+      aggregateFraction: 1,
+      idle: true,
+    });
+    queue.close();
+  });
+
+  it("keeps failed jobs needing attention in the shared overview until retried", async () => {
+    const { queue } = JobQueue.open(":memory:");
+    queue.registerExecutor("overview.failed", async () => {
+      throw new Error("needs a retry");
+    });
+    const failed = queue.enqueue({
+      kind: "overview.failed",
+      title: "Failed overview job",
+      payload: null,
+      cancellable: true,
+    });
+    await waitFor(() => queue.get(failed.jobId)?.state === "failed");
+
+    await expect(queue.overview()).resolves.toMatchObject({
+      running: [],
+      queued: [],
+      retryable: [{ jobId: failed.jobId, state: "failed" }],
+      aggregateFraction: 1,
+      idle: false,
+    });
     queue.close();
   });
 });
