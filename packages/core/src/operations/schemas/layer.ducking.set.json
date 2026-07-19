@@ -1,0 +1,26 @@
+{
+  "$id": "guyditor:op/layer.ducking.set",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object", "additionalProperties": false, "required": ["layerId", "config"],
+  "properties": {
+    "layerId": { "type": "string", "pattern": "^lyr_[a-z2-7]{10}$" },
+    "config": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["enabled", "mode", "duckDb", "attackMs", "releaseMs", "holdMs", "minGapMs"],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "mode": { "enum": ["auto", "manual"] },
+            "duckDb": { "type": "number", "minimum": -96, "maximum": 0 },
+            "attackMs": { "type": "number", "minimum": 0 },
+            "releaseMs": { "type": "number", "minimum": 0 },
+            "holdMs": { "type": "number", "minimum": 0 },
+            "minGapMs": { "type": "number", "minimum": 0 }
+          }
+        }
+      ]
+    }
+  }
+}

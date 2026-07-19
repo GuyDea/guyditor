@@ -75,7 +75,9 @@ export type {
   RasterizeKeyMasksOptions,
 } from "./key-mask.js";
 export type {
+  AudioStage,
   AudioChainNodeParams,
+  ColorNodeParams,
   CompositeNodeParams,
   EncodeNodeParams,
   KeyNodeParams,
@@ -89,6 +91,23 @@ export type {
   TransformNodeParams,
   TrimNodeParams,
 } from "./ir.js";
+export { compileDuckingEnvelope } from "./ducking.js";
+export type {
+  CompileDuckingEnvelopeInput,
+  DuckingEnvelopePoint,
+  ResolvedDuckingOverride,
+  SpeechInterval,
+} from "./ducking.js";
+export {
+  measureDeliveredLoudness,
+  normalizeMasterLoudness,
+} from "./loudness.js";
+export type {
+  LoudnessRunner,
+  LoudnessRunResult,
+  NormalizeMasterLoudnessInput,
+  NormalizeMasterLoudnessResult,
+} from "./loudness.js";
 export { loadRenderProfile } from "./profile.js";
 export type {
   LoadedRenderProfile,

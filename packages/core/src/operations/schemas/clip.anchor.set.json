@@ -1,0 +1,17 @@
+{
+  "$id": "guyditor:op/clip.anchor.set",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object", "additionalProperties": false, "required": ["clipId", "anchor"],
+  "properties": {
+    "clipId": { "type": "string", "pattern": "^clp_[a-z2-7]{10}$" },
+    "anchor": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "string",
+          "pattern": "^(ann:ann_[a-z2-7]{10}|(word:w[0-9]{6}(#(start|end))?|beat:beat_[a-z2-7]{10}|clip:clp_[a-z2-7]{10}@[0-9]+|timeline:(seq_[a-z2-7]{10}@[0-9]+|[0-9]+@[0-9]+/[1-9][0-9]*))([+-][0-9]+)?)$"
+        }
+      ]
+    }
+  }
+}

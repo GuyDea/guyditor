@@ -1,0 +1,33 @@
+{
+  "$id": "guyditor:op/clip.look.apply",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object", "additionalProperties": false,
+  "required": ["presetId", "presetVersion"],
+  "properties": {
+    "clipId": { "type": "string", "pattern": "^clp_[a-z2-7]{10}$" },
+    "layerId": { "type": "string", "pattern": "^lyr_[a-z2-7]{10}$" },
+    "effectId": { "type": "string", "pattern": "^fx_[a-z2-7]{10}$" },
+    "presetId": { "type": ["string", "null"], "pattern": "^pre_[a-z2-7]{10}$" },
+    "presetVersion": { "type": ["integer", "null"], "minimum": 0 }
+  },
+  "allOf": [
+    {
+      "oneOf": [
+        {
+          "required": ["clipId"], "properties": { "clipId": {} },
+          "not": { "required": ["layerId"], "properties": { "layerId": {} } }
+        },
+        {
+          "required": ["layerId"], "properties": { "layerId": {} },
+          "not": { "required": ["clipId"], "properties": { "clipId": {} } }
+        }
+      ]
+    },
+    {
+      "oneOf": [
+        { "properties": { "presetId": { "type": "null" }, "presetVersion": { "type": "null" } } },
+        { "properties": { "presetId": { "type": "string" }, "presetVersion": { "type": "integer" } } }
+      ]
+    }
+  ]
+}

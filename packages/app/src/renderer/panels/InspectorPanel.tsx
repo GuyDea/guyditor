@@ -7,6 +7,7 @@ import { Panel } from "./Panel.js";
 import { KeyInspector } from "./KeyInspector.js";
 import { PipInspector } from "./PipInspector.js";
 import type { WorkspacePanelProps } from "./types.js";
+import { AudioInspector } from "./AudioInspector.js";
 
 function actorLabel(transaction: TransactionRecord): string {
   return `${transaction.actor.kind}:${transaction.actor.id}`;
@@ -82,6 +83,12 @@ export function InspectorPanel({
         <button type="button" data-testid="project-copy-path" disabled={snapshot === null} onClick={() => snapshot === null ? undefined : void copyText(snapshot.projectPath, "project path")}>Copy path</button>
         <button type="button" data-testid="history-open" disabled={snapshot === null} onClick={() => void openHistory()}>History</button>
       </div>
+      <AudioInspector
+        layer={layer}
+        timelineFps={snapshot?.master.settings.timeline.fps ?? "24/1"}
+        refreshProject={refreshProject}
+        setNotice={setNotice}
+      />
       <KeyInspector snapshot={snapshot} refreshProject={refreshProject} setNotice={setNotice} />
       <PipInspector snapshot={snapshot} refreshProject={refreshProject} setNotice={setNotice} />
       {value === null ? (

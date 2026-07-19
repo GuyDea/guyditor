@@ -54,6 +54,18 @@ export type {
   MediaEngineOptions,
 } from "./ingest.js";
 export {
+  ebur128MeasureCommand,
+  loudnormMeasureCommand,
+  loudnormNormalizeCommand,
+  parseEbur128Summary,
+  parseLoudnormMeasurement,
+} from "./loudness.js";
+export type {
+  Ebur128Measurement,
+  LoudnessTarget,
+  LoudnormMeasurement,
+} from "./loudness.js";
+export {
   analyzeKeyQcFrame,
   applyChromaKeyAlpha,
   buildKeyQcReport,

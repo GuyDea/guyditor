@@ -2,6 +2,7 @@ export type RenderNodeKind =
   | "source"
   | "trim"
   | "transform"
+  | "color"
   | "pip"
   | "key"
   | "composite"
@@ -13,7 +14,7 @@ export interface RenderNode {
   id: string;
   kind: RenderNodeKind;
   inputs: string[];
-  params: SourceNodeParams | TrimNodeParams | TransformNodeParams | PipNodeParams | KeyNodeParams
+  params: SourceNodeParams | TrimNodeParams | TransformNodeParams | ColorNodeParams | PipNodeParams | KeyNodeParams
         | CompositeNodeParams | OverlayNodeParams | AudioChainNodeParams | EncodeNodeParams;
 }
 
@@ -74,6 +75,11 @@ export interface TransformNodeParams {
   easePresetId?: string;
 }
 
+export interface ColorNodeParams {
+  correction: import("../../core/src/index.js").ColorCorrection;
+  source: "clip" | "look" | "adjustment" | "layer-look";
+}
+
 export interface KeyNodeParams {
   method: "chroma" | "neuralMatte" | "alphaMatte";
   keyColor?: string;
@@ -126,15 +132,25 @@ export interface OverlayNodeParams {
 }
 
 export interface AudioChainNodeParams {
+  mode?: "sequential" | "anchored" | "mix";
+  durationSamples?: number;
   inputSettings?: Array<{
     durationSamples: number;
     transitionFromPreviousSamples?: number;
+    atOutputSample?: number;
+    offsetSamples?: number;
+    loop?: boolean;
+    loopCrossfadeSamples?: number;
+    loopDurationSamples?: number;
+    stages: AudioStage[];
   }>;
-  stages: Array<{
-    stage: "gain" | "fade" | "channelmap" | "denoise" | "eq" | "compress"
-      | "limit" | "duck" | "loudnorm";
-    params: Record<string, number | string | boolean>;
-  }>;
+  stages: AudioStage[];
+}
+
+export interface AudioStage {
+  stage: "gain" | "fade" | "channelmap" | "denoise" | "eq" | "compress"
+    | "limit" | "duck" | "loudnorm";
+  params: Record<string, number | string | boolean>;
 }
 
 export interface EncodeNodeParams {

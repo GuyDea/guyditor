@@ -123,6 +123,50 @@ export interface Sequence {
   audio?: { targetLufs: number; truePeakDb: number };
 }
 
+export interface AudioChain {
+  nodes: AudioChainNode[];
+}
+
+export type AudioChainNode =
+  | { type: "channelSelect"; enabled: boolean; mapping: "left" | "right" | "mix" | number[] }
+  | { type: "noiseReduction"; enabled: boolean; strengthDb: number }
+  | { type: "gain"; enabled: boolean; gainDb: number }
+  | { type: "eq"; enabled: boolean; bands: Array<{ freqHz: number; gainDb: number; q: number }> }
+  | {
+      type: "compression";
+      enabled: boolean;
+      thresholdDb: number;
+      ratio: number;
+      attackMs: number;
+      releaseMs: number;
+      makeupDb: number;
+    }
+  | { type: "limiting"; enabled: boolean; ceilingDb: number };
+
+export interface DuckingConfig {
+  enabled: boolean;
+  mode: "auto" | "manual";
+  duckDb: number;
+  attackMs: number;
+  releaseMs: number;
+  holdMs: number;
+  minGapMs: number;
+}
+
+export interface DuckingOverridePoint {
+  at: SemanticAnchor;
+  gainDb: number;
+}
+
+export interface DuckingSettings extends DuckingConfig {
+  overrides: DuckingOverridePoint[];
+}
+
+export interface LookApplication extends ColorCorrection {
+  presetId: string;
+  presetVersion: number;
+}
+
 export interface Clip {
   id: string;
   asset: string;
@@ -140,7 +184,7 @@ export interface Clip {
     mute?: boolean;
     offset?: SampleTime;
     channels?: "left" | "right" | "mix" | number[];
-    chain?: unknown;
+    chain?: AudioChain;
   };
   loop?: { enabled: boolean; crossfade?: FrameTime };
   anchor?: SemanticAnchor;
@@ -345,7 +389,9 @@ export interface Layer {
   matte?: { layerId: string; source: "alpha" | "luma"; invert?: boolean };
   pip?: PipConfig;
   adjustment?: ColorCorrection;
-  ducking?: unknown;
+  audio?: { chain?: AudioChain };
+  ducking?: DuckingSettings;
+  look?: LookApplication;
   sequence?: string;
   items?: PlacedItem[];
 }

@@ -9,6 +9,8 @@ import {
 } from "./graph.js";
 import type {
   AudioChainNodeParams,
+  AudioStage,
+  ColorNodeParams,
   CompositeNodeParams,
   EncodeNodeParams,
   KeyNodeParams,
@@ -428,6 +430,29 @@ export function compileFiltergraph(graph: RenderGraph, outputPath?: string): Com
     labels.set(node.id, label);
   }
 
+  function compileColor(node: RenderNode): void {
+    const color = params<ColorNodeParams>(node, "color");
+    const input = compiledInput(node);
+    const label = compiledNodeLabel(node);
+    const correction = color.correction;
+    const brightness = Math.max(-1, Math.min(1, (2 ** correction.exposure - 1) / 2));
+    const stages = [
+      `eq=contrast=${numberText(correction.contrast)}:` +
+      `brightness=${numberText(brightness)}:saturation=${numberText(correction.saturation)}`,
+    ];
+    if (correction.tint !== undefined && correction.tint !== 0) {
+      stages.push(
+        `colorbalance=rm=${numberText(correction.tint / 2)}:` +
+        `gm=${numberText(-correction.tint)}:bm=${numberText(correction.tint / 2)}`,
+      );
+    }
+    if (correction.temperatureK !== undefined) {
+      stages.push(`colortemperature=temperature=${numberText(correction.temperatureK)}`);
+    }
+    filters.push(`${inputLabel(input)}${stages.join(",")}[${label}]`);
+    labels.set(node.id, label);
+  }
+
   function ffmpegColor(value: string): string {
     return value.startsWith("#") ? `0x${value.slice(1)}` : value;
   }
@@ -776,21 +801,162 @@ export function compileFiltergraph(graph: RenderGraph, outputPath?: string): Com
     labels.set(node.id, label);
   }
 
+  function audioStageFilters(stages: readonly AudioStage[]): string[] {
+    return stages.flatMap((stage) => {
+      const value = stage.params;
+      switch (stage.stage) {
+        case "gain":
+          return `volume=${numberText(value["gainDb"] as number)}dB`;
+        case "fade":
+          return `afade=t=${value["direction"] === "out" ? "out" : "in"}:` +
+            `ss=${String(value["startSample"] as number)}:` +
+            `ns=${String(value["durationSamples"] as number)}:` +
+            `curve=${String(value["curve"] === "linear" ? "tri" : value["curve"] ?? "tri")}`;
+        case "channelmap": {
+          const mapping = String(value["mapping"]);
+          if (mapping === "left") {
+            return "channelmap=map=FL-FL|FL-FR:channel_layout=stereo";
+          }
+          if (mapping === "right") {
+            return "channelmap=map=FR-FL|FR-FR:channel_layout=stereo";
+          }
+          if (mapping === "mix") return "pan=stereo|c0=0.5*c0+0.5*c1|c1=0.5*c0+0.5*c1";
+          const channels = mapping.split(",").map((channel) => Number(channel));
+          return `channelmap=map=${channels.map((channel, index) =>
+            `${String(channel)}-${String(index)}`).join("|")}:channel_layout=stereo`;
+        }
+        case "denoise":
+          return "arnndn=m='guyditor-rnnoise.rnnn':" +
+            `mix=${numberText(Math.min(1, (value["strengthDb"] as number) / 30))}`;
+        case "eq":
+          return `equalizer=f=${numberText(value["frequencyHz"] as number)}:` +
+            `t=q:w=${numberText(value["q"] as number)}:` +
+            `g=${numberText(value["gainDb"] as number)}`;
+        case "compress":
+          return `acompressor=threshold=${numberText(value["thresholdDb"] as number)}dB:` +
+            `ratio=${numberText(value["ratio"] as number)}:` +
+            `attack=${numberText(value["attackMs"] as number)}:` +
+            `release=${numberText(value["releaseMs"] as number)}:` +
+            `makeup=${numberText(value["makeupDb"] as number)}dB`;
+        case "limit":
+          return `alimiter=limit=${numberText(10 ** ((value["ceilingDb"] as number) / 20))}:level=false`;
+        case "duck":
+          return duckVolumeFilter(String(value["envelope"]), value["sampleRate"] as number);
+        case "loudnorm":
+          // The master loudness marker is intentionally lowered by RenderService
+          // after this post-chain mix has been rendered and measured in pass one.
+          return [];
+      }
+    });
+  }
+
+  function duckVolumeFilter(serialized: string, rate: number): string {
+    const points = serialized.length === 0
+      ? []
+      : serialized.split(",").map((entry) => {
+          const [sample, gain] = entry.split(":");
+          return { sample: Number(sample), gain: Number(gain) };
+        });
+    if (points.length === 0) return "volume=0dB";
+    let expressionText = numberText(points.at(-1)!.gain);
+    for (let index = points.length - 2; index >= 0; index -= 1) {
+      const from = points[index]!;
+      const to = points[index + 1]!;
+      const fromSeconds = decimal(fraction(BigInt(from.sample), BigInt(rate)));
+      const durationSeconds = decimal(fraction(BigInt(to.sample - from.sample), BigInt(rate)));
+      const segment = to.sample === from.sample
+        ? numberText(to.gain)
+        : `${numberText(from.gain)}+((${numberText(to.gain)})-(${numberText(from.gain)}))*` +
+          `(t-${fromSeconds})/${durationSeconds}`;
+      expressionText = `if(lt(t,${decimal(fraction(BigInt(to.sample), BigInt(rate)))}),` +
+        `${segment},${expressionText})`;
+    }
+    return `volume='pow(10,(${expressionText})/20)':eval=frame`;
+  }
+
   function compileAudiochain(node: RenderNode): void {
     const audio = params<AudioChainNodeParams>(node, "audiochain");
-    if (audio.stages.length > 0) unsupported("audiochain stages", [node.id]);
-    const inputs = node.inputs.map((_, index) => compiledInput(node, index));
+    const rawInputs = node.inputs.map((_, index) => compiledInput(node, index));
     const label = compiledNodeLabel(node);
-    if (inputs.length === 0) graphInvalid("An audiochain needs at least one input.", [node.id]);
+    if (rawInputs.length === 0) graphInvalid("An audiochain needs at least one input.", [node.id]);
     const settings = audio.inputSettings;
-    if (settings === undefined || settings.every(({ transitionFromPreviousSamples }) =>
+    const inputs = rawInputs.map((raw, index) => {
+      const setting = settings?.[index];
+      if (setting === undefined) graphInvalid(`Audio input ${String(index)} has no settings.`, [node.id]);
+      let current = raw;
+      const inputStages: string[] = [];
+      if ((setting.offsetSamples ?? 0) > 0) {
+        inputStages.push(
+          `adelay=delays=${String(setting.offsetSamples)}S:all=1`,
+          `atrim=end_sample=${String(setting.durationSamples)}`,
+        );
+      } else if ((setting.offsetSamples ?? 0) < 0) {
+        inputStages.push(
+          `atrim=start_sample=${String(-setting.offsetSamples!)}`,
+          "asetpts=PTS-STARTPTS",
+          "apad",
+          `atrim=end_sample=${String(setting.durationSamples)}`,
+        );
+      }
+      inputStages.push(...audioStageFilters(setting.stages));
+      if (inputStages.length > 0) {
+        const processed = `${label}i${String(index)}`;
+        filters.push(`${inputLabel(current)}${inputStages.join(",")}[${processed}]`);
+        current = processed;
+      }
+      if (setting.loop === true) {
+        const loopDuration = setting.loopDurationSamples ?? setting.durationSamples;
+        const crossfade = setting.loopCrossfadeSamples ?? 0;
+        if (crossfade > 0 && crossfade < setting.durationSamples) {
+          const bodyInput = `${label}lb${String(index)}`;
+          const tailInput = `${label}lt${String(index)}`;
+          const headInput = `${label}lh${String(index)}`;
+          const body = `${label}lbo${String(index)}`;
+          const tail = `${label}lto${String(index)}`;
+          const head = `${label}lho${String(index)}`;
+          const seam = `${label}ls${String(index)}`;
+          const cycle = `${label}lc${String(index)}`;
+          const looped = `${label}lo${String(index)}`;
+          filters.push(`${inputLabel(current)}asplit=3[${bodyInput}][${tailInput}][${headInput}]`);
+          filters.push(`[${bodyInput}]atrim=end_sample=${String(setting.durationSamples - crossfade)},asetpts=PTS-STARTPTS[${body}]`);
+          filters.push(`[${tailInput}]atrim=start_sample=${String(setting.durationSamples - crossfade)},asetpts=PTS-STARTPTS[${tail}]`);
+          filters.push(`[${headInput}]atrim=end_sample=${String(crossfade)},asetpts=PTS-STARTPTS[${head}]`);
+          filters.push(`[${tail}][${head}]acrossfade=d=${decimal(fraction(BigInt(crossfade), BigInt(outputSampleRate ?? 48_000)))}:c1=tri:c2=tri[${seam}]`);
+          filters.push(`[${body}][${seam}]concat=n=2:v=0:a=1[${cycle}]`);
+          filters.push(`[${cycle}]aloop=loop=-1:size=${String(setting.durationSamples)},atrim=end_sample=${String(loopDuration)}[${looped}]`);
+          current = looped;
+        } else {
+          const looped = `${label}lo${String(index)}`;
+          filters.push(`${inputLabel(current)}aloop=loop=-1:size=${String(setting.durationSamples)},atrim=end_sample=${String(loopDuration)}[${looped}]`);
+          current = looped;
+        }
+      }
+      if ((audio.mode === "anchored" || audio.mode === "mix") && (setting.atOutputSample ?? 0) > 0) {
+        const delayed = `${label}d${String(index)}`;
+        filters.push(
+          `${inputLabel(current)}adelay=delays=${String(setting.atOutputSample)}S:all=1[${delayed}]`,
+        );
+        current = delayed;
+      }
+      return current;
+    });
+    let mixed: string;
+    if (audio.mode === "mix" || audio.mode === "anchored") {
+      mixed = audio.stages.length === 0 ? label : `${label}mix`;
+      filters.push(
+        `${inputs.map(inputLabel).join("")}amix=inputs=${String(inputs.length)}:` +
+        `duration=longest:normalize=0,atrim=end_sample=${String(audio.durationSamples ?? 1)}[${mixed}]`,
+      );
+    } else if (settings === undefined || settings.every(({ transitionFromPreviousSamples }) =>
       (transitionFromPreviousSamples ?? 0) === 0)) {
-      filters.push(`${inputs.map(inputLabel).join("")}concat=n=${String(inputs.length)}:v=0:a=1[${label}]`);
+      mixed = audio.stages.length === 0 ? label : `${label}mix`;
+      filters.push(`${inputs.map(inputLabel).join("")}concat=n=${String(inputs.length)}:v=0:a=1[${mixed}]`);
     } else {
       let current = inputs[0]!;
       for (let index = 1; index < inputs.length; index += 1) {
         const transitionSamples = settings[index]?.transitionFromPreviousSamples ?? 0;
-        const next = index === inputs.length - 1 ? label : `${label}x${String(index)}`;
+        const finalMix = audio.stages.length === 0 ? label : `${label}mix`;
+        const next = index === inputs.length - 1 ? finalMix : `${label}x${String(index)}`;
         if (transitionSamples > 0) {
           filters.push(
             `${inputLabel(current)}${inputLabel(inputs[index]!)}acrossfade=` +
@@ -802,8 +968,15 @@ export function compileFiltergraph(graph: RenderGraph, outputPath?: string): Com
         }
         current = next;
       }
+      mixed = current;
     }
-    labels.set(node.id, label);
+    const postStages = audioStageFilters(audio.stages);
+    if (postStages.length > 0) {
+      filters.push(`${inputLabel(mixed)}${postStages.join(",")}[${label}]`);
+      labels.set(node.id, label);
+    } else {
+      labels.set(node.id, mixed);
+    }
   }
 
   for (const node of graph.nodes) {
@@ -811,6 +984,7 @@ export function compileFiltergraph(graph: RenderGraph, outputPath?: string): Com
       case "source": break;
       case "trim": compileTrim(node); break;
       case "transform": compileTransform(node); break;
+      case "color": compileColor(node); break;
       case "pip": compilePip(node); break;
       case "key": compileKey(node); break;
       case "composite": compileComposite(node); break;

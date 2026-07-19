@@ -4,6 +4,7 @@ import {
   access,
   mkdir,
   readFile,
+  rename,
   rm,
   stat,
   writeFile,
@@ -17,6 +18,7 @@ import {
   resolveAnchor,
 } from "../../core/src/index.js";
 import type {
+  CaptionTrack,
   Deliverable,
   GuyditorError,
   GuyditorProject,
@@ -46,6 +48,7 @@ import {
   resolveFfprobe,
   runFfmpeg,
 } from "../../media/src/index.js";
+import type { LoudnessTarget } from "../../media/src/index.js";
 
 import { compileFiltergraph } from "./filtergraph.js";
 import { compileRenderGraph } from "./graph.js";
@@ -78,6 +81,11 @@ import type { TemplateCatalogEntry } from "./template-registry.js";
 import { rasterizeKeyMasks } from "./key-mask.js";
 import { rasterizePipAssets } from "./pip-assets.js";
 import type { RasterizedPipAssets } from "./pip-assets.js";
+import type { SpeechInterval } from "./ducking.js";
+import {
+  measureDeliveredLoudness,
+  normalizeMasterLoudness,
+} from "./loudness.js";
 
 const RENDER_PACKAGE_VERSION = "0.0.0";
 
@@ -190,6 +198,13 @@ interface PreparedExport {
   request: ExportRequest;
   validation: ExportValidationResult;
   variant: "burnin" | "clean";
+  loudness?: {
+    audioKey: string;
+    measurementPath: string;
+    normalizedPath: string;
+    sampleRate: number;
+    target: LoudnessTarget;
+  };
 }
 
 interface PrepareOptions {
@@ -226,6 +241,41 @@ function commandFailureMessage(error: unknown): string {
     if (lines.length > 0) return `${message}: ${lines.join(" | ")}`;
   }
   return message;
+}
+
+function exactSamplesForSeconds(
+  value: { num: number; den: number },
+  sampleRate: number,
+  feature: string,
+): number {
+  if (
+    !Number.isSafeInteger(value.num) || !Number.isSafeInteger(value.den) || value.den <= 0 ||
+    !Number.isSafeInteger(sampleRate) || sampleRate <= 0
+  ) {
+    throw makeGuyditorError(
+      "E_RENDER_GRAPH_INVALID",
+      `${feature} has an invalid rational time.`,
+      { affected: [feature] },
+    );
+  }
+  const numerator = BigInt(value.num) * BigInt(sampleRate);
+  const denominator = BigInt(value.den);
+  if (numerator < 0n || numerator % denominator !== 0n) {
+    throw makeGuyditorError(
+      "E_RENDER_UNSUPPORTED",
+      `${feature} cannot be represented at ${String(sampleRate)} Hz without rounding.`,
+      { affected: [feature] },
+    );
+  }
+  const samples = numerator / denominator;
+  if (samples > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw makeGuyditorError(
+      "E_RENDER_UNSUPPORTED",
+      `${feature} is outside exact sample bounds.`,
+      { affected: [feature] },
+    );
+  }
+  return Number(samples);
 }
 
 function isGuyditorError(error: unknown): error is GuyditorError {
@@ -571,7 +621,7 @@ export class RenderService {
       );
     }
     const jobs = preparedExports.map((prepared) => {
-      prepared.validation = validation;
+      prepared.validation = structuredClone(validation);
       const job = this.#jobQueue.enqueue({
         kind: "render.export",
         title: `Render ${req.deliverableId} ${prepared.variant}`,
@@ -777,10 +827,11 @@ export class RenderService {
     try {
       const profile = await loadRenderProfile(deliverable.profile, this.#profilesRoot);
       const resolved = this.#withResolvedAssetPaths(project);
-      const anchorFrames = await this.#pipAnchorFrames(
+      const sidecars = await this.#captionSidecars(project);
+      const anchorFrames = await this.#renderAnchorFrames(
         resolved,
         deliverable,
-        await this.#captionSidecars(project),
+        sidecars,
       );
       compileRenderGraph({
         project: resolved,
@@ -792,6 +843,7 @@ export class RenderService {
         profileSha256: profile.sha256,
         toolchain: await toolchainManifest(),
         anchorFrames,
+        speechIntervals: this.#speechIntervals(resolved, deliverable, sidecars),
       });
       checks.push({
         id: "VAL-200",
@@ -909,13 +961,24 @@ export class RenderService {
     return sidecars;
   }
 
-  async #pipAnchorFrames(
+  async #renderAnchorFrames(
     project: GuyditorProject,
     deliverable: Deliverable,
     sidecars: readonly TranscriptSidecar[],
   ): Promise<Record<string, number>> {
-    const anchors = [...new Set(project.layers.flatMap(({ pip }) =>
-      pip?.keyframes.map(({ at }) => at) ?? []))];
+    const audioSequenceIds = new Set(project.layers.flatMap((layer) =>
+      layer.enabled &&
+      (layer.kind === "audio" || layer.kind === "music" || layer.kind === "ambience" || layer.kind === "sfx") &&
+      layer.sequence !== undefined
+        ? [layer.sequence]
+        : []));
+    const anchors = [...new Set([
+      ...project.layers.flatMap(({ pip }) => pip?.keyframes.map(({ at }) => at) ?? []),
+      ...project.layers.flatMap(({ ducking }) => ducking?.overrides.map(({ at }) => at) ?? []),
+      ...project.sequences
+        .filter(({ id }) => audioSequenceIds.has(id))
+        .flatMap(({ clips }) => clips.flatMap(({ anchor }) => anchor === undefined ? [] : [anchor])),
+    ])];
     const frames: Record<string, number> = {};
     const dependencies = { wordLookup: createTranscriptWordLookup(sidecars) };
     for (const anchor of anchors) {
@@ -923,14 +986,55 @@ export class RenderService {
       if (!resolution.ok) throw resolution.error;
       if (resolution.value.status !== "resolved" || resolution.value.timeline === undefined) {
         throw makeGuyditorError(
-          "E_PIP_ANCHOR_UNRESOLVED",
-          `PiP anchor ${anchor} is orphaned and cannot be rendered.`,
+          "E_RENDER_GRAPH_INVALID",
+          `Render anchor ${anchor} is orphaned and cannot be resolved.`,
           { affected: [anchor] },
         );
       }
       frames[anchor] = resolution.value.timeline.frames;
     }
     return frames;
+  }
+
+  #speechIntervals(
+    project: GuyditorProject,
+    deliverable: Deliverable,
+    sidecars: readonly TranscriptSidecar[],
+  ): SpeechInterval[] {
+    const sourceLayerIds = project.layers
+      .filter((layer) =>
+        layer.enabled && layer.sequence === deliverable.sequenceId &&
+        (layer.kind === "video" || layer.kind === "audio"))
+      .map(({ id }) => id);
+    if (sourceLayerIds.length === 0 || sidecars.length === 0) return [];
+    const track: CaptionTrack = {
+      id: "cap_aaaaaaaaaa",
+      name: "Derived ducking speech map",
+      sourceLayerIds,
+      preset: { presetId: "pre_aaaaaaaaaa", version: 0 },
+      styleOverrides: {},
+      breakOverrides: [],
+      emphasisOverrides: [],
+      timingOffsets: [],
+      enabled: true,
+    };
+    const timeline = buildWordTimelineMap({
+      project,
+      sequenceId: deliverable.sequenceId,
+      track,
+      sidecars,
+    });
+    const sampleRate = project.settings.audio.sampleRate;
+    return timeline.instances.map(({ start, end, wordId }) => ({
+      start: {
+        samples: exactSamplesForSeconds(start, sampleRate, `speech start ${wordId}`),
+        rate: sampleRate,
+      },
+      end: {
+        samples: exactSamplesForSeconds(end, sampleRate, `speech end ${wordId}`),
+        rate: sampleRate,
+      },
+    }));
   }
 
   async #rasterizedPips(
@@ -1070,7 +1174,8 @@ export class RenderService {
             durationFrames: graphicPlan.durationFrames,
           }];
     const maskAssets = await this.#rasterizedMasks(project, deliverable);
-    const anchorFrames = await this.#pipAnchorFrames(project, deliverable, transcriptSidecars);
+    const anchorFrames = await this.#renderAnchorFrames(project, deliverable, transcriptSidecars);
+    const speechIntervals = this.#speechIntervals(project, deliverable, transcriptSidecars);
     const pipAssets = await this.#rasterizedPips(project, deliverable, anchorFrames);
     const graph = compileRenderGraph({
       project,
@@ -1085,6 +1190,7 @@ export class RenderService {
       graphicOverlays,
       maskAssets,
       anchorFrames,
+      speechIntervals,
       pipAssets,
       ...(options.diagnostic === undefined ? {} : {
         diagnosticBackground: options.diagnostic.background,
@@ -1098,6 +1204,27 @@ export class RenderService {
           resolve(req.outputDir),
           `${req.deliverableId}-${options.diagnostic.inspectedLayerId}-${options.diagnostic.background}.${profile.profile.container}`,
         );
+    const sequence = project.sequences.find(({ id }) => id === deliverable.sequenceId);
+    const hasProgramAudio = graph.nodes.some((node) => {
+      if (node.kind !== "source") return false;
+      const source = node.params as SourceNodeParams;
+      return source.stream === "audio" && source.path.length > 0;
+    });
+    const sampleRate = project.settings.audio.sampleRate;
+    const target: LoudnessTarget = {
+      integratedLufs: sequence?.audio?.targetLufs ?? -14,
+      truePeakDbtp: sequence?.audio?.truePeakDb ?? -1,
+      loudnessRangeLu: 11,
+    };
+    const audioKey = createHash("sha256").update(JSON.stringify({
+      revision: graph.revision,
+      deliverableId: graph.deliverableId,
+      sampleRate,
+      target,
+      audioNodes: graph.nodes.filter((node) =>
+        node.kind === "audiochain" ||
+        (node.kind === "source" && (node.params as SourceNodeParams).stream === "audio")),
+    })).digest("hex");
     return {
       command: compileFiltergraph(graph, outputPath),
       graph,
@@ -1114,6 +1241,19 @@ export class RenderService {
         outcome: "pass",
       },
       variant,
+      ...(options.diagnostic === undefined && hasProgramAudio ? {
+        loudness: {
+          audioKey,
+          measurementPath: join(this.#projectRoot, ".guyditor/cache/render/measure", `${audioKey}.json`),
+          normalizedPath: join(
+            this.#projectRoot,
+            ".guyditor/cache/render/audio",
+            `${audioKey}-${variant}.wav`,
+          ),
+          sampleRate,
+          target,
+        },
+      } : {}),
     };
   }
 
@@ -1179,6 +1319,7 @@ export class RenderService {
           context.reportProgress(Math.min(0.99, Number(scaled) / 1_000_000));
         },
       });
+      await this.#normalizeMasterAudio(jobId, prepared, context);
       const probe = await probeMedia(prepared.outputPath);
       if (
         probe.video === undefined ||
@@ -1213,6 +1354,107 @@ export class RenderService {
           affected: [prepared.request.deliverableId],
           retry: "safe",
           suggestion: "Inspect the FFmpeg error and retry the render job.",
+        },
+      );
+    }
+  }
+
+  async #normalizeMasterAudio(
+    jobId: string,
+    prepared: PreparedExport,
+    context: JobExecutorContext,
+  ): Promise<void> {
+    const loudness = prepared.loudness;
+    if (loudness === undefined) return;
+    const run = async (args: readonly string[]) => runFfmpeg(args, { signal: context.signal });
+    const normalization = await normalizeMasterLoudness({
+      inputPath: prepared.outputPath,
+      outputPath: loudness.normalizedPath,
+      measurementPath: loudness.measurementPath,
+      target: loudness.target,
+      sampleRate: loudness.sampleRate,
+      run,
+    });
+
+    const temporaryPath = `${prepared.outputPath}.${jobId}.loudness.${prepared.profile.profile.container}`;
+    try {
+      await runFfmpeg([
+        "-hide_banner",
+        "-nostdin",
+        "-y",
+        "-i",
+        prepared.outputPath,
+        "-i",
+        loudness.normalizedPath,
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a:0",
+        "-c:v",
+        "copy",
+        "-c:a",
+        prepared.profile.profile.audio.codec,
+        "-b:a",
+        prepared.profile.profile.audio.bitrate,
+        "-ar",
+        String(loudness.sampleRate),
+        "-ac",
+        "2",
+        "-shortest",
+        temporaryPath,
+      ], { signal: context.signal });
+      await rename(temporaryPath, prepared.outputPath);
+    } finally {
+      await rm(temporaryPath, { force: true }).catch(() => undefined);
+    }
+
+    const delivered = await measureDeliveredLoudness(prepared.outputPath, run);
+    const integratedDelta = Math.abs(delivered.integratedLufs - loudness.target.integratedLufs);
+    const integratedPass = integratedDelta <= 0.5;
+    const peakPass = delivered.truePeakDbtp <= loudness.target.truePeakDbtp;
+    const integratedStatus = normalization.limiterApplied
+      ? "warn"
+      : integratedPass ? "pass" : "fail";
+    prepared.validation.checks.push({
+      id: "VAL-500",
+      status: integratedStatus,
+      message: normalization.limiterApplied
+        ? `Delivered master is ${delivered.integratedLufs} LUFS; true-peak protection limited the linear correction toward ${loudness.target.integratedLufs} LUFS.`
+        : integratedPass
+          ? `Delivered master is ${delivered.integratedLufs} LUFS, within 0.5 LU of ${loudness.target.integratedLufs} LUFS.`
+        : `Delivered master is ${delivered.integratedLufs} LUFS, outside 0.5 LU of ${loudness.target.integratedLufs} LUFS.`,
+      affected: [prepared.request.deliverableId],
+      measured: {
+        integratedLufs: delivered.integratedLufs,
+        targetLufs: loudness.target.integratedLufs,
+        deltaLu: integratedDelta,
+      },
+    });
+    if (integratedStatus === "warn" && prepared.validation.outcome === "pass") {
+      prepared.validation.outcome = "warnings";
+    }
+    prepared.validation.checks.push({
+      id: "VAL-501",
+      status: peakPass ? "pass" : "fail",
+      message: peakPass
+        ? `Delivered true peak ${delivered.truePeakDbtp} dBTP is at or below ${loudness.target.truePeakDbtp} dBTP.`
+        : `Delivered true peak ${delivered.truePeakDbtp} dBTP exceeds ${loudness.target.truePeakDbtp} dBTP.`,
+      affected: [prepared.request.deliverableId],
+      measured: {
+        truePeakDbtp: delivered.truePeakDbtp,
+        targetTruePeakDbtp: loudness.target.truePeakDbtp,
+      },
+    });
+    if (integratedStatus === "fail" || !peakPass) {
+      prepared.validation.outcome = "blocked";
+      throw makeGuyditorError(
+        "E_EXPORT_VALIDATION_FAILED",
+        `Delivered audio failed loudness validation for ${prepared.request.deliverableId}: ` +
+        `I ${String(delivered.integratedLufs)} LUFS (target ${String(loudness.target.integratedLufs)}), ` +
+        `TP ${String(delivered.truePeakDbtp)} dBTP (ceiling ${String(loudness.target.truePeakDbtp)}).`,
+        {
+          affected: [prepared.request.deliverableId],
+          suggestion: "Inspect the cached loudnorm measurement and master audio chain.",
         },
       );
     }

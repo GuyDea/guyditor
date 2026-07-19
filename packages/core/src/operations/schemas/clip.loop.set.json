@@ -1,0 +1,27 @@
+{
+  "$id": "guyditor:op/clip.loop.set",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object", "additionalProperties": false,
+  "required": ["clipId", "loop", "loopCrossfade"],
+  "properties": {
+    "clipId": { "type": "string", "pattern": "^clp_[a-z2-7]{10}$" },
+    "loop": { "type": ["boolean", "null"] },
+    "loopCrossfade": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object", "additionalProperties": false, "required": ["t"],
+          "properties": {
+            "t": {
+              "type": "object", "additionalProperties": false, "required": ["frames", "fps"],
+              "properties": {
+                "frames": { "type": "integer", "minimum": 0 },
+                "fps": { "type": "string", "pattern": "^[0-9]+/[1-9][0-9]*$" }
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

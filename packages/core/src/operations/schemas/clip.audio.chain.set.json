@@ -1,0 +1,30 @@
+{
+  "$id": "guyditor:op/clip.audio.chain.set",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object", "additionalProperties": false, "required": ["chain"],
+  "properties": {
+    "clipId": { "type": "string", "pattern": "^clp_[a-z2-7]{10}$" },
+    "layerId": { "type": "string", "pattern": "^lyr_[a-z2-7]{10}$" },
+    "chain": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object", "additionalProperties": false, "required": ["nodes"],
+          "properties": {
+            "nodes": { "type": "array", "minItems": 6, "maxItems": 6, "items": { "type": "object" } }
+          }
+        }
+      ]
+    }
+  },
+  "oneOf": [
+    {
+      "required": ["clipId"], "properties": { "clipId": {} },
+      "not": { "required": ["layerId"], "properties": { "layerId": {} } }
+    },
+    {
+      "required": ["layerId"], "properties": { "layerId": {} },
+      "not": { "required": ["clipId"], "properties": { "clipId": {} } }
+    }
+  ]
+}

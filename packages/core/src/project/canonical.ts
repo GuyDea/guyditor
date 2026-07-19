@@ -71,6 +71,13 @@ const ORDERS = {
   transition: ["id", "preset", "duration", "params", "intent"],
   effect: ["id", "kind", "params"],
   clipAudio: ["gainDb", "fadeIn", "fadeInCurve", "fadeOut", "fadeOutCurve", "mute", "offset", "channels", "chain"],
+  layerAudio: ["chain"],
+  audioChain: ["nodes"],
+  audioChainNode: [
+    "type", "enabled", "mapping", "strengthDb", "gainDb", "bands",
+    "thresholdDb", "ratio", "attackMs", "releaseMs", "makeupDb", "ceilingDb",
+  ],
+  eqBand: ["freqHz", "gainDb", "q"],
   loop: ["enabled", "crossfade"],
   punchIn: ["level", "anchor"],
   point: ["x", "y"],
@@ -105,8 +112,11 @@ const ORDERS = {
   normalizedRect: ["x", "y", "w", "h"],
   layer: [
     "id", "kind", "name", "order", "enabled", "locked", "opacity", "blend",
-    "transform", "matte", "pip", "adjustment", "ducking", "sequence", "items",
+    "transform", "matte", "pip", "adjustment", "audio", "ducking", "look", "sequence", "items",
   ],
+  ducking: ["enabled", "mode", "duckDb", "attackMs", "releaseMs", "holdMs", "minGapMs", "overrides"],
+  duckingPoint: ["at", "gainDb"],
+  look: ["presetId", "presetVersion", "exposure", "contrast", "temperatureK", "tint", "saturation"],
   matte: ["layerId", "source", "invert"],
   placedItem: [
     "id", "asset", "template", "at", "duration", "anchorMetadata", "source", "effects",
@@ -199,13 +209,24 @@ function orderFor(
   if (key === "rights") return ORDERS.rights;
   if (key === "chapter") return ORDERS.chapter;
   if (key === "audio" && includesPath(path, "clips")) return ORDERS.clipAudio;
+  if (key === "audio" && includesPath(path, "layers")) return ORDERS.layerAudio;
   if (key === "audio" && includesPath(path, "sequences")) return ORDERS.sequenceAudio;
+  if (key === "chain") return ORDERS.audioChain;
+  if (typeof value.type === "string" && [
+    "channelSelect", "noiseReduction", "gain", "eq", "compression", "limiting",
+  ].includes(value.type)) return ORDERS.audioChainNode;
+  if ("freqHz" in value && "gainDb" in value && "q" in value) return ORDERS.eqBand;
   if (key === "transitionAfter") return ORDERS.transition;
   if (key === "loop") return ORDERS.loop;
   if (key === "punchIn") return ORDERS.punchIn;
   if (key === "transform") return ORDERS.transform;
   if (key === "crop" && "w" in value && "h" in value) return ORDERS.crop;
   if (key === "adjustment" || key === "postColor") return ORDERS.colorCorrection;
+  if (key === "ducking") return ORDERS.ducking;
+  if (typeof path.at(-1) === "number" && path.at(-2) === "overrides" && includesPath(path, "ducking")) {
+    return ORDERS.duckingPoint;
+  }
+  if (key === "look") return ORDERS.look;
   if (key === "params" && value.schema === "guyditor/key@1") return ORDERS.keySettings;
   if (key === "chroma") return ORDERS.chroma;
   if (key === "edge" && "erodePx" in value) return ORDERS.keyEdge;

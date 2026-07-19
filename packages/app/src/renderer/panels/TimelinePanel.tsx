@@ -229,7 +229,22 @@ export function TimelinePanel({
         <div className="layer-list" data-testid="timeline-layer-list">
           {layers.map((layer) => (
             <div key={layer.id} className="layer-row" data-selected={selectedLayerId === layer.id}>
-              <button type="button" data-testid={`layer-select-${layer.id}`} onClick={() => selectLayer(layer.id)}>{layer.name}</button>
+              <div className="layer-identity">
+                <button type="button" data-testid={`layer-select-${layer.id}`} onClick={() => selectLayer(layer.id)}>{layer.name}</button>
+                {layer.kind === "music" ? (
+                  <span
+                    className="ducking-visualization"
+                    data-enabled={layer.ducking?.enabled === true}
+                    data-testid={`ducking-visualization-${layer.id}`}
+                    title={layer.ducking === undefined
+                      ? "Ducking is not configured"
+                      : `${layer.ducking.mode} ducking ${String(layer.ducking.duckDb)} dB`}
+                  >
+                    <i />
+                    <b>{layer.ducking === undefined ? "DUCK OFF" : `${String(layer.ducking.duckDb)} dB`}</b>
+                  </span>
+                ) : null}
+              </div>
               <button type="button" data-testid={`layer-enable-${layer.id}`} onClick={() => void layerAction(layer, layer.enabled ? "disable" : "enable")}>{layer.enabled ? "On" : "Off"}</button>
               <button type="button" data-testid={`layer-lock-${layer.id}`} onClick={() => void layerAction(layer, layer.locked ? "unlock" : "lock")}>{layer.locked ? "Locked" : "Open"}</button>
             </div>

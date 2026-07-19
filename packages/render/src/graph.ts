@@ -8,18 +8,23 @@ import {
 } from "../../core/src/index.js";
 import type {
   Asset,
+  AudioChain,
   Clip,
+  ColorCorrection,
   Effect,
   FrameTime,
   GuyditorProject,
   KeySettings,
   Layer,
   PlacedItem,
+  Sequence,
   Transform2D,
 } from "../../core/src/index.js";
 
 import type {
+  AudioStage,
   AudioChainNodeParams,
+  ColorNodeParams,
   CompositeNodeParams,
   EncodeNodeParams,
   KeyNodeParams,
@@ -34,6 +39,13 @@ import type {
   TrimNodeParams,
 } from "./ir.js";
 import type { RenderProfile } from "./profile.js";
+import {
+  compileDuckingEnvelope,
+} from "./ducking.js";
+import type {
+  ResolvedDuckingOverride,
+  SpeechInterval,
+} from "./ducking.js";
 
 const BASE32 = "abcdefghijklmnopqrstuvwxyz234567";
 export const VIRTUAL_GAP_ASSET = "__guyditor_gap__";
@@ -61,6 +73,10 @@ export interface CompileRenderGraphOptions {
   /** Compile-time semantic-anchor resolutions; solved coordinates remain derived IR only. */
   anchorFrames?: Readonly<Record<string, number>>;
   pipAssets?: Readonly<Record<string, NonNullable<PipNodeParams["rasterAssets"]>>>;
+  /** Timeline-mapped VAD/peak speech intervals at the project sample rate. */
+  speechIntervals?: readonly SpeechInterval[];
+  /** Exact resolved samples for persisted semantic manual-ducking anchors. */
+  duckingOverrideSamples?: Readonly<Record<string, number>>;
 }
 
 interface VisualInput {
@@ -132,6 +148,22 @@ function samplesForFrames(time: FrameTime, sampleRate: number): number {
   return safeNumber(numerator / fps.numerator, "sample time");
 }
 
+function resampleExactOffset(samples: number, rate: number, outputRate: number): number {
+  const numerator = BigInt(samples) * BigInt(outputRate);
+  const denominator = BigInt(rate);
+  if (numerator % denominator !== 0n) {
+    unsupported(
+      `sample offset ${String(samples)}@${String(rate)} Hz at ${String(outputRate)} Hz`,
+      "Part 2",
+    );
+  }
+  const value = numerator / denominator;
+  if (value < BigInt(Number.MIN_SAFE_INTEGER) || value > BigInt(Number.MAX_SAFE_INTEGER)) {
+    unsupported("sample offset outside exact integer bounds", "Part 2");
+  }
+  return Number(value);
+}
+
 function outputFrames(time: FrameTime, fps: string): number {
   const converted = convertTime(time, fps);
   if (!converted.ok) {
@@ -179,6 +211,57 @@ function pushNode(
 
 function actualAudioRate(asset: Asset, fallback: number): number {
   return asset.audio?.[0]?.sampleRate ?? asset.probe.audio?.rate ?? fallback;
+}
+
+function correctionFromEffect(effect: Effect): ColorCorrection {
+  const correction = effect.params as unknown as ColorCorrection;
+  return structuredClone(correction);
+}
+
+function audioChainStages(chain: AudioChain | undefined): AudioStage[] {
+  if (chain === undefined) return [];
+  const stages: AudioStage[] = [];
+  for (const node of chain.nodes) {
+    if (!node.enabled) continue;
+    switch (node.type) {
+      case "channelSelect":
+        stages.push({
+          stage: "channelmap",
+          params: {
+            mapping: Array.isArray(node.mapping) ? node.mapping.join(",") : node.mapping,
+          },
+        });
+        break;
+      case "noiseReduction":
+        stages.push({ stage: "denoise", params: { strengthDb: node.strengthDb } });
+        break;
+      case "gain":
+        stages.push({ stage: "gain", params: { gainDb: node.gainDb } });
+        break;
+      case "eq":
+        stages.push(...node.bands.map((band) => ({
+          stage: "eq" as const,
+          params: { frequencyHz: band.freqHz, gainDb: band.gainDb, q: band.q },
+        })));
+        break;
+      case "compression":
+        stages.push({
+          stage: "compress",
+          params: {
+            thresholdDb: node.thresholdDb,
+            ratio: node.ratio,
+            attackMs: node.attackMs,
+            releaseMs: node.releaseMs,
+            makeupDb: node.makeupDb,
+          },
+        });
+        break;
+      case "limiting":
+        stages.push({ stage: "limit", params: { ceilingDb: node.ceilingDb } });
+        break;
+    }
+  }
+  return stages;
 }
 
 function dominantChannel(color: string): "green" | "blue" | undefined {
@@ -334,9 +417,6 @@ function assertSupportedSubset(
     );
   }
   for (const layer of visualLayers(project)) {
-    if (layer.kind === "adjustment") {
-      unsupported(`adjustment-layer color math on ${layer.id}`, "Part 6", [layer.id]);
-    }
     if (layer.kind === "text" || layer.kind === "animation") {
       const templatesOnly = layer.items?.every((item) => item.template !== undefined) ?? true;
       if (!templatesOnly) unsupported(`overlay items layer ${layer.id}`, "Part 7", [layer.id]);
@@ -349,11 +429,13 @@ function assertSupportedSubset(
   for (const candidate of project.sequences) {
     for (const clip of candidate.clips) {
       if (clip.overlapPrevious !== undefined) unsupported(`overlap before ${clip.id}`, "Part 5", [clip.id]);
-      if (clip.loop !== undefined) unsupported(`loop on ${clip.id}`, "Part 5", [clip.id]);
       if (clip.punchIn !== undefined) unsupported(`punch-in transform on ${clip.id}`, "Part 6", [clip.id]);
       for (const effect of clip.effects ?? []) {
         if (effect.kind === "freeze") unsupported(`freeze effect ${effect.id}`, "Part 6", [effect.id]);
-        if (effect.kind !== "speed" && effect.kind !== "key" && effect.kind !== "transform") {
+        if (
+          effect.kind !== "speed" && effect.kind !== "key" && effect.kind !== "transform" &&
+          effect.kind !== "color" && effect.kind !== "look"
+        ) {
           unsupported(`${effect.kind} effect ${effect.id}`, "Part 6", [effect.id]);
         }
       }
@@ -426,6 +508,12 @@ export function compileRenderGraph(options: CompileRenderGraphOptions): RenderGr
     if (keyEffect !== undefined) {
       const key = keyParams(keyEffect.params as unknown as KeySettings, owner.id, options);
       if (key !== undefined) root = pushNode(nodes, nextId, "key", [root.id], key);
+    }
+    for (const effect of owner.effects?.filter(({ kind }) => kind === "color" || kind === "look") ?? []) {
+      root = pushNode(nodes, nextId, "color", [root.id], {
+        correction: correctionFromEffect(effect),
+        source: effect.kind === "look" ? "look" : "clip",
+      } satisfies ColorNodeParams);
     }
     const transform = owner.effects?.find(({ kind }) => kind === "transform");
     if (transform !== undefined) {
@@ -627,26 +715,89 @@ export function compileRenderGraph(options: CompileRenderGraphOptions): RenderGr
         } satisfies KeyNodeParams),
       };
     }
+    if (layer.look !== undefined) {
+      compiled = {
+        ...compiled,
+        root: pushNode(nodes, nextId, "color", [compiled.root.id], {
+          correction: structuredClone(layer.look),
+          source: "layer-look",
+        } satisfies ColorNodeParams),
+      };
+    }
     layerInputs.push({ ...compiled, layer });
   }
-
-  const topComposite = pushNode(nodes, nextId, "composite", layerInputs.map(({ root }) => root.id), {
-    canvas: {
-      w: project.settings.timeline.width,
-      h: project.settings.timeline.height,
-      background: diagnosticColor(options),
-    },
-    mode: "stack",
-    durationFrames: compositionDurationFrames,
-    inputSettings: layerInputs.map(({ durationFrames, layer }) => ({
-      durationFrames,
-      layerId: layer.id,
-      blend: layer.blend ?? "normal",
-      opacity: layer.opacity ?? 1,
-    })),
-  } satisfies CompositeNodeParams);
-
-  let visualRoot = topComposite;
+  const adjustmentLayers = ordered.filter(({ kind }) => kind === "adjustment");
+  let visualRoot: RenderNode;
+  if (adjustmentLayers.length === 0) {
+    visualRoot = pushNode(nodes, nextId, "composite", layerInputs.map(({ root }) => root.id), {
+      canvas: {
+        w: project.settings.timeline.width,
+        h: project.settings.timeline.height,
+        background: diagnosticColor(options),
+      },
+      mode: "stack",
+      durationFrames: compositionDurationFrames,
+      inputSettings: layerInputs.map(({ durationFrames, layer }) => ({
+        durationFrames,
+        layerId: layer.id,
+        blend: layer.blend ?? "normal",
+        opacity: layer.opacity ?? 1,
+      })),
+    } satisfies CompositeNodeParams);
+  } else {
+    const compiledByLayer = new Map(layerInputs.map((entry) => [entry.layer.id, entry] as const));
+    let current: RenderNode | undefined;
+    for (const layer of ordered.filter(({ kind }) =>
+      kind === "video" || kind === "image" || kind === "adjustment")) {
+      if (layer.kind === "adjustment") {
+        if (current === undefined) {
+          current = pushNode(nodes, nextId, "composite", [], {
+            canvas: {
+              w: project.settings.timeline.width,
+              h: project.settings.timeline.height,
+              background: diagnosticColor(options),
+            },
+            mode: "stack",
+            durationFrames: compositionDurationFrames,
+            inputSettings: [],
+          } satisfies CompositeNodeParams);
+        }
+        current = pushNode(nodes, nextId, "color", [current.id], {
+          correction: structuredClone(layer.adjustment!),
+          source: "adjustment",
+        } satisfies ColorNodeParams);
+        continue;
+      }
+      const compiled = compiledByLayer.get(layer.id);
+      if (compiled === undefined) continue;
+      current = pushNode(
+        nodes,
+        nextId,
+        "composite",
+        current === undefined ? [compiled.root.id] : [current.id, compiled.root.id],
+        {
+          canvas: {
+            w: project.settings.timeline.width,
+            h: project.settings.timeline.height,
+            background: diagnosticColor(options),
+          },
+          mode: "stack",
+          durationFrames: compositionDurationFrames,
+          inputSettings: [
+            ...(current === undefined ? [] : [{ durationFrames: compositionDurationFrames }]),
+            {
+              durationFrames: compiled.durationFrames,
+              layerId: layer.id,
+              blend: layer.blend ?? "normal",
+              opacity: layer.opacity ?? 1,
+            },
+          ],
+        } satisfies CompositeNodeParams,
+      );
+    }
+    if (current === undefined) graphInvalid("The visual stack has no renderable base.");
+    visualRoot = current;
+  }
   for (const overlay of options.graphicOverlays ?? []) {
     visualRoot = pushNode(nodes, nextId, "overlay", [visualRoot.id], structuredClone(overlay));
   }
@@ -656,13 +807,82 @@ export function compileRenderGraph(options: CompileRenderGraphOptions): RenderGr
     }
   }
 
-  const audioInputs: string[] = [];
-  const audioSettings: NonNullable<AudioChainNodeParams["inputSettings"]> = [];
-  function addAudioSlot(asset: Asset | undefined, duration: FrameTime, clip?: Clip): void {
+  const outputSampleRate = project.settings.audio.sampleRate;
+  const compositionDurationSamples = samplesForFrames(
+    { frames: compositionDurationFrames, fps: project.settings.timeline.fps },
+    outputSampleRate,
+  );
+
+  function clipAudioStages(clip: Clip, durationSamples: number): AudioStage[] {
+    const stages: AudioStage[] = [];
+    if (clip.audio?.mute === true) stages.push({ stage: "gain", params: { gainDb: -120 } });
+    if (clip.audio?.gainDb !== undefined) {
+      stages.push({ stage: "gain", params: { gainDb: clip.audio.gainDb } });
+    }
+    if (clip.audio?.fadeIn !== undefined) {
+      stages.push({
+        stage: "fade",
+        params: {
+          direction: "in",
+          startSample: 0,
+          durationSamples: samplesForFrames(clip.audio.fadeIn, outputSampleRate),
+          curve: clip.audio.fadeInCurve ?? "linear",
+        },
+      });
+    }
+    if (clip.audio?.fadeOut !== undefined) {
+      const fadeSamples = samplesForFrames(clip.audio.fadeOut, outputSampleRate);
+      stages.push({
+        stage: "fade",
+        params: {
+          direction: "out",
+          startSample: Math.max(0, durationSamples - fadeSamples),
+          durationSamples: fadeSamples,
+          curve: clip.audio.fadeOutCurve ?? "linear",
+        },
+      });
+    }
+    if (clip.audio?.channels !== undefined) {
+      stages.push({
+        stage: "channelmap",
+        params: {
+          mapping: Array.isArray(clip.audio.channels)
+            ? clip.audio.channels.join(",")
+            : clip.audio.channels,
+        },
+      });
+    }
+    stages.push(...audioChainStages(clip.audio?.chain));
+    return stages;
+  }
+
+  function clipAnchorFrame(clip: Clip, sequenceId: string): number {
+    if (clip.anchor === undefined) return 0;
+    const supplied = options.anchorFrames?.[clip.anchor];
+    if (supplied !== undefined) return supplied;
+    const scoped = new RegExp(`^timeline:${sequenceId}@([0-9]+)$`, "u").exec(clip.anchor);
+    if (scoped !== null) return Number(scoped[1]);
+    const absolute = /^timeline:([0-9]+)@([0-9]+\/[1-9][0-9]*)$/u.exec(clip.anchor);
+    if (absolute !== null) {
+      return outputFrames({ frames: Number(absolute[1]), fps: absolute[2]! }, project.settings.timeline.fps);
+    }
+    unsupported(`unresolved audio anchor ${clip.anchor}`, "Part 0 anchor resolver", [clip.id]);
+  }
+
+  function compileAudioSequence(
+    target: Sequence,
+    mode: "sequential" | "anchored",
+    layer?: Layer,
+  ): RenderNode {
+    const audioInputs: string[] = [];
+    const audioSettings: NonNullable<AudioChainNodeParams["inputSettings"]> = [];
+    const timeline = deriveTimeline(project, target.id);
+    if (!timeline.ok) throw timeline.error;
+    const byClip = new Map(timeline.value.clips.map((entry) => [entry.clipId, entry] as const));
+
+    function addAudioSlot(asset: Asset | undefined, duration: FrameTime, clip?: Clip): void {
     const hasAudio = asset !== undefined && ((asset.audio?.length ?? 0) > 0 || asset.probe.audio !== undefined);
-    const rate = hasAudio
-      ? actualAudioRate(asset, project.settings.audio.sampleRate)
-      : project.settings.audio.sampleRate;
+    const sourceRate = hasAudio ? actualAudioRate(asset, outputSampleRate) : outputSampleRate;
     const source = pushNode(nodes, nextId, "source", [], {
       assetId: hasAudio ? asset.id : VIRTUAL_SILENCE_ASSET,
       assetSha256: hasAudio ? asset.sha256 : "0".repeat(64),
@@ -670,15 +890,15 @@ export function compileRenderGraph(options: CompileRenderGraphOptions): RenderGr
       path: hasAudio ? asset.path : "",
       useProxy: false,
     } satisfies SourceNodeParams);
-    const durationSamples = samplesForFrames(duration, rate);
+    const durationSamples = samplesForFrames(duration, outputSampleRate);
     const trimParams: TrimNodeParams = hasAudio && clip !== undefined
       ? {
-          in: { samples: samplesForFrames(clip.source.in, rate), rate },
-          out: { samples: samplesForFrames(clip.source.out, rate), rate },
+          in: { samples: samplesForFrames(clip.source.in, sourceRate), rate: sourceRate },
+          out: { samples: samplesForFrames(clip.source.out, sourceRate), rate: sourceRate },
         }
       : {
-          in: { samples: 0, rate },
-          out: { samples: durationSamples, rate },
+          in: { samples: 0, rate: outputSampleRate },
+          out: { samples: durationSamples, rate: outputSampleRate },
         };
     if (clip !== undefined) {
       const speed = speedOf(clip);
@@ -686,39 +906,134 @@ export function compileRenderGraph(options: CompileRenderGraphOptions): RenderGr
     }
     const trim = pushNode(nodes, nextId, "trim", [source.id], trimParams);
     audioInputs.push(trim.id);
-    audioSettings.push({ durationSamples });
+    const startFrame = clip === undefined || mode === "sequential"
+      ? 0
+      : clipAnchorFrame(clip, target.id);
+    const atOutputSample = samplesForFrames(
+      { frames: startFrame, fps: project.settings.timeline.fps },
+      outputSampleRate,
+    );
+    audioSettings.push({
+      durationSamples,
+      stages: clip === undefined ? [] : clipAudioStages(clip, durationSamples),
+      ...(mode === "anchored" ? { atOutputSample } : {}),
+      ...(clip?.audio?.offset === undefined
+        ? {}
+        : {
+            offsetSamples: resampleExactOffset(
+              clip.audio.offset.samples,
+              clip.audio.offset.rate,
+              outputSampleRate,
+            ),
+          }),
+      ...(clip?.loop?.enabled !== true
+        ? {}
+        : {
+            loop: true,
+            loopCrossfadeSamples: clip.loop.crossfade === undefined
+              ? 0
+              : samplesForFrames(clip.loop.crossfade, outputSampleRate),
+            loopDurationSamples: Math.max(0, compositionDurationSamples - atOutputSample),
+          }),
+    });
+    }
+
+    for (const [index, clip] of target.clips.entries()) {
+      if (mode === "sequential" && clip.gapBefore !== undefined) {
+        addAudioSlot(undefined, clip.gapBefore);
+      }
+      const asset = project.assets.find(({ id }) => id === clip.asset);
+      if (asset === undefined) {
+        throw makeGuyditorError(
+          "E_RENDER_UNFROZEN_GENERATION",
+          `Clip ${clip.id} references absent asset ${clip.asset}.`,
+          { affected: [clip.id, clip.asset] },
+        );
+      }
+      const derived = byClip.get(clip.id);
+      if (derived === undefined) graphInvalid(`No derived timeline entry exists for ${clip.id}.`, [clip.id]);
+      addAudioSlot(asset, derived.duration, clip);
+      const transition = target.clips[index - 1]?.transitionAfter;
+      if (transition !== undefined && mode === "sequential") {
+        audioSettings.at(-1)!.transitionFromPreviousSamples = samplesForFrames(
+          transition.duration,
+          outputSampleRate,
+        );
+      }
+    }
+
+    const stages = audioChainStages(layer?.audio?.chain);
+    if (layer?.ducking?.enabled === true) {
+      const overrides: ResolvedDuckingOverride[] = layer.ducking.overrides.map((point) => {
+        const suppliedSample = options.duckingOverrideSamples?.[point.at];
+        const suppliedFrame = options.anchorFrames?.[point.at];
+        if (suppliedSample === undefined && suppliedFrame === undefined) {
+          unsupported(`unresolved ducking override ${point.at}`, "Part 0 anchor resolver", [layer.id]);
+        }
+        return {
+          at: {
+            samples: suppliedSample ?? samplesForFrames(
+              { frames: suppliedFrame!, fps: project.settings.timeline.fps },
+              outputSampleRate,
+            ),
+            rate: outputSampleRate,
+          },
+          gainDb: point.gainDb,
+        };
+      });
+      const envelope = compileDuckingEnvelope({
+        config: layer.ducking,
+        speech: options.speechIntervals ?? [],
+        overrides,
+        duration: { samples: compositionDurationSamples, rate: outputSampleRate },
+      });
+      stages.push({
+        stage: "duck",
+        params: {
+          sampleRate: outputSampleRate,
+          envelope: envelope.map(({ at, gainDb }) => `${String(at.samples)}:${String(gainDb)}`).join(","),
+        },
+      });
+    }
+    return pushNode(nodes, nextId, "audiochain", audioInputs, {
+      mode,
+      durationSamples: compositionDurationSamples,
+      stages,
+      inputSettings: audioSettings,
+    } satisfies AudioChainNodeParams);
   }
 
-  const mainByClip = new Map(mainTimeline.value.clips.map((entry) => [entry.clipId, entry] as const));
-  for (const [index, clip] of sequence.clips.entries()) {
-    if (clip.gapBefore !== undefined) addAudioSlot(undefined, clip.gapBefore);
-    const asset = project.assets.find(({ id }) => id === clip.asset);
-    if (asset === undefined) {
-      throw makeGuyditorError(
-        "E_RENDER_UNFROZEN_GENERATION",
-        `Clip ${clip.id} references absent asset ${clip.asset}.`,
-        { affected: [clip.id, clip.asset] },
-      );
-    }
-    const derived = mainByClip.get(clip.id);
-    if (derived === undefined) graphInvalid(`No derived timeline entry exists for ${clip.id}.`, [clip.id]);
-    addAudioSlot(asset, derived.duration, clip);
-    const transition = sequence.clips[index - 1]?.transitionAfter;
-    if (transition !== undefined) {
-      audioSettings.at(-1)!.transitionFromPreviousSamples = samplesForFrames(
-        transition.duration,
-        audioSettings.at(-1)!.durationSamples === 0
-          ? project.settings.audio.sampleRate
-          : project.settings.audio.sampleRate,
-      );
-    }
-  }
-  const audiochain = pushNode(nodes, nextId, "audiochain", audioInputs, {
-    stages: [],
-    inputSettings: audioSettings,
+  const mainAudio = compileAudioSequence(sequence, "sequential");
+  const roleAudio = project.layers
+    .filter(({ enabled, kind, sequence: sequenceId }) =>
+      enabled && (kind === "audio" || kind === "music" || kind === "ambience" || kind === "sfx") &&
+      sequenceId !== undefined)
+    .sort((left, right) => left.order - right.order || left.id.localeCompare(right.id))
+    .map((layer) => {
+      const layerSequence = project.sequences.find(({ id }) => id === layer.sequence);
+      if (layerSequence === undefined) graphInvalid(`Audio layer ${layer.id} sequence is missing.`, [layer.id]);
+      return compileAudioSequence(layerSequence, "anchored", layer);
+    });
+  const masterTarget = sequence.audio ?? { targetLufs: -14, truePeakDb: -1 };
+  const masterAudio = pushNode(nodes, nextId, "audiochain", [mainAudio.id, ...roleAudio.map(({ id }) => id)], {
+    mode: "mix",
+    durationSamples: compositionDurationSamples,
+    inputSettings: [mainAudio, ...roleAudio].map(() => ({
+      durationSamples: compositionDurationSamples,
+      stages: [],
+    })),
+    stages: [{
+      stage: "loudnorm",
+      params: {
+        integratedLufs: masterTarget.targetLufs,
+        truePeakDbtp: masterTarget.truePeakDb,
+        loudnessRangeLu: 11,
+        twoPass: true,
+      },
+    }],
   } satisfies AudioChainNodeParams);
 
-  pushNode(nodes, nextId, "encode", [visualRoot.id, audiochain.id], {
+  pushNode(nodes, nextId, "encode", [visualRoot.id, masterAudio.id], {
     profileId: profile.id,
     profileVersion: profile.version,
     profileSha256,

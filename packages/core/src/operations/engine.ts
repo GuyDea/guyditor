@@ -14,6 +14,16 @@ import setClipGapSchema from "./schemas/clip.gap.set.json" with { type: "json" }
 import setClipOverlapSchema from "./schemas/clip.overlap.set.json" with { type: "json" };
 import setClipAudioGainSchema from "./schemas/clip.audio.gain.set.json" with { type: "json" };
 import setClipAudioFadeSchema from "./schemas/clip.audio.fade.set.json" with { type: "json" };
+import setClipAudioOffsetSchema from "./schemas/clip.audio.offset.set.json" with { type: "json" };
+import setClipAudioChannelsSchema from "./schemas/clip.audio.channels.set.json" with { type: "json" };
+import setClipAudioChainSchema from "./schemas/clip.audio.chain.set.json" with { type: "json" };
+import setSequenceAudioMasterSchema from "./schemas/sequence.audio.master.set.json" with { type: "json" };
+import setClipLoopSchema from "./schemas/clip.loop.set.json" with { type: "json" };
+import setClipAnchorSchema from "./schemas/clip.anchor.set.json" with { type: "json" };
+import setLayerDuckingSchema from "./schemas/layer.ducking.set.json" with { type: "json" };
+import setLayerDuckingOverrideSchema from "./schemas/layer.ducking.override.json" with { type: "json" };
+import setClipColorSchema from "./schemas/clip.color.set.json" with { type: "json" };
+import applyClipLookSchema from "./schemas/clip.look.apply.json" with { type: "json" };
 import addLayerSchema from "./schemas/layer.add.json" with { type: "json" };
 import removeLayerSchema from "./schemas/layer.remove.json" with { type: "json" };
 import reorderLayerSchema from "./schemas/layer.reorder.json" with { type: "json" };
@@ -111,6 +121,10 @@ import type { TransactionRecord } from "../store/types.js";
 import type { TemplateProvider } from "../templates/index.js";
 import { applyClipOperation } from "./clip.js";
 import type { ClipApplication } from "./clip.js";
+import {
+  applyAudioColorOperation,
+  isAudioColorOperation,
+} from "./audio-color.js";
 import { applyLayerOperation } from "./layer.js";
 import { applyTransitionOperation } from "./transition.js";
 import { applyAssetOperation } from "./asset.js";
@@ -235,6 +249,16 @@ const catalog = new Map<string, CatalogEntry>([
   ["key.qc.run", catalogEntry(runKeyQcSchema, "low", "none", "Analyze key quality for {clip}")],
   ["clip.audio.gain.set", catalogEntry(setClipAudioGainSchema, "low", "none", "Set {clip} gain to {gainDb} dB")],
   ["clip.audio.fade.set", catalogEntry(setClipAudioFadeSchema, "low", "none", "Set audio fades on {clip}")],
+  ["clip.audio.offset.set", catalogEntry(setClipAudioOffsetSchema, "normal", "none", "Shift {clip} audio by {offset}")],
+  ["clip.audio.channels.set", catalogEntry(setClipAudioChannelsSchema, "low", "none", "Use {mapping} channel(s) on {clip}")],
+  ["clip.audio.chain.set", catalogEntry(setClipAudioChainSchema, "normal", "none", "Set audio chain on {target}")],
+  ["sequence.audio.master.set", catalogEntry(setSequenceAudioMasterSchema, "normal", "none", "Set master loudness target {targetLufs} LUFS / {truePeakDb} dBTP")],
+  ["clip.loop.set", catalogEntry(setClipLoopSchema, "low", "none", "Loop {clip} with {loopCrossfade} crossfade")],
+  ["clip.anchor.set", catalogEntry(setClipAnchorSchema, "normal", "none", "Anchor {clip} start to {anchor}")],
+  ["layer.ducking.set", catalogEntry(setLayerDuckingSchema, "low", "none", "Set ducking on {layer}")],
+  ["layer.ducking.override", catalogEntry(setLayerDuckingOverrideSchema, "low", "none", "Set manual ducking points on {layer}")],
+  ["clip.color.set", catalogEntry(setClipColorSchema, "low", "none", "Adjust color on {clip}")],
+  ["clip.look.apply", catalogEntry(applyClipLookSchema, "low", "none", "Apply look {presetId}@{presetVersion} to {target}")],
   ["transition.set", catalogEntry(setTransitionSchema, "normal", "none", "Set {kind} ({duration}) between {a} and {b}")],
   ["transition.remove", catalogEntry(removeTransitionSchema, "normal", "none", "Remove {kind} between {a} and {b}")],
   ["transcript.create", catalogEntry(
@@ -585,7 +609,9 @@ export class OperationEngine {
 
       const normalized = { op: requested.op, params };
       let application: Result<ClipApplication>;
-      if (requested.op.startsWith("asset.")) {
+      if (isAudioColorOperation(requested.op)) {
+        application = applyAudioColorOperation(working, normalized, this.#idFactory);
+      } else if (requested.op.startsWith("asset.")) {
         application = applyAssetOperation(working, normalized);
       } else if (requested.op === "anchor.rebind") {
         application = applyAnchorOperation(working, normalized);

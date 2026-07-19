@@ -148,6 +148,45 @@ test("journals semantic reorder, gap, remove, and layer toggle operations", asyn
   }
 });
 
+test("renders master metering and journals automatic and manual ducking", async () => {
+  const template = await createWorkspaceProject({ audioPost: true });
+  const launched = await launchApp({ projectTemplate: template });
+  try {
+    await expect(launched.page.getByTestId("loudness-meter")).toBeVisible();
+    await expect(launched.page.getByTestId("loudness-target"))
+      .toContainText("master −16.0 LUFS · ceiling −1.5 dBTP");
+    await launched.page.getByTestId("loudness-reset").click();
+
+    await launched.page.getByTestId("layer-select-lyr_bbbbbbbbbb").click();
+    await expect(launched.page.getByTestId("audio-inspector")).toBeVisible();
+    await launched.page.getByTestId("duck-db").fill("-15");
+    await launched.page.getByTestId("duck-save").click();
+    await expect(launched.page.getByTestId("revision-indicator")).toHaveText("rev_00002");
+    await expect(launched.page.getByTestId("ducking-visualization-lyr_bbbbbbbbbb"))
+      .toHaveAttribute("data-enabled", "true");
+
+    await launched.page.getByTestId("duck-mode").selectOption("manual");
+    await launched.page.getByTestId("duck-save").click();
+    await expect(launched.page.getByTestId("revision-indicator")).toHaveText("rev_00003");
+    await launched.page.getByTestId("duck-override-anchor").fill("timeline:12@24/1");
+    await launched.page.getByTestId("duck-override-gain").fill("-9");
+    await launched.page.getByTestId("duck-override-add").click();
+    await expect(launched.page.getByTestId("revision-indicator")).toHaveText("rev_00004");
+
+    const journal = await readFile(join(launched.projectPath!, "history/transactions.jsonl"), "utf8");
+    const operations = journal.trim().split("\n").flatMap((line) =>
+      (JSON.parse(line) as { operations: Array<{ op: string }> }).operations);
+    expect(operations.filter(({ op }) => op === "layer.ducking.set")).toHaveLength(2);
+    expect(operations.filter(({ op }) => op === "layer.ducking.override")).toHaveLength(1);
+    const master = await readFile(join(launched.projectPath!, "episode.guyditor.yaml"), "utf8");
+    expect(master).toContain("mode: manual");
+    expect(master).toContain("timeline:12@24/1");
+  } finally {
+    await launched.electronApp.close();
+    await rm(template, { recursive: true, force: true });
+  }
+});
+
 test("removes a selected transcript range through the canonical sidecar operation", async () => {
   const template = await createWorkspaceProject({ transcript: true });
   const launched = await launchApp({ projectTemplate: template });

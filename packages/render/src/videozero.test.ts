@@ -334,6 +334,10 @@ describe.skipIf(fixtureManifestMissing)(
         deliverableId: "dlv_aaaaaaaaaa",
         output: { path: output, durationFrames: expectedFrames, fps: "30/1" },
       });
+      expect(report.validation.checks).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: "VAL-500", status: "pass" }),
+        expect.objectContaining({ id: "VAL-501", status: "pass" }),
+      ]));
       expect(report.output.sha256).toBe(await sha256(output));
     }, 120_000);
   },

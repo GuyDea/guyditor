@@ -18,6 +18,14 @@ import { ChromaPreviewCanvas } from "../chroma-preview.js";
 import { pipPlaceOperation } from "../../../../compositor/src/pip-operation.js";
 import { PipPreviewCanvas } from "../pip-preview.js";
 import {
+  createLoudnessMeter,
+} from "../loudness-meter.js";
+import type {
+  LoudnessFrame,
+  LoudnessMeterController,
+  LoudnessTargetOverlay,
+} from "../loudness-meter.js";
+import {
   errorMessage,
   executeDirect,
 } from "../ipc.js";
@@ -28,12 +36,19 @@ import {
 } from "../preview-controller.js";
 import { usePreviewStore, useSelectionStore } from "../state/view-state.js";
 import { Panel } from "./Panel.js";
+import { LoudnessMeter } from "./LoudnessMeter.js";
 import type { WorkspacePanelProps } from "./types.js";
 
 interface ProxyResolution { path: string; url: string }
 
 const BASE32 = "abcdefghijklmnopqrstuvwxyz234567";
 const DRAWING_TOOLS: AnnotationShape[] = ["note", "pin", "rect", "ellipse", "arrow", "range"];
+const EMPTY_LOUDNESS_FRAME: LoudnessFrame = {
+  momentaryLufs: -Infinity,
+  shortTermLufs: -Infinity,
+  integratedLufs: null,
+  truePeakDbtp: [],
+};
 
 function annotationId(): string {
   const bytes = new Uint8Array(10);
@@ -138,6 +153,8 @@ export function PreviewPanel({
   setNotice,
 }: WorkspacePanelProps): React.JSX.Element {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const loudnessControllerRef = useRef<LoudnessMeterController | null>(null);
+  const loudnessFrameSinkRef = useRef<(frame: LoudnessFrame) => void>(() => undefined);
   const captionCanvasRef = useRef<HTMLCanvasElement>(null);
   const [proxy, setProxy] = useState<ProxyResolution | null>(null);
   const [captionFrame, setCaptionFrame] = useState<CaptionFrameSpec | null>(null);
@@ -148,6 +165,8 @@ export function PreviewPanel({
   const [context, setContext] = useState<unknown>(null);
   const [chromaAvailable, setChromaAvailable] = useState(true);
   const [pipAnchorFrames, setPipAnchorFrames] = useState<Record<string, number>>({});
+  const [loudnessFrame, setLoudnessFrame] = useState<LoudnessFrame>(EMPTY_LOUDNESS_FRAME);
+  const [loudnessAvailable, setLoudnessAvailable] = useState(true);
   const playhead = usePreviewStore((state) => state.playhead);
   const playing = usePreviewStore((state) => state.playing);
   const settled = usePreviewStore((state) => state.settled);
@@ -177,6 +196,34 @@ export function PreviewPanel({
   const selectedPipLayer = snapshot?.master.layers.find((candidate) =>
     candidate.id === selectedLayerId && candidate.pip !== undefined);
   const selectedPip = selectedPipLayer?.pip;
+  const sequence = snapshot?.master.sequences.find(({ id }) => id === deliverable?.sequenceId);
+  const loudnessTarget: LoudnessTargetOverlay = {
+    integratedLufs: sequence?.audio?.targetLufs ?? -14,
+    toleranceLu: 1,
+    truePeakDbtp: sequence?.audio?.truePeakDb ?? -1,
+    profileId: "sequence-master",
+  };
+  loudnessFrameSinkRef.current = setLoudnessFrame;
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (video === null) return;
+    let cancelled = false;
+    void createLoudnessMeter(video, (frame) => loudnessFrameSinkRef.current(frame))
+      .then((controller) => {
+        if (cancelled) void controller.dispose();
+        else loudnessControllerRef.current = controller;
+      })
+      .catch(() => {
+        if (!cancelled) setLoudnessAvailable(false);
+      });
+    return () => {
+      cancelled = true;
+      const controller = loudnessControllerRef.current;
+      loudnessControllerRef.current = null;
+      if (controller !== null) void controller.dispose();
+    };
+  }, []);
 
   useEffect(() => {
     let current = true;
@@ -449,32 +496,31 @@ export function PreviewPanel({
         data-diagnostic={diagnosticBackground}
       >
         {keyPreviewActive ? <div className="diagnostic-backdrop" aria-hidden="true" /> : null}
+        <video
+          ref={videoRef}
+          className="preview-video-source"
+          data-keyed={keyPreviewActive}
+          data-empty={proxy === null}
+          src={proxy?.url}
+          playsInline
+          data-testid="preview-video"
+          onTimeUpdate={(event) => {
+            if (!playing || active === undefined) return;
+            const timelineRate = fpsNumber(fps);
+            const sourceRate = fpsNumber(active.clip.source.in.fps);
+            const relative = Math.round(
+              (event.currentTarget.currentTime - active.clip.source.in.frames / sourceRate) * timelineRate,
+            );
+            setPlayhead({
+              frames: Math.max(0, Math.min(duration - 1, active.timelineStart + relative)),
+              fps,
+            });
+          }}
+          onEnded={() => setPlayhead({ frames: Math.min(duration - 1, playhead.frames + 1), fps })}
+        />
         {proxy === null ? (
           <div className="black-frame"><span>{active === undefined ? "GAP" : "PROXY PENDING"}</span></div>
-        ) : (
-          <video
-            ref={videoRef}
-            className="preview-video-source"
-            data-keyed={keyPreviewActive}
-            src={proxy.url}
-            muted
-            playsInline
-            data-testid="preview-video"
-            onTimeUpdate={(event) => {
-              if (!playing || active === undefined) return;
-              const timelineRate = fpsNumber(fps);
-              const sourceRate = fpsNumber(active.clip.source.in.fps);
-              const relative = Math.round(
-                (event.currentTarget.currentTime - active.clip.source.in.frames / sourceRate) * timelineRate,
-              );
-              setPlayhead({
-                frames: Math.max(0, Math.min(duration - 1, active.timelineStart + relative)),
-                fps,
-              });
-            }}
-            onEnded={() => setPlayhead({ frames: Math.min(duration - 1, playhead.frames + 1), fps })}
-          />
-        )}
+        ) : null}
         <ChromaPreviewCanvas
           videoRef={videoRef}
           settings={keySettings}
@@ -544,7 +590,10 @@ export function PreviewPanel({
         <button
           type="button"
           data-testid="preview-play-toggle"
-          onClick={() => setPlaying(!playing)}
+          onClick={() => {
+            if (!playing) void loudnessControllerRef.current?.resume();
+            setPlaying(!playing);
+          }}
         >
           {playing ? "Pause" : "Play"}
         </button>
@@ -574,6 +623,15 @@ export function PreviewPanel({
           {formatTimecode(playhead.frames, fps)}
         </output>
       </div>
+      <LoudnessMeter
+        available={loudnessAvailable}
+        frame={loudnessFrame}
+        target={loudnessTarget}
+        onReset={() => {
+          loudnessControllerRef.current?.reset();
+          setLoudnessFrame(EMPTY_LOUDNESS_FRAME);
+        }}
+      />
       <div className="word-position" data-testid="preview-word-position">
         {wordAtPosition(transcripts, active?.clip.asset, currentSourceFrame, active?.clip.source.in.fps)}
       </div>

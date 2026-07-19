@@ -19,6 +19,7 @@ export interface WorkspaceProjectOptions {
   transcript?: boolean;
   proposal?: boolean;
   queuedJob?: boolean;
+  audioPost?: boolean;
 }
 
 async function valueOf<Value>(result: Promise<Result<Value>>): Promise<Value> {
@@ -44,6 +45,18 @@ export async function createWorkspaceProject(
   model.assets[0]!.probe.audio = { rate: 48_000, channels: 1 };
   model.sidecars[0]!.inputs = [];
   model.sidecars[0]!.sha256 = createHash("sha256").update(EMPTY_ANNOTATIONS).digest("hex");
+  if (options.audioPost === true) {
+    model.sequences[0]!.audio = { targetLufs: -16, truePeakDb: -1.5 };
+    model.layers.push({
+      id: "lyr_bbbbbbbbbb",
+      kind: "music",
+      name: "Music bed",
+      order: 1,
+      enabled: true,
+      locked: false,
+      sequence: "seq_aaaaaaaaaa",
+    });
+  }
   const created = await valueOf(Promise.resolve(createProject(root, model)));
   await writeFile(join(root, "sidecars/annotations.yaml"), EMPTY_ANNOTATIONS, "utf8");
 
