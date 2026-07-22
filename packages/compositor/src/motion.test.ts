@@ -84,6 +84,27 @@ describe("versioned PiP motion presets", () => {
     })).toThrow(expect.objectContaining({ code: "E_PIP_ANCHOR_UNRESOLVED" }));
   });
 
+  it("resolves base and keyframe placement overrides for the target aspect", () => {
+    const pip = structuredClone(basePip);
+    pip.placement.overrides = { "9:16": { anchor: "top", width: "70%" } };
+    pip.keyframes[0]!.placement.overrides = {
+      "9:16": { anchor: "bottom", width: "60%" },
+    };
+    const timeline = compilePipTimeline({
+      pip,
+      compWidth: 1080,
+      compHeight: 1920,
+      targetAspect: "9:16",
+      sourceAspect: 16 / 9,
+      anchorFrames: { "word:w000123": 90 },
+      sampleEveryFrames: 3,
+    });
+
+    expect(timeline.samples[0]!.rect.y).toBeLessThan(0.1);
+    expect(timeline.samples.at(-1)!.rect.y).toBeGreaterThan(0.7);
+    expect(timeline.samples.at(-1)!.rect.w).toBeCloseTo(0.6);
+  });
+
   it("compiles swap_background as synchronized inverse curve pairs", () => {
     const pair = compileSwapBackground({
       pipRect: { x: 0.72, y: 0.69, w: 0.24, h: 0.24 },

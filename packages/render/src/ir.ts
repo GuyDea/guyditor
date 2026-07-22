@@ -63,6 +63,9 @@ export interface TrimNodeParams {
 }
 
 export interface TransformNodeParams {
+  /** Present for derived vertical transforms so recomposition remains auditable per layer. */
+  layerId?: string;
+  framingDecisionId?: string;
   keyframes: Array<{
     atOutputFrame: number;
     crop?: [number, number, number, number];

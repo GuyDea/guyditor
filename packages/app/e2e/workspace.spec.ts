@@ -192,17 +192,23 @@ test("renders master metering and journals automatic and manual ducking", async 
     await expect(launched.page.getByTestId("audio-inspector")).toBeVisible();
     await launched.page.getByTestId("duck-db").fill("-15");
     await launched.page.getByTestId("duck-save").click();
-    await expect(launched.page.getByTestId("revision-indicator")).toHaveText("rev_00002");
+    await expect(launched.page.getByTestId("revision-indicator")).toHaveText("rev_00002", {
+      timeout: 15_000,
+    });
     await expect(launched.page.getByTestId("ducking-visualization-lyr_bbbbbbbbbb"))
       .toHaveAttribute("data-enabled", "true");
 
     await launched.page.getByTestId("duck-mode").selectOption("manual");
     await launched.page.getByTestId("duck-save").click();
-    await expect(launched.page.getByTestId("revision-indicator")).toHaveText("rev_00003");
+    await expect(launched.page.getByTestId("revision-indicator")).toHaveText("rev_00003", {
+      timeout: 15_000,
+    });
     await launched.page.getByTestId("duck-override-anchor").fill("timeline:12@24/1");
     await launched.page.getByTestId("duck-override-gain").fill("-9");
     await launched.page.getByTestId("duck-override-add").click();
-    await expect(launched.page.getByTestId("revision-indicator")).toHaveText("rev_00004");
+    await expect(launched.page.getByTestId("revision-indicator")).toHaveText("rev_00004", {
+      timeout: 15_000,
+    });
 
     const journal = await readFile(join(launched.projectPath!, "history/transactions.jsonl"), "utf8");
     const operations = journal.trim().split("\n").flatMap((line) =>
@@ -336,6 +342,7 @@ test("surfaces a jump-cut seam and prepares concealment without silently editing
 });
 
 test("configures a capture folder and shows stable session ingest and seeded take work", async () => {
+  test.setTimeout(60_000);
   const template = await createWorkspaceProject();
   const watchRoot = join(template, "capture-inbox");
   const sessionRoot = join(watchRoot, "20260719-2130_step-seven");

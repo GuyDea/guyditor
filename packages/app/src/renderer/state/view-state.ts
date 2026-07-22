@@ -12,7 +12,8 @@ export type PanelId =
   | "inspector"
   | "agent"
   | "timeline"
-  | "status";
+  | "status"
+  | "publish";
 
 interface SelectionState {
   selectedClipId: string | null;
@@ -129,6 +130,7 @@ const expandedPanels: Record<PanelId, boolean> = {
   agent: false,
   timeline: false,
   status: false,
+  publish: false,
 };
 
 export const useWorkspaceStore = create<WorkspaceState>((set) => ({

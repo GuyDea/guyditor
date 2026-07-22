@@ -21,6 +21,7 @@ export interface JobStatus {
   state: JobState;
   progress: number;
   dependsOn: string[];
+  dependencyMode?: "success" | "terminal";
   error?: GuyditorError;
   title: string;
   cancellable: boolean;
@@ -41,6 +42,7 @@ export interface EnqueueJobInput {
   payload: JsonValue;
   cancellable: boolean;
   dependsOn?: string[];
+  dependencyMode?: "success" | "terminal";
 }
 
 export interface JobFilter {

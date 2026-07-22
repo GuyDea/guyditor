@@ -7,6 +7,10 @@
     "lint": "eslint src"
   },
   "dependencies": {
-    "@guyditor/core": "workspace:*"
+    "@guyditor/compositor": "workspace:*",
+    "@guyditor/core": "workspace:*",
+    "@guyditor/media": "workspace:*",
+    "ajv": "^8.20.0",
+    "yaml": "^2.9.0"
   }
 }

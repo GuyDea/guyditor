@@ -4,7 +4,7 @@ import type {
   Result,
 } from "../../../core/src/index.js";
 
-export type MlworkerTaskMethod = "align" | "transcribe" | "vad";
+export type MlworkerTaskMethod = "align" | "track" | "transcribe" | "vad";
 
 export interface MlworkerCapability {
   task: string;
@@ -114,6 +114,33 @@ export interface MlworkerVadResult {
   speech: MlworkerVadInterval[];
   silence: MlworkerVadInterval[];
   engine: { name: string; version: string };
+}
+
+export type MlworkerTrackKind = "face" | "body" | "object" | "screen-region";
+
+export interface MlworkerTrackBox {
+  kind: MlworkerTrackKind;
+  trackId: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  conf: number;
+}
+
+export interface MlworkerTrackSample {
+  frame: number;
+  boxes: MlworkerTrackBox[];
+}
+
+export interface MlworkerTrackResult {
+  frameCount: number;
+  width: number;
+  height: number;
+  fps: number;
+  sampleEvery: number;
+  samples: MlworkerTrackSample[];
+  engine: { name: "mediapipe"; version: string };
 }
 
 export type MlworkerError = GuyditorError;

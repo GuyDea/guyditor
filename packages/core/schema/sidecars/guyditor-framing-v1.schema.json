@@ -1,0 +1,73 @@
+{
+  "$id": "https://guyditor.dev/schema/sidecars/guyditor-framing-v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "deliverableId", "profile", "sourceRevision", "aspect", "requiredTrackAssets", "decisions"],
+  "properties": {
+    "format": { "const": "guyditor.framing/v1" },
+    "deliverableId": { "type": "string", "pattern": "^dlv_[a-z2-7]{10}$" },
+    "profile": { "type": "string", "minLength": 1 },
+    "sourceRevision": { "type": "string", "pattern": "^rev_[0-9]{5}$" },
+    "aspect": { "type": "string", "pattern": "^[1-9][0-9]*:[1-9][0-9]*$" },
+    "requiredTrackAssets": {
+      "type": "array", "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^ast_[a-z2-7]{10}$" }
+    },
+    "decisions": { "type": "array", "items": { "$ref": "#/$defs/decision" } }
+  },
+  "$defs": {
+    "frameTime": {
+      "type": "object", "additionalProperties": false, "required": ["frames", "fps"],
+      "properties": {
+        "frames": { "type": "integer", "minimum": 0 },
+        "fps": { "type": "string", "pattern": "^(?:0|[1-9][0-9]*)/[1-9][0-9]*$" }
+      }
+    },
+    "rect": {
+      "type": "object", "additionalProperties": false, "required": ["x", "y", "w", "h"],
+      "properties": {
+        "x": { "type": "number", "minimum": 0, "maximum": 1 },
+        "y": { "type": "number", "minimum": 0, "maximum": 1 },
+        "w": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
+        "h": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 }
+      }
+    },
+    "keyframe": {
+      "type": "object", "additionalProperties": false, "required": ["at", "rect"],
+      "properties": { "at": { "$ref": "#/$defs/frameTime" }, "rect": { "$ref": "#/$defs/rect" } }
+    },
+    "shot": {
+      "type": "object", "additionalProperties": false, "required": ["clipId", "source"],
+      "properties": {
+        "clipId": { "type": "string", "pattern": "^clp_[a-z2-7]{10}$" },
+        "source": {
+          "type": "object", "additionalProperties": false, "required": ["start", "end"],
+          "properties": { "start": { "$ref": "#/$defs/frameTime" }, "end": { "$ref": "#/$defs/frameTime" } }
+        }
+      }
+    },
+    "decision": {
+      "type": "object", "additionalProperties": false,
+      "required": ["decisionId", "shot", "mode", "subjects", "confidence", "warnings"],
+      "properties": {
+        "decisionId": { "type": "string", "pattern": "^fd_[0-9]+$" },
+        "shot": { "$ref": "#/$defs/shot" },
+        "mode": { "enum": ["crop", "recompose"] },
+        "crop": {
+          "type": "object", "additionalProperties": false, "required": ["keyframes"],
+          "properties": { "keyframes": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/keyframe" } } }
+        },
+        "layout": { "type": "string", "minLength": 1 },
+        "subjects": { "type": "array", "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "warnings": { "type": "array", "items": { "type": "string" } },
+        "overriddenBy": { "type": "string", "minLength": 1 }
+      },
+      "allOf": [
+        { "if": { "properties": { "mode": { "const": "crop" } } }, "then": { "properties": { "crop": {} }, "required": ["crop"] } },
+        { "if": { "properties": { "mode": { "const": "recompose" } } }, "then": { "properties": { "layout": {} }, "required": ["layout"] } }
+      ]
+    }
+  }
+}

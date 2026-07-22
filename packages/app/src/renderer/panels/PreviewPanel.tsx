@@ -8,15 +8,19 @@ import type {
   AnnotationShape,
   Clip,
   FrameTime,
+  FramingRect,
   KeySettings,
 } from "../../../../core/src/index.js";
 import captionFontUrl from "../../../../render/assets/fonts/Inconsolata.otf?url";
 import { paintCaptionFrame } from "../../../../render/src/caption-painter.js";
 import type { CaptionPaintContext } from "../../../../render/src/caption-painter.js";
 import type { CaptionFrameSpec } from "../../../../transcript/src/index.js";
+import type { FramingPreviewSpec } from "../../../../render/src/index.js";
+import { subjectTrackAvoidRegions } from "../../../../media/src/subject-avoidance.js";
 import { ChromaPreviewCanvas } from "../chroma-preview.js";
 import { pipPlaceOperation } from "../../../../compositor/src/pip-operation.js";
 import { PipPreviewCanvas } from "../pip-preview.js";
+import { cropVideoStyle, projectTrackBox } from "../vertical-framing.js";
 import {
   createLoudnessMeter,
 } from "../loudness-meter.js";
@@ -54,6 +58,23 @@ function annotationId(): string {
   const bytes = new Uint8Array(10);
   crypto.getRandomValues(bytes);
   return ["ann", [...bytes].map((value) => BASE32[value & 31]).join("")].join("_");
+}
+
+function framingOverrideId(): string {
+  const bytes = new Uint8Array(10);
+  crypto.getRandomValues(bytes);
+  return `fov_${[...bytes].map((value) => BASE32[value & 31]).join("")}`;
+}
+
+function clampCrop(crop: FramingRect): FramingRect {
+  const w = Math.max(0.01, Math.min(1, crop.w));
+  const h = Math.max(0.01, Math.min(1, crop.h));
+  return {
+    x: Math.max(0, Math.min(1 - w, crop.x)),
+    y: Math.max(0, Math.min(1 - h, crop.y)),
+    w,
+    h,
+  };
 }
 
 function fpsNumber(fps: string): number {
@@ -158,6 +179,8 @@ export function PreviewPanel({
   const captionCanvasRef = useRef<HTMLCanvasElement>(null);
   const [proxy, setProxy] = useState<ProxyResolution | null>(null);
   const [captionFrame, setCaptionFrame] = useState<CaptionFrameSpec | null>(null);
+  const [framingFrame, setFramingFrame] = useState<FramingPreviewSpec | null>(null);
+  const [cropDraft, setCropDraft] = useState<FramingRect | null>(null);
   const [graphicsFrame, setGraphicsFrame] = useState<string | null>(null);
   const [captionFontReady, setCaptionFontReady] = useState(false);
   const [tool, setTool] = useState<AnnotationShape>("pin");
@@ -189,6 +212,7 @@ export function PreviewPanel({
   const deliverable = snapshot?.master.deliverables.find(
     ({ id }) => id === snapshot.master.settings.primaryDeliverable,
   );
+  const vertical = deliverable?.kind === "short";
   const persistedKeySettings = active?.clip.effects?.find(({ kind }) => kind === "key")
     ?.params as unknown as KeySettings | undefined;
   const keySettings = previewKeySettings ?? persistedKeySettings ?? null;
@@ -203,6 +227,19 @@ export function PreviewPanel({
     truePeakDbtp: sequence?.audio?.truePeakDb ?? -1,
     profileId: "sequence-master",
   };
+  const previewCrop = cropDraft ?? framingFrame?.crop;
+  const projectedTrackBoxes = framingFrame === null || previewCrop === undefined
+    ? []
+    : framingFrame.boxes.map((box) => ({ box, rect: projectTrackBox(box, previewCrop) }))
+      .filter(({ rect }) => rect.x + rect.w > 0 && rect.x < 1 && rect.y + rect.h > 0 && rect.y < 1);
+  const trackedAvoidRegions = framingFrame === null
+    ? []
+    : subjectTrackAvoidRegions(
+        previewCrop === undefined
+          ? framingFrame.boxes
+          : projectedTrackBoxes.map(({ box, rect }) => ({ ...box, ...rect })),
+        playhead.frames,
+      );
   loudnessFrameSinkRef.current = setLoudnessFrame;
 
   useEffect(() => {
@@ -317,6 +354,31 @@ export function PreviewPanel({
 
   useEffect(() => {
     let current = true;
+    if (snapshot === null || deliverable === undefined || !vertical) {
+      setFramingFrame(null);
+      return () => { current = false; };
+    }
+    void window.guyditor.call<FramingPreviewSpec | null>("RenderService", "framingFrame", {
+      deliverableId: deliverable.id,
+      revision: snapshot.revision,
+      frame: playhead.frames,
+    }).then((frame) => {
+      if (current) setFramingFrame(frame);
+    }).catch((error: unknown) => {
+      if (current) {
+        setFramingFrame(null);
+        setNotice(errorMessage(error));
+      }
+    });
+    return () => { current = false; };
+  }, [deliverable?.id, playhead.frames, setNotice, snapshot?.revision, vertical]);
+
+  useEffect(() => {
+    setCropDraft(framingFrame?.crop === undefined ? null : { ...framingFrame.crop });
+  }, [framingFrame?.crop, framingFrame?.decisionId]);
+
+  useEffect(() => {
+    let current = true;
     if (snapshot === null || deliverable === undefined) {
       setGraphicsFrame(null);
       return () => { current = false; };
@@ -339,7 +401,8 @@ export function PreviewPanel({
   useEffect(() => {
     const canvas = captionCanvasRef.current;
     if (canvas === null || snapshot === null) return;
-    const { width, height } = snapshot.master.settings.timeline;
+    const width = framingFrame?.output.width ?? snapshot.master.settings.timeline.width;
+    const height = framingFrame?.output.height ?? snapshot.master.settings.timeline.height;
     if (canvas.width !== width) canvas.width = width;
     if (canvas.height !== height) canvas.height = height;
     const context = canvas.getContext("2d");
@@ -353,7 +416,7 @@ export function PreviewPanel({
         height,
       );
     }
-  }, [captionFontReady, captionFrame, snapshot]);
+  }, [captionFontReady, captionFrame, framingFrame?.output.height, framingFrame?.output.width, snapshot]);
 
   useEffect(() => {
     let current = true;
@@ -458,6 +521,36 @@ export function PreviewPanel({
     }
   }
 
+  async function saveShotCrop(): Promise<void> {
+    if (
+      snapshot === null || deliverable === undefined || active === undefined ||
+      framingFrame === null || cropDraft === null
+    ) return;
+    try {
+      await executeDirect([{
+        op: "deliverable.framing.override",
+        params: {
+          deliverableId: deliverable.id,
+          override: {
+            id: framingOverrideId(),
+            decisionId: framingFrame.decisionId,
+            crop: {
+              keyframes: [{
+                at: { frames: framingFrame.sourceFrame, fps: active.clip.source.in.fps },
+                rect: clampCrop(cropDraft),
+              }],
+            },
+            note: "Manual shot crop from the vertical preview",
+          },
+        },
+      }], `Correct ${framingFrame.decisionId} crop`);
+      await refreshProject();
+      setNotice(`Saved the manual crop for ${framingFrame.decisionId}.`);
+    } catch (error: unknown) {
+      setNotice(errorMessage(error));
+    }
+  }
+
   async function lifecycle(annotation: Annotation, action: "resolve" | "reject" | "reopen"): Promise<void> {
     try {
       await executeDirect([{
@@ -492,6 +585,8 @@ export function PreviewPanel({
       <div
         className="preview-surface"
         data-testid="preview-surface"
+        data-aspect={vertical ? "portrait" : "landscape"}
+        data-framing-mode={framingFrame?.mode ?? "none"}
         data-settled={settled}
         data-diagnostic={diagnosticBackground}
       >
@@ -501,7 +596,11 @@ export function PreviewPanel({
           className="preview-video-source"
           data-keyed={keyPreviewActive}
           data-empty={proxy === null}
+          data-framed={vertical && previewCrop !== undefined}
           src={proxy?.url}
+          style={vertical && previewCrop !== undefined
+            ? { position: "absolute", maxWidth: "none", objectFit: "fill", ...cropVideoStyle(previewCrop) }
+            : undefined}
           playsInline
           data-testid="preview-video"
           onTimeUpdate={(event) => {
@@ -521,6 +620,62 @@ export function PreviewPanel({
         {proxy === null ? (
           <div className="black-frame"><span>{active === undefined ? "GAP" : "PROXY PENDING"}</span></div>
         ) : null}
+        {vertical && framingFrame !== null ? (
+          <div className="framing-overlay" data-testid="vertical-framing-overlay">
+            <div
+              className="framing-safe-area"
+              aria-label="Caption title-safe area"
+              style={{
+                top: `${String(framingFrame.safeArea.top * 100)}%`,
+                right: `${String(framingFrame.safeArea.right * 100)}%`,
+                bottom: `${String(framingFrame.safeArea.bottom * 100)}%`,
+                left: `${String(framingFrame.safeArea.left * 100)}%`,
+              }}
+            />
+            {projectedTrackBoxes.map(({ box, rect }) => (
+              <span
+                key={box.trackId}
+                className="framing-subject-box"
+                data-kind={box.kind}
+                title={`${box.kind} · ${box.trackId} · ${String(Math.round(box.conf * 100))}%`}
+                style={{
+                  left: `${String(rect.x * 100)}%`,
+                  top: `${String(rect.y * 100)}%`,
+                  width: `${String(rect.w * 100)}%`,
+                  height: `${String(rect.h * 100)}%`,
+                }}
+              />
+            ))}
+            <div className="framing-source-map" aria-label="Source crop and subject track">
+              {framingFrame.boxes.map((box) => (
+                <span
+                  key={box.trackId}
+                  className="framing-source-subject"
+                  data-kind={box.kind}
+                  style={{
+                    left: `${String(box.x * 100)}%`,
+                    top: `${String(box.y * 100)}%`,
+                    width: `${String(box.w * 100)}%`,
+                    height: `${String(box.h * 100)}%`,
+                  }}
+                />
+              ))}
+              {previewCrop === undefined ? null : (
+                <span
+                  className="framing-source-crop"
+                  data-testid="framing-crop-box"
+                  style={{
+                    left: `${String(previewCrop.x * 100)}%`,
+                    top: `${String(previewCrop.y * 100)}%`,
+                    width: `${String(previewCrop.w * 100)}%`,
+                    height: `${String(previewCrop.h * 100)}%`,
+                  }}
+                />
+              )}
+              <b>{framingFrame.mode === "crop" ? "source gate" : "layer map"}</b>
+            </div>
+          </div>
+        ) : null}
         <ChromaPreviewCanvas
           videoRef={videoRef}
           settings={keySettings}
@@ -531,12 +686,12 @@ export function PreviewPanel({
           <PipPreviewCanvas
             videoRef={videoRef}
             pip={selectedPip}
-            avoidRegions={snapshot.master.avoidRegions ?? []}
+            avoidRegions={[...(snapshot.master.avoidRegions ?? []), ...trackedAvoidRegions]}
             frame={playhead.frames}
             anchorFrames={pipAnchorFrames}
             composition={{
-              width: snapshot.master.settings.timeline.width,
-              height: snapshot.master.settings.timeline.height,
+              width: framingFrame?.output.width ?? snapshot.master.settings.timeline.width,
+              height: framingFrame?.output.height ?? snapshot.master.settings.timeline.height,
             }}
             onPlace={async (placement) => {
               try {
@@ -564,6 +719,7 @@ export function PreviewPanel({
           ref={captionCanvasRef}
           className="caption-overlay"
           data-testid="preview-caption-overlay"
+          data-relayout={vertical ? "short" : "canonical"}
           aria-label="Caption overlay"
           onClick={(event) => {
             if (captionFrame === null) return;
@@ -577,7 +733,11 @@ export function PreviewPanel({
             if (word !== undefined) selectWord(word.wordId);
           }}
         />
-        <svg className="annotation-overlay" viewBox="0 0 100 56.25" aria-label="Annotation overlay">
+        <svg
+          className="annotation-overlay"
+          viewBox={vertical ? "0 0 100 177.7778" : "0 0 100 56.25"}
+          aria-label="Annotation overlay"
+        >
           {annotations.filter(({ state }) => state === "open" || state === "reopened").map((annotation) => (
             <AnnotationMark key={annotation.id} annotation={annotation} />
           ))}
@@ -586,6 +746,49 @@ export function PreviewPanel({
           {warning ?? (settled ? "settled" : "seeking")}
         </div>
       </div>
+      {vertical ? (
+        <section className="framing-controls" data-testid="framing-controls" aria-label="Shot framing controls">
+          <header>
+            <strong>{framingFrame?.decisionId ?? "Framing pending"}</strong>
+            <span data-mode={framingFrame?.mode ?? "pending"}>
+              {framingFrame?.mode ?? "pending"}
+              {framingFrame === null ? "" : framingFrame.overridden ? " · manual" : " · automatic"}
+            </span>
+          </header>
+          {cropDraft === null ? (
+            <p>Separate layers are recomposed against the portrait safe areas.</p>
+          ) : (
+            <div className="framing-crop-controls">
+              {(["x", "y", "w", "h"] as const).map((key) => (
+                <label key={key}>
+                  {key}
+                  <input
+                    type="number"
+                    min="0"
+                    max="1"
+                    step="0.001"
+                    value={cropDraft[key]}
+                    aria-label={`Crop ${key}`}
+                    onChange={(event) => setCropDraft(clampCrop({
+                      ...cropDraft,
+                      [key]: event.target.valueAsNumber || 0,
+                    }))}
+                  />
+                </label>
+              ))}
+              <button
+                type="button"
+                data-testid="save-shot-crop"
+                disabled={framingFrame === null || active === undefined}
+                onClick={() => void saveShotCrop()}
+              >
+                Save shot crop
+              </button>
+            </div>
+          )}
+          {framingFrame?.warnings.map((message) => <small key={message}>{message}</small>)}
+        </section>
+      ) : null}
       <div className="transport">
         <button
           type="button"

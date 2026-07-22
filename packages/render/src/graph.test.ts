@@ -17,6 +17,7 @@ import type {
   ToolchainManifest,
   TrimNodeParams,
 } from "./index.js";
+import type { FramingSidecar } from "../../deliver/src/index.js";
 
 const HASH = "a".repeat(64);
 
@@ -25,6 +26,22 @@ const PROFILE: RenderProfile = {
   version: "1.0.0",
   video: { codec: "libx264", crf: 18, pixelFormat: "yuv420p" },
   audio: { codec: "aac", bitrate: "192k" },
+  container: "mp4",
+};
+
+const SHORT_PROFILE: RenderProfile = {
+  id: "youtube-shorts",
+  version: "1.0.0",
+  kind: "short",
+  video: {
+    codec: "libx264",
+    crf: 18,
+    pixelFormat: "yuv420p",
+    resolution: { width: 1080, height: 1920 },
+    fps: "30/1",
+    aspect: "9:16",
+  },
+  audio: { codec: "aac", bitrate: "256k" },
   container: "mp4",
 };
 
@@ -168,6 +185,175 @@ function compile(
 }
 
 describe("compileRenderGraph", () => {
+  it("lowers shot crops into the vertical profile canvas", () => {
+    const model = project();
+    model.deliverables[0] = {
+      ...model.deliverables[0]!,
+      kind: "short",
+      profile: "youtube-shorts@1.0.0",
+    };
+    const framing: FramingSidecar = {
+      format: "guyditor.framing/v1",
+      deliverableId: "dlv_aaaaaaaaaa",
+      profile: "youtube-shorts@1.0.0",
+      sourceRevision: model.revision,
+      aspect: "9:16",
+      requiredTrackAssets: [],
+      decisions: [{
+        decisionId: "fd_0001",
+        shot: {
+          clipId: "clp_aaaaaaaaaa",
+          source: {
+            start: { frames: 0, fps: "30/1" },
+            end: { frames: 120, fps: "30/1" },
+          },
+        },
+        mode: "crop",
+        crop: { keyframes: [
+          { at: { frames: 0, fps: "30/1" }, rect: { x: 0.2, y: 0, w: 0.31640625, h: 1 } },
+          { at: { frames: 60, fps: "30/1" }, rect: { x: 0.3, y: 0, w: 0.31640625, h: 1 } },
+        ] },
+        subjects: ["face-1"],
+        confidence: 0.9,
+        warnings: [],
+      }],
+    };
+
+    const graph = compileRenderGraph({
+      project: model, revision: model.revision, deliverableId: "dlv_aaaaaaaaaa",
+      variant: "clean", quality: "high", profile: SHORT_PROFILE, profileSha256: HASH,
+      toolchain: TOOLCHAIN, framing,
+    });
+
+    expect(graph.outputSize).toEqual({ w: 1080, h: 1920 });
+    const framed = graph.nodes.find(({ kind, params }) =>
+      kind === "transform" && "framingDecisionId" in params);
+    expect(framed?.params).toMatchObject({
+      layerId: "lyr_aaaaaaaaaa",
+      framingDecisionId: "fd_0001",
+      keyframes: [
+        { atOutputFrame: 0, crop: [0.2, 0.341796875, 0.31640625, 0.31640625] },
+        { atOutputFrame: 60, crop: [0.3, 0.341796875, 0.31640625, 0.31640625] },
+      ],
+    });
+  });
+
+  it("accepts a derived framing sidecar after a manual override advances the revision", () => {
+    const model = project();
+    const derivedRevision = model.revision;
+    model.revision = "rev_00003";
+    model.deliverables[0] = {
+      ...model.deliverables[0]!,
+      kind: "short",
+      profile: "youtube-shorts@1.0.0",
+      framingOverrides: [{
+        id: "fov_aaaaaaaaaa",
+        decisionId: "fd_0001",
+        crop: {
+          keyframes: [{
+            at: { frames: 0, fps: "30/1" },
+            rect: { x: 0.4, y: 0, w: 0.31640625, h: 1 },
+          }],
+        },
+      }],
+    };
+    const framing: FramingSidecar = {
+      format: "guyditor.framing/v1",
+      deliverableId: "dlv_aaaaaaaaaa",
+      profile: "youtube-shorts@1.0.0",
+      sourceRevision: derivedRevision,
+      aspect: "9:16",
+      requiredTrackAssets: [],
+      decisions: [{
+        decisionId: "fd_0001",
+        shot: {
+          clipId: "clp_aaaaaaaaaa",
+          source: {
+            start: { frames: 0, fps: "30/1" },
+            end: { frames: 120, fps: "30/1" },
+          },
+        },
+        mode: "crop",
+        crop: { keyframes: [{
+          at: { frames: 0, fps: "30/1" },
+          rect: { x: 0.2, y: 0, w: 0.31640625, h: 1 },
+        }] },
+        subjects: ["face-1"],
+        confidence: 0.9,
+        warnings: [],
+      }],
+    };
+
+    const graph = compileRenderGraph({
+      project: model, revision: model.revision, deliverableId: "dlv_aaaaaaaaaa",
+      variant: "clean", quality: "high", profile: SHORT_PROFILE, profileSha256: HASH,
+      toolchain: TOOLCHAIN, framing,
+    });
+    const framed = graph.nodes.find(({ kind, params }) =>
+      kind === "transform" && "framingDecisionId" in params);
+
+    expect(framed?.params).toMatchObject({
+      keyframes: [{
+        atOutputFrame: 0,
+        crop: [0.4, 0.341796875, 0.31640625, 0.31640625],
+      }],
+    });
+  });
+
+  it("recomposes multi-layer vertical projects with layer-level transforms", () => {
+    const model = project();
+    model.deliverables[0] = {
+      ...model.deliverables[0]!,
+      kind: "short",
+      profile: "youtube-shorts@1.0.0",
+    };
+    model.layers.push({
+      ...structuredClone(model.layers[0]!),
+      id: "lyr_bbbbbbbbbb",
+      name: "presenter",
+      order: 1,
+    });
+    const framing: FramingSidecar = {
+      format: "guyditor.framing/v1",
+      deliverableId: "dlv_aaaaaaaaaa",
+      profile: "youtube-shorts@1.0.0",
+      sourceRevision: model.revision,
+      aspect: "9:16",
+      requiredTrackAssets: [],
+      decisions: [{
+        decisionId: "fd_0001",
+        shot: {
+          clipId: "clp_aaaaaaaaaa",
+          source: {
+            start: { frames: 0, fps: "30/1" },
+            end: { frames: 120, fps: "30/1" },
+          },
+        },
+        mode: "recompose",
+        layout: "youtube-shorts:portrait",
+        subjects: ["face-1"],
+        confidence: 0.9,
+        warnings: [],
+      }],
+    };
+
+    const graph = compileRenderGraph({
+      project: model, revision: model.revision, deliverableId: "dlv_aaaaaaaaaa",
+      variant: "clean", quality: "high", profile: SHORT_PROFILE, profileSha256: HASH,
+      toolchain: TOOLCHAIN, framing,
+    });
+    const framingTransforms = graph.nodes.filter(({ kind, params }) =>
+      kind === "transform" && "framingDecisionId" in params);
+
+    expect(framingTransforms).toHaveLength(2);
+    expect(framingTransforms.map(({ params }) =>
+      "layerId" in params ? params.layerId : undefined)).toEqual([
+      "lyr_aaaaaaaaaa", "lyr_bbbbbbbbbb",
+    ]);
+    expect(framingTransforms.every(({ params }) =>
+      "keyframes" in params && params.keyframes.every(({ crop }) => crop === undefined))).toBe(true);
+  });
+
   it("lowers a static punch-in level to a normalized crop and restoring scale", () => {
     const model = project();
     model.sequences[0]!.clips[0]!.punchIn = {

@@ -1,0 +1,40 @@
+format: guyditor-profile/v1
+id: tiktok
+version: 1.0.0
+displayName: "TikTok"
+kind: short
+video:
+  aspect: "9:16"
+  resolution: { width: 1080, height: 1920 }
+  fps: { allowed: ["30/1", "60/1", "30000/1001", "60000/1001"], default: "30/1" }
+  container: mp4
+  codec: h264
+  codecProfile: high
+  pixelFormat: yuv420p
+  colorSpace: bt709
+  rateControl: { mode: crf, crf: 18, maxBitrateKbps: 12000 }
+duration: { minSeconds: 1, maxSeconds: 600, recommendedMaxSeconds: 180 }
+audio:
+  codec: aac
+  sampleRate: 48000
+  channels: 2
+  bitrateKbps: 256
+  loudness: { integratedLufs: -14, toleranceLu: 1.0, truePeakDbtp: -1.0, lraMaxLu: 11 }
+safeAreas:
+  title: { top: 0.08, bottom: 0.25, left: 0.05, right: 0.14 }
+  action: { top: 0.04, bottom: 0.20, left: 0.03, right: 0.10 }
+  platformUi:
+    - { name: right-rail, strict: true, rect: { x: 0.86, y: 0.34, w: 0.14, h: 0.48 } }
+    - { name: bottom-caption, strict: false, rect: { x: 0.00, y: 0.80, w: 0.86, h: 0.20 } }
+captionDefaults:
+  maxLines: 2
+  maxCharsPerLine: 18
+  placement: { anchor: center, verticalCenter: 0.61 }
+  perWordHighlight: true
+metadata:
+  title: { maxChars: 90 }
+  description: { maxChars: 4000 }
+  tags: null
+  hashtags: { maxCount: 20, countedIn: caption }
+cover: { resolution: { width: 1080, height: 1920 }, formats: [jpg, png], maxBytes: 2097152 }
+chapters: null

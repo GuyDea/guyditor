@@ -15,6 +15,9 @@ import pytest
 
 
 WORKER_ROOT = Path(__file__).resolve().parents[1]
+REPOSITORY_ROOT = WORKER_ROOT.parents[1]
+DISC_FIXTURE = REPOSITORY_ROOT / ".fixtures" / "disc-track-720p30-8s.mp4"
+FIXTURE_MANIFEST = REPOSITORY_ROOT / ".fixtures" / "manifest.json"
 
 
 class WorkerProcess:
@@ -121,6 +124,7 @@ def test_hello_advertises_importable_capabilities(worker: WorkerProcess) -> None
     assert isinstance(capabilities, list)
     assert {capability["task"] for capability in capabilities} == {
         "align",
+        "track",
         "transcribe",
         "vad",
     }
@@ -139,7 +143,7 @@ def test_hello_advertises_importable_capabilities(worker: WorkerProcess) -> None
 
 
 def test_disable_env_omits_capabilities_without_preventing_startup() -> None:
-    worker = WorkerProcess({"GUYDITOR_ML_DISABLE": "align,transcribe,vad"})
+    worker = WorkerProcess({"GUYDITOR_ML_DISABLE": "align,track,transcribe,vad"})
     try:
         hello = worker.read()
         params = hello["params"]
@@ -148,6 +152,122 @@ def test_disable_env_omits_capabilities_without_preventing_startup() -> None:
 
         worker.send({"jsonrpc": "2.0", "id": 1, "method": "ping", "params": {}})
         assert worker.response(1)["result"] == {"pong": True}
+    finally:
+        worker.close()
+
+
+def test_track_reports_schema_progress_and_disc_path_accuracy() -> None:
+    if not DISC_FIXTURE.is_file() or not FIXTURE_MANIFEST.is_file():
+        pytest.skip("run pnpm fixtures first")
+    manifest = json.loads(FIXTURE_MANIFEST.read_text(encoding="utf8"))
+    truth = manifest["files"][DISC_FIXTURE.name]["groundTruth"]["centerPath"]
+    worker = WorkerProcess()
+    try:
+        worker.read()
+        worker.send(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "track",
+                "params": {
+                    "taskId": "job_trackcase2",
+                    "videoPath": str(DISC_FIXTURE),
+                    "sampleEvery": 1,
+                },
+            }
+        )
+        progress: list[float] = []
+        response: dict[str, object] | None = None
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            message = worker.read(max(0.01, deadline - time.monotonic()))
+            if message.get("method") == "$/progress":
+                params = message["params"]
+                assert isinstance(params, dict)
+                progress.append(float(params["progress"]))
+            if message.get("id") == 1:
+                response = message
+                break
+        assert response is not None
+        assert "error" not in response, worker.stderr
+        assert progress and progress[-1] == 1
+        result = response["result"]
+        assert isinstance(result, dict)
+        assert result["frameCount"] == len(truth)
+        assert result["width"] == 1280
+        assert result["height"] == 720
+        assert result["sampleEvery"] == 1
+        assert result["engine"]["name"] == "mediapipe"
+        samples = result["samples"]
+        assert isinstance(samples, list)
+        by_frame = {sample["frame"]: sample for sample in samples}
+        accurate = 0
+        measured = 0
+        track_ids: set[str] = set()
+        for expected in truth:
+            boxes = by_frame.get(expected["frame"], {}).get("boxes", [])
+            objects = [box for box in boxes if box["kind"] == "object"]
+            if not objects:
+                continue
+            measured += 1
+            box = max(objects, key=lambda candidate: candidate["conf"])
+            track_ids.add(box["trackId"])
+            center_x = (box["x"] + box["w"] / 2) * result["width"]
+            if abs(center_x - expected["x"]) <= result["width"] * 0.10:
+                accurate += 1
+            assert all(0 <= box[key] <= 1 for key in ("x", "y", "w", "h", "conf"))
+        assert measured >= len(truth) * 0.90
+        assert accurate >= len(truth) * 0.90
+        assert len(track_ids) == 1
+    finally:
+        worker.close()
+
+
+def test_track_disable_flag_is_honest_and_worker_stays_available() -> None:
+    worker = WorkerProcess({"GUYDITOR_ML_DISABLE": "track"})
+    try:
+        hello = worker.read()
+        params = hello["params"]
+        assert isinstance(params, dict)
+        capabilities = params["capabilities"]
+        assert isinstance(capabilities, list)
+        assert "track" not in {capability["task"] for capability in capabilities}
+        worker.send({"jsonrpc": "2.0", "id": 1, "method": "ping", "params": {}})
+        assert worker.response(1)["result"] == {"pong": True}
+    finally:
+        worker.close()
+
+
+def test_cancel_track_acknowledges_and_worker_remains_available() -> None:
+    if not DISC_FIXTURE.is_file():
+        pytest.skip("run pnpm fixtures first")
+    worker = WorkerProcess()
+    try:
+        worker.read()
+        worker.send(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "track",
+                "params": {
+                    "taskId": "job_trackcancl",
+                    "videoPath": str(DISC_FIXTURE),
+                    "sampleEvery": 1,
+                },
+            }
+        )
+        worker.send(
+            {
+                "jsonrpc": "2.0",
+                "method": "$/cancel",
+                "params": {"taskId": "job_trackcancl"},
+            }
+        )
+
+        cancelled = worker.response(1, timeout=2)
+        assert cancelled["error"]["code"] == -32800
+        worker.send({"jsonrpc": "2.0", "id": 2, "method": "ping", "params": {}})
+        assert worker.response(2, timeout=2)["result"] == {"pong": True}
     finally:
         worker.close()
 

@@ -8,10 +8,13 @@ import {
   M1_SHIP_IDS,
   M2_PARTIAL_COMMANDS,
   M2_PARTIAL_IDS,
+  M3_COMMANDS,
+  M3_IDS,
   runGate,
   validateDogfoodReport,
   validateM1Traceability,
   validateM2PartialTraceability,
+  validateM3Traceability,
 } from "./gate.mjs";
 import {
   REQUIRED_FIXTURE_PATHS,
@@ -145,9 +148,15 @@ recorded
 }
 
 function completeM2Traceability() {
-  const partial = new Set(["FR-1101", "FR-505", "FR-510"]);
+  const partial = new Set(["FR-1101", "FR-505"]);
   return M2_PARTIAL_IDS.map((id) =>
     `| ${id} | Part | ${partial.has(id) ? "partial" : "implemented"} | \`test/${id}.test.ts\` | evidence |`
+  ).join("\n");
+}
+
+function completeM3Traceability() {
+  return M3_IDS.map((id) =>
+    `| ${id} | Part | implemented | \`test/${id}.test.ts\` | evidence |`
   ).join("\n");
 }
 
@@ -303,6 +312,32 @@ test("m2 runs the declared partial gate and enforces its scoped traceability", (
   assert.deepEqual(validateM2PartialTraceability(completeM2Traceability()), []);
 });
 
+test("m3 runs the complete §14.8 gate and requires all FR-800..813 and AC rows", () => {
+  const commands = [];
+  const output = [];
+  const reports = [];
+  const status = runGate("m3", {
+    log: (message) => output.push(message),
+    readFixtureManifest: completeManifest,
+    readTraceabilityReport: completeM3Traceability,
+    runCommand: (command, args) => {
+      commands.push([command, ...args]);
+      return { status: 0 };
+    },
+    skipDogfood: true,
+    writeGateReport: (input) => {
+      reports.push(input);
+      return "/repo/docs/gates/m3-test.md";
+    },
+  });
+  assert.equal(status, 0);
+  assert.deepEqual(commands, M3_COMMANDS.map(({ command, args }) => [command, ...args]));
+  assert.deepEqual(validateM3Traceability(completeM3Traceability()), []);
+  assert.equal(reports[0].traceabilityCount, M3_IDS.length);
+  assert.match(output.join("\n"), /agent candidate judgment.*dogfood.*skipped/iu);
+  assert.match(output.join("\n"), /full FR-800\.\.813/iu);
+});
+
 test("m1 rejects absent, incomplete, or un-evidenced checklist rows", () => {
   const missing = validateM1Traceability(completeTraceability().replace(
     /^\| FR-001 .*$/mu,
@@ -390,7 +425,7 @@ test("m0 rejects motion paths with missing coordinates", () => {
   assert.match(errors.join("\n"), /subjectBoundingBoxPath.*x.*y.*width.*height/);
 });
 
-for (const milestone of [undefined, "m3", "m4", "unsupported"]) {
+for (const milestone of [undefined, "m4", "unsupported"]) {
   test(`gate ${milestone ?? "<missing>"} exits one with a clear message`, () => {
     const gatePath = path.join(import.meta.dirname, "gate.mjs");
     const args = milestone === undefined ? [gatePath] : [gatePath, milestone];

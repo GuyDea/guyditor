@@ -40,12 +40,10 @@ def _alignment_available() -> bool:
 
 def advertised_capabilities() -> list[dict[str, Any]]:
     disabled = disabled_tasks()
-    if util.find_spec("faster_whisper") is None:
-        return []
-
-    version = _package_version("faster-whisper")
     capabilities: list[dict[str, Any]] = []
-    if "transcribe" not in disabled:
+    whisper_available = util.find_spec("faster_whisper") is not None
+    version = _package_version("faster-whisper")
+    if whisper_available and "transcribe" not in disabled:
         capabilities.append(
             {
                 "task": "transcribe",
@@ -55,7 +53,8 @@ def advertised_capabilities() -> list[dict[str, Any]]:
             }
         )
     if (
-        "align" not in disabled
+        whisper_available
+        and "align" not in disabled
         and _alignment_available()
     ):
         capabilities.append(
@@ -66,12 +65,20 @@ def advertised_capabilities() -> list[dict[str, Any]]:
                 "models": ["wav2vec2-base-960h"],
             }
         )
-    if "vad" not in disabled:
+    if whisper_available and "vad" not in disabled:
         capabilities.append(
             {
                 "task": "vad",
                 "engine": "faster-whisper-silero-vad+energy-boundaries",
                 "engineVersion": version,
+            }
+        )
+    if util.find_spec("mediapipe") is not None and "track" not in disabled:
+        capabilities.append(
+            {
+                "task": "track",
+                "engine": "mediapipe",
+                "engineVersion": _package_version("mediapipe"),
             }
         )
     return capabilities

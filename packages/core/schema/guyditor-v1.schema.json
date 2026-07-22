@@ -431,6 +431,7 @@
       "properties": {
         "id": { "type": "string", "pattern": "^clp_[a-z2-7]{10}$" },
         "asset": { "type": "string", "pattern": "^ast_[a-z2-7]{10}$" },
+        "origin": { "const": "local" },
         "source": { "$ref": "#/$defs/frameRange" },
         "gapBefore": { "$ref": "#/$defs/frameTime" },
         "overlapPrevious": { "$ref": "#/$defs/frameTime" },
@@ -753,6 +754,28 @@
         "fit": { "enum": ["contain", "cover", "stretch"] }
       }
     },
+    "responsiveKeyframePlacement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["anchor"],
+      "properties": {
+        "anchor": { "$ref": "#/$defs/anchorName" },
+        "width": { "$ref": "#/$defs/percent" },
+        "height": { "$ref": "#/$defs/percent" },
+        "margin": { "$ref": "#/$defs/percent" },
+        "margin_x": { "$ref": "#/$defs/percent" },
+        "margin_y": { "$ref": "#/$defs/percent" },
+        "offset_x": { "$ref": "#/$defs/percent" },
+        "offset_y": { "$ref": "#/$defs/percent" },
+        "aspect": { "$ref": "#/$defs/aspectRatio" },
+        "fit": { "enum": ["contain", "cover", "stretch"] },
+        "overrides": {
+          "type": "object",
+          "propertyNames": { "enum": ["16:9", "9:16", "1:1", "4:5"] },
+          "additionalProperties": { "$ref": "#/$defs/partialPlacementConstraints" }
+        }
+      }
+    },
     "responsivePlacement": {
       "type": "object",
       "additionalProperties": false,
@@ -850,7 +873,7 @@
       "properties": {
         "id": { "type": "string", "pattern": "^kfr_[a-z2-7]{10}$" },
         "at": { "$ref": "#/$defs/anchor" },
-        "placement": { "$ref": "#/$defs/placementConstraints" },
+        "placement": { "$ref": "#/$defs/responsiveKeyframePlacement" },
         "style": { "$ref": "#/$defs/partialPipStyle" },
         "transition": { "$ref": "#/$defs/pipTransition" }
       }
@@ -1324,17 +1347,128 @@
         "id": { "type": "string", "pattern": "^dlv_[a-z2-7]{10}$" },
         "kind": { "enum": ["longform", "short"] },
         "name": { "type": "string" },
-        "profile": { "type": "string" },
+        "profile": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*@(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$" },
         "profileOverrides": { "$ref": "#/$defs/unknownRecord" },
         "sequenceId": { "type": "string", "pattern": "^seq_[a-z2-7]{10}$" },
         "captionsTrackId": { "type": "string", "pattern": "^cts_[a-z2-7]{10}$" },
         "status": { "enum": ["draft", "in-review", "approved", "stale"] },
         "approvedRevision": { "type": "string", "pattern": "^rev_[0-9]{5}$" },
-        "dependencies": true,
+        "dependencies": { "type": "array", "items": { "$ref": "#/$defs/dependencyEntry" } },
         "divergences": { "type": "array", "items": { "$ref": "#/$defs/divergence" } },
-        "staleReasons": true,
-        "publishFiles": { "type": "array", "items": { "$ref": "#/$defs/publishFile" } }
+        "staleReasons": { "type": "array", "items": { "$ref": "#/$defs/staleReason" } },
+        "publishFiles": { "type": "array", "items": { "$ref": "#/$defs/publishFile" } },
+        "framingOverrides": { "type": "array", "items": { "$ref": "#/$defs/framingOverride" } },
+        "publish": { "$ref": "#/$defs/deliverablePublishState" }
         ,"restyle": { "$ref": "#/$defs/restyleDeliverable" }
+      }
+    },
+    "deliverablePublishState": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "metadata": { "$ref": "#/$defs/publishMetadataDocument" },
+        "chapters": { "$ref": "#/$defs/publishChapterList" },
+        "selectedThumbnail": { "type": "string", "minLength": 1 }
+      }
+    },
+    "publishMetadataDocument": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format", "deliverableId", "profile", "language", "title", "description", "tags", "hashtags", "status"],
+      "properties": {
+        "format": { "const": "guyditor-publish/v1" },
+        "deliverableId": { "type": "string", "pattern": "^dlv_[a-z2-7]{10}$" },
+        "profile": { "type": "string", "minLength": 1 },
+        "language": { "type": "string", "minLength": 1 },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "tags": { "type": "array", "items": { "type": "string" } },
+        "hashtags": { "type": "array", "items": { "type": "string" } },
+        "cta": { "type": "string" },
+        "status": { "enum": ["draft", "approved", "stale"] },
+        "draftedBy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["agent", "model", "skillVersions"],
+          "properties": {
+            "agent": { "type": "string", "minLength": 1 },
+            "model": { "type": "string", "minLength": 1 },
+            "skillVersions": { "type": "object", "additionalProperties": { "type": "string" } }
+          }
+        },
+        "approvedRevision": { "type": "string", "pattern": "^rev_[0-9]{5}$" }
+      }
+    },
+    "publishChapterList": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format", "deliverableId", "derivedAtRevision", "status", "chapters", "textSha256"],
+      "properties": {
+        "format": { "const": "guyditor-chapters/v1" },
+        "deliverableId": { "type": "string", "pattern": "^dlv_[a-z2-7]{10}$" },
+        "derivedAtRevision": { "type": "string", "pattern": "^rev_[0-9]{5}$" },
+        "status": { "enum": ["draft", "approved", "stale"] },
+        "chapters": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["beatId", "title", "startSeconds"],
+            "properties": {
+              "beatId": { "type": "string", "pattern": "^beat_[a-z2-7]{10}$" },
+              "title": { "type": "string", "minLength": 1 },
+              "startSeconds": { "type": "integer", "minimum": 0 }
+            }
+          }
+        },
+        "textSha256": { "$ref": "#/$defs/sha256" },
+        "approvedRevision": { "type": "string", "pattern": "^rev_[0-9]{5}$" },
+        "warnings": { "type": "array", "items": { "type": "string" } },
+        "stale": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["transactionId", "revision", "detectedAt", "warning"],
+          "properties": {
+            "transactionId": { "type": "string", "pattern": "^txn_[a-z2-7]{10}$" },
+            "revision": { "type": "string", "pattern": "^rev_[0-9]{5}$" },
+            "detectedAt": { "$ref": "#/$defs/iso8601" },
+            "warning": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    },
+    "framingRect": {
+      "type": "object", "additionalProperties": false, "required": ["x", "y", "w", "h"],
+      "properties": {
+        "x": { "type": "number", "minimum": 0, "maximum": 1 },
+        "y": { "type": "number", "minimum": 0, "maximum": 1 },
+        "w": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
+        "h": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 }
+      }
+    },
+    "framingCrop": {
+      "type": "object", "additionalProperties": false, "required": ["keyframes"],
+      "properties": {
+        "keyframes": {
+          "type": "array", "minItems": 1,
+          "items": {
+            "type": "object", "additionalProperties": false, "required": ["at", "rect"],
+            "properties": {
+              "at": { "$ref": "#/$defs/frameTime" },
+              "rect": { "$ref": "#/$defs/framingRect" }
+            }
+          }
+        }
+      }
+    },
+    "framingOverride": {
+      "type": "object", "additionalProperties": false, "required": ["id", "decisionId"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "decisionId": { "type": "string", "pattern": "^fd_[0-9]+$" },
+        "crop": { "$ref": "#/$defs/framingCrop" },
+        "layout": { "type": "string", "minLength": 1 },
+        "note": { "type": "string" }
       }
     },
     "restyleDeliverable": {
@@ -1351,8 +1485,68 @@
       "additionalProperties": false,
       "required": ["class", "transactionIds"],
       "properties": {
-        "class": { "type": "string" },
+        "class": { "enum": ["hook", "order", "pacing", "cuts", "graphics", "captions", "cta", "ending", "framing"] },
         "transactionIds": { "type": "array", "items": { "type": "string", "pattern": "^txn_[a-z2-7]{10}$" } }
+      }
+    },
+    "wordRange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["startWordId", "endWordId"],
+      "properties": {
+        "startWordId": { "$ref": "#/$defs/wordId" },
+        "endWordId": { "$ref": "#/$defs/wordId" }
+      }
+    },
+    "sourceRangeRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["assetId", "range"],
+      "properties": {
+        "assetId": { "type": "string", "pattern": "^ast_[a-z2-7]{10}$" },
+        "range": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["start", "end"],
+          "properties": {
+            "start": { "$ref": "#/$defs/frameTime" },
+            "end": { "$ref": "#/$defs/frameTime" }
+          }
+        },
+        "words": { "$ref": "#/$defs/wordRange" },
+        "longformClipId": { "type": "string", "pattern": "^clp_[a-z2-7]{10}$" }
+      }
+    },
+    "dependencyEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["derivativeClipId", "source"],
+      "properties": {
+        "derivativeClipId": { "type": "string", "pattern": "^clp_[a-z2-7]{10}$" },
+        "source": { "$ref": "#/$defs/sourceRangeRef" }
+      }
+    },
+    "staleReason": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["transactionId", "revision", "affected", "detectedAt"],
+      "properties": {
+        "transactionId": { "type": "string", "pattern": "^txn_[a-z2-7]{10}$" },
+        "revision": { "type": "string", "pattern": "^rev_[0-9]{5}$" },
+        "affected": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["dependency", "change"],
+            "properties": {
+              "dependency": { "$ref": "#/$defs/dependencyEntry" },
+              "change": { "type": "string", "minLength": 1 }
+            }
+          }
+        },
+        "detectedAt": { "$ref": "#/$defs/iso8601" }
       }
     },
     "publishFile": {

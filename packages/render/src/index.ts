@@ -117,6 +117,13 @@ export type {
   NormalizeMasterLoudnessResult,
 } from "./loudness.js";
 export { loadRenderProfile } from "./profile.js";
+export { framingPreviewSpec } from "./framing-preview.js";
+export type { FramingPreviewSpec, FramingPreviewSpecInput } from "./framing-preview.js";
+export { framingPreviewStripSvg, renderFramingPreviewStrip } from "./framing-strip.js";
+export type {
+  FramingPreviewStripInput,
+  FramingPreviewStripPanel,
+} from "./framing-strip.js";
 export type {
   LoadedRenderProfile,
   RenderProfile,
@@ -125,6 +132,7 @@ export {
   RenderService,
   exportOutputPath,
   exportReportPath,
+  outputSetPaths,
   subtitleOutputPaths,
 } from "./service.js";
 export type {
@@ -134,9 +142,23 @@ export type {
   ExportEnqueueResult,
   ExportReport,
   ExportRequest,
+  OutputSetPaths,
+  OutputSetEnqueueResult,
+  OutputSetRequest,
   ExportValidationCheckResult,
   ExportValidationResult,
   FunctionalEquivalenceSpec,
   RenderRequest,
   RenderServiceOptions,
 } from "./service.js";
+export { validateOverlayLayout, validatePublishMetadataCheck } from "./validation.js";
+export { laplacianVariance } from "./cover-analysis.js";
+export {
+  renderThumbnailComposition,
+  thumbnailCompositionPlan,
+  writeThumbnailComposition,
+} from "./thumbnail.js";
+export type {
+  ThumbnailComposition,
+  ThumbnailProviders,
+} from "./thumbnail.js";

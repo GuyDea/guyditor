@@ -8,14 +8,17 @@ import { pathToFileURL } from "node:url";
 import {
   AnchorResolverRegistry,
   AnnotationService,
+  absoluteSeconds,
   buildAnnotationContext,
   convertTimeRounding,
   DEFAULT_JUMP_CUT_CONCEALMENT_CONFIG,
   findJumpCutWarnings,
+  formatRevision,
   JobQueue,
   makeId,
   OperationEngine,
   openProject as openCoreProject,
+  parseRevision,
   parseRestylePlan,
   parseTakeMarkerSidecar,
   planJumpCutConcealment,
@@ -38,6 +41,7 @@ import type {
   RestyleFrameRange,
   RestylePlan,
   RestyleSeamTreatment,
+  SidecarRef,
   TakeMarkerSidecar,
   TransactionRecord,
   WatchFolderConfig,
@@ -45,6 +49,7 @@ import type {
 import {
   buildCaptureGuidanceReport,
   CaptureWatcher,
+  createSubjectTrackAnalysis,
   enqueueKeyQc,
   loadPeaks,
   MediaEngine,
@@ -52,9 +57,17 @@ import {
   probeMedia,
   proxyCachePaths,
   registerKeyQcExecutor,
+  parseSubjectTrackAnalysis,
+  subjectTrackSidecarPath,
+  writeSubjectTrackAnalysis,
   writeCaptureGuidanceReport,
 } from "../../../media/src/index.js";
-import type { KeyQcJobPayload, KeyQcReport } from "../../../media/src/index.js";
+import type {
+  KeyQcJobPayload,
+  KeyQcReport,
+  MlworkerTrackResult,
+  SubjectTrackAnalysis,
+} from "../../../media/src/index.js";
 import {
   compileFillerProposal,
   createAnnotationTranscriptSource,
@@ -73,7 +86,11 @@ import {
 import { assessSourceRangeContinuity } from "../../../transcript/src/continuity.js";
 import type { TranscribeResult } from "../../../transcript/src/index.js";
 import { loadTranscriptWorkspace } from "../../../transcript/src/operations.js";
-import { RenderService, TemplateRegistry } from "../../../render/src/index.js";
+import {
+  renderFramingPreviewStrip,
+  RenderService,
+  TemplateRegistry,
+} from "../../../render/src/index.js";
 import type { ExportReport } from "../../../render/src/index.js";
 import {
   AdapterRegistry,
@@ -89,8 +106,30 @@ import type {
   KlingAdapterConfig,
 } from "../../../agent/src/index.js";
 import { CompositorModel } from "../../../compositor/src/index.js";
-import { createRestylePlan } from "../../../deliver/src/index.js";
-import type { RestylePlanningSignals } from "../../../deliver/src/index.js";
+import {
+  createRefreshProposal,
+  createRestylePlan,
+  BatchExportService,
+  draftPublishMetadata,
+  deriveFramingSidecar,
+  discoverShortCandidates,
+  extractTranscriptText,
+  generateChapterList,
+  loadPlatformProfile,
+  parseFramingSidecar,
+  PublishService,
+  resolveDerivationSources,
+  writeCandidateCache,
+  writeFramingSidecar,
+} from "../../../deliver/src/index.js";
+import type {
+  DeliverableTranscript,
+  DerivationSelection,
+  PublishMetadata,
+  PublishFileResult,
+  RestylePlanningSignals,
+  ShortCandidate,
+} from "../../../deliver/src/index.js";
 
 import type {
   ExecuteRequest,
@@ -140,6 +179,8 @@ interface ProjectServices {
   annotations: AnnotationService;
   compositor: CompositorModel;
   render: RenderService;
+  publish: PublishService;
+  batch: BatchExportService;
   templates: TemplateRegistry;
   adapters: AdapterRegistry;
   restyle: RestyleExecutionService;
@@ -215,6 +256,117 @@ async function transcriptSidecars(store: ProjectStore) {
     .map(async ({ path }) => parseTranscriptSidecar(
       await readFile(join(store.root, path), "utf8"),
     )));
+}
+
+function deliverableTranscripts(
+  sidecars: Awaited<ReturnType<typeof transcriptSidecars>>,
+): DeliverableTranscript[] {
+  return sidecars.map((sidecar) => ({
+    assetId: sidecar.assetId,
+    words: sidecar.segments.flatMap(({ words }) => words).flatMap((id) => {
+      const word = sidecar.words[id];
+      return word === undefined ? [] : [{
+        id,
+        text: word.text,
+        punctAfter: word.punctAfter,
+        state: word.state,
+        start: structuredClone(word.start),
+        end: structuredClone(word.end),
+      }];
+    }),
+  }));
+}
+
+async function publishTranscript(store: ProjectStore, deliverableId: string): Promise<{
+  language: string;
+  text: string;
+}> {
+  const project = store.currentProject;
+  const deliverable = project.deliverables.find(({ id }) => id === deliverableId);
+  if (deliverable === undefined) throw new Error(`Deliverable ${deliverableId} does not exist.`);
+  const sidecars = await transcriptSidecars(store);
+  const words = sidecars.flatMap((sidecar) => Object.entries(sidecar.words).map(([id, word]) => ({
+    id,
+    assetId: sidecar.assetId,
+    text: word.text,
+    punctAfter: word.punctAfter,
+    startSamples: word.start.samples,
+    endSamples: word.end.samples,
+    rate: word.start.rate,
+    state: word.state,
+    ...(sidecar.speakers.find(({ id: speakerId }) => speakerId === sidecar.segments
+      .find(({ words: segmentWords }) => segmentWords.includes(id))?.speaker)?.label === undefined
+      ? {}
+      : { speaker: sidecar.speakers.find(({ id: speakerId }) => speakerId === sidecar.segments
+          .find(({ words: segmentWords }) => segmentWords.includes(id))?.speaker)!.label }),
+  })));
+  const clips = deliverable.dependencies?.flatMap(({ source }) => source.words === undefined ? [] : [{
+    assetId: source.assetId,
+    startWordId: source.words.startWordId,
+    endWordId: source.words.endWordId,
+  }]) ?? [];
+  if (clips.length === 0) {
+    const sequence = project.sequences.find(({ id }) => id === deliverable.sequenceId);
+    for (const clip of sequence?.clips ?? []) {
+      if (clip.origin === "local") continue;
+      const sidecar = sidecars.find(({ assetId }) => assetId === clip.asset);
+      if (sidecar === undefined) continue;
+      const [fpsNumerator = "0", fpsDenominator = "1"] = clip.source.in.fps.split("/");
+      const fps = Number(fpsNumerator) / Number(fpsDenominator);
+      const sourceStart = clip.source.in.frames / fps;
+      const sourceEnd = clip.source.out.frames / fps;
+      const ids = Object.entries(sidecar.words)
+        .filter(([, word]) => word.state === "active" &&
+          word.end.samples / word.end.rate > sourceStart &&
+          word.start.samples / word.start.rate < sourceEnd)
+        .map(([id]) => id)
+        .sort();
+      if (ids[0] !== undefined && ids.at(-1) !== undefined) {
+        clips.push({ assetId: sidecar.assetId, startWordId: ids[0], endWordId: ids.at(-1)! });
+      }
+    }
+  }
+  const beatWordIds = project.beats.flatMap(({ anchor }) => {
+    const match = /^word:(w[0-9]{6})/u.exec(anchor);
+    return match?.[1] === undefined ? [] : [match[1]];
+  });
+  return {
+    language: sidecars.find(({ language }) => language.length > 0)?.language ?? "en",
+    text: extractTranscriptText({ clips, beatWordIds, words }),
+  };
+}
+
+function secondsAt(frame: { frames: number; fps: string }): number {
+  const value = resultValue(absoluteSeconds(frame));
+  const [numerator, denominator] = value.split("/").map(Number);
+  if (numerator === undefined || denominator === undefined || denominator === 0) {
+    throw new TypeError(`Invalid exact second value ${value}.`);
+  }
+  return Math.floor(numerator / denominator);
+}
+
+function mergedPublishFiles(
+  deliverable: ProjectStore["currentProject"]["deliverables"][number],
+  results: readonly PublishFileResult[],
+): Array<{ path: string; sha256: string }> {
+  const files = new Map((deliverable.publishFiles ?? []).map((file) => [file.path, file]));
+  for (const { path, sha256 } of results) files.set(path, { path, sha256 });
+  return [...files.values()].sort((left, right) => left.path.localeCompare(right.path));
+}
+
+async function candidateCache(store: ProjectStore): Promise<ShortCandidate[]> {
+  try {
+    const parsed = JSON.parse(await readFile(join(
+      store.root,
+      ".guyditor",
+      "cache",
+      "candidates",
+      `${store.currentProject.revision}.json`,
+    ), "utf8")) as { candidates?: ShortCandidate[] };
+    return parsed.candidates ?? [];
+  } catch {
+    return [];
+  }
 }
 
 async function acceptedRestylePlan(
@@ -345,7 +497,7 @@ async function latestExportReport(store: ProjectStore): Promise<ExportReport | n
     return null;
   }
   const reports = await Promise.all(names
-    .filter((name) => name.endsWith(".export-report.json"))
+    .filter((name) => name.endsWith("export-report.json"))
     .map(async (name) => {
       try {
         return JSON.parse(await readFile(join(root, name), "utf8")) as ExportReport;
@@ -579,6 +731,236 @@ export class WindowServiceHost {
         external: () => restyleRuntime.service?.externalWaits() ?? [],
       },
     });
+    jobs.registerExecutor("candidates", async (job, context) => {
+      const payload = jsonRecord(job.payload);
+      const profilePin = payload?.["profile"];
+      const revision = payload?.["revision"];
+      if (typeof profilePin !== "string" || typeof revision !== "string") {
+        throw new Error("Candidate discovery payload is incomplete.");
+      }
+      if (store.currentProject.revision !== revision) {
+        throw new Error(`Candidate discovery base ${revision} is stale; enqueue it again at ${store.currentProject.revision}.`);
+      }
+      context.reportProgress(0.15);
+      const loaded = await loadPlatformProfile(profilePin, {
+        projectRoot: join(store.root, "profiles"),
+        userRoot: join(this.#app.userDirectory, "profiles"),
+        builtinsRoot: this.#app.profilesRoot,
+      });
+      if (loaded.profile.kind !== "short" || loaded.profile.duration.maxSeconds === null) {
+        throw new Error(`Candidate discovery requires a bounded short profile, received ${profilePin}.`);
+      }
+      const constraints = jsonRecord(payload?.["constraints"]);
+      const durationRecord = jsonRecord(constraints?.["durationSeconds"]);
+      const mustIncludeBeats = Array.isArray(constraints?.["mustIncludeBeats"])
+        ? constraints["mustIncludeBeats"].filter((id): id is string => typeof id === "string")
+        : undefined;
+      const candidates = discoverShortCandidates({
+        project: store.currentProject,
+        transcripts: deliverableTranscripts(await transcriptSidecars(store)),
+        profile: profilePin,
+        duration: {
+          minSeconds: loaded.profile.duration.minSeconds,
+          maxSeconds: loaded.profile.duration.maxSeconds,
+        },
+        ...(typeof payload?.["maxCandidates"] === "number"
+          ? { maxCandidates: payload["maxCandidates"] }
+          : {}),
+        ...(constraints === undefined ? {} : {
+          constraints: {
+            ...(mustIncludeBeats === undefined ? {} : { mustIncludeBeats }),
+            ...(typeof durationRecord?.["min"] === "number" && typeof durationRecord["max"] === "number"
+              ? { durationSeconds: { min: durationRecord["min"], max: durationRecord["max"] } }
+              : {}),
+          },
+        }),
+      });
+      context.reportProgress(0.85);
+      const path = await writeCandidateCache(store.root, revision, candidates);
+      context.reportProgress(1);
+      return { path, count: candidates.length };
+    });
+    const registerDerivedSidecar = async (sidecar: SidecarRef): Promise<void> => {
+      resultValue(await new OperationEngine(store.currentProject, {
+        appVersion: this.#app.appVersion,
+        committer: store,
+        auditSink: this.#app.auditLog,
+      }).execute([{
+        op: "sidecar.register",
+        params: { name: sidecar.name, sidecar },
+      }], {
+        baseRevision: store.currentProject.revision,
+        origin: "system",
+        dryRun: false,
+        recordUndo: false,
+        instruction: { kind: "ui-direct", text: `Register derived sidecar ${sidecar.name}` },
+      }));
+    };
+    jobs.registerExecutor("reframe", async (job, context) => {
+      const payload = jsonRecord(job.payload);
+      const deliverableId = payload?.["deliverableId"];
+      if (typeof deliverableId !== "string") throw new Error("Reframe payload needs a deliverableId.");
+      const initial = store.currentProject;
+      const deliverable = initial.deliverables.find(({ id }) => id === deliverableId);
+      const sequence = initial.sequences.find(({ id }) => id === deliverable?.sequenceId);
+      if (deliverable?.kind !== "short" || sequence === undefined) {
+        throw new Error(`Short deliverable ${deliverableId} is unavailable.`);
+      }
+      const assetIds = [...new Set(sequence.clips.map(({ asset }) => asset))].sort();
+      const tracking: Record<string, SubjectTrackAnalysis | undefined> = {};
+      for (const [index, assetId] of assetIds.entries()) {
+        if (context.signal.aborted) throw new Error("Reframe cancelled.");
+        const current = store.currentProject;
+        const asset = current.assets.find(({ id }) => id === assetId);
+        if (asset === undefined) throw new Error(`Reframe asset ${assetId} is unavailable.`);
+        const relativePath = subjectTrackSidecarPath(asset.id);
+        const reference = current.sidecars.find(({ schema, path }) =>
+          schema === "guyditor.analysis/v1" && path === relativePath);
+        let existing: SubjectTrackAnalysis | undefined;
+        if (reference !== undefined) {
+          try {
+            const text = await readFile(join(store.root, relativePath), "utf8");
+            const hash = createHash("sha256").update(text).digest("hex");
+            const parsed = parseSubjectTrackAnalysis(text);
+            if (
+              hash === reference.sha256 &&
+              parsed.sourceHash.replace(/^sha256:/u, "") === asset.sha256
+            ) existing = parsed;
+          } catch {
+            existing = undefined;
+          }
+        }
+        if (existing === undefined) {
+          const tracked = await this.#app.mlworker.runTask("track", {
+            taskId: `${job.jobId}-${String(index)}`,
+            videoPath: isAbsolute(asset.path) ? asset.path : resolve(store.root, asset.path),
+            sampleEvery: 3,
+          }, {
+            signal: context.signal,
+            onProgress: ({ progress }) => context.reportProgress(
+              (index + progress) / Math.max(1, assetIds.length) * 0.7,
+            ),
+          });
+          if (!tracked.ok) throw tracked.error;
+          existing = createSubjectTrackAnalysis({
+            assetId: asset.id,
+            sourceHash: asset.sha256,
+            params: { sampleEvery: 3 },
+            toolVersions: {
+              mlworker: "0.0.0",
+              mediapipe: (tracked.value as unknown as MlworkerTrackResult).engine.version,
+            },
+            createdAt: new Date().toISOString(),
+            result: tracked.value as unknown as MlworkerTrackResult,
+          });
+          const written = await writeSubjectTrackAnalysis(store.root, existing);
+          await registerDerivedSidecar({
+            name: `analysis-${asset.id}-subject-track`,
+            path: written.path,
+            schema: "guyditor.analysis/v1",
+            sha256: written.sha256,
+            generatedBy: { tool: "mlworker/mediapipe", version: existing.data === undefined ? "unknown" :
+              (tracked.value as unknown as MlworkerTrackResult).engine.version, job: job.jobId },
+            inputs: [{ asset: asset.id, sha256: asset.sha256 }],
+          });
+        }
+        tracking[asset.id] = existing;
+        context.reportProgress((index + 1) / Math.max(1, assetIds.length) * 0.7);
+      }
+      const current = store.currentProject;
+      const profile = await loadPlatformProfile(deliverable.profile, {
+        projectRoot: join(store.root, "profiles"),
+        userRoot: join(this.#app.userDirectory, "profiles"),
+        builtinsRoot: this.#app.profilesRoot,
+        ...(deliverable.profileOverrides === undefined ? {} : { overrides: deliverable.profileOverrides }),
+      });
+      const sceneBoundaries: Record<string, number[] | undefined> = {};
+      for (const assetId of assetIds) {
+        const reference = current.sidecars.find(({ schema, path }) =>
+          schema === "guyditor.analysis/v1" && path === `sidecars/analysis/${assetId}.scene.shots.json`);
+        if (reference === undefined) continue;
+        try {
+          const value = JSON.parse(await readFile(join(store.root, reference.path), "utf8")) as unknown;
+          const data = jsonRecord(jsonRecord(value)?.["data"]);
+          const boundaries = data?.["boundaries"];
+          if (Array.isArray(boundaries)) {
+            sceneBoundaries[assetId] = boundaries.filter((frame): frame is number =>
+              typeof frame === "number" && Number.isSafeInteger(frame) && frame >= 0);
+          }
+        } catch {
+          sceneBoundaries[assetId] = undefined;
+        }
+      }
+      const framingPath = `sidecars/framing/${deliverable.id}.framing.json`;
+      const previousReference = current.sidecars.find(({ schema, path }) =>
+        schema === "guyditor.framing/v1" && path === framingPath);
+      const previous = previousReference === undefined
+        ? undefined
+        : parseFramingSidecar(await readFile(join(store.root, previousReference.path), "utf8"));
+      const sidecar = deriveFramingSidecar({
+        project: current,
+        deliverableId,
+        profile: profile.profile,
+        tracking,
+        sceneBoundaries,
+        ...(previous === undefined ? {} : { previous }),
+      });
+      sidecar.sourceRevision = formatRevision(parseRevision(current.revision) + 1);
+      context.reportProgress(0.85);
+      const trackReferences = current.sidecars.filter(({ path }) =>
+        assetIds.some((assetId) => path === subjectTrackSidecarPath(assetId)));
+      const framingReference = await writeFramingSidecar(store.root, sidecar, [
+        ...assetIds.map((assetId) => {
+          const asset = current.assets.find(({ id }) => id === assetId)!;
+          return { asset: asset.id, sha256: asset.sha256 };
+        }),
+        ...trackReferences.map((reference) => ({ sidecar: reference.name, sha256: reference.sha256 })),
+      ]);
+      await registerDerivedSidecar({
+        ...framingReference,
+        generatedBy: { tool: "@guyditor/deliver", version: "0.0.0", job: job.jobId },
+      });
+      const previewDirectory = join(store.root, ".guyditor/cache/reframe", deliverable.id);
+      await mkdir(previewDirectory, { recursive: true });
+      const previewStrips: Array<{ decisionId: string; path: string }> = [];
+      for (const [index, decision] of sidecar.decisions.entries()) {
+        if (context.signal.aborted) throw new Error("Reframe cancelled.");
+        const clip = sequence?.clips.find(({ id }) => id === decision.shot.clipId);
+        const asset = current.assets.find(({ id }) => id === clip?.asset);
+        if (asset === undefined) {
+          throw new Error(`Framing preview asset for ${decision.decisionId} is unavailable.`);
+        }
+        const name = `${decision.decisionId}.svg`;
+        await renderFramingPreviewStrip({
+          decision,
+          sourcePath: isAbsolute(asset.path) ? asset.path : resolve(store.root, asset.path),
+          outputPath: join(previewDirectory, name),
+          signal: context.signal,
+        });
+        previewStrips.push({ decisionId: decision.decisionId, path: name });
+        context.reportProgress(0.88 + (index + 1) / Math.max(1, sidecar.decisions.length) * 0.1);
+      }
+      await writeFile(
+        join(previewDirectory, "preview-strip.json"),
+        `${JSON.stringify({
+          format: "guyditor.reframe-preview/v1",
+          decisions: sidecar.decisions.map(({ decisionId, shot, crop, mode }) => ({
+            decisionId,
+            mode,
+            stripPath: previewStrips.find((strip) => strip.decisionId === decisionId)?.path,
+            frames: [
+              shot.source.start.frames,
+              Math.floor((shot.source.start.frames + shot.source.end.frames) / 2),
+              Math.max(shot.source.start.frames, shot.source.end.frames - 1),
+            ],
+            motionPath: crop?.keyframes.map(({ at, rect }) => ({ frame: at.frames, rect })) ?? [],
+          })),
+        }, null, 2)}\n`,
+        "utf8",
+      );
+      context.reportProgress(1);
+      return { deliverableId, framingPath: framingReference.path, decisionCount: sidecar.decisions.length };
+    });
     const media = new MediaEngine({ jobQueue: jobs, mlworker: this.#app.mlworker });
     registerKeyQcExecutor(jobs);
     const compositor = new CompositorModel({
@@ -627,6 +1009,57 @@ export class WindowServiceHost {
       jobQueue: jobs,
       profilesRoot: this.#app.profilesRoot,
       templateRegistry: templates,
+    });
+    const publish = new PublishService({
+      projectRoot: store.root,
+      project: () => store.currentProject,
+      ...(this.#app.profilesRoot === undefined ? {} : { profilesRoot: this.#app.profilesRoot }),
+      userProfilesRoot: join(this.#app.userDirectory, "profiles"),
+      validateExport: (deliverableId, revision) => render.validateExport(deliverableId, revision),
+    });
+    jobs.registerExecutor("publish.kit", async (job) => {
+      const deliverableId = jsonRecord(job.payload)?.["deliverableId"];
+      if (typeof deliverableId !== "string") throw new Error("Upload-kit job needs a deliverableId.");
+      const built = await publish.buildKit(deliverableId);
+      return {
+        path: built.path,
+        deliverableId: built.manifest.deliverableId,
+        profile: built.manifest.profile,
+        revision: built.manifest.revision,
+        fileCount: built.manifest.files.length,
+      };
+    });
+    const batch = new BatchExportService({
+      queue: jobs,
+      revision: () => store.currentProject.revision,
+      validate: (deliverableId, revision) => {
+        const deliverable = store.currentProject.deliverables.find(({ id }) => id === deliverableId);
+        if (deliverable?.status !== "approved") {
+          return Promise.resolve({
+            outcome: "blocked" as const,
+            checks: [{
+              status: "fail" as const,
+              message: deliverable === undefined
+                ? `Deliverable ${deliverableId} does not exist.`
+                : `Deliverable ${deliverableId} must be approved and non-stale.`,
+              affected: [deliverableId],
+            }],
+          });
+        }
+        return render.validateExport(deliverableId, revision);
+      },
+      exportOutputSet: (deliverableId, revision) => render.renderOutputSet({
+        deliverableId,
+        revision,
+        outputDir: join(store.root, "exports"),
+      }),
+      enqueueKitBuild: (deliverableId, dependsOn) => Promise.resolve(jobs.enqueue({
+        kind: "publish.kit",
+        title: `Build upload kit · ${deliverableId}`,
+        cancellable: true,
+        dependsOn: [...dependsOn],
+        payload: { deliverableId },
+      })),
     });
     const adapters = new AdapterRegistry();
     const kling = this.#app.restyleAdapter;
@@ -685,6 +1118,12 @@ export class WindowServiceHost {
         if (job.state === "done" && job.kind === "keyqc.analyze") {
           void this.#writeCaptureGuidance(job).catch(() => undefined);
         }
+        if (job.state === "done" && job.kind === "reframe") {
+          this.publisher.publish({
+            kind: "project.revision",
+            revision: store.currentProject.revision,
+          });
+        }
         if (job.state === "done" && job.kind === "restyle.generate") {
           const proposalId = jsonRecord(job.payload)?.["proposalId"];
           if (typeof proposalId === "string") {
@@ -724,6 +1163,8 @@ export class WindowServiceHost {
       annotations,
       compositor,
       render,
+      publish,
+      batch,
       templates,
       adapters,
       restyle,
@@ -929,6 +1370,337 @@ export class WindowServiceHost {
         };
       case "DeliverableService":
         return project === undefined ? undefined : {
+          publishState: ({ deliverableId }: { deliverableId: string }) => {
+            const deliverable = project.store.currentProject.deliverables
+              .find(({ id }) => id === deliverableId);
+            if (deliverable === undefined) throw new Error(`Deliverable ${deliverableId} does not exist.`);
+            return structuredClone(deliverable.publish ?? {});
+          },
+          draftMetadata: async ({ deliverableId }: { deliverableId: string }) => {
+            const deliverable = project.store.currentProject.deliverables
+              .find(({ id }) => id === deliverableId);
+            if (deliverable === undefined) throw new Error(`Deliverable ${deliverableId} does not exist.`);
+            const transcript = await publishTranscript(project.store, deliverableId);
+            const metadata = draftPublishMetadata({
+              deliverableId,
+              profile: deliverable.profile,
+              language: transcript.language,
+              transcript: transcript.text,
+              beats: project.store.currentProject.beats.map(({ chapter, name }) => chapter?.title ?? name),
+            });
+            const [transcriptFile, metadataFile] = await Promise.all([
+              project.publish.writeText(deliverableId, "transcript", transcript.text),
+              project.publish.writeMetadata(metadata),
+            ]);
+            await this.#execute({
+              operations: [
+                { op: "deliverable.metadata.set", params: { deliverableId, metadata } },
+                {
+                  op: "deliverable.publish.files.set",
+                  params: {
+                    deliverableId,
+                    files: mergedPublishFiles(deliverable, [transcriptFile, metadataFile]),
+                  },
+                },
+              ],
+              intent: "direct",
+              label: `Draft publish metadata · ${deliverable.name}`,
+            });
+            return metadata;
+          },
+          saveMetadata: async ({ deliverableId, metadata }: {
+            deliverableId: string;
+            metadata: PublishMetadata;
+          }) => {
+            const deliverable = project.store.currentProject.deliverables
+              .find(({ id }) => id === deliverableId);
+            if (deliverable === undefined) throw new Error(`Deliverable ${deliverableId} does not exist.`);
+            const edited: PublishMetadata = {
+              ...structuredClone(metadata),
+              deliverableId,
+              profile: deliverable.profile,
+              status: "draft",
+            };
+            delete edited.approvedRevision;
+            const metadataFile = await project.publish.writeMetadata(edited);
+            await this.#execute({
+              operations: [
+                { op: "deliverable.metadata.set", params: { deliverableId, metadata: edited } },
+                {
+                  op: "deliverable.publish.files.set",
+                  params: {
+                    deliverableId,
+                    files: mergedPublishFiles(deliverable, [metadataFile]),
+                  },
+                },
+              ],
+              intent: "direct",
+              label: `Edit publish metadata · ${deliverable.name}`,
+            });
+            return edited;
+          },
+          generateChapters: async ({ deliverableId }: { deliverableId: string }) => {
+            const current = project.store.currentProject;
+            const deliverable = current.deliverables.find(({ id }) => id === deliverableId);
+            if (deliverable === undefined) throw new Error(`Deliverable ${deliverableId} does not exist.`);
+            const loaded = await loadPlatformProfile(deliverable.profile, {
+              projectRoot: join(project.store.root, "profiles"),
+              userRoot: join(this.#app.userDirectory, "profiles"),
+              builtinsRoot: this.#app.profilesRoot,
+              ...(deliverable.profileOverrides === undefined
+                ? {}
+                : { overrides: deliverable.profileOverrides }),
+            });
+            if (loaded.profile.chapters === null) {
+              throw new Error(`${loaded.profile.displayName} does not support chapters.`);
+            }
+            const sidecars = await transcriptSidecars(project.store);
+            const resolvers = new AnchorResolverRegistry();
+            resolvers.registerWordLookup(createTranscriptWordLookup(sidecars));
+            const beats = [];
+            for (const beat of current.beats) {
+              if (beat.chapter === undefined) continue;
+              const resolution = resultValue(await resolveAnchor(
+                current,
+                beat.anchor,
+                deliverable.sequenceId,
+                resolvers.dependencies(),
+              ));
+              if (resolution.status === "resolved" && resolution.timeline !== undefined) {
+                beats.push({
+                  beatId: beat.id,
+                  title: beat.chapter.title,
+                  startSeconds: secondsAt(resolution.timeline),
+                });
+              }
+            }
+            const generated = generateChapterList({
+              deliverableId,
+              revision: current.revision,
+              beats,
+              rules: loaded.profile.chapters,
+            });
+            const chapters = {
+              ...generated.list,
+              textSha256: createHash("sha256").update(generated.text).digest("hex"),
+              ...(generated.warnings.length === 0 ? {} : { warnings: generated.warnings }),
+            };
+            const chapterFiles = await project.publish.writeChapters(chapters);
+            await this.#execute({
+              operations: [
+                { op: "deliverable.chapters.set", params: { deliverableId, chapters } },
+                {
+                  op: "deliverable.publish.files.set",
+                  params: {
+                    deliverableId,
+                    files: mergedPublishFiles(deliverable, chapterFiles),
+                  },
+                },
+              ],
+              intent: "direct",
+              label: `Generate chapters · ${deliverable.name}`,
+            });
+            return { ...chapters, errors: generated.errors };
+          },
+          approvePublish: async ({ deliverableId, targets }: {
+            deliverableId: string;
+            targets: Array<"metadata" | "chapters">;
+          }) => {
+            const deliverable = project.store.currentProject.deliverables
+              .find(({ id }) => id === deliverableId);
+            if (deliverable === undefined) throw new Error(`Deliverable ${deliverableId} does not exist.`);
+            const approvedRevision = formatRevision(parseRevision(project.store.currentProject.revision) + 1);
+            const publishFiles: PublishFileResult[] = [];
+            if (targets.includes("metadata")) {
+              if (deliverable.publish?.metadata === undefined) throw new Error("Draft metadata before approval.");
+              publishFiles.push(await project.publish.writeMetadata({
+                ...deliverable.publish.metadata,
+                status: "approved",
+                approvedRevision,
+              }));
+            }
+            if (targets.includes("chapters")) {
+              const chapters = deliverable.publish?.chapters;
+              const loaded = await loadPlatformProfile(deliverable.profile, {
+                projectRoot: join(project.store.root, "profiles"),
+                userRoot: join(this.#app.userDirectory, "profiles"),
+                builtinsRoot: this.#app.profilesRoot,
+              });
+              if (chapters === undefined || loaded.profile.chapters === null ||
+                  chapters.chapters.length < loaded.profile.chapters.minCount) {
+                throw new Error("Generate a profile-valid chapter list before approval.");
+              }
+              publishFiles.push(...await project.publish.writeChapters({
+                ...chapters,
+                status: "approved",
+                approvedRevision,
+              }));
+            }
+            await this.#execute({
+              operations: [
+                { op: "deliverable.publish.approve", params: { deliverableId, targets } },
+                {
+                  op: "deliverable.publish.files.set",
+                  params: {
+                    deliverableId,
+                    files: mergedPublishFiles(deliverable, publishFiles),
+                  },
+                },
+              ],
+              intent: "direct",
+              label: `Approve publish assets · ${deliverable.name}`,
+            });
+            const approved = project.store.currentProject.deliverables
+              .find(({ id }) => id === deliverableId)?.publish;
+            return structuredClone(approved ?? {});
+          },
+          selectThumbnail: async ({ deliverableId, composition }: {
+            deliverableId: string;
+            composition: string | null;
+          }) => this.#execute({
+            operations: [{ op: "deliverable.thumbnail.select", params: { deliverableId, composition } }],
+            intent: "direct",
+            label: composition === null ? "Clear publish thumbnail" : `Select thumbnail ${composition}`,
+          }),
+          writeTextExports: async ({ deliverableId, targets }: {
+            deliverableId: string;
+            targets: Array<"transcript" | "chapters" | "metadata">;
+          }) => {
+            if (targets.includes("transcript")) {
+              const transcript = await publishTranscript(project.store, deliverableId);
+              await project.publish.writeText(deliverableId, "transcript", transcript.text);
+            }
+            const files = await project.publish.writeTextExports(deliverableId, targets);
+            const deliverable = project.store.currentProject.deliverables
+              .find(({ id }) => id === deliverableId);
+            if (deliverable === undefined) throw new Error(`Deliverable ${deliverableId} does not exist.`);
+            await this.#execute({
+              operations: [{
+                op: "deliverable.publish.files.set",
+                params: { deliverableId, files: mergedPublishFiles(deliverable, files) },
+              }],
+              intent: "direct",
+              label: `Register text exports · ${deliverable.name}`,
+            });
+            return files;
+          },
+          renderOutputSet: async ({ deliverableId }: { deliverableId: string }) => {
+            const result = await project.render.renderOutputSet({
+              deliverableId,
+              revision: project.store.currentProject.revision,
+              outputDir: join(project.store.root, "exports"),
+            });
+            return { ...result, job: publicJobStatus(project.jobs.get(result.jobId)!) };
+          },
+          buildKit: ({ deliverableId }: { deliverableId: string }) => publicJobStatus(
+            project.jobs.enqueue({
+              kind: "publish.kit",
+              title: `Build upload kit · ${deliverableId}`,
+              cancellable: true,
+              payload: { deliverableId },
+            }),
+          ),
+          batchExport: (params: { deliverableIds: string[]; buildKits?: boolean }) =>
+            project.batch.exportBatch(params),
+          batchResult: ({ jobId }: { jobId: string }) => project.batch.result(jobId),
+          retryBatch: ({ jobId }: { jobId: string }) => project.batch.retryBatch(jobId),
+          profiles: async () => Promise.all([
+            "youtube-longform@1.0.0",
+            "youtube-shorts@1.0.0",
+            "tiktok@1.0.0",
+            "instagram-reels@1.0.0",
+          ].map(async (pin) => (await loadPlatformProfile(pin, {
+            projectRoot: join(project.store.root, "profiles"),
+            userRoot: join(this.#app.userDirectory, "profiles"),
+            builtinsRoot: this.#app.profilesRoot,
+          })).profile)),
+          candidates: () => candidateCache(project.store),
+          discoverCandidates: (params: {
+            profile: string;
+            maxCandidates?: number;
+            constraints?: {
+              mustIncludeBeats?: string[];
+              durationSeconds?: { min: number; max: number };
+            };
+          }) => publicJobStatus(project.jobs.enqueue({
+            kind: "candidates",
+            title: `Discover short candidates · ${params.profile}`,
+            cancellable: true,
+            payload: {
+              profile: params.profile,
+              revision: project.store.currentProject.revision,
+              ...(params.maxCandidates === undefined ? {} : { maxCandidates: params.maxCandidates }),
+              ...(params.constraints === undefined ? {} : { constraints: params.constraints }),
+            },
+          })),
+          derive: async (params: {
+            name: string;
+            profile: string;
+            profileOverrides?: Record<string, unknown>;
+            selection?: DerivationSelection;
+            candidateId?: string;
+          }) => {
+            let selection = params.selection;
+            if (params.candidateId !== undefined) {
+              const candidate = (await candidateCache(project.store))
+                .find(({ candidateId }) => candidateId === params.candidateId);
+              if (candidate === undefined) throw new Error(`Candidate ${params.candidateId} is unavailable at ${project.store.currentProject.revision}.`);
+              selection = { words: candidate.words };
+            }
+            if (selection === undefined) throw new Error("Derivation requires a selection or candidate.");
+            const resolved = resultValue(resolveDerivationSources(
+              project.store.currentProject,
+              deliverableTranscripts(await transcriptSidecars(project.store)),
+              selection,
+            ));
+            const sessionId = makeId("ses");
+            const proposal = resultValue(await this.#coreEngine(project).createProposal({
+              operations: [{
+                op: "deliverable.derive",
+                params: {
+                  kind: "short",
+                  name: params.name,
+                  profile: params.profile,
+                  ...(params.profileOverrides === undefined ? {} : { profileOverrides: params.profileOverrides }),
+                  from: structuredClone(selection),
+                  ...(params.candidateId === undefined ? {} : { candidateId: params.candidateId }),
+                  resolvedSources: resolved,
+                },
+              }],
+              instruction: { kind: "user-text", text: `Derive ${params.name}` },
+              actor: { kind: "agent", id: sessionId, model: "deliverable-service" },
+              sessionId,
+              reason: {
+                text: `Review the independent ${params.profile} sequence derived from the selected long-form source ranges.`,
+                sources: [{ kind: "instruction", ref: params.candidateId ?? "manual-selection" }],
+              },
+              addresses: [],
+            }));
+            this.publisher.publish({ kind: "proposal.updated", proposalId: proposal.id });
+            return proposal;
+          },
+          refresh: async ({ deliverableId }: { deliverableId: string }) => {
+            const proposal = resultValue(await createRefreshProposal({
+              project: project.store.currentProject,
+              transcripts: deliverableTranscripts(await transcriptSidecars(project.store)),
+              deliverableId,
+              history: await history(project.store),
+              createProposal: (request) => this.#coreEngine(project).createProposal(request),
+              attachPreview: async (ready) => project.jobs.enqueue({
+                kind: "render.preview",
+                title: `Refresh preview · ${deliverableId}`,
+                cancellable: true,
+                payload: {
+                  proposalId: ready.id,
+                  deliverableId,
+                  revision: project.store.currentProject.revision,
+                },
+              }).jobId,
+              updateProposal: (ready) => project.store.updateProposal(ready),
+            }));
+            this.publisher.publish({ kind: "proposal.updated", proposalId: proposal.id });
+            return proposal;
+          },
           restylePlan: async ({ deliverableId }: { deliverableId: string }) =>
             acceptedRestylePlan(project.store, deliverableId),
           createRestylePlan: async (params: {
@@ -1041,6 +1813,8 @@ export class WindowServiceHost {
           cacheStats: () => project.render.cacheStats(),
           captionFrame: (params: Parameters<RenderService["captionFrame"]>[0]) =>
             project.render.captionFrame(params),
+          framingFrame: (params: Parameters<RenderService["framingFrame"]>[0]) =>
+            project.render.framingFrame(params),
           graphicsFrame: (params: Parameters<RenderService["graphicsFrame"]>[0]) =>
             project.render.graphicsFrame(params),
           templateCatalog: () => project.render.templateCatalog(),
@@ -1103,6 +1877,7 @@ export class WindowServiceHost {
       ...(request.intent === "redo" && request.undoOf !== undefined
         ? { redoOf: request.undoOf }
         : {}),
+      ...(request.divergence === undefined ? {} : { divergence: request.divergence }),
     };
     const containsTranscript = request.operations.some(({ op }) =>
       op.startsWith("transcript.") || op.startsWith("caption.") || op === "pickup.splice");
@@ -1130,6 +1905,7 @@ export class WindowServiceHost {
         instruction: context.instruction,
         ...(context.undoOf === undefined ? {} : { undoOf: context.undoOf }),
         ...(context.redoOf === undefined ? {} : { redoOf: context.redoOf }),
+        ...(context.divergence === undefined ? {} : { divergence: context.divergence }),
       }));
     }
     const txnId = result.transactionId;
@@ -1157,6 +1933,9 @@ export class WindowServiceHost {
 
   async #acceptProposal(proposalId: string): Promise<Proposal> {
     const project = this.#requireProject();
+    const shortsBefore = new Set(project.store.currentProject.deliverables
+      .filter(({ kind }) => kind === "short")
+      .map(({ id }) => id));
     let current = resultValue(await project.store.readProposal(proposalId));
     if (
       current.baseRevision !== project.store.currentProject.revision &&
@@ -1195,6 +1974,23 @@ export class WindowServiceHost {
           current.id,
           "creator",
         ));
+    const reframeIds = new Set([
+      ...project.store.currentProject.deliverables
+        .filter(({ id, kind }) => kind === "short" && !shortsBefore.has(id))
+        .map(({ id }) => id),
+      ...current.operations.flatMap(({ op, params }) =>
+        op === "deliverable.refresh" && typeof params["deliverableId"] === "string"
+          ? [params["deliverableId"]]
+          : []),
+    ]);
+    for (const deliverableId of reframeIds) {
+      project.jobs.enqueue({
+        kind: "reframe",
+        title: `Recompose vertical framing · ${deliverableId}`,
+        cancellable: true,
+        payload: { deliverableId },
+      });
+    }
     this.publisher.publish({ kind: "proposal.updated", proposalId: current.id });
     this.publisher.publish({
       kind: "project.revision",

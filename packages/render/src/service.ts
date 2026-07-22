@@ -9,9 +9,10 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
-import { dirname, extname, isAbsolute, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 import {
+  convertTimeRounding,
   deriveTimeline,
   makeGuyditorError,
   parseProjectYaml,
@@ -31,6 +32,7 @@ import {
   DEFAULT_CAPTION_STYLE,
   buildWordTimelineMap,
   compileCaptionTrack,
+  compileDerivativeCaptionTrack,
   createTranscriptWordLookup,
   loadPinnedCaptionPreset,
   parseTranscriptSidecar,
@@ -43,15 +45,20 @@ import type {
   TranscriptSidecar,
 } from "../../transcript/src/index.js";
 import {
+  parseSubjectTrackAnalysis,
   probeMedia,
   resolveFfmpeg,
   resolveFfprobe,
   runFfmpeg,
 } from "../../media/src/index.js";
 import type { LoudnessTarget } from "../../media/src/index.js";
+import { parseFramingSidecar, selectCoverFrames } from "../../deliver/src/index.js";
+import type { FramingSidecar } from "../../deliver/src/index.js";
 
 import { compileFiltergraph } from "./filtergraph.js";
 import { compileRenderGraph } from "./graph.js";
+import { framingPreviewSpec } from "./framing-preview.js";
+import type { FramingPreviewSpec } from "./framing-preview.js";
 import type { DiagnosticBackground } from "./graph.js";
 import type {
   EncodeNodeParams,
@@ -60,7 +67,7 @@ import type {
   ToolchainManifest,
 } from "./ir.js";
 import { loadRenderProfile } from "./profile.js";
-import type { LoadedRenderProfile } from "./profile.js";
+import type { LoadedRenderProfile, RenderProfile } from "./profile.js";
 import {
   captionOverlayToolchain,
   createCaptionTextMeasurer,
@@ -86,6 +93,8 @@ import {
   measureDeliveredLoudness,
   normalizeMasterLoudness,
 } from "./loudness.js";
+import { validateOverlayLayout, validatePublishMetadataCheck } from "./validation.js";
+import { laplacianVariance } from "./cover-analysis.js";
 
 const RENDER_PACKAGE_VERSION = "0.0.0";
 
@@ -122,6 +131,29 @@ export interface ExportEnqueueResult {
   jobId: string;
   jobIds: string[];
   subtitlePaths: { srt: string; vtt: string } | null;
+}
+
+export interface OutputSetRequest {
+  revision: string;
+  deliverableId: string;
+  outputDir: string;
+  skipValidationWarnings?: boolean;
+}
+
+export interface OutputSetEnqueueResult {
+  jobId: string;
+  jobIds: string[];
+  output: OutputSetPaths;
+}
+
+export interface OutputSetPaths {
+  root: string;
+  videoBurned: string;
+  videoClean: string;
+  srt: string;
+  vtt: string;
+  coversDir: string;
+  report: string;
 }
 
 export interface FunctionalEquivalenceSpec {
@@ -204,6 +236,7 @@ interface PreparedExport {
     normalizedPath: string;
     sampleRate: number;
     target: LoudnessTarget;
+    toleranceLu: number;
   };
 }
 
@@ -305,6 +338,99 @@ async function exists(path: string): Promise<boolean> {
   }
 }
 
+const COVER_ANALYSIS_WIDTH = 160;
+const COVER_ANALYSIS_HEIGHT = 160;
+
+async function coverSharpnessScores(input: {
+  videoPath: string;
+  durationFrames: number;
+  fps: number;
+  signal: AbortSignal;
+}): Promise<Array<{ frame: number; sharpness: number }>> {
+  const chunks: Buffer[] = [];
+  await runFfmpeg([
+    "-hide_banner", "-loglevel", "error", "-nostdin",
+    "-i", input.videoPath,
+    "-vf", `fps=1,scale=${String(COVER_ANALYSIS_WIDTH)}:${String(COVER_ANALYSIS_HEIGHT)}:flags=area,format=gray`,
+    "-an", "-f", "rawvideo", "-pix_fmt", "gray", "pipe:1",
+  ], {
+    collectStdout: false,
+    onStdoutChunk: (chunk) => chunks.push(Buffer.from(chunk)),
+    signal: input.signal,
+  });
+  const bytes = Buffer.concat(chunks);
+  const frameBytes = COVER_ANALYSIS_WIDTH * COVER_ANALYSIS_HEIGHT;
+  const count = Math.floor(bytes.length / frameBytes);
+  return Array.from({ length: count }, (_, index) => {
+    const frame = Math.min(input.durationFrames - 1, Math.round(index * input.fps));
+    return {
+      frame,
+      sharpness: laplacianVariance(
+        bytes.subarray(index * frameBytes, (index + 1) * frameBytes),
+        COVER_ANALYSIS_WIDTH,
+        COVER_ANALYSIS_HEIGHT,
+      ),
+    };
+  });
+}
+
+async function coverFaceAreas(input: {
+  projectRoot: string;
+  project: GuyditorProject;
+  deliverable: Deliverable;
+  frames: readonly number[];
+  outputFps: string;
+}): Promise<Map<number, number>> {
+  const sequence = input.project.sequences.find(({ id }) => id === input.deliverable.sequenceId);
+  if (sequence === undefined) return new Map();
+  const derived = deriveTimeline(input.project, sequence.id);
+  if (!derived.ok) throw derived.error;
+  const tracking = new Map<string, ReturnType<typeof parseSubjectTrackAnalysis>>();
+  for (const assetId of new Set(sequence.clips.map(({ asset }) => asset))) {
+    const reference = input.project.sidecars.find(({ path, schema }) =>
+      schema === "guyditor.analysis/v1" &&
+      path === `sidecars/analysis/${assetId}.subject.track.json`);
+    if (reference === undefined) continue;
+    tracking.set(assetId, parseSubjectTrackAnalysis(await readFile(
+      resolvedMediaPath(input.projectRoot, reference.path),
+      "utf8",
+    )));
+  }
+  const result = new Map<number, number>();
+  for (const frame of input.frames) {
+    const converted = convertTimeRounding(
+      { frames: frame, fps: input.outputFps },
+      input.project.settings.timeline.fps,
+    );
+    if (!converted.ok) continue;
+    const timelineFrame = converted.value.time.frames;
+    const timed = derived.value.clips.find(({ start, duration }) =>
+      timelineFrame >= start.frames && timelineFrame < start.frames + duration.frames);
+    const clip = sequence.clips.find(({ id }) => id === timed?.clipId);
+    const sidecar = clip === undefined ? undefined : tracking.get(clip.asset);
+    if (timed === undefined || clip === undefined) {
+      result.set(frame, 0);
+      continue;
+    }
+    if (sidecar === undefined) continue;
+    const progress = timed.duration.frames <= 1
+      ? 0
+      : (timelineFrame - timed.start.frames) / timed.duration.frames;
+    const sourceFrame = Math.min(
+      clip.source.out.frames - 1,
+      clip.source.in.frames + Math.max(0, Math.round(
+        progress * (clip.source.out.frames - clip.source.in.frames),
+      )),
+    );
+    const sample = sidecar.data.samples.slice().sort((left, right) =>
+      Math.abs(left.frame - sourceFrame) - Math.abs(right.frame - sourceFrame) ||
+      left.frame - right.frame)[0];
+    result.set(frame, sample?.boxes.filter(({ kind }) => kind === "face")
+      .reduce((total, box) => total + box.w * box.h, 0) ?? 0);
+  }
+  return result;
+}
+
 function resolvedMediaPath(projectRoot: string, path: string): string {
   if (isAbsolute(path) || /^[A-Za-z][A-Za-z0-9+.-]*:/u.test(path)) return path;
   return resolve(projectRoot, path);
@@ -385,12 +511,29 @@ export function exportOutputPath(
   variant: "burnin" | "clean",
   container: "mp4" | "mov" | "webm",
 ): string {
-  return join(outputDir, `${deliverableId}-${variant}.${container}`);
+  const paths = outputSetPaths(outputDir, deliverableId, container);
+  return variant === "burnin" ? paths.videoBurned : paths.videoClean;
 }
 
 export function exportReportPath(outputPath: string): string {
-  const extension = extname(outputPath);
-  return `${outputPath.slice(0, -extension.length)}.export-report.json`;
+  return join(dirname(outputPath), "export-report.json");
+}
+
+export function outputSetPaths(
+  outputDir: string,
+  deliverableId: string,
+  container: "mp4" | "mov" | "webm",
+): OutputSetPaths {
+  const root = join(outputDir, deliverableId);
+  return {
+    root,
+    videoBurned: join(root, `video.burned.${container}`),
+    videoClean: join(root, `video.clean.${container}`),
+    srt: join(root, "subtitles.srt"),
+    vtt: join(root, "subtitles.vtt"),
+    coversDir: join(root, "covers"),
+    report: join(root, "export-report.json"),
+  };
 }
 
 export function subtitleOutputPaths(
@@ -398,8 +541,8 @@ export function subtitleOutputPaths(
   deliverableId: string,
 ): { srt: string; vtt: string } {
   return {
-    srt: join(outputDir, `${deliverableId}.srt`),
-    vtt: join(outputDir, `${deliverableId}.vtt`),
+    srt: join(outputDir, deliverableId, "subtitles.srt"),
+    vtt: join(outputDir, deliverableId, "subtitles.vtt"),
   };
 }
 
@@ -453,6 +596,19 @@ export class RenderService {
         revision: prepared.graph.revision,
         variant: "diagnostic",
       };
+    });
+    this.#jobQueue.registerExecutor("render.outputset", async (job, context) => {
+      const payload = job.payload;
+      if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
+        throw new TypeError(`Output-set job ${job.jobId} has an invalid payload.`);
+      }
+      const deliverableId = payload["deliverableId"];
+      const revision = payload["revision"];
+      const outputDir = payload["outputDir"];
+      if (typeof deliverableId !== "string" || typeof revision !== "string" || typeof outputDir !== "string") {
+        throw new TypeError(`Output-set job ${job.jobId} has incomplete identifiers.`);
+      }
+      return this.#finalizeOutputSet(deliverableId, revision, outputDir, context);
     });
   }
 
@@ -513,6 +669,73 @@ export class RenderService {
       cues: [],
       styleResolved: resolveCaptionStyle(DEFAULT_CAPTION_STYLE, {}),
     };
+  }
+
+  public async framingFrame(request: {
+    revision: string;
+    deliverableId: string;
+    frame: number;
+  }): Promise<FramingPreviewSpec | null> {
+    requirePreviewFrame(request.frame, "Framing");
+    const project = await this.#loadProject(request.revision);
+    await this.#verifySidecars(project);
+    const deliverable = project.deliverables.find(({ id }) => id === request.deliverableId);
+    if (deliverable === undefined) {
+      throw makeGuyditorError(
+        "E_RENDER_DELIVERABLE_NOT_FOUND",
+        `Deliverable ${request.deliverableId} does not exist at ${project.revision}.`,
+        { affected: [request.deliverableId, project.revision] },
+      );
+    }
+    const framing = await this.#framingSidecar(project, deliverable);
+    if (framing === undefined) return null;
+    const sequence = project.sequences.find(({ id }) => id === deliverable.sequenceId);
+    if (sequence === undefined) return null;
+    const timeline = deriveTimeline(project, sequence.id);
+    if (!timeline.ok) throw timeline.error;
+    const timed = timeline.value.clips.find(({ start, duration }) =>
+      request.frame >= start.frames && request.frame < start.frames + duration.frames);
+    const clip = sequence.clips.find(({ id }) => id === timed?.clipId);
+    if (timed === undefined || clip === undefined) return null;
+    const sourceSpan = clip.source.out.frames - clip.source.in.frames;
+    const progress = timed.duration.frames === 0
+      ? 0
+      : (request.frame - timed.start.frames) / timed.duration.frames;
+    const sourceFrame = clip.source.in.frames + Math.round(progress * sourceSpan);
+    const decision = framing.decisions.find(({ shot }) =>
+      shot.clipId === clip.id &&
+      sourceFrame >= shot.source.start.frames && sourceFrame < shot.source.end.frames);
+    if (decision === undefined) return null;
+    const trackReference = project.sidecars.find(({ schema, path }) =>
+      schema === "guyditor.analysis/v1" &&
+      path === `sidecars/analysis/${clip.asset}.subject.track.json`);
+    const tracking = trackReference === undefined
+      ? undefined
+      : parseSubjectTrackAnalysis(await readFile(
+          resolvedMediaPath(this.#projectRoot, trackReference.path),
+          "utf8",
+        ));
+    const sample = tracking?.data.samples.slice().sort((left, right) =>
+      Math.abs(left.frame - sourceFrame) - Math.abs(right.frame - sourceFrame) ||
+      left.frame - right.frame)[0];
+    const profile = (await loadRenderProfile(
+      deliverable.profile,
+      this.#profilesRoot,
+      deliverable.profileOverrides,
+    )).profile;
+    const override = deliverable.framingOverrides?.find(({ decisionId }) =>
+      decisionId === decision.decisionId);
+    return framingPreviewSpec({
+      decision,
+      sourceFrame,
+      ...(override === undefined ? {} : { override }),
+      boxes: sample?.boxes ?? [],
+      output: profile.video.resolution ?? {
+        width: project.settings.timeline.width,
+        height: project.settings.timeline.height,
+      },
+      safeArea: profile.safeAreas?.title ?? { top: 0, bottom: 0, left: 0, right: 0 },
+    });
   }
 
   public async templateCatalog(): Promise<TemplateCatalogEntry[]> {
@@ -600,6 +823,19 @@ export class RenderService {
     if (isProposalRevision(req.revision)) {
       throw renderUnsupported(`proposal revision ${req.revision}`, "Part 5", [req.revision]);
     }
+    const lifecycleProject = await this.#loadProject(req.revision);
+    const lifecycleDeliverable = lifecycleProject.deliverables.find(({ id }) => id === req.deliverableId);
+    if (lifecycleDeliverable?.status === "stale") {
+      throw makeGuyditorError(
+        "E_DELIVERABLE_STALE",
+        `Deliverable ${req.deliverableId} is stale and cannot be exported.`,
+        {
+          affected: [req.deliverableId],
+          retry: "none",
+          suggestion: "Run deliverable.refresh and review the diff",
+        },
+      );
+    }
     const variants = [...new Set(req.variants)];
     if (variants.length === 0) {
       throw renderUnsupported("an export without a variant", "Part 12", [req.deliverableId]);
@@ -643,6 +879,56 @@ export class RenderService {
       subtitlePaths: preparedExports[0]!.project.deliverables.find(({ id }) => id === req.deliverableId)?.captionsTrackId === undefined
         ? null
         : subtitleOutputPaths(resolve(req.outputDir), req.deliverableId),
+    };
+  }
+
+  public async renderOutputSet(req: OutputSetRequest): Promise<OutputSetEnqueueResult> {
+    const project = await this.#loadProject(req.revision);
+    const deliverable = project.deliverables.find(({ id }) => id === req.deliverableId);
+    if (deliverable === undefined) {
+      throw makeGuyditorError(
+        "E_RENDER_DELIVERABLE_NOT_FOUND",
+        `Deliverable ${req.deliverableId} does not exist at ${project.revision}.`,
+        { affected: [req.deliverableId, project.revision] },
+      );
+    }
+    if (deliverable.status !== "approved") {
+      throw makeGuyditorError(
+        "E_DELIVERABLE_STATUS",
+        `Deliverable ${req.deliverableId} must be approved and non-stale before output-set export.`,
+        { affected: [req.deliverableId], retry: "none" },
+      );
+    }
+    const profile = await loadRenderProfile(
+      deliverable.profile,
+      this.#profilesRoot,
+      deliverable.profileOverrides,
+    );
+    const rendered = await this.renderExport({
+      revision: req.revision,
+      deliverableId: req.deliverableId,
+      variants: ["burnin", "clean"],
+      outputDir: req.outputDir,
+      ...(req.skipValidationWarnings === undefined
+        ? {}
+        : { skipValidationWarnings: req.skipValidationWarnings }),
+    });
+    const output = outputSetPaths(resolve(req.outputDir), req.deliverableId, profile.profile.container);
+    const finalizer = this.#jobQueue.enqueue({
+      kind: "render.outputset",
+      title: `Finalize output set · ${deliverable.name}`,
+      cancellable: true,
+      dependsOn: rendered.jobIds,
+      payload: {
+        deliverableId: req.deliverableId,
+        revision: project.revision,
+        outputDir: resolve(req.outputDir),
+      },
+    });
+    return {
+      jobId: finalizer.jobId,
+      jobIds: [...rendered.jobIds, finalizer.jobId],
+      output,
     };
   }
 
@@ -749,14 +1035,25 @@ export class RenderService {
               : `${String(orphaned.length)} caption override anchors are orphaned.`,
             affected: orphaned.length === 0 ? [deliverable.captionsTrackId] : orphaned.map(({ anchor }) => anchor),
           });
-          checks.push({
-            id: "VAL-CAPTION-OVERFLOW",
-            status: overflow.length === 0 ? "pass" : "fail",
-            message: overflow.length === 0
-              ? "Caption words fit the configured safe width."
-              : `${String(overflow.length)} caption words exceed the configured safe width.`,
-            affected: overflow.length === 0 ? [deliverable.captionsTrackId] : overflow,
-          });
+          const visualProfile = await loadRenderProfile(
+            deliverable.profile,
+            this.#profilesRoot,
+            deliverable.profileOverrides,
+          );
+          checks.push(validateOverlayLayout({
+            deliverableId,
+            profile: { safeAreas: visualProfile.profile.safeAreas ?? {
+              title: { top: 0, right: 0, bottom: 0, left: 0 },
+              action: { top: 0, right: 0, bottom: 0, left: 0 },
+              platformUi: [],
+            } },
+            captionOverflowWordIds: overflow,
+            boxes: model.cues.map(({ box }) => ({
+              ownerId: deliverable.captionsTrackId!,
+              kind: "caption" as const,
+              rect: box,
+            })),
+          }));
           const ambiguous = model.diagnostics.ambiguousRanges;
           checks.push({
             id: "VAL-CAPTION-AMBIGUITY",
@@ -825,7 +1122,18 @@ export class RenderService {
       }
     }
     try {
-      const profile = await loadRenderProfile(deliverable.profile, this.#profilesRoot);
+      const profile = await loadRenderProfile(
+        deliverable.profile,
+        this.#profilesRoot,
+        deliverable.profileOverrides,
+      );
+      if (deliverable.publish?.metadata !== undefined && profile.profile.metadata !== undefined) {
+        checks.push(validatePublishMetadataCheck({
+          deliverableId,
+          metadata: deliverable.publish.metadata,
+          profile: { metadata: profile.profile.metadata },
+        }));
+      }
       const resolved = this.#withResolvedAssetPaths(project);
       const sidecars = await this.#captionSidecars(project);
       const anchorFrames = await this.#renderAnchorFrames(
@@ -833,6 +1141,7 @@ export class RenderService {
         deliverable,
         sidecars,
       );
+      const framing = await this.#framingSidecar(project, deliverable);
       compileRenderGraph({
         project: resolved,
         revision: resolved.revision,
@@ -844,6 +1153,7 @@ export class RenderService {
         toolchain: await toolchainManifest(),
         anchorFrames,
         speechIntervals: this.#speechIntervals(resolved, deliverable, sidecars),
+        ...(framing === undefined ? {} : { framing }),
       });
       checks.push({
         id: "VAL-200",
@@ -961,6 +1271,20 @@ export class RenderService {
     return sidecars;
   }
 
+  async #framingSidecar(
+    project: GuyditorProject,
+    deliverable: Deliverable,
+  ): Promise<FramingSidecar | undefined> {
+    const reference = project.sidecars.find(({ schema, path }) =>
+      schema === "guyditor.framing/v1" &&
+      path === `sidecars/framing/${deliverable.id}.framing.json`);
+    if (reference === undefined) return undefined;
+    return parseFramingSidecar(await readFile(
+      resolvedMediaPath(this.#projectRoot, reference.path),
+      "utf8",
+    ));
+  }
+
   async #renderAnchorFrames(
     project: GuyditorProject,
     deliverable: Deliverable,
@@ -1041,11 +1365,15 @@ export class RenderService {
     project: GuyditorProject,
     deliverable: Deliverable,
     anchorFrames: Readonly<Record<string, number>>,
+    profile: RenderProfile,
   ): Promise<Record<string, RasterizedPipAssets>> {
     const timeline = deriveTimeline(project, deliverable.sequenceId);
     if (!timeline.ok) throw timeline.error;
+    const profileFps = deliverable.kind === "short" ? profile.video.fps : undefined;
+    const profileResolution = deliverable.kind === "short" ? profile.video.resolution : undefined;
     const [durationNumerator = "0", durationDenominator = "1"] = timeline.value.duration.split("/");
-    const [fpsNumerator = "1", fpsDenominator = "1"] = project.settings.timeline.fps.split("/");
+    const [fpsNumerator = "1", fpsDenominator = "1"] =
+      (profileFps ?? project.settings.timeline.fps).split("/");
     const durationFrames = Number(
       BigInt(durationNumerator) * BigInt(fpsNumerator) /
       (BigInt(durationDenominator) * BigInt(fpsDenominator)),
@@ -1054,8 +1382,8 @@ export class RenderService {
       layer.enabled && layer.pip !== undefined
         ? [rasterizePipAssets({
             pip: layer.pip,
-            compWidth: project.settings.timeline.width,
-            compHeight: project.settings.timeline.height,
+            compWidth: profileResolution?.width ?? project.settings.timeline.width,
+            compHeight: profileResolution?.height ?? project.settings.timeline.height,
             durationFrames: Math.max(1, durationFrames),
             anchorFrames,
             cacheRoot: join(this.#projectRoot, ".guyditor/cache/render/pip"),
@@ -1067,6 +1395,7 @@ export class RenderService {
   async #captionModel(
     project: GuyditorProject,
     deliverable: Deliverable,
+    suppliedProfile?: RenderProfile,
   ): Promise<CaptionRenderModel | undefined> {
     const captionId = deliverable.captionsTrackId;
     if (captionId === undefined) return undefined;
@@ -1076,7 +1405,6 @@ export class RenderService {
       id === track.preset.presetId && version === track.preset.version);
     if (pin === undefined) throw new TypeError(`Caption preset ${track.preset.presetId}@${String(track.preset.version)} is not pinned.`);
     const preset = await loadPinnedCaptionPreset(this.#projectRoot, pin);
-    const style = resolveCaptionStyle(preset.style, track.styleOverrides);
     const sidecars = await this.#captionSidecars(project);
     const timeline = buildWordTimelineMap({
       project,
@@ -1084,6 +1412,35 @@ export class RenderService {
       track,
       sidecars,
     });
+    const profile = suppliedProfile ?? (await loadRenderProfile(
+      deliverable.profile,
+      this.#profilesRoot,
+      deliverable.profileOverrides,
+    )).profile;
+    if (
+      deliverable.kind === "short" &&
+      profile.video.resolution !== undefined &&
+      profile.video.fps !== undefined &&
+      profile.safeAreas !== undefined &&
+      profile.captionDefaults !== undefined
+    ) {
+      return compileDerivativeCaptionTrack({
+        track,
+        timeline,
+        sidecars,
+        presetStyle: preset.style,
+        profile: {
+          video: {
+            resolution: profile.video.resolution,
+            fps: { default: profile.video.fps },
+          },
+          safeAreas: { title: profile.safeAreas.title },
+          captionDefaults: profile.captionDefaults,
+        },
+        measureText: createCaptionTextMeasurer(),
+      });
+    }
+    const style = resolveCaptionStyle(preset.style, track.styleOverrides);
     const safeArea = style.safeArea === "none"
       ? { x: 0, y: 0, w: 1, h: 1 }
       : { x: 0.05, y: 0.05, w: 0.9, h: 0.9 };
@@ -1118,12 +1475,16 @@ export class RenderService {
         { affected: [req.deliverableId, project.revision] },
       );
     }
-    const profile = await loadRenderProfile(deliverable.profile, this.#profilesRoot);
-    const captionModel = await this.#captionModel(project, deliverable);
+    const profile = await loadRenderProfile(
+      deliverable.profile,
+      this.#profilesRoot,
+      deliverable.profileOverrides,
+    );
+    const captionModel = await this.#captionModel(project, deliverable, profile.profile);
     let overlays: Parameters<typeof compileRenderGraph>[0]["overlays"] = [];
     if (captionModel !== undefined) {
-      await mkdir(resolve(req.outputDir), { recursive: true });
       const subtitlePaths = subtitleOutputPaths(resolve(req.outputDir), req.deliverableId);
+      await mkdir(dirname(subtitlePaths.srt), { recursive: true });
       await Promise.all([
         writeFile(subtitlePaths.srt, serializeSubtitles(captionModel, {
           format: "srt",
@@ -1153,14 +1514,18 @@ export class RenderService {
       }
     }
     const transcriptSidecars = await this.#captionSidecars(project);
+    const profileResolution = deliverable.kind === "short"
+      ? profile.profile.video.resolution
+      : undefined;
+    const profileFps = deliverable.kind === "short" ? profile.profile.video.fps : undefined;
     const graphicPlan = await renderGraphicOverlaySequence({
       project,
       sequenceId: deliverable.sequenceId,
       registry: this.#templateRegistry,
       anchorDependencies: { wordLookup: createTranscriptWordLookup(transcriptSidecars) },
-      width: project.settings.timeline.width,
-      height: project.settings.timeline.height,
-      fps: project.settings.timeline.fps,
+      width: profileResolution?.width ?? project.settings.timeline.width,
+      height: profileResolution?.height ?? project.settings.timeline.height,
+      fps: profileFps ?? project.settings.timeline.fps,
       brand: { palette: {} },
       cacheRoot: join(this.#projectRoot, ".guyditor/cache/render/graphics"),
     });
@@ -1176,7 +1541,13 @@ export class RenderService {
     const maskAssets = await this.#rasterizedMasks(project, deliverable);
     const anchorFrames = await this.#renderAnchorFrames(project, deliverable, transcriptSidecars);
     const speechIntervals = this.#speechIntervals(project, deliverable, transcriptSidecars);
-    const pipAssets = await this.#rasterizedPips(project, deliverable, anchorFrames);
+    const pipAssets = await this.#rasterizedPips(
+      project,
+      deliverable,
+      anchorFrames,
+      profile.profile,
+    );
+    const framing = await this.#framingSidecar(project, deliverable);
     const graph = compileRenderGraph({
       project,
       revision: project.revision,
@@ -1192,6 +1563,7 @@ export class RenderService {
       anchorFrames,
       speechIntervals,
       pipAssets,
+      ...(framing === undefined ? {} : { framing }),
       ...(options.diagnostic === undefined ? {} : {
         diagnosticBackground: options.diagnostic.background,
         diagnosticSaturatedColor: options.diagnostic.saturatedColor,
@@ -1204,17 +1576,22 @@ export class RenderService {
           resolve(req.outputDir),
           `${req.deliverableId}-${options.diagnostic.inspectedLayerId}-${options.diagnostic.background}.${profile.profile.container}`,
         );
-    const sequence = project.sequences.find(({ id }) => id === deliverable.sequenceId);
     const hasProgramAudio = graph.nodes.some((node) => {
       if (node.kind !== "source") return false;
       const source = node.params as SourceNodeParams;
       return source.stream === "audio" && source.path.length > 0;
     });
-    const sampleRate = project.settings.audio.sampleRate;
+    const profileLoudness = profile.profile.audio.loudness ?? {
+      integratedLufs: -14,
+      toleranceLu: 1,
+      truePeakDbtp: -1,
+      lraMaxLu: 11,
+    };
+    const sampleRate = profile.profile.audio.sampleRate ?? project.settings.audio.sampleRate;
     const target: LoudnessTarget = {
-      integratedLufs: sequence?.audio?.targetLufs ?? -14,
-      truePeakDbtp: sequence?.audio?.truePeakDb ?? -1,
-      loudnessRangeLu: 11,
+      integratedLufs: profileLoudness.integratedLufs,
+      truePeakDbtp: profileLoudness.truePeakDbtp,
+      loudnessRangeLu: profileLoudness.lraMaxLu,
     };
     const audioKey = createHash("sha256").update(JSON.stringify({
       revision: graph.revision,
@@ -1252,6 +1629,7 @@ export class RenderService {
           ),
           sampleRate,
           target,
+          toleranceLu: profileLoudness.toleranceLu,
         },
       } : {}),
     };
@@ -1410,19 +1788,21 @@ export class RenderService {
 
     const delivered = await measureDeliveredLoudness(prepared.outputPath, run);
     const integratedDelta = Math.abs(delivered.integratedLufs - loudness.target.integratedLufs);
-    const integratedPass = integratedDelta <= 0.5;
+    const integratedPass = integratedDelta <= loudness.toleranceLu;
     const peakPass = delivered.truePeakDbtp <= loudness.target.truePeakDbtp;
     const integratedStatus = normalization.limiterApplied
       ? "warn"
-      : integratedPass ? "pass" : "fail";
+      : integratedPass
+        ? integratedDelta > loudness.toleranceLu / 2 ? "warn" : "pass"
+        : "fail";
     prepared.validation.checks.push({
       id: "VAL-500",
       status: integratedStatus,
       message: normalization.limiterApplied
         ? `Delivered master is ${delivered.integratedLufs} LUFS; true-peak protection limited the linear correction toward ${loudness.target.integratedLufs} LUFS.`
         : integratedPass
-          ? `Delivered master is ${delivered.integratedLufs} LUFS, within 0.5 LU of ${loudness.target.integratedLufs} LUFS.`
-        : `Delivered master is ${delivered.integratedLufs} LUFS, outside 0.5 LU of ${loudness.target.integratedLufs} LUFS.`,
+          ? `Delivered master is ${delivered.integratedLufs} LUFS, within ${String(loudness.toleranceLu)} LU of ${loudness.target.integratedLufs} LUFS.`
+        : `Delivered master is ${delivered.integratedLufs} LUFS, outside ${String(loudness.toleranceLu)} LU of ${loudness.target.integratedLufs} LUFS.`,
       affected: [prepared.request.deliverableId],
       measured: {
         integratedLufs: delivered.integratedLufs,
@@ -1518,5 +1898,139 @@ export class RenderService {
       },
     };
     await writeFile(exportReportPath(prepared.outputPath), `${JSON.stringify(report, null, 2)}\n`, "utf8");
+  }
+
+  async #finalizeOutputSet(
+    deliverableId: string,
+    revision: string,
+    outputDir: string,
+    context: JobExecutorContext,
+  ): Promise<{
+    deliverableId: string;
+    root: string;
+    videoBurned: string;
+    videoClean: string;
+    srt: string;
+    vtt: string;
+    coversDir: string;
+    report: string;
+    coverCandidates: string[];
+  }> {
+    const project = await this.#loadProject(revision);
+    const deliverable = project.deliverables.find(({ id }) => id === deliverableId);
+    if (deliverable === undefined) {
+      throw makeGuyditorError(
+        "E_RENDER_DELIVERABLE_NOT_FOUND",
+        `Deliverable ${deliverableId} does not exist at ${revision}.`,
+        { affected: [deliverableId, revision] },
+      );
+    }
+    const loaded = await loadRenderProfile(
+      deliverable.profile,
+      this.#profilesRoot,
+      deliverable.profileOverrides,
+    );
+    const output = outputSetPaths(outputDir, deliverableId, loaded.profile.container);
+    await mkdir(output.root, { recursive: true });
+    if (!await exists(output.srt)) await writeFile(output.srt, "", "utf8");
+    if (!await exists(output.vtt)) await writeFile(output.vtt, "WEBVTT\n\n", "utf8");
+    const covers: string[] = [];
+    if (deliverable.kind === "short") {
+      const probe = await probeMedia(output.videoClean);
+      const durationFrames = probe.probe.duration !== undefined && "frames" in probe.probe.duration
+        ? probe.probe.duration.frames
+        : 0;
+      const [fpsNumerator, fpsDenominator] = (loaded.profile.video.fps ?? project.settings.timeline.fps)
+        .split("/").map(Number);
+      const fps = fpsNumerator! / fpsDenominator!;
+      const beatFrames: number[] = [];
+      const transcriptSidecars = await this.#captionSidecars(project);
+      const dependencies = { wordLookup: createTranscriptWordLookup(transcriptSidecars) };
+      for (const beat of project.beats) {
+        const resolved = await resolveAnchor(project, beat.anchor, deliverable.sequenceId, dependencies);
+        if (resolved.ok && resolved.value.status === "resolved" && resolved.value.timeline !== undefined) {
+          beatFrames.push(resolved.value.timeline.frames);
+        }
+      }
+      const hookWordId = deliverable.dependencies?.[0]?.source.words?.startWordId;
+      const hook = hookWordId === undefined
+        ? undefined
+        : await resolveAnchor(project, `word:${hookWordId}`, deliverable.sequenceId, dependencies);
+      const hookFrame = hook?.ok === true && hook.value.status === "resolved" && hook.value.timeline !== undefined
+        ? hook.value.timeline.frames
+        : 0;
+      const sharpness = await coverSharpnessScores({
+        videoPath: output.videoClean,
+        durationFrames,
+        fps,
+        signal: context.signal,
+      });
+      const faceAreas = await coverFaceAreas({
+        projectRoot: this.#projectRoot,
+        project,
+        deliverable,
+        frames: sharpness.map(({ frame }) => frame),
+        outputFps: loaded.profile.video.fps ?? project.settings.timeline.fps,
+      });
+      const scoredFrames = sharpness.map(({ frame, sharpness: score }) => ({
+        frame,
+        faceArea: faceAreas.get(frame) ?? 1,
+        sharpness: score,
+      }));
+      const frames = selectCoverFrames({
+        fps,
+        durationFrames,
+        hookFrame,
+        beatFrames,
+        scoredFrames,
+        limit: 6,
+      });
+      await mkdir(output.coversDir, { recursive: true });
+      for (const [index, frame] of frames.entries()) {
+        const cover = join(output.coversDir, `cover-${String(index + 1).padStart(2, "0")}.jpg`);
+        await runFfmpeg([
+          "-hide_banner", "-nostdin", "-y",
+          "-i", output.videoClean,
+          "-vf", `select=eq(n\\,${String(frame)}),scale=${String(loaded.profile.cover?.resolution.width ?? loaded.profile.video.resolution?.width ?? 1080)}:${String(loaded.profile.cover?.resolution.height ?? loaded.profile.video.resolution?.height ?? 1920)}`,
+          "-frames:v", "1", "-q:v", "2", cover,
+        ], { signal: context.signal });
+        covers.push(cover);
+        context.reportProgress((index + 1) / Math.max(1, frames.length));
+      }
+    }
+    const reportText = await readFile(output.report, "utf8");
+    const report = JSON.parse(reportText) as Record<string, unknown>;
+    const artifactPaths = [
+      output.videoBurned,
+      output.videoClean,
+      output.srt,
+      output.vtt,
+      ...covers,
+    ];
+    const artifacts = await Promise.all(artifactPaths.map(async (path) => ({
+      path: relative(output.root, path).replaceAll("\\", "/"),
+      sha256: await sha256(path),
+    })));
+    report["outputSet"] = {
+      videoBurned: output.videoBurned,
+      videoClean: output.videoClean,
+      srt: output.srt,
+      vtt: output.vtt,
+      coverCandidates: covers,
+      report: output.report,
+      artifacts,
+    };
+    await writeFile(output.report, `${JSON.stringify(report, null, 2)}\n`, "utf8");
+    return {
+      deliverableId,
+      root: output.root,
+      videoBurned: output.videoBurned,
+      videoClean: output.videoClean,
+      srt: output.srt,
+      vtt: output.vtt,
+      coversDir: output.coversDir,
+      report: output.report,
+      coverCandidates: covers,
+    };
   }
 }

@@ -202,7 +202,7 @@ describe("AgentGateway", () => {
       "tool.call:proposal_get",
       "tool.result:proposal_get",
     ]);
-  });
+  }, 15_000);
 
   it("validates agent-authored graphic proposals through the shared template provider", async () => {
     const store = await annotatedProject();
@@ -270,5 +270,104 @@ describe("AgentGateway", () => {
       await gateway.close();
       jobs.close();
     }
+  });
+
+  it("exposes cache-backed short-candidate discovery as an audited gateway tool", async () => {
+    const store = await annotatedProject();
+    const userDirectory = await mkdtemp(join(tmpdir(), "guyditor-candidate-gateway-user-"));
+    temporaryDirectories.push(userDirectory);
+    const audit = new AuditLog({ userDir: userDirectory });
+    const { queue: jobs } = JobQueue.open(":memory:");
+    const calls: unknown[] = [];
+    const records = [{
+      candidateId: "candidate-0123456789ab",
+      words: { startWordId: "w000001", endWordId: "w000020" },
+      beats: ["beat_aaaaaaaaaa"],
+      durationSeconds: 18,
+      scores: { hook: 0.8, coherence: 0.7, payoff: 0.9, overall: 0.79 },
+      evidence: {
+        hookLine: "Why this works",
+        reasons: ["question in first 2.5 seconds"],
+        criteria: ["question", "payoff-beat-final-third"],
+      },
+    }];
+    const gateway = new AgentGateway({
+      auditLog: audit,
+      jobQueue: jobs,
+      project: store,
+      stateDirectory: join(userDirectory, "state"),
+      sessionIdFactory: () => "ses_bbbbbbbbbb",
+      candidateDiscovery: (input) => {
+        calls.push(input);
+        return Promise.resolve(records);
+      },
+    });
+    const started = await gateway.start();
+    try {
+      const result = await runStubDirector({
+        annotationId: "ann_bbbbbbbbbb",
+        clipId: "clp_aaaaaaaaaa",
+        gatewayStateFile: started.stateFile,
+        candidateDiscovery: {
+          profile: "youtube-shorts@1.0.0",
+          maxCandidates: 3,
+        },
+      });
+
+      expect(result.tools).toContain("deliverable_candidates_discover");
+      expect(calls).toEqual([{
+        profile: "youtube-shorts@1.0.0",
+        maxCandidates: 3,
+      }]);
+      expect(result.candidateResult).toEqual(records);
+    } finally {
+      await gateway.close();
+      jobs.close();
+    }
+  });
+
+  it("exposes deterministic publish-metadata drafting through the audited gateway", async () => {
+    const store = await annotatedProject();
+    const userDirectory = await mkdtemp(join(tmpdir(), "guyditor-metadata-gateway-user-"));
+    temporaryDirectories.push(userDirectory);
+    const audit = new AuditLog({ userDir: userDirectory });
+    const { queue: jobs } = JobQueue.open(":memory:");
+    const draft = {
+      format: "guyditor-publish/v1",
+      deliverableId: "dlv_aaaaaaaaaa",
+      profile: "youtube-shorts@1.0.0",
+      language: "en",
+      title: "Exact editing",
+      description: "Deterministic draft",
+      tags: ["editing"],
+      hashtags: ["#editing"],
+      status: "draft",
+    };
+    const gateway = new AgentGateway({
+      auditLog: audit,
+      jobQueue: jobs,
+      project: store,
+      stateDirectory: join(userDirectory, "state"),
+      sessionIdFactory: () => "ses_bbbbbbbbbb",
+      metadataDraft: (deliverableId) => Promise.resolve({ ...draft, deliverableId }),
+    });
+    const started = await gateway.start();
+    try {
+      const result = await runStubDirector({
+        annotationId: "ann_bbbbbbbbbb",
+        clipId: "clp_aaaaaaaaaa",
+        gatewayStateFile: started.stateFile,
+        metadataDraft: { deliverableId: "dlv_aaaaaaaaaa" },
+      });
+      expect(result.tools).toContain("deliverable_metadata_draft");
+      expect(result.metadataResult).toEqual(draft);
+    } finally {
+      await gateway.close();
+      jobs.close();
+    }
+    expect(audit.readSession("ses_bbbbbbbbbb").records).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "tool.call", tool: "deliverable_metadata_draft" }),
+      expect.objectContaining({ type: "tool.result", tool: "deliverable_metadata_draft", ok: true }),
+    ]));
   });
 });

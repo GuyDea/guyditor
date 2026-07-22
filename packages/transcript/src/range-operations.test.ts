@@ -66,10 +66,10 @@ function model(): GuyditorProject {
 const generated = new Map<IdPrefix | "seg" | "spk", readonly string[]>([
   ["ast", []],
   ["clp", ["clp_cccccccccc", "clp_dddddddddd", "clp_eeeeeeeeee", "clp_ffffffffff"]],
-  ["seq", []],
-  ["lyr", []],
+  ["seq", ["seq_bbbbbbbbbb"]],
+  ["lyr", ["lyr_bbbbbbbbbb"]],
   ["trn", []],
-  ["cts", []],
+  ["cts", ["cts_bbbbbbbbbb"]],
   ["ann", []],
   ["dlv", ["dlv_bbbbbbbbbb", "dlv_cccccccccc"]],
   ["pre", []],
@@ -236,11 +236,9 @@ describe("transcript range operations", () => {
     expect(withoutRevision(store.currentProject)).toEqual(withoutRevision(before));
   });
 
-  it("creates a draft short candidate without changing any sequence", async () => {
+  it("creates a draft short candidate with an independently owned sequence", async () => {
     const { store, engine } = await fixture();
     const before = structuredClone(store.currentProject);
-    const sequences = structuredClone(store.currentProject.sequences);
-
     const marked = await valueOf(engine.execute(store, [{
       op: "transcript.range.shortCandidate",
       params: {
@@ -249,12 +247,30 @@ describe("transcript range operations", () => {
       },
     }]));
 
-    expect(store.currentProject.sequences).toEqual(sequences);
     expect(store.currentProject.deliverables.at(-1)).toMatchObject({
       id: "dlv_bbbbbbbbbb",
       kind: "short",
       name: "A strong hook",
+      profile: "youtube-shorts@1.0.0",
       status: "draft",
+      sequenceId: "seq_bbbbbbbbbb",
+      captionsTrackId: "cts_bbbbbbbbbb",
+      dependencies: [{
+        derivativeClipId: "clp_cccccccccc",
+        source: {
+          assetId: "ast_aaaaaaaaaa",
+          range: {
+            start: { frames: 36, fps: "24/1" },
+            end: { frames: 72, fps: "24/1" },
+          },
+          words: { startWordId: "w000002", endWordId: "w000003" },
+          longformClipId: "clp_aaaaaaaaaa",
+        },
+      }],
+    });
+    expect(store.currentProject.sequences.at(-1)).toMatchObject({
+      id: "seq_bbbbbbbbbb",
+      clips: [{ id: "clp_cccccccccc", asset: "ast_aaaaaaaaaa" }],
     });
     expect(marked.riskClass).toBe("low");
     await valueOf(engine.execute(store, marked.applied[0]!.inverse));

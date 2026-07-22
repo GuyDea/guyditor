@@ -233,18 +233,53 @@ describe("AC-002 — inspect every accepted edit", () => {
 
     const deliverableModel = structuredClone(store.currentProject);
     deliverableModel.revision = "rev_00013";
+    deliverableModel.sequences.push({
+      id: "seq_bbbbbbbbbb",
+      name: "AC-002 derivative",
+      clips: [{
+        id: "clp_cccccccccc",
+        asset: "ast_aaaaaaaaaa",
+        source: {
+          in: { frames: 0, fps: "24/1" },
+          out: { frames: 24, fps: "24/1" },
+        },
+      }],
+    });
+    deliverableModel.layers.push({
+      id: "lyr_bbbbbbbbbb",
+      kind: "video",
+      name: "AC-002 derivative",
+      order: 1,
+      enabled: true,
+      locked: false,
+      sequence: "seq_bbbbbbbbbb",
+    });
     deliverableModel.deliverables.push({
       id: "dlv_bbbbbbbbbb",
       kind: "short",
       name: "AC-002 derivative",
       profile: "youtube-shorts@1.0.0",
-      sequenceId: "seq_aaaaaaaaaa",
+      sequenceId: "seq_bbbbbbbbbb",
       status: "draft",
-      dependencies: [{ deliverableId: "dlv_aaaaaaaaaa", revision: "rev_00012" }],
+      dependencies: [{
+        derivativeClipId: "clp_cccccccccc",
+        source: {
+          assetId: "ast_aaaaaaaaaa",
+          range: {
+            start: { frames: 0, fps: "24/1" },
+            end: { frames: 24, fps: "24/1" },
+          },
+          longformClipId: "clp_aaaaaaaaaa",
+        },
+      }],
     });
     await valueOf(store.commit(deliverableModel, transaction(store, deliverableModel.revision, {
       op: "deliverable.derive",
-      params: { sourceDeliverableId: "dlv_aaaaaaaaaa", deliverableId: "dlv_bbbbbbbbbb" },
+      params: {
+        sourceDeliverableId: "dlv_aaaaaaaaaa",
+        deliverableId: "dlv_bbbbbbbbbb",
+        createdClipIds: ["clp_cccccccccc"],
+      },
       summary: "Derive AC-002 short from the primary deliverable",
     }, 12)));
 
@@ -265,15 +300,15 @@ describe("AC-002 — inspect every accepted edit", () => {
         `${formatRevision(revision)}.yaml`,
       ), "utf8");
       const changes = changedLines(beforeText, afterText);
-      const expectedEntity = revision <= 10
-        ? id("clp", revision - 1)
+      const expectedEntities = revision <= 10
+        ? [id("clp", revision - 1)]
         : revision === 11
-          ? id("clp", 40)
+          ? [id("clp", 40)]
           : revision === 12
-            ? "cts_aaaaaaaaaa"
-            : "dlv_bbbbbbbbbb";
+            ? ["cts_aaaaaaaaaa"]
+            : ["clp_cccccccccc", "dlv_bbbbbbbbbb"];
       expect(changedEntityIds(beforeText, afterText, changes), formatRevision(revision))
-        .toEqual([expectedEntity]);
+        .toEqual(expectedEntities);
       if (revision === 11) {
         expect(changes.filter(({ line }) => !/^revision:/u.test(line)).length).toBeLessThanOrEqual(12);
         expect(changedEntityIds(beforeText, afterText, changes))

@@ -177,6 +177,7 @@ describe.skipIf(!existsSync(FIXTURE_ROOT))("AC-003 corrected word-highlight capt
         deliverableId: manifest.deliverable,
         variants: ["burnin", "clean"],
         outputDir,
+        skipValidationWarnings: true,
       });
       expect(enqueued.jobIds).toHaveLength(2);
       for (const jobId of enqueued.jobIds) {

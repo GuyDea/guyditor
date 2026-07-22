@@ -1,5 +1,9 @@
 import { createHash } from "node:crypto";
-import { compilePipTimeline } from "../../compositor/src/index.js";
+import {
+  compilePipTimeline,
+  solvePlacement,
+} from "../../compositor/src/index.js";
+import type { FramingSidecar } from "../../deliver/src/index.js";
 
 import {
   convertTime,
@@ -85,6 +89,8 @@ export interface CompileRenderGraphOptions {
   duckingOverrideSamples?: Readonly<Record<string, number>>;
   /** Smoothed normalized face centers derived from tracking sidecars for punch-in crops. */
   faceTrackAnchors?: Readonly<Record<string, { x: number; y: number }>>;
+  /** Verified per-deliverable framing decisions loaded from guyditor.framing/v1. */
+  framing?: FramingSidecar;
 }
 
 interface VisualInput {
@@ -438,9 +444,10 @@ function restyleSourceRange(
   return { startFrame, endFrame };
 }
 
-function visualLayers(project: GuyditorProject): Layer[] {
+function visualLayers(project: GuyditorProject, sequenceId?: string): Layer[] {
   return project.layers
-    .filter(({ enabled, kind }) => enabled && (
+    .filter(({ enabled, kind, sequence }) =>
+      enabled && (sequenceId === undefined || sequence === undefined || sequence === sequenceId) && (
       kind === "video" || kind === "image" || kind === "matte" ||
       kind === "text" || kind === "animation" || kind === "caption" ||
       kind === "adjustment"
@@ -473,7 +480,7 @@ function assertSupportedSubset(
       { affected: [deliverableId, deliverable.sequenceId] },
     );
   }
-  for (const layer of visualLayers(project)) {
+  for (const layer of visualLayers(project, deliverable.sequenceId)) {
     if (layer.kind === "text" || layer.kind === "animation") {
       const templatesOnly = layer.items?.every((item) => item.template !== undefined) ?? true;
       if (!templatesOnly) unsupported(`overlay items layer ${layer.id}`, "Part 7", [layer.id]);
@@ -520,11 +527,25 @@ export function compileRenderGraph(options: CompileRenderGraphOptions): RenderGr
   if (deliverable.profile !== `${profile.id}@${profile.version}`) {
     unsupported(`profile pin ${deliverable.profile}`, "Part 11", [deliverable.id]);
   }
+  const profileFps = deliverable.kind === "short" ? profile.video.fps : undefined;
+  const profileResolution = deliverable.kind === "short" ? profile.video.resolution : undefined;
+  const outputFps = profileFps ?? project.settings.timeline.fps;
+  const outputSize = profileResolution === undefined
+    ? { w: project.settings.timeline.width, h: project.settings.timeline.height }
+    : { w: profileResolution.width, h: profileResolution.height };
+  if (options.framing !== undefined && (
+    options.framing.deliverableId !== deliverable.id ||
+    options.framing.profile !== deliverable.profile
+  )) {
+    graphInvalid("The framing sidecar does not match this deliverable and profile.", [
+      deliverable.id,
+    ]);
+  }
   const mainTimeline = deriveTimeline(project, sequence.id);
   if (!mainTimeline.ok) throw mainTimeline.error;
   const sourceCompositionDurationFrames = framesForSeconds(
     mainTimeline.value.duration,
-    project.settings.timeline.fps,
+    outputFps,
   );
   const timelineInsertions = restyleTimelineInsertions(project, sequence.id);
   for (const insertion of timelineInsertions) {
@@ -540,12 +561,176 @@ export function compileRenderGraph(options: CompileRenderGraphOptions): RenderGr
   const nodes: RenderNode[] = [];
   const nextId = idFactory(`${revision}:${deliverableId}:${variant}:${quality}`);
   const canvas = {
-    w: project.settings.timeline.width,
-    h: project.settings.timeline.height,
+    ...outputSize,
     background: "0x00000000",
   };
-  const visualLayerCount = visualLayers(project).filter(({ kind }) =>
+  const visualLayerCount = visualLayers(project, deliverable.sequenceId).filter(({ kind }) =>
     kind === "video" || kind === "image").length;
+  const derivedClips = new Map(mainTimeline.value.clips.map((entry) => [entry.clipId, entry] as const));
+
+  function effectiveFramingDecision(decision: FramingSidecar["decisions"][number]): {
+    mode: "crop" | "recompose";
+    crop: typeof decision.crop;
+    layout: string | undefined;
+  } {
+    const override = deliverable.framingOverrides?.find(({ decisionId }) =>
+      decisionId === decision.decisionId);
+    return {
+      mode: override?.crop !== undefined
+        ? "crop"
+        : override?.layout !== undefined ? "recompose" : decision.mode,
+      crop: override?.crop ?? decision.crop,
+      layout: override?.layout ?? decision.layout,
+    };
+  }
+
+  function sourceTimeToOutputFrame(clipId: string, at: FrameTime): number {
+    const clip = sequence.clips.find(({ id }) => id === clipId);
+    const derived = derivedClips.get(clipId);
+    if (clip === undefined || derived === undefined) {
+      graphInvalid(`Framing decision references unavailable clip ${clipId}.`, [clipId]);
+    }
+    const sourceIn = outputFrames(clip.source.in, outputFps);
+    const sourceOut = outputFrames(clip.source.out, outputFps);
+    const sourceAt = outputFrames(at, outputFps);
+    if (sourceAt < sourceIn || sourceAt > sourceOut) {
+      graphInvalid(`Framing keyframe leaves clip ${clipId}'s source range.`, [clipId]);
+    }
+    const sourceSpan = sourceOut - sourceIn;
+    const derivedStart = outputFrames(derived.start, outputFps);
+    const derivedDuration = outputFrames(derived.duration, outputFps);
+    const timelineFrame = derivedStart + (sourceSpan === 0
+      ? 0
+      : Math.round((sourceAt - sourceIn) * derivedDuration / sourceSpan));
+    return sourceFrameToOutputFrame(timelineFrame, timelineInsertions);
+  }
+
+  function layerSourceSize(layer: Layer): { width: number; height: number } {
+    const layerSequence = project.sequences.find(({ id }) => id === layer.sequence);
+    const assetId = layerSequence?.clips[0]?.asset ?? layer.items?.find(({ asset }) => asset !== undefined)?.asset;
+    const asset = project.assets.find(({ id }) => id === assetId);
+    return {
+      width: asset?.video?.width ?? asset?.probe.width ?? project.settings.timeline.width,
+      height: asset?.video?.height ?? asset?.probe.height ?? project.settings.timeline.height,
+    };
+  }
+
+  function decisionSourceSize(
+    decision: FramingSidecar["decisions"][number],
+    layer: Layer,
+  ): { width: number; height: number } {
+    const clip = sequence.clips.find(({ id }) => id === decision.shot.clipId);
+    const asset = project.assets.find(({ id }) => id === clip?.asset);
+    return asset === undefined
+      ? layerSourceSize(layer)
+      : {
+          width: asset.video?.width ?? asset.probe.width ?? project.settings.timeline.width,
+          height: asset.video?.height ?? asset.probe.height ?? project.settings.timeline.height,
+        };
+  }
+
+  function sourceCropOnContainedCanvas(
+    rect: NonNullable<FramingSidecar["decisions"][number]["crop"]>["keyframes"][number]["rect"],
+    source: { width: number; height: number },
+  ): { crop: [number, number, number, number]; scale: number } {
+    const contain = Math.min(outputSize.w / source.width, outputSize.h / source.height);
+    const containedWidth = source.width * contain;
+    const containedHeight = source.height * contain;
+    const offsetX = (outputSize.w - containedWidth) / 2;
+    const offsetY = (outputSize.h - containedHeight) / 2;
+    const crop: [number, number, number, number] = [
+      (offsetX + rect.x * containedWidth) / outputSize.w,
+      (offsetY + rect.y * containedHeight) / outputSize.h,
+      rect.w * containedWidth / outputSize.w,
+      rect.h * containedHeight / outputSize.h,
+    ];
+    return { crop, scale: Math.min(1 / crop[2], 1 / crop[3]) };
+  }
+
+  function normalizedRecomposeKeyframe(
+    layer: Layer,
+    layerIndex: number,
+  ): Pick<TransformNodeParams["keyframes"][number], "scale" | "pos" | "anchor"> {
+    if (layer.pip !== undefined) {
+      // The PiP transform below performs the responsive constraint solve; this
+      // framing transform remains an auditable per-layer boundary.
+      return { scale: 1, pos: [0.5, 0.5], anchor: [0.5, 0.5] };
+    }
+    const source = layerSourceSize(layer);
+    if (layerIndex === 0) {
+      const cover = Math.max(outputSize.w / source.width, outputSize.h / source.height);
+      return { scale: cover, pos: [0.5, 0.5], anchor: [0.5, 0.5] };
+    }
+    const rect = solvePlacement({
+      anchor: layerIndex % 2 === 0 ? "top" : "bottom",
+      width: "84%",
+      margin: "6%",
+      aspect: `${String(source.width)}:${String(source.height)}`,
+    }, outputSize.w, outputSize.h, source.width / source.height);
+    const fit = Math.min(
+      rect.w * outputSize.w / source.width,
+      rect.h * outputSize.h / source.height,
+    );
+    return {
+      scale: fit,
+      pos: [rect.x + rect.w / 2, rect.y + rect.h / 2],
+      anchor: [0.5, 0.5],
+    };
+  }
+
+  function framingTransformParams(layer: Layer, layerIndex: number): TransformNodeParams | undefined {
+    const decisions = options.framing?.decisions ?? [];
+    const effective = decisions.map((decision) => ({
+      decision,
+      ...effectiveFramingDecision(decision),
+    }));
+    const crops = effective.filter(({ mode, crop }) => mode === "crop" && crop !== undefined);
+    if (crops.length > 0) {
+      const byFrame = new Map<number, TransformNodeParams["keyframes"][number]>();
+      for (const { decision, crop } of crops) {
+        for (const keyframe of crop!.keyframes) {
+          const atOutputFrame = sourceTimeToOutputFrame(decision.shot.clipId, keyframe.at);
+          const lowered = sourceCropOnContainedCanvas(
+            keyframe.rect,
+            decisionSourceSize(decision, layer),
+          );
+          byFrame.set(atOutputFrame, {
+            atOutputFrame,
+            crop: lowered.crop,
+            scale: lowered.scale,
+            pos: [0.5, 0.5],
+            anchor: [0.5, 0.5],
+          });
+        }
+      }
+      const keyframes = [...byFrame.values()].sort((left, right) => left.atOutputFrame - right.atOutputFrame);
+      if (keyframes.length > 0 && keyframes[0]!.atOutputFrame !== 0) {
+        keyframes.unshift({ ...keyframes[0]!, atOutputFrame: 0 });
+      }
+      return {
+        layerId: layer.id,
+        framingDecisionId: crops[0]!.decision.decisionId,
+        keyframes,
+        interpolation: "linear",
+      };
+    }
+    const recompositions = effective.filter(({ mode }) => mode === "recompose");
+    if (recompositions.length === 0) return undefined;
+    const geometry = normalizedRecomposeKeyframe(layer, layerIndex);
+    const byFrame = new Map<number, TransformNodeParams["keyframes"][number]>();
+    for (const { decision } of recompositions) {
+      const frame = sourceTimeToOutputFrame(decision.shot.clipId, decision.shot.source.start);
+      byFrame.set(frame, { atOutputFrame: frame, ...geometry });
+    }
+    const keyframes = [...byFrame.values()].sort((left, right) => left.atOutputFrame - right.atOutputFrame);
+    if (keyframes[0]!.atOutputFrame !== 0) keyframes.unshift({ ...keyframes[0]!, atOutputFrame: 0 });
+    return {
+      layerId: layer.id,
+      framingDecisionId: recompositions[0]!.decision.decisionId,
+      keyframes,
+      interpolation: "linear",
+    };
+  }
 
   function addVisualSource(
     owner: Clip | PlacedItem,
@@ -605,7 +790,7 @@ export function compileRenderGraph(options: CompileRenderGraphOptions): RenderGr
       in: { frames: 0, fps: duration.fps },
       out: duration,
     } satisfies TrimNodeParams);
-    return { nodeId: trim.id, durationFrames: outputFrames(duration, project.settings.timeline.fps) };
+    return { nodeId: trim.id, durationFrames: outputFrames(duration, outputFps) };
   }
 
   function compileSequenceLayer(layer: Layer): { root: RenderNode; durationFrames: number } {
@@ -627,7 +812,7 @@ export function compileRenderGraph(options: CompileRenderGraphOptions): RenderGr
       }
       const derived = byClip.get(clip.id);
       if (derived === undefined) graphInvalid(`No derived timeline entry exists for ${clip.id}.`, [clip.id]);
-      const durationFrames = outputFrames(derived.duration, project.settings.timeline.fps);
+      const durationFrames = outputFrames(derived.duration, outputFps);
       const previous = layerSequence.clips[index - 1];
       const transition = previous?.transitionAfter;
       inputs.push({
@@ -638,12 +823,12 @@ export function compileRenderGraph(options: CompileRenderGraphOptions): RenderGr
           : {
               transitionFromPreviousFrames: outputFrames(
                 transition.duration,
-                project.settings.timeline.fps,
+                outputFps,
               ),
             }),
       });
     }
-    const durationFrames = framesForSeconds(timeline.value.duration, project.settings.timeline.fps);
+    const durationFrames = framesForSeconds(timeline.value.duration, outputFps);
     let root = pushNode(nodes, nextId, "composite", inputs.map(({ nodeId }) => nodeId), {
       canvas,
       mode: "timeline.sequential",
@@ -687,10 +872,10 @@ export function compileRenderGraph(options: CompileRenderGraphOptions): RenderGr
       const durationFrames = fixedItemDuration(
         item,
         asset,
-        project.settings.timeline.fps,
+        outputFps,
         sourceCompositionDurationFrames,
       );
-      const sourceStartFrame = itemStart(item, sequence.id, project.settings.timeline.fps);
+      const sourceStartFrame = itemStart(item, sequence.id, outputFps);
       const restyleRange = restyleSourceRange(item);
       if (restyleRange !== undefined) {
         if (
@@ -709,8 +894,8 @@ export function compileRenderGraph(options: CompileRenderGraphOptions): RenderGr
         source = item.source;
       } else if (asset.kind === "image" || asset.image !== undefined) {
         source = {
-          in: { frames: 0, fps: project.settings.timeline.fps },
-          out: { frames: durationFrames, fps: project.settings.timeline.fps },
+          in: { frames: 0, fps: outputFps },
+          out: { frames: durationFrames, fps: outputFps },
         };
       } else if (asset.probe.duration !== undefined && "frames" in asset.probe.duration) {
         source = {
@@ -751,8 +936,9 @@ export function compileRenderGraph(options: CompileRenderGraphOptions): RenderGr
     if (layer.pip !== undefined) {
       const timeline = compilePipTimeline({
         pip: layer.pip,
-        compWidth: project.settings.timeline.width,
-        compHeight: project.settings.timeline.height,
+        compWidth: outputSize.w,
+        compHeight: outputSize.h,
+        targetAspect: profile.video.aspect ?? `${String(outputSize.w)}:${String(outputSize.h)}`,
         anchorFrames: options.anchorFrames ?? {},
       });
       const transformed = pushNode(nodes, nextId, "transform", [compiled.root.id], {
@@ -778,10 +964,22 @@ export function compileRenderGraph(options: CompileRenderGraphOptions): RenderGr
         root: styled,
       };
     }
+    if (layer.kind === "video" || layer.kind === "image") {
+      const layerIndex = visualLayers(project, deliverable.sequenceId)
+        .filter(({ kind }) => kind === "video" || kind === "image")
+        .findIndex(({ id }) => id === layer.id);
+      const framing = framingTransformParams(layer, layerIndex);
+      if (framing !== undefined) {
+        compiled = {
+          ...compiled,
+          root: pushNode(nodes, nextId, "transform", [compiled.root.id], framing),
+        };
+      }
+    }
     return compiled;
   }
 
-  const ordered = visualLayers(project);
+  const ordered = visualLayers(project, deliverable.sequenceId);
   const matteRoots = new Map<string, { root: RenderNode; durationFrames: number }>();
   for (const layer of ordered.filter(({ kind }) => kind === "matte")) {
     matteRoots.set(layer.id, compileLayer(layer));
@@ -830,8 +1028,7 @@ export function compileRenderGraph(options: CompileRenderGraphOptions): RenderGr
   if (adjustmentLayers.length === 0) {
     visualRoot = pushNode(nodes, nextId, "composite", layerInputs.map(({ root }) => root.id), {
       canvas: {
-        w: project.settings.timeline.width,
-        h: project.settings.timeline.height,
+        ...outputSize,
         background: diagnosticColor(options),
       },
       mode: "stack",
@@ -852,8 +1049,7 @@ export function compileRenderGraph(options: CompileRenderGraphOptions): RenderGr
         if (current === undefined) {
           current = pushNode(nodes, nextId, "composite", [], {
             canvas: {
-              w: project.settings.timeline.width,
-              h: project.settings.timeline.height,
+              ...outputSize,
               background: diagnosticColor(options),
             },
             mode: "stack",
@@ -876,8 +1072,7 @@ export function compileRenderGraph(options: CompileRenderGraphOptions): RenderGr
         current === undefined ? [compiled.root.id] : [current.id, compiled.root.id],
         {
           canvas: {
-            w: project.settings.timeline.width,
-            h: project.settings.timeline.height,
+            ...outputSize,
             background: diagnosticColor(options),
           },
           mode: "stack",
@@ -908,11 +1103,11 @@ export function compileRenderGraph(options: CompileRenderGraphOptions): RenderGr
 
   const outputSampleRate = project.settings.audio.sampleRate;
   const sourceCompositionDurationSamples = samplesForFrames(
-    { frames: sourceCompositionDurationFrames, fps: project.settings.timeline.fps },
+    { frames: sourceCompositionDurationFrames, fps: outputFps },
     outputSampleRate,
   );
   const compositionDurationSamples = samplesForFrames(
-    { frames: compositionDurationFrames, fps: project.settings.timeline.fps },
+    { frames: compositionDurationFrames, fps: outputFps },
     outputSampleRate,
   );
 
@@ -967,7 +1162,7 @@ export function compileRenderGraph(options: CompileRenderGraphOptions): RenderGr
     if (scoped !== null) return Number(scoped[1]);
     const absolute = /^timeline:([0-9]+)@([0-9]+\/[1-9][0-9]*)$/u.exec(clip.anchor);
     if (absolute !== null) {
-      return outputFrames({ frames: Number(absolute[1]), fps: absolute[2]! }, project.settings.timeline.fps);
+      return outputFrames({ frames: Number(absolute[1]), fps: absolute[2]! }, outputFps);
     }
     unsupported(`unresolved audio anchor ${clip.anchor}`, "Part 0 anchor resolver", [clip.id]);
   }
@@ -1013,7 +1208,7 @@ export function compileRenderGraph(options: CompileRenderGraphOptions): RenderGr
       ? 0
       : clipAnchorFrame(clip, target.id);
     const atOutputSample = samplesForFrames(
-      { frames: startFrame, fps: project.settings.timeline.fps },
+      { frames: startFrame, fps: outputFps },
       outputSampleRate,
     );
     audioSettings.push({
@@ -1076,7 +1271,7 @@ export function compileRenderGraph(options: CompileRenderGraphOptions): RenderGr
         return {
           at: {
             samples: suppliedSample ?? samplesForFrames(
-              { frames: suppliedFrame!, fps: project.settings.timeline.fps },
+              { frames: suppliedFrame!, fps: outputFps },
               outputSampleRate,
             ),
             rate: outputSampleRate,
@@ -1141,17 +1336,17 @@ export function compileRenderGraph(options: CompileRenderGraphOptions): RenderGr
     : pushNode(nodes, nextId, "timeline-insert", [masterAudio.id], {
         stream: "audio",
         sourceDuration: samplesForFrames(
-          { frames: sourceCompositionDurationFrames, fps: project.settings.timeline.fps },
+          { frames: sourceCompositionDurationFrames, fps: outputFps },
           outputSampleRate,
         ),
         outputDuration: compositionDurationSamples,
         insertions: timelineInsertions.map(({ sourceFrame, durationFrames }) => ({
           at: samplesForFrames(
-            { frames: sourceFrame, fps: project.settings.timeline.fps },
+            { frames: sourceFrame, fps: outputFps },
             outputSampleRate,
           ),
           duration: samplesForFrames(
-            { frames: durationFrames, fps: project.settings.timeline.fps },
+            { frames: durationFrames, fps: outputFps },
             outputSampleRate,
           ),
         })),
@@ -1174,8 +1369,8 @@ export function compileRenderGraph(options: CompileRenderGraphOptions): RenderGr
     revision,
     deliverableId,
     variant,
-    outputFps: project.settings.timeline.fps,
-    outputSize: { w: project.settings.timeline.width, h: project.settings.timeline.height },
+    outputFps,
+    outputSize,
     nodes,
     toolchain,
   };

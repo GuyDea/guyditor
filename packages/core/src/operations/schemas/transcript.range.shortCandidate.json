@@ -17,7 +17,20 @@
           }
         },
         "title": { "type": "string", "minLength": 1 },
-        "createdCandidateId": { "type": "string", "pattern": "^dlv_[a-z2-7]{10}$" }
+        "profile": { "type": "string", "pattern": "^[a-z0-9-]+@[0-9]+\\.[0-9]+\\.[0-9]+$" },
+        "created": {
+          "type": "object",
+          "required": ["deliverableId", "sequenceId", "layerId", "captionsTrackId", "clipIds"],
+          "additionalProperties": false,
+          "properties": {
+            "deliverableId": { "type": "string", "pattern": "^dlv_[a-z2-7]{10}$" },
+            "sequenceId": { "type": "string", "pattern": "^seq_[a-z2-7]{10}$" },
+            "layerId": { "type": "string", "pattern": "^lyr_[a-z2-7]{10}$" },
+            "additionalLayerIds": { "type": "array", "items": { "type": "string", "pattern": "^lyr_[a-z2-7]{10}$" } },
+            "captionsTrackId": { "type": "string", "pattern": "^cts_[a-z2-7]{10}$" },
+            "clipIds": { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "^clp_[a-z2-7]{10}$" } }
+          }
+        }
       }
     },
     {

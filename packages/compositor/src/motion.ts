@@ -6,7 +6,11 @@ import type {
 } from "../../core/src/index.js";
 
 import type { NormalizedRect } from "./placement.js";
-import { solvePlacement } from "./placement.js";
+import {
+  resolveResponsiveKeyframePlacement,
+  resolveResponsivePlacement,
+  solvePlacement,
+} from "./placement.js";
 
 export interface MotionPreset {
   id: string;
@@ -244,15 +248,17 @@ export interface CompilePipTimelineOptions {
   compWidth: number;
   compHeight: number;
   sourceAspect?: number;
+  targetAspect?: string;
   anchorFrames: Readonly<Record<string, number>>;
   sampleEveryFrames?: number;
 }
 
 export function compilePipTimeline(options: CompilePipTimelineOptions): CompiledPipTimeline {
   const sourceAspect = options.sourceAspect ?? options.compWidth / options.compHeight;
+  const targetAspect = options.targetAspect ?? `${String(options.compWidth)}:${String(options.compHeight)}`;
   let state: MotionState = {
     rect: solvePlacement(
-      options.pip.placement.base,
+      resolveResponsivePlacement(options.pip.placement, targetAspect),
       options.compWidth,
       options.compHeight,
       sourceAspect,
@@ -281,7 +287,7 @@ export function compilePipTimeline(options: CompilePipTimelineOptions): Compiled
   for (const { frame, keyframe } of resolved) {
     const target: MotionState = {
       rect: solvePlacement(
-        keyframe.placement,
+        resolveResponsiveKeyframePlacement(keyframe.placement, targetAspect),
         options.compWidth,
         options.compHeight,
         sourceAspect,

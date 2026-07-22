@@ -4,6 +4,8 @@ import {
   constraintsFromDrag,
   formatPlacementConstraints,
   parsePlacementConstraints,
+  resolveAspectClass,
+  resolveResponsivePlacement,
   solvePlacement,
   solvePlacementPixels,
 } from "./placement.js";
@@ -106,6 +108,24 @@ describe("PiP placement constraints", () => {
       y: expect.closeTo(0.3, 6),
       w: expect.closeTo(0.24, 6),
       h: expect.closeTo(0.24, 6),
+    });
+  });
+
+  it("selects the exact or nearest aspect class and shallow-merges responsive overrides", () => {
+    expect(resolveAspectClass("9:16")).toBe("9:16");
+    expect(resolveAspectClass("3:4")).toBe("4:5");
+    expect(resolveAspectClass("3:4", "9:16")).toBe("9:16");
+    expect(resolveResponsivePlacement({
+      base: { anchor: "bottom_right", width: "24%", margin: "4%", aspect: "16:9" },
+      overrides: {
+        "9:16": { anchor: "top", width: "46%", margin_y: "6%" },
+      },
+    }, "9:16")).toEqual({
+      anchor: "top",
+      width: "46%",
+      margin: "4%",
+      margin_y: "6%",
+      aspect: "16:9",
     });
   });
 });

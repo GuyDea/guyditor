@@ -69,7 +69,7 @@ deliverables:                                # ---- long-form and short-form del
       dependencies: [ { derivativeClipId: clp_sh6t2u3v4w,
                         source: { assetId: ast_camera4a2b,
                                   range: { start: { frames: 1204, fps: 30000/1001 }, end: { frames: 2010, fps: 30000/1001 } },
-                                  words: { from: w000012, to: w000094 },
+                                  words: { startWordId: w000012, endWordId: w000094 },
                                   longformClipId: clp_hook6x5y7z } } ] }
 presets:                                     # ---- preset pins: version + snapshot hash ----
   - { id: pre_capstyle77, name: brand-captions, kind: caption, version: 7, path: presets/pre_capstyle77@7.yaml,

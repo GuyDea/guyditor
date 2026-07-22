@@ -23,6 +23,11 @@ export interface StubDirectorOptions {
   trimFrames?: number;
   operations?: OperationInput[];
   title?: string;
+  candidateDiscovery?: {
+    profile: string;
+    maxCandidates?: number;
+  };
+  metadataDraft?: { deliverableId: string };
 }
 
 export interface StubDirectorResult {
@@ -31,6 +36,8 @@ export interface StubDirectorResult {
   context: AnnotationContextPackage;
   proposal: Proposal;
   status: Proposal;
+  candidateResult?: unknown;
+  metadataResult?: unknown;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -85,6 +92,18 @@ export async function runStubDirector(
       name: "progress_overview",
       arguments: {},
     }));
+    const candidateResult = options.candidateDiscovery === undefined
+      ? undefined
+      : toolValue<unknown>(await client.callTool({
+          name: "deliverable_candidates_discover",
+          arguments: options.candidateDiscovery,
+        }));
+    const metadataResult = options.metadataDraft === undefined
+      ? undefined
+      : toolValue<unknown>(await client.callTool({
+          name: "deliverable_metadata_draft",
+          arguments: options.metadataDraft,
+        }));
     const context = toolValue<AnnotationContextPackage>(await client.callTool({
       name: "context_package",
       arguments: { annotationId: options.annotationId },
@@ -112,7 +131,15 @@ export async function runStubDirector(
       name: "proposal_get",
       arguments: { proposalId: proposal.id },
     }));
-    return { tools, progress, context, proposal, status };
+    return {
+      tools,
+      progress,
+      context,
+      proposal,
+      status,
+      ...(candidateResult === undefined ? {} : { candidateResult }),
+      ...(metadataResult === undefined ? {} : { metadataResult }),
+    };
   } finally {
     await client.close();
   }

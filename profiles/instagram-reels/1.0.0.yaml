@@ -1,0 +1,40 @@
+format: guyditor-profile/v1
+id: instagram-reels
+version: 1.0.0
+displayName: "Instagram Reels"
+kind: short
+video:
+  aspect: "9:16"
+  resolution: { width: 1080, height: 1920 }
+  fps: { allowed: ["30/1", "60/1", "30000/1001", "60000/1001"], default: "30/1" }
+  container: mp4
+  codec: h264
+  codecProfile: high
+  pixelFormat: yuv420p
+  colorSpace: bt709
+  rateControl: { mode: crf, crf: 18, maxBitrateKbps: 12000 }
+duration: { minSeconds: 1, maxSeconds: 180, recommendedMaxSeconds: 90 }
+audio:
+  codec: aac
+  sampleRate: 48000
+  channels: 2
+  bitrateKbps: 256
+  loudness: { integratedLufs: -14, toleranceLu: 1.0, truePeakDbtp: -1.0, lraMaxLu: 11 }
+safeAreas:
+  title: { top: 0.12, bottom: 0.24, left: 0.05, right: 0.12 }
+  action: { top: 0.07, bottom: 0.18, left: 0.03, right: 0.09 }
+  platformUi:
+    - { name: right-rail, strict: true, rect: { x: 0.88, y: 0.36, w: 0.12, h: 0.44 } }
+    - { name: bottom-caption, strict: true, rect: { x: 0.00, y: 0.82, w: 0.88, h: 0.18 } }
+captionDefaults:
+  maxLines: 2
+  maxCharsPerLine: 18
+  placement: { anchor: center, verticalCenter: 0.60 }
+  perWordHighlight: true
+metadata:
+  title: null
+  description: { maxChars: 2200 }
+  tags: null
+  hashtags: { maxCount: 30, recommendedMaxCount: 5, countedIn: caption }
+cover: { resolution: { width: 1080, height: 1920 }, formats: [jpg, png], maxBytes: 2097152 }
+chapters: null

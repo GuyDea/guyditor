@@ -35,6 +35,12 @@ const annotationIdParams: JsonSchema = {
   properties: { annotationId: { type: "string", pattern: "^ann_[a-z2-7]{10}$" } },
   additionalProperties: false,
 };
+const deliverableIdParams: JsonSchema = {
+  type: "object",
+  required: ["deliverableId"],
+  properties: { deliverableId: { type: "string", pattern: "^dlv_[a-z2-7]{10}$" } },
+  additionalProperties: false,
+};
 
 export const IPC_SURFACES: readonly IpcSurface[] = Object.freeze([
   {
@@ -71,6 +77,7 @@ export const IPC_SURFACES: readonly IpcSurface[] = Object.freeze([
             intent: { enum: ["direct", "undo", "redo"] },
             label: { type: "string", minLength: 1 },
             undoOf: { type: "string", pattern: "^txn_[a-z2-7]{10}$" },
+            divergence: { enum: ["hook", "order", "pacing", "cuts", "graphics", "captions", "cta", "ending", "framing"] },
           },
           additionalProperties: false,
         },
@@ -346,6 +353,136 @@ export const IPC_SURFACES: readonly IpcSurface[] = Object.freeze([
   {
     service: "DeliverableService",
     methods: {
+      publishState: { paramsSchema: deliverableIdParams, resultSchema: anyResult, budgetMs: 20 },
+      draftMetadata: { paramsSchema: deliverableIdParams, resultSchema: anyResult, budgetMs: 150 },
+      saveMetadata: {
+        paramsSchema: {
+          type: "object",
+          required: ["deliverableId", "metadata"],
+          properties: {
+            deliverableId: { type: "string", pattern: "^dlv_[a-z2-7]{10}$" },
+            metadata: { type: "object" },
+          },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 150,
+      },
+      generateChapters: { paramsSchema: deliverableIdParams, resultSchema: anyResult, budgetMs: 150 },
+      approvePublish: {
+        paramsSchema: {
+          type: "object",
+          required: ["deliverableId", "targets"],
+          properties: {
+            deliverableId: { type: "string", pattern: "^dlv_[a-z2-7]{10}$" },
+            targets: {
+              type: "array",
+              minItems: 1,
+              uniqueItems: true,
+              items: { enum: ["metadata", "chapters"] },
+            },
+          },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 150,
+      },
+      selectThumbnail: {
+        paramsSchema: {
+          type: "object",
+          required: ["deliverableId", "composition"],
+          properties: {
+            deliverableId: { type: "string", pattern: "^dlv_[a-z2-7]{10}$" },
+            composition: { type: ["string", "null"] },
+          },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 150,
+      },
+      writeTextExports: {
+        paramsSchema: {
+          type: "object",
+          required: ["deliverableId", "targets"],
+          properties: {
+            deliverableId: { type: "string", pattern: "^dlv_[a-z2-7]{10}$" },
+            targets: {
+              type: "array",
+              minItems: 1,
+              uniqueItems: true,
+              items: { enum: ["transcript", "chapters", "metadata"] },
+            },
+          },
+          additionalProperties: false,
+        },
+        resultSchema: { type: "array" },
+        budgetMs: 150,
+      },
+      renderOutputSet: { paramsSchema: deliverableIdParams, resultSchema: anyResult, budgetMs: 150 },
+      buildKit: { paramsSchema: deliverableIdParams, resultSchema: anyResult, budgetMs: 20 },
+      batchExport: {
+        paramsSchema: {
+          type: "object",
+          required: ["deliverableIds"],
+          properties: {
+            deliverableIds: {
+              type: "array",
+              minItems: 1,
+              uniqueItems: true,
+              items: { type: "string", pattern: "^dlv_[a-z2-7]{10}$" },
+            },
+            buildKits: { type: "boolean" },
+          },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 150,
+      },
+      batchResult: { paramsSchema: jobIdParams, resultSchema: anyResult, budgetMs: 20 },
+      retryBatch: { paramsSchema: jobIdParams, resultSchema: anyResult, budgetMs: 150 },
+      profiles: { paramsSchema: emptyParams, resultSchema: { type: "array" }, budgetMs: 50 },
+      candidates: { paramsSchema: emptyParams, resultSchema: { type: "array" }, budgetMs: 50 },
+      discoverCandidates: {
+        paramsSchema: {
+          type: "object",
+          required: ["profile"],
+          properties: {
+            profile: { type: "string", pattern: "^[a-z0-9-]+@[0-9]+\\.[0-9]+\\.[0-9]+$" },
+            maxCandidates: { type: "integer", minimum: 1, maximum: 100 },
+            constraints: { type: "object" },
+          },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 20,
+      },
+      derive: {
+        paramsSchema: {
+          type: "object",
+          required: ["name", "profile"],
+          anyOf: [{ required: ["selection"] }, { required: ["candidateId"] }],
+          properties: {
+            name: { type: "string", minLength: 1 },
+            profile: { type: "string", pattern: "^[a-z0-9-]+@[0-9]+\\.[0-9]+\\.[0-9]+$" },
+            profileOverrides: { type: "object" },
+            selection: { type: "object" },
+            candidateId: { type: "string", minLength: 1 },
+          },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 150,
+      },
+      refresh: {
+        paramsSchema: {
+          type: "object",
+          required: ["deliverableId"],
+          properties: { deliverableId: { type: "string", pattern: "^dlv_[a-z2-7]{10}$" } },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 150,
+      },
       restylePlan: {
         paramsSchema: {
           type: "object",
@@ -454,6 +591,20 @@ export const IPC_SURFACES: readonly IpcSurface[] = Object.freeze([
     methods: {
       cacheStats: { paramsSchema: emptyParams, resultSchema: anyResult, budgetMs: 20 },
       captionFrame: {
+        paramsSchema: {
+          type: "object",
+          required: ["deliverableId", "revision", "frame"],
+          properties: {
+            deliverableId: { type: "string", pattern: "^dlv_[a-z2-7]{10}$" },
+            revision: { type: "string", pattern: "^rev_[0-9]{5}$" },
+            frame: { type: "integer", minimum: 0 },
+          },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 50,
+      },
+      framingFrame: {
         paramsSchema: {
           type: "object",
           required: ["deliverableId", "revision", "frame"],

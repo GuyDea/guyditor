@@ -1,4 +1,5 @@
 export { resolveFfmpeg, resolveFfprobe } from "./binaries.js";
+export { subjectTrackAvoidRegions } from "./subject-avoidance.js";
 export {
   CAPTURE_STABILITY_POLICY,
   CaptureWatcher,
@@ -141,6 +142,19 @@ export {
   applyDeterministicRestyleFilter,
   materializeRestyleSegment,
 } from "./restyle.js";
+export {
+  createSubjectTrackAnalysis,
+  parseSubjectTrackAnalysis,
+  serializeSubjectTrackAnalysis,
+  subjectTrackSidecarPath,
+  writeSubjectTrackAnalysis,
+} from "./subject-tracking.js";
+export type {
+  AnalysisSidecar,
+  CreateSubjectTrackAnalysisInput,
+  SubjectTrackAnalysis,
+  SubjectTrackData,
+} from "./subject-tracking.js";
 export type {
   ApplyDeterministicRestyleFilterInput,
   MaterializeRestyleSegmentInput,
@@ -164,6 +178,10 @@ export type {
   MlworkerTaskMethod,
   MlworkerTaskRunner,
   MlworkerTranscribeResult,
+  MlworkerTrackBox,
+  MlworkerTrackKind,
+  MlworkerTrackResult,
+  MlworkerTrackSample,
   MlworkerVadInterval,
   MlworkerVadResult,
   MlworkerWord,

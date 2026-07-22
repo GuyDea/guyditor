@@ -1,0 +1,97 @@
+{
+  "$id": "guyditor:op/deliverable.refresh",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["deliverableId", "clips", "dependencies"],
+  "properties": {
+    "deliverableId": { "type": "string", "pattern": "^dlv_[a-z2-7]{10}$" },
+    "clips": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["id", "asset", "source"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^clp_[a-z2-7]{10}$" },
+          "asset": { "type": "string", "pattern": "^ast_[a-z2-7]{10}$" },
+          "origin": { "const": "local" },
+          "source": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["in", "out"],
+            "properties": {
+              "in": { "$ref": "#/$defs/frameTime" },
+              "out": { "$ref": "#/$defs/frameTime" }
+            }
+          }
+        }
+      }
+    },
+    "dependencies": { "type": "array", "items": { "$ref": "#/$defs/dependency" } },
+    "replayedTransactionIds": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^txn_[a-z2-7]{10}$" }
+    },
+    "orphaned": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["transactionId", "explanation"],
+        "properties": {
+          "transactionId": { "type": "string", "pattern": "^txn_[a-z2-7]{10}$" },
+          "explanation": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "frameTime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["frames", "fps"],
+      "properties": {
+        "frames": { "type": "integer", "minimum": 0 },
+        "fps": { "type": "string", "pattern": "^(?:0|[1-9][0-9]*)/[1-9][0-9]*$" }
+      }
+    },
+    "wordRange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["startWordId", "endWordId"],
+      "properties": {
+        "startWordId": { "type": "string", "pattern": "^w[0-9]{6}$" },
+        "endWordId": { "type": "string", "pattern": "^w[0-9]{6}$" }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["assetId", "range"],
+      "properties": {
+        "assetId": { "type": "string", "pattern": "^ast_[a-z2-7]{10}$" },
+        "range": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["start", "end"],
+          "properties": {
+            "start": { "$ref": "#/$defs/frameTime" },
+            "end": { "$ref": "#/$defs/frameTime" }
+          }
+        },
+        "words": { "$ref": "#/$defs/wordRange" },
+        "longformClipId": { "type": "string", "pattern": "^clp_[a-z2-7]{10}$" }
+      }
+    },
+    "dependency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["derivativeClipId", "source"],
+      "properties": {
+        "derivativeClipId": { "type": "string", "pattern": "^clp_[a-z2-7]{10}$" },
+        "source": { "$ref": "#/$defs/source" }
+      }
+    }
+  }
+}
