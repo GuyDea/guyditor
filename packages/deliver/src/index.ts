@@ -1,4 +1,9 @@
 export { createRestylePlan } from "./restyle-planner.js";
+export { validateDeliverableRights } from "./rights-validation.js";
+export type {
+  DeliverableRightsCheck,
+  DeliverableRightsValidation,
+} from "./rights-validation.js";
 export type {
   CreateRestylePlanRequest,
   RestylePlanningSignals,

@@ -52,6 +52,7 @@ import setTransitionSchema from "./schemas/transition.set.json" with { type: "js
 import removeTransitionSchema from "./schemas/transition.remove.json" with { type: "json" };
 import assetIngestSchema from "./schemas/asset.ingest.json" with { type: "json" };
 import assetRemoveSchema from "./schemas/asset.remove.json" with { type: "json" };
+import assetRightsSetSchema from "./schemas/asset.rights.set.json" with { type: "json" };
 import assetMarkersAttachSchema from "./schemas/asset.markers.attach.json" with { type: "json" };
 import assetTakesSetSchema from "./schemas/asset.takes.set.json" with { type: "json" };
 import transcriptCreateSchema from "./schemas/transcript.create.json" with { type: "json" };
@@ -97,6 +98,7 @@ import templateInstallSchema from "./schemas/template.install.json" with { type:
 import templateUninstallSchema from "./schemas/template.uninstall.json" with { type: "json" };
 import restylePlanCreateSchema from "./schemas/restyle.plan.create.json" with { type: "json" };
 import restyleSegmentApproveSchema from "./schemas/restyle.segment.approve.json" with { type: "json" };
+import generationAcceptSchema from "./schemas/generation.accept.json" with { type: "json" };
 import seamTreatmentSetSchema from "./schemas/seam.treatment.set.json" with { type: "json" };
 import deliverableDeriveSchema from "./schemas/deliverable.derive.json" with { type: "json" };
 import deliverableStatusSetSchema from "./schemas/deliverable.status.set.json" with { type: "json" };
@@ -160,6 +162,7 @@ import { applyAnchorOperation } from "./anchor.js";
 import { assessBatchRisk, buildSemanticDiff } from "./diff.js";
 import { applyGraphicOperation, applyTemplateOperation } from "./graphic.js";
 import { applyRestyleOperation } from "../restyle/operations.js";
+import { applyGenerationOperation } from "../generation/operations.js";
 import { applyTakeOperation } from "../takes/operations.js";
 import { applyDeliverableOperation } from "../deliverables/operations.js";
 import {
@@ -258,6 +261,7 @@ function catalogEntry(
 const catalog = new Map<string, CatalogEntry>([
   ["asset.ingest", catalogEntry(assetIngestSchema, "normal", "none", "Ingest {n} assets")],
   ["asset.remove", catalogEntry(assetRemoveSchema, "normal", "none", "Remove {n} assets")],
+  ["asset.rights.set", catalogEntry(assetRightsSetSchema, "normal", "none", "Set rights for {assetId}")],
   ["asset.markers.attach", catalogEntry(assetMarkersAttachSchema, "low", "none", "Attach {n} markers to {asset}")],
   ["asset.takes.set", catalogEntry(assetTakesSetSchema, "low", "none", "Set take metadata for {asset}")],
   ["project.watchFolders.set", catalogEntry(projectWatchFoldersSetSchema, "low", "none", "Configure {n} capture watch folders")],
@@ -511,6 +515,12 @@ const catalog = new Map<string, CatalogEntry>([
     "consequential",
     "none",
     "Approve restyle segment {chunkId}",
+  )],
+  ["generation.accept", catalogEntry(
+    generationAcceptSchema,
+    "consequential",
+    "none",
+    "Accept generated B-roll {asset.id}",
   )],
   ["seam.treatment.set", catalogEntry(
     seamTreatmentSetSchema,
@@ -924,6 +934,7 @@ export class OperationEngine {
       !context.dryRun && !allowProposalCommit &&
       batch.some(({ op }) =>
         op === "restyle.plan.create" || op === "restyle.segment.approve" ||
+        op === "generation.accept" ||
         op === "seam.treatment.set" || op === "deliverable.derive" ||
         op === "deliverable.refresh")
     ) {
@@ -1016,6 +1027,8 @@ export class OperationEngine {
           );
       } else if (requested.op.startsWith("restyle.") || requested.op.startsWith("seam.")) {
         application = await applyRestyleOperation(working, normalized, this.#templateProvider);
+      } else if (requested.op.startsWith("generation.")) {
+        application = applyGenerationOperation(working, normalized);
       } else if (requested.op === "take.select") {
         application = applyTakeOperation(working, normalized);
       } else if (requested.op.startsWith("deliverable.")) {

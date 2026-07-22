@@ -41,6 +41,48 @@ const deliverableIdParams: JsonSchema = {
   properties: { deliverableId: { type: "string", pattern: "^dlv_[a-z2-7]{10}$" } },
   additionalProperties: false,
 };
+const candidateIdParams: JsonSchema = {
+  type: "object",
+  required: ["candidateId"],
+  properties: { candidateId: { type: "string", minLength: 1 } },
+  additionalProperties: false,
+};
+const generationRequestProperties = {
+  adapterId: { type: "string", minLength: 1 },
+  request: {
+    type: "object",
+    required: [
+      "requestId", "mode", "model", "prompt", "width", "height", "count",
+      "providerSettings",
+    ],
+    properties: {
+      requestId: { type: "string", minLength: 1 },
+      mode: { enum: ["image", "video"] },
+      model: { type: "string", minLength: 1 },
+      prompt: { type: "string", minLength: 1 },
+      negativePrompt: { type: "string" },
+      referenceAssetIds: {
+        type: "array",
+        uniqueItems: true,
+        items: { type: "string", pattern: "^ast_[a-z2-7]{10}$" },
+      },
+      width: { type: "integer", minimum: 16, maximum: 4096 },
+      height: { type: "integer", minimum: 16, maximum: 4096 },
+      durationFrames: { type: "integer", minimum: 1 },
+      fps: { type: "string", pattern: "^[1-9][0-9]*/[1-9][0-9]*$" },
+      seed: { type: "integer", minimum: 0, maximum: 4294967295 },
+      count: { type: "integer", minimum: 1, maximum: 4 },
+      providerSettings: { type: "object" },
+    },
+    additionalProperties: false,
+  },
+};
+const generationRequestParams: JsonSchema = {
+  type: "object",
+  required: ["adapterId", "request"],
+  properties: generationRequestProperties,
+  additionalProperties: false,
+};
 const skillIdProperty: JsonSchema = { type: "string", pattern: "^skl_[a-z2-7]{10}$" };
 const skillVersionProperty: JsonSchema = {
   type: "string",
@@ -512,6 +554,83 @@ export const IPC_SURFACES: readonly IpcSurface[] = Object.freeze([
     service: "AdapterRegistry",
     methods: {
       list: { paramsSchema: emptyParams, resultSchema: { type: "array" }, budgetMs: 20 },
+    },
+  },
+  {
+    service: "GenerationService",
+    methods: {
+      taxonomy: { paramsSchema: emptyParams, resultSchema: { type: "array" }, budgetMs: 20 },
+      adapters: { paramsSchema: emptyParams, resultSchema: { type: "array" }, budgetMs: 20 },
+      rightsPolicy: { paramsSchema: emptyParams, resultSchema: anyResult, budgetMs: 20 },
+      estimate: {
+        paramsSchema: generationRequestParams,
+        resultSchema: anyResult,
+        budgetMs: 50,
+      },
+      request: {
+        paramsSchema: {
+          type: "object",
+          required: ["adapterId", "request"],
+          properties: {
+            ...generationRequestProperties,
+            confirmToken: { type: "string", minLength: 1 },
+          },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 50,
+      },
+      reviewQueue: { paramsSchema: emptyParams, resultSchema: { type: "array" }, budgetMs: 50 },
+      recordCreatorJudgment: {
+        paramsSchema: {
+          type: "object",
+          required: ["candidateId", "itemId", "state", "note"],
+          properties: {
+            candidateId: { type: "string", minLength: 1 },
+            itemId: { type: "string", minLength: 1 },
+            state: { enum: ["pass", "fail", "not_applicable"] },
+            note: { type: "string", minLength: 1 },
+          },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 50,
+      },
+      resolveReview: { paramsSchema: candidateIdParams, resultSchema: anyResult, budgetMs: 50 },
+      rejectCandidate: { paramsSchema: candidateIdParams, resultSchema: anyResult, budgetMs: 50 },
+      acceptCandidate: {
+        paramsSchema: {
+          type: "object",
+          required: ["candidateId", "sequenceId", "atFrame", "durationFrames"],
+          properties: {
+            candidateId: { type: "string", minLength: 1 },
+            sequenceId: { type: "string", pattern: "^seq_[a-z2-7]{10}$" },
+            atFrame: { type: "integer", minimum: 0 },
+            durationFrames: { type: "integer", minimum: 1 },
+          },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 150,
+      },
+      regenerate: { paramsSchema: candidateIdParams, resultSchema: anyResult, budgetMs: 50 },
+      ingestSource: {
+        paramsSchema: {
+          type: "object",
+          required: ["sourceClass", "path"],
+          properties: {
+            sourceClass: {
+              enum: ["local-footage", "licensed-asset", "still-image", "screen-capture"],
+            },
+            path: { type: "string", minLength: 1 },
+            origin: { enum: ["captured", "licensed"] },
+            rights: { type: "object" },
+          },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 50,
+      },
     },
   },
   {

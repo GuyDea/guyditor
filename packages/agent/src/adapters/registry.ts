@@ -1,5 +1,6 @@
 import type {
   AdapterUserConfig,
+  BrollProviderAdapter,
   CriticAdapter,
   ProviderAdapter,
   RegisteredAdapter,
@@ -53,6 +54,13 @@ export class AdapterRegistry {
       : undefined;
   }
 
+  public resolveGeneration(idOrCanonicalName: string): BrollProviderAdapter | undefined {
+    const adapter = this.resolve(idOrCanonicalName);
+    return adapter !== undefined && "descriptor" in adapter && "submit" in adapter
+      ? adapter
+      : undefined;
+  }
+
   public resolveCritic(adapterId: string): CriticAdapter | undefined {
     const adapter = this.#byId.get(adapterId);
     return adapter !== undefined && "kind" in adapter && adapter.kind === "critic"
@@ -77,6 +85,35 @@ export class AdapterRegistry {
         "descriptor" in adapter && "restyle" in adapter)
       .sort((left, right) =>
         left.descriptor.canonicalName.localeCompare(right.descriptor.canonicalName));
+  }
+
+  public generationAdapters(): BrollProviderAdapter[] {
+    return [...this.#byId.values()]
+      .filter((adapter): adapter is BrollProviderAdapter =>
+        "descriptor" in adapter && "submit" in adapter)
+      .sort((left, right) =>
+        left.descriptor.canonicalName.localeCompare(right.descriptor.canonicalName));
+  }
+
+  public generationAvailability(idOrCanonicalName: string): {
+    available: boolean;
+    reason?: string;
+  } {
+    const adapter = this.resolveGeneration(idOrCanonicalName);
+    if (adapter === undefined) {
+      return {
+        available: false,
+        reason: `Generation adapter ${idOrCanonicalName} is not installed.`,
+      };
+    }
+    if (adapter.descriptor.availability === "declared-unavailable") {
+      return {
+        available: false,
+        reason: adapter.descriptor.unavailableReason ??
+          `Generation adapter ${adapter.descriptor.adapterId} is unavailable.`,
+      };
+    }
+    return { available: true };
   }
 
   public criticAdapters(): CriticAdapter[] {

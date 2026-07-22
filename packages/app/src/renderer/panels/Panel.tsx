@@ -59,5 +59,5 @@ export function Panel({
 }
 
 function panelNumber(id: PanelId): number {
-  return ({ media: 1, preview: 2, transcript: 3, inspector: 4, agent: 5, timeline: 6, status: 7, graphics: 8, publish: 9, skills: 10 })[id];
+  return ({ media: 1, preview: 2, transcript: 3, inspector: 4, agent: 5, timeline: 6, status: 7, graphics: 8, publish: 9, skills: 10, broll: 11 })[id];
 }

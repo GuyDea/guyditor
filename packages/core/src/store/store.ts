@@ -59,6 +59,16 @@ import type {
   RestyleGenerationProvenance,
   RestylePlan,
 } from "../restyle/index.js";
+import {
+  generationProvenanceSidecarRef,
+  generationReviewSidecarRef,
+  serializeGenerationProvenance,
+  serializeGenerationReview,
+} from "../generation/index.js";
+import type {
+  GenerationProvenance,
+  GenerationReviewAnnotation,
+} from "../generation/index.js";
 import { computeChangedRanges } from "./history.js";
 import type {
   RevisionComparison,
@@ -674,6 +684,51 @@ async function prepareRestyleCommit(
       writes.set(
         sidecarFilePath(root, provenanceReference.path),
         serializeRestyleProvenance(provenance),
+      );
+    }
+    if (operation.op === "generation.accept") {
+      const provenance = structuredClone(
+        operation.params["provenance"] as GenerationProvenance,
+      );
+      const review = structuredClone(
+        operation.params["review"] as GenerationReviewAnnotation,
+      );
+      const asset = model.assets.find(({ id }) => id === provenance.assetId);
+      if (asset === undefined) {
+        throw new Error(`Generation acceptance asset ${provenance.assetId} is not registered.`);
+      }
+      const provenanceReference = generationProvenanceSidecarRef(provenance);
+      const reviewReference = generationReviewSidecarRef(review);
+      for (const reference of [provenanceReference, reviewReference]) {
+        const registered = restyleSidecarReference(model, reference.name);
+        if (
+          registered === undefined || registered.path !== reference.path ||
+          registered.sha256 !== reference.sha256
+        ) {
+          throw new Error(`Generation sidecar ${reference.name} does not match its registration.`);
+        }
+      }
+      const cachedPath = operation.params["cachedPath"];
+      if (typeof cachedPath !== "string") {
+        throw new Error(`Generation acceptance ${asset.id} has no candidate path.`);
+      }
+      const source = await generationCandidatePath(root, cachedPath);
+      const sourceHash = createHash("sha256").update(await readFile(source)).digest("hex");
+      if (sourceHash !== asset.sha256 || provenance.contentHash !== `sha256:${sourceHash}`) {
+        throw new Error(`Generation candidate ${review.candidateId} changed after review.`);
+      }
+      const target = generatedAssetFilePath(root, asset.path);
+      if (await readOptional(target) !== undefined) {
+        throw new Error(`Frozen generation asset ${asset.path} already exists.`);
+      }
+      copies.push({ source, target });
+      writes.set(
+        sidecarFilePath(root, provenanceReference.path),
+        serializeGenerationProvenance(provenance),
+      );
+      writes.set(
+        sidecarFilePath(root, reviewReference.path),
+        serializeGenerationReview(review),
       );
     }
   }

@@ -23,6 +23,7 @@ export interface UserSettings {
     episode: { warnUsd: number | null; capUsd: number | null };
     cumulative: { warnUsd: number | null; capUsd: number | null };
   };
+  rights: { requirementLevel: "off" | "warn" | "block" };
   adapters: {
     restyle: {
       kling: {
@@ -62,6 +63,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
     episode: { warnUsd: 25, capUsd: null },
     cumulative: { warnUsd: 100, capUsd: null },
   },
+  rights: { requirementLevel: "warn" },
   adapters: {
     restyle: {
       kling: {

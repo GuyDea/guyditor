@@ -6,6 +6,7 @@ import type { TranscriptSidecar } from "../../../transcript/src/index.js";
 import type { ResolvedSkill, SkillManifest } from "../../../agent/src/index.js";
 import type { JobOverview, JobStatus, ProjectSnapshot } from "../shared/ipc.js";
 import { GlobalProgress } from "./GlobalProgress.js";
+import { BrollPanel } from "./panels/BrollPanel.js";
 import { GraphicsPanel } from "./panels/GraphicsPanel.js";
 import { errorMessage, getSnapshot, redoLast, undoLast } from "./ipc.js";
 import { InspectorPanel } from "./panels/InspectorPanel.js";
@@ -350,6 +351,7 @@ export function App(): React.JSX.Element {
       <div className="workspace-layout">
         <div className="left-stack">
           <MediaBrowserPanel {...panelProps} />
+          <BrollPanel {...panelProps} />
           <GraphicsPanel {...panelProps} />
           <SkillsPanel {...panelProps} />
         </div>

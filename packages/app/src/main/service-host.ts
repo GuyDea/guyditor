@@ -41,6 +41,7 @@ import type {
   RestyleFrameRange,
   RestylePlan,
   RestyleSeamTreatment,
+  RightsPolicy,
   SidecarRef,
   TakeMarkerSidecar,
   TransactionRecord,
@@ -97,6 +98,7 @@ import {
   AuditLog,
   CostMeter,
   FileCredentialStore,
+  GenerationExecutionService,
   KlingRestyleAdapter,
   RestyleExecutionService,
   SkillRegistry,
@@ -140,6 +142,11 @@ import type {
 } from "../shared/ipc.js";
 import type { IpcService } from "./rpc.js";
 import type { WindowEventPublisher } from "./events.js";
+import { validateExportWithRights } from "./export-validation.js";
+import {
+  generationService,
+  registerBuiltInGenerationAdapters,
+} from "./generation-service.js";
 import { skillRegistryService } from "./skill-service.js";
 import { TakeComparisonService } from "./take-comparison-service.js";
 
@@ -147,6 +154,7 @@ interface AppHostSettings {
   auditRetentionDays: number;
   budgets: BudgetConfig;
   maxConcurrentJobs: number | "auto";
+  rightsRequirementLevel?: RightsPolicy["requirementLevel"];
   restyleAdapter?: KlingAdapterConfig & { enabled: boolean };
 }
 
@@ -186,6 +194,7 @@ interface ProjectServices {
   batch: BatchExportService;
   templates: TemplateRegistry;
   adapters: AdapterRegistry;
+  generation: GenerationExecutionService;
   restyle: RestyleExecutionService;
   takeComparisons: TakeComparisonService;
   unsubscribeJobs: () => void;
@@ -658,6 +667,12 @@ export class AppServiceHost {
     return this.#options.userDirectory;
   }
 
+  public get rightsPolicy(): RightsPolicy {
+    return {
+      requirementLevel: this.#options.settings.rightsRequirementLevel ?? "warn",
+    };
+  }
+
   public get restyleAdapter(): KlingAdapterConfig & {
     enabled: boolean;
     costPerSecond: number;
@@ -1054,7 +1069,13 @@ export class WindowServiceHost {
             }],
           });
         }
-        return render.validateExport(deliverableId, revision);
+        return validateExportWithRights({
+          render,
+          store,
+          deliverableId,
+          revision,
+          rightsPolicy: this.#app.rightsPolicy,
+        });
       },
       exportOutputSet: (deliverableId, revision) => render.renderOutputSet({
         deliverableId,
@@ -1070,6 +1091,7 @@ export class WindowServiceHost {
       })),
     });
     const adapters = new AdapterRegistry();
+    registerBuiltInGenerationAdapters(adapters, this.#app.credentials);
     const kling = this.#app.restyleAdapter;
     if (kling.enabled) {
       const adapter = new KlingRestyleAdapter({
@@ -1093,6 +1115,15 @@ export class WindowServiceHost {
       });
     }
     const restyle = new RestyleExecutionService({
+      projectStore: store,
+      operationEngine: {
+        createProposal: (input) => this.#coreEngine(this.#requireProject()).createProposal(input),
+      },
+      adapters,
+      jobs,
+      costMeter: this.#app.costMeter,
+    });
+    const generation = new GenerationExecutionService({
       projectStore: store,
       operationEngine: {
         createProposal: (input) => this.#coreEngine(this.#requireProject()).createProposal(input),
@@ -1183,6 +1214,7 @@ export class WindowServiceHost {
       batch,
       templates,
       adapters,
+      generation,
       restyle,
       takeComparisons,
       unsubscribeJobs,
@@ -1398,6 +1430,15 @@ export class WindowServiceHost {
             configuration: project.adapters.configuration(adapter.descriptor.adapterId),
           })),
         };
+      case "GenerationService":
+        return project === undefined ? undefined : generationService({
+          store: project.store,
+          media: project.media,
+          adapters: project.adapters,
+          generation: project.generation,
+          rightsPolicy: this.#app.rightsPolicy,
+          acceptProposal: (proposalId) => this.#acceptProposal(proposalId),
+        });
       case "DeliverableService":
         return project === undefined ? undefined : {
           publishState: ({ deliverableId }: { deliverableId: string }) => {
@@ -1854,8 +1895,16 @@ export class WindowServiceHost {
             project.render.renderExport(params),
           renderDiagnostic: (params: Parameters<RenderService["renderDiagnostic"]>[0]) =>
             project.render.renderDiagnostic(params),
-          validateExport: ({ deliverableId, revision }: { deliverableId: string; revision: string }) =>
-            project.render.validateExport(deliverableId, revision),
+          validateExport: ({ deliverableId, revision }: {
+            deliverableId: string;
+            revision: string;
+          }) => validateExportWithRights({
+            render: project.render,
+            store: project.store,
+            deliverableId,
+            revision,
+            rightsPolicy: this.#app.rightsPolicy,
+          }),
           exportReport: () => latestExportReport(project.store),
         };
       case "AuditLog":

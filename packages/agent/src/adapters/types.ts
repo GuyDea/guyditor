@@ -14,14 +14,16 @@ export interface AdapterDescriptor {
   displayName: string;
   provider: string;
   local: boolean;
+  availability?: "available" | "declared-unavailable";
+  unavailableReason?: string;
   capabilities: Array<"critic" | "generate" | "restyle">;
   modes: Array<"image" | "video">;
   models: Array<{
     id: string;
-    mode: "video";
+    mode: "image" | "video";
     maxWidth: number;
     maxHeight: number;
-    maxDurationSec: number;
+    maxDurationSec?: number;
     supportsSeed: boolean;
   }>;
   requestSchema: object;

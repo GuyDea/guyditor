@@ -376,6 +376,29 @@ export class JobQueue {
     return row === undefined ? undefined : rowToJob(row);
   }
 
+  /** Persist an executor checkpoint (for example a resumable provider handle). */
+  public checkpoint(jobId: string, payload: JsonValue): Result<JobRecord> {
+    this.#ensureOpen();
+    const job = this.get(jobId);
+    if (job === undefined) {
+      return jobFailure("E_JOB_NOT_FOUND", `Job ${jobId} does not exist.`, jobId);
+    }
+    if (job.state !== "running") {
+      return jobFailure(
+        "E_JOB_NOT_RUNNING",
+        `Job ${jobId} in state ${job.state} cannot record a checkpoint.`,
+        jobId,
+      );
+    }
+    this.#database.prepare("UPDATE jobs SET payload = ? WHERE id = ? AND state = 'running'")
+      .run(jsonText(payload), jobId);
+    const updated = this.get(jobId);
+    if (updated === undefined) {
+      return jobFailure("E_JOB_NOT_FOUND", `Job ${jobId} does not exist.`, jobId);
+    }
+    return success(updated);
+  }
+
   public registerExecutor(kind: string, executor: JobExecutor): void {
     this.#ensureOpen();
     if (kind.length === 0) throw new TypeError("Executor kind must not be empty.");

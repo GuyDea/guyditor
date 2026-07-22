@@ -1,6 +1,19 @@
 export { resolveFfmpeg, resolveFfprobe } from "./binaries.js";
 export { subjectTrackAvoidRegions } from "./subject-avoidance.js";
 export {
+  derivePromptSynthesis,
+  isBrollSourceClass,
+  resolveBrollSourcePath,
+  synthesizePromptClip,
+} from "./broll.js";
+export type {
+  BrollSourcePathRequest,
+  PromptSynthesisParameters,
+  ResolvedBrollSourcePath,
+  SynthesizedPromptClip,
+  SynthesizePromptClipInput,
+} from "./broll.js";
+export {
   CAPTURE_STABILITY_POLICY,
   CaptureWatcher,
   parseCaptureFilename,

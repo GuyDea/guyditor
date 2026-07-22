@@ -156,6 +156,34 @@ describe("AppServiceHost", () => {
     await appHost.close();
   });
 
+  it("exposes the complete B-roll taxonomy and generation adapter availability", async () => {
+    const root = await mkdtemp(join(tmpdir(), "guyditor-host-generation-"));
+    const userDirectory = await mkdtemp(join(tmpdir(), "guyditor-host-generation-user-"));
+    const created = await createProject(root, projectFixture());
+    if (!created.ok) throw created.error;
+    const appHost = testAppHost(userDirectory);
+    const windowHost = appHost.createWindowHost({
+      publisher: new WindowEventPublisher(() => undefined),
+    });
+    await windowHost.openProject(root);
+
+    const generation = windowHost.resolveService("GenerationService");
+    const taxonomy = generation?.["taxonomy"];
+    const adapters = generation?.["adapters"];
+    if (typeof taxonomy !== "function" || typeof adapters !== "function") {
+      throw new Error("Generation service is unavailable.");
+    }
+    expect(await Reflect.apply(taxonomy, generation, [])).toHaveLength(7);
+    expect(await Reflect.apply(adapters, generation, [])).toMatchObject([
+      { descriptor: { canonicalName: ["adp", "comfyui"].join("_"), availability: "declared-unavailable" } },
+      { descriptor: { canonicalName: ["adp", "httpgen"].join("_"), availability: "declared-unavailable" } },
+      { descriptor: { canonicalName: ["adp", "stubgen"].join("_"), availability: "available" } },
+    ]);
+
+    await windowHost.close();
+    await appHost.close();
+  });
+
   it("executes clip.trim through a window service and emits the committed revision", async () => {
     const root = await mkdtemp(join(tmpdir(), "guyditor-host-project-"));
     const userDirectory = await mkdtemp(join(tmpdir(), "guyditor-host-user-"));
