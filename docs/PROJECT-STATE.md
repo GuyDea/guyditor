@@ -1,6 +1,6 @@
 # Guyditor — build state and resume guide
 
-**Updated:** 2026-07-19 (end of coordinated build session)
+**Updated:** 2026-07-22
 **Build model:** Codex CLI implements; Claude (Claude Code) coordinates, reviews, and commits.
 To resume: open Claude Code in this directory and say "continue the Guyditor build"
 (Claude's project memory carries the detailed resume procedure).
@@ -11,21 +11,19 @@ To resume: open Claude Code in this directory and say "continue the Guyditor bui
   536 unit/property tests, 19 Playwright e2e, golden + contract suites,
   AC-001/002/003/004/005/006 automated, AC-009 harness).
   Gate reports: `docs/gates/`. Requirement coverage: `docs/traceability.md`.
-- **Branch `impl/restyle-001`** (current, clean): amendment 001 step 1 **committed**
-  (5bb1d55) — restyle adapter interface, Kling adapter (deterministic stub mode until
-  credentials exist; live wire format isolated + PROVIDER-VERIFY flagged), ≤10s
-  segmentation planner with whole-plan cost preflight, provenance freezing,
-  staleness, and the plan review UI.
-- **Amendments** (`docs/amendments/`): 001 segmented AI restyle (accepted; in
-  progress), 002 global progress visibility (accepted; implemented as FR-907).
+- **Amendment 001 (segmented AI restyle) is COMPLETE and merged** (a8953d5): adapter
+  interface, Kling client (stub mode; live wire format PROVIDER-VERIFY-flagged in
+  packages/agent/src/adapters/kling-api.ts), ≤10s segmentation planner with cost
+  preflight, provenance freezing, staleness, and FR-609 seam concealment
+  (interstitials + punch-in) with exact-frame resume proven by golden.
+- **Amendment 002** (global progress visibility) implemented as FR-907.
 
 ## What Claude does on resume
 
-1. Next task: FR-609 seam application (punch-in alternation + infographic
-   interstitial templates on chunk boundaries), completing amendment 001.
-2. Verify the Kling wire format against live docs/credentials (one file:
+1. M3 campaign (in progress): shorts, platform profiles, vertical recomposition,
+   publish kits (BRD Priority C).
+2. On credentials: verify the Kling wire format against live docs (one file:
    `packages/agent/src/adapters/kling-api.ts`).
-3. Then: M3 campaign (shorts, vertical recomposition, publish kits).
 
 ## Waiting on the creator (Martin)
 
