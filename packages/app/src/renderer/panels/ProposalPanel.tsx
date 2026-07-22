@@ -1,8 +1,16 @@
 import { useState } from "react";
 
-import type { Proposal, SemanticDiffEntry } from "../../../../core/src/index.js";
+import type {
+  EvidenceRef,
+  Proposal,
+  SemanticDiffEntry,
+} from "../../../../core/src/index.js";
 import { errorMessage } from "../ipc.js";
-import { useAgentPanelStore } from "../state/view-state.js";
+import {
+  useAgentPanelStore,
+  usePreviewStore,
+  useSelectionStore,
+} from "../state/view-state.js";
 import { Panel } from "./Panel.js";
 import { RestylePlanReview } from "./RestylePlan.js";
 import type { WorkspacePanelProps } from "./types.js";
@@ -35,6 +43,34 @@ export function ProposalPanel({
   const [captureSkillId, setCaptureSkillId] = useState("");
   const [exampleDescription, setExampleDescription] = useState("");
   const [resolvedExamples, setResolvedExamples] = useState<Proposal[]>([]);
+  const setPlayhead = usePreviewStore((state) => state.setPlayhead);
+  const selectWord = useSelectionStore((state) => state.selectWord);
+  const setWordRange = useSelectionStore((state) => state.setWordRange);
+  const selectAnnotation = useSelectionStore((state) => state.selectAnnotation);
+  const selectDeliverable = useSelectionStore((state) => state.selectDeliverable);
+
+  function jumpToEvidence(evidence: EvidenceRef): void {
+    if (evidence.sourceRange !== undefined) setPlayhead(evidence.sourceRange.start);
+    if (evidence.wordRange !== undefined) {
+      selectWord(evidence.wordRange.from);
+      setWordRange({
+        fromWord: evidence.wordRange.from,
+        toWord: evidence.wordRange.to,
+      });
+    }
+    if (evidence.annotationId !== undefined) selectAnnotation(evidence.annotationId);
+    if (evidence.deliverableId !== undefined) selectDeliverable(evidence.deliverableId);
+  }
+
+  function evidenceLabel(evidence: EvidenceRef): string {
+    if (evidence.wordRange !== undefined) {
+      return `${evidence.wordRange.from}–${evidence.wordRange.to}`;
+    }
+    if (evidence.sourceRange !== undefined) {
+      return `${evidence.assetId ?? "source"} @ ${String(evidence.sourceRange.start.frames)}f`;
+    }
+    return evidence.annotationId ?? evidence.deliverableId ?? evidence.assetId ?? "evidence";
+  }
 
   async function act(
     proposal: Proposal,
@@ -171,6 +207,73 @@ export function ProposalPanel({
                   <div className="chip-row">
                     {proposal.addresses.map((id) => <span key={id} className="entity-chip">{id}</span>)}
                   </div>
+                  {proposal.assessment === undefined ? null : (
+                    <section
+                      className="assessment-review"
+                      data-testid={`proposal-assessment-${proposal.id}`}
+                    >
+                      <header>
+                        <span className="state-chip" data-state="ready">Recommendation</span>
+                        <strong>{proposal.assessment.question}</strong>
+                      </header>
+                      <dl className="assessment-criteria">
+                        {proposal.assessment.criteria.map((criterion) => (
+                          <div key={criterion.id}>
+                            <dt>{criterion.id}</dt>
+                            <dd>
+                              {criterion.text}
+                              <small>{criterion.source === "skill_rule"
+                                ? `${criterion.skillId} · ${criterion.ruleId}`
+                                : "inline disclosed criterion"}</small>
+                            </dd>
+                          </div>
+                        ))}
+                      </dl>
+                      {proposal.assessment.subjects.map((subject, subjectIndex) => (
+                        <article key={`${proposal.assessmentId}-${String(subjectIndex)}`}>
+                          <button
+                            type="button"
+                            className="evidence-jump"
+                            onClick={() => jumpToEvidence(subject.ref)}
+                          >Jump to {evidenceLabel(subject.ref)}</button>
+                          <h4>Observed</h4>
+                          {subject.observations.map((observation) => (
+                            <div className="assessment-observation" key={observation.id}>
+                              <p>{observation.text}</p>
+                              <div className="chip-row">
+                                {observation.evidence.map((evidence, evidenceIndex) => (
+                                  <button
+                                    type="button"
+                                    className="entity-chip evidence-jump"
+                                    key={`${observation.id}-${String(evidenceIndex)}`}
+                                    onClick={() => jumpToEvidence(evidence)}
+                                  >{evidenceLabel(evidence)}</button>
+                                ))}
+                              </div>
+                            </div>
+                          ))}
+                          <h4>Inferred</h4>
+                          {subject.inferences.map((inference, inferenceIndex) => (
+                            <p className="assessment-inference" key={`${inference.text}-${String(inferenceIndex)}`}>
+                              {inference.text}
+                              <small>{inference.confidence} confidence · based on {inference.basedOn.join(", ")}</small>
+                            </p>
+                          ))}
+                          {subject.scores === undefined ? null : (
+                            <div className="score-ledger">
+                              {subject.scores.map((score) => (
+                                <span key={score.criterionId}>{score.criterionId} {String(score.value)}/5</span>
+                              ))}
+                            </div>
+                          )}
+                        </article>
+                      ))}
+                      {proposal.assessment.comparison === undefined ? null : (
+                        <p><strong>Ranking:</strong> {proposal.assessment.comparison.rankedRefs.join(" → ")} · {proposal.assessment.comparison.rationale}</p>
+                      )}
+                      <small className="assessment-limitations">Limitations: {proposal.assessment.limitations}</small>
+                    </section>
+                  )}
                   <div className="semantic-diff" data-testid={`proposal-diff-${proposal.id}`}>
                     {proposal.diff === undefined ? (
                       <ul>{proposal.operations.map((operation, index) => <li key={`${operation.op}-${String(index)}`}>{operation.summary}</li>)}</ul>

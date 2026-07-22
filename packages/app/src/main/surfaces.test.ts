@@ -30,7 +30,10 @@ describe("workspace IPC surfaces", () => {
       JobQueue: ["overview"],
       MediaEngine: ["ingest", "pickAndIngest", "resolveProxy", "readPeaks", "importPickup"],
       TranscriptEngine: ["enqueueFillerDetection", "proposePickup"],
-      CaptureWatcher: ["list", "configure", "reconcile", "listTakes"],
+      CaptureWatcher: [
+        "list", "configure", "reconcile", "listTakes", "listTakeComparisons",
+        "compareTakes", "selectTake",
+      ],
       AnnotationService: ["list", "get", "contextPackage"],
       SkillRegistry: [
         "list",

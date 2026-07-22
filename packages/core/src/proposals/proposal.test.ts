@@ -29,6 +29,7 @@ import type {
   ProposalReason,
   ProposalStore,
   Result,
+  SubjectiveAssessment,
   TransactionRecord,
 } from "../index.js";
 import { projectFixture } from "../project/test-fixtures.js";
@@ -69,6 +70,36 @@ function reason(text = "Tighten the ending without changing the story."): Propos
   return {
     text,
     sources: [{ kind: "instruction", ref: "tighten the ending" }],
+  };
+}
+
+function assessment(): SubjectiveAssessment {
+  return {
+    assessmentId: "asm_aaaaaaaaaa",
+    framing: "recommendation",
+    question: "Is the proposed ending concise?",
+    criteria: [{ id: "clarity", source: "inline", text: "Prefer a direct final sentence." }],
+    subjects: [{
+      ref: {
+        assetId: "ast_aaaaaaaaaa",
+        sourceRange: { start: { frames: 12, fps: "24/1" }, durFrames: 12 },
+      },
+      observations: [{
+        id: "obs-ending-duration",
+        text: "The final sentence occupies twelve source frames.",
+        evidence: [{
+          assetId: "ast_aaaaaaaaaa",
+          sourceRange: { start: { frames: 12, fps: "24/1" }, durFrames: 12 },
+        }],
+      }],
+      inferences: [{
+        text: "The shorter ending is likely to feel more concise.",
+        basedOn: ["obs-ending-duration"],
+        confidence: "medium",
+      }],
+      scores: [{ criterionId: "clarity", value: 4, scale: "1-5" }],
+    }],
+    limitations: "Conciseness is an editorial recommendation, not an observed audience response.",
   };
 }
 
@@ -631,6 +662,54 @@ describe("proposal lifecycle", () => {
       instruction: { kind: "user-text", text: "trim" },
       actor: { kind: "agent", id: "ses_aaaaaaaaaa" },
       reason: { text: "", sources: [] },
+      addresses: [],
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "E_OP_REASON_REQUIRED", acceptedStateChanged: false },
+    });
+  });
+
+  it("persists an attached assessment beside the proposal and restores it on read", async () => {
+    const { root, engine } = await projectEngine();
+
+    const proposal = await valueOf(engine.createProposal({
+      operations: [trim()],
+      instruction: { kind: "user-text", text: "assess and tighten the ending" },
+      actor: { kind: "agent", id: "ses_aaaaaaaaaa" },
+      reason: reason("Use the assessed shorter ending."),
+      assessment: assessment(),
+      addresses: [],
+    }));
+
+    expect(proposal).toMatchObject({
+      assessmentId: "asm_aaaaaaaaaa",
+      assessment: { framing: "recommendation", limitations: expect.any(String) },
+    });
+    await expect(readFile(
+      join(root, "proposals", proposal.id, "assessment.json"),
+      "utf8",
+    )).resolves.toBe(`${JSON.stringify(assessment(), null, 2)}\n`);
+    const reopened = await valueOf(openProject(root));
+    await expect(reopened.readProposal(proposal.id)).resolves.toMatchObject({
+      ok: true,
+      value: { assessment: assessment() },
+    });
+  });
+
+  it("requires Reason on low-risk assessment-carrying proposals", async () => {
+    const { engine } = await projectEngine();
+
+    const result = await engine.createProposal({
+      operations: [{
+        op: "asset.takes.set",
+        params: { assetId: "ast_aaaaaaaaaa", takeIds: [], sidecar: null },
+      }],
+      instruction: { kind: "skill-policy", text: "assessment-derived metadata" },
+      actor: { kind: "agent", id: "ses_aaaaaaaaaa" },
+      reason: { text: "", sources: [] },
+      assessment: assessment(),
       addresses: [],
     });
 

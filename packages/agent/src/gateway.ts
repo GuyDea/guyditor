@@ -21,8 +21,11 @@ import type {
   AutomationPolicy,
   OperationInput,
   ProjectStore,
+  SubjectiveAssessment,
   TemplateProvider,
 } from "../../core/src/index.js";
+import type { AssessmentStore } from "./assessment-store.js";
+import type { CriticExecutionService } from "./critic-execution.js";
 import type { DataClass } from "./audit-types.js";
 import type { AuditLog } from "./audit-log.js";
 import {
@@ -49,6 +52,10 @@ export const AC004_GATEWAY_TOOLS = Object.freeze([
 export const M3_CANDIDATE_GATEWAY_TOOL = "deliverable_candidates_discover" as const;
 export const M3_METADATA_GATEWAY_TOOL = "deliverable_metadata_draft" as const;
 export const M4_ACTIVE_SKILLS_GATEWAY_TOOL = "active_skills_get" as const;
+export const M4_ASSESSMENT_SUBMIT_TOOL = "assessment_submit" as const;
+export const M4_CRITIC_REQUEST_TOOL = "critic_request" as const;
+export const M4_CRITIC_RESULT_GET_TOOL = "critic_result_get" as const;
+export const M4_TAKES_COMPARE_TOOL = "assist_takes_compare" as const;
 
 export interface CandidateDiscoveryToolInput {
   profile: string;
@@ -86,6 +93,9 @@ export interface AgentGatewayOptions {
   candidateDiscovery?: (input: CandidateDiscoveryToolInput) => Promise<unknown>;
   metadataDraft?: (deliverableId: string) => Promise<unknown>;
   skillRegistry?: GatewaySkillRegistry;
+  assessmentStore?: Pick<AssessmentStore, "submit" | "get">;
+  criticExecution?: Pick<CriticExecutionService, "request" | "get">;
+  takeComparison?: (takeIds: string[]) => Promise<unknown>;
 }
 
 export interface StartedAgentGateway {
@@ -202,6 +212,9 @@ export class AgentGateway {
   readonly #candidateDiscovery: AgentGatewayOptions["candidateDiscovery"];
   readonly #metadataDraft: AgentGatewayOptions["metadataDraft"];
   readonly #skillRegistry: GatewaySkillRegistry;
+  readonly #assessmentStore: AgentGatewayOptions["assessmentStore"];
+  readonly #criticExecution: AgentGatewayOptions["criticExecution"];
+  readonly #takeComparison: AgentGatewayOptions["takeComparison"];
   readonly #sessions: SessionManager;
   readonly #transports = new Map<string, ActiveTransport>();
   #http: Server | undefined;
@@ -223,6 +236,9 @@ export class AgentGateway {
     this.#candidateDiscovery = options.candidateDiscovery;
     this.#metadataDraft = options.metadataDraft;
     this.#skillRegistry = options.skillRegistry ?? new SkillRegistry();
+    this.#assessmentStore = options.assessmentStore;
+    this.#criticExecution = options.criticExecution;
+    this.#takeComparison = options.takeComparison;
     this.#sessions = new SessionManager(this.#audit, {
       ...(options.sessionIdFactory === undefined
         ? {}
@@ -456,16 +472,24 @@ export class AgentGateway {
           op: z.string().min(1),
           params: z.record(z.string(), z.unknown()),
         })).min(1),
-        addresses: z.array(z.string().regex(ANNOTATION_ID)).min(1),
+        addresses: z.array(z.string().regex(ANNOTATION_ID)).default([]),
+        assessmentId: z.string().regex(/^asm_[a-z2-7]{10}$/u).optional(),
+        evidenceRefs: z.array(z.string().min(1)).optional(),
         divergence: z.enum(["hook", "order", "pacing", "cuts", "graphics", "captions", "cta", "ending", "framing"]).optional(),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
-    }, async ({ title, ops, addresses, divergence }, extra) => this.#toolCall(
+    }, async ({ title, ops, addresses, divergence, assessmentId, evidenceRefs }, extra) => this.#toolCall(
       session,
       "proposal_create",
       String(extra.requestId),
-      { title, ops, addresses, divergence },
+      { title, ops, addresses, divergence, assessmentId, evidenceRefs },
       async () => {
+        const assessment = assessmentId === undefined
+          ? undefined
+          : await this.#assessmentStore?.get(assessmentId);
+        if (assessmentId !== undefined && assessment === undefined) {
+          throw new Error(`E_ASSESSMENT_NOT_FOUND: Assessment ${assessmentId} was not found.`);
+        }
         const engine = new OperationEngine(this.#project.currentProject, {
           appVersion: "0.0.0",
           proposalStore: this.#project,
@@ -479,7 +503,9 @@ export class AgentGateway {
         });
         const result = await engine.createProposal({
           operations: ops as OperationInput[],
-          instruction: { kind: "annotation", annotation: addresses[0] },
+          instruction: addresses[0] === undefined
+            ? { kind: "skill-policy" }
+            : { kind: "annotation", annotation: addresses[0] },
           actor: {
             kind: "agent",
             id: session.sessionId,
@@ -489,17 +515,143 @@ export class AgentGateway {
           ...(divergence === undefined ? {} : { divergence }),
           reason: {
             text: title,
-            sources: addresses.map((annotationId) => ({
-              kind: "annotation" as const,
-              ref: annotationId,
-            })),
+            sources: [
+              ...addresses.map((annotationId) => ({
+                kind: "annotation" as const,
+                ref: annotationId,
+              })),
+              ...(assessmentId === undefined ? [] : [{
+                kind: "media-evidence" as const,
+                ref: assessmentId,
+              }]),
+              ...(evidenceRefs ?? []).map((ref) => ({
+                kind: "media-evidence" as const,
+                ref,
+              })),
+            ],
           },
+          ...(assessment === undefined ? {} : { assessment }),
           addresses,
         });
         if (!result.ok) throw result.error;
         return { value: result.value, dataClasses: ["metadata" as const] };
       },
     ));
+
+    if (this.#assessmentStore !== undefined) {
+      server.registerTool(M4_ASSESSMENT_SUBMIT_TOOL, {
+        description: "Validate and cache a recommendation-framed subjective assessment with inspectable evidence.",
+        inputSchema: { assessment: z.record(z.string(), z.unknown()) },
+        annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+      }, async ({ assessment }, extra) => this.#toolCall(
+        session,
+        M4_ASSESSMENT_SUBMIT_TOOL,
+        String(extra.requestId),
+        { assessment },
+        async () => ({
+          value: await this.#assessmentStore!.submit(assessment) as SubjectiveAssessment,
+          dataClasses: ["metadata" as const],
+        }),
+      ));
+    }
+    if (this.#criticExecution !== undefined) {
+      server.registerTool(M4_CRITIC_REQUEST_TOOL, {
+        description: "Send a consent-gated proxy range to a registered advisory critic and cache its findings.",
+        inputSchema: {
+          adapterId: z.string().min(1),
+          confirmToken: z.string().min(1).optional(),
+          request: z.object({
+            critiqueId: z.string().regex(/^crt_[a-z2-7]{10}$/u),
+            subject: z.object({
+              deliverableId: z.string().regex(/^dlv_[a-z2-7]{10}$/u).optional(),
+              proxyFile: z.object({ path: z.string().min(1), sha256: z.string().optional() }),
+              range: z.record(z.string(), z.unknown()),
+            }),
+            rubric: z.array(z.object({
+              id: z.string().min(1),
+              source: z.enum(["skill_rule", "inline"]),
+              skillId: z.string().optional(),
+              ruleId: z.string().optional(),
+              text: z.string().min(1),
+            })),
+            questions: z.array(z.string().min(1)),
+          }),
+        },
+        annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+      }, async ({ adapterId, request: critiqueRequest, confirmToken }, extra) => this.#toolCall(
+        session,
+        M4_CRITIC_REQUEST_TOOL,
+        String(extra.requestId),
+        { adapterId, request: critiqueRequest, confirmToken },
+        async () => {
+          const result = await this.#criticExecution!.request({
+            adapterId,
+            request: {
+              critiqueId: critiqueRequest.critiqueId,
+              questions: [...critiqueRequest.questions],
+              rubric: critiqueRequest.rubric.map((criterion) => ({
+                id: criterion.id,
+                source: criterion.source,
+                text: criterion.text,
+                ...(criterion.skillId === undefined ? {} : { skillId: criterion.skillId }),
+                ...(criterion.ruleId === undefined ? {} : { ruleId: criterion.ruleId }),
+              })),
+              subject: {
+                ...(critiqueRequest.subject.deliverableId === undefined
+                  ? {}
+                  : { deliverableId: critiqueRequest.subject.deliverableId }),
+                range: critiqueRequest.subject.range,
+                proxyFile: {
+                  path: critiqueRequest.subject.proxyFile.path,
+                  ...(critiqueRequest.subject.proxyFile.sha256 === undefined
+                    ? {}
+                    : { sha256: critiqueRequest.subject.proxyFile.sha256 }),
+                },
+              },
+            },
+            context: {
+              sessionId: session.sessionId,
+              projectId: session.projectId,
+              taskId: critiqueRequest.critiqueId,
+              initiator: "agent",
+            },
+            ...(confirmToken === undefined ? {} : { confirmToken }),
+          });
+          if (!result.ok) throw result.error;
+          return { value: result.value, dataClasses: ["metadata" as const] };
+        },
+      ));
+      server.registerTool(M4_CRITIC_RESULT_GET_TOOL, {
+        description: "Fetch cached advisory critic findings for proposal translation.",
+        inputSchema: { critiqueId: z.string().regex(/^crt_[a-z2-7]{10}$/u) },
+        annotations: { readOnlyHint: true, openWorldHint: false },
+      }, async ({ critiqueId }, extra) => this.#toolCall(
+        session,
+        M4_CRITIC_RESULT_GET_TOOL,
+        String(extra.requestId),
+        { critiqueId },
+        async () => ({
+          value: await this.#criticExecution!.get(critiqueId) ?? null,
+          dataClasses: ["metadata" as const],
+        }),
+      ));
+    }
+    if (this.#takeComparison !== undefined) {
+      server.registerTool(M4_TAKES_COMPARE_TOOL, {
+        description: "Compare transcript-similar takes using delivery, technical, and pinned preference evidence.",
+        inputSchema: { takeIds: z.array(z.string().regex(/^tak_[a-z2-7]{10}$/u)).min(2) },
+        annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+      }, async ({ takeIds }, extra) => this.#toolCall(
+        session,
+        M4_TAKES_COMPARE_TOOL,
+        String(extra.requestId),
+        { takeIds },
+        async () => ({
+          value: await this.#takeComparison!([...takeIds]),
+          dataClasses: ["metadata" as const, "transcript" as const, "audio" as const],
+        }),
+      ));
+    }
 
     server.registerTool("proposal_get", {
       description: "Read current proposal status and creator outcome.",
@@ -597,7 +749,11 @@ export class AgentGateway {
     tool: typeof AC004_GATEWAY_TOOLS[number] |
       typeof M3_CANDIDATE_GATEWAY_TOOL |
       typeof M3_METADATA_GATEWAY_TOOL |
-      typeof M4_ACTIVE_SKILLS_GATEWAY_TOOL,
+      typeof M4_ACTIVE_SKILLS_GATEWAY_TOOL |
+      typeof M4_ASSESSMENT_SUBMIT_TOOL |
+      typeof M4_CRITIC_REQUEST_TOOL |
+      typeof M4_CRITIC_RESULT_GET_TOOL |
+      typeof M4_TAKES_COMPARE_TOOL,
     callId: string,
     params: unknown,
     execute: () => Promise<{ value: Value; dataClasses: DataClass[] }>,

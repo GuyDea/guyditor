@@ -3,6 +3,7 @@ import type { OrphanedAnchorRecord } from "../anchors/bookkeeping.js";
 import type { Result } from "../errors.js";
 import type { GuyditorProject, SemanticAnchor } from "../project/index.js";
 import type { DivergenceClass } from "../deliverables/types.js";
+import type { SubjectiveAssessment } from "../assessments/index.js";
 import type { SemanticOperation, TransactionRecord } from "../store/types.js";
 
 export type RiskClass = "low" | "normal" | "consequential";
@@ -183,6 +184,8 @@ export interface Proposal {
   sessionId?: string;
   divergence?: DivergenceClass;
   reason: ProposalReason;
+  assessmentId?: string;
+  assessment?: SubjectiveAssessment;
   riskClass: RiskClass;
   addresses: string[];
   applied?: AppliedOperation[];
@@ -205,6 +208,7 @@ export interface CreateProposalRequest {
   sessionId?: string;
   divergence?: DivergenceClass;
   reason: ProposalReason;
+  assessment?: SubjectiveAssessment;
   addresses: string[];
   warnings?: ContinuityWarning[];
 }

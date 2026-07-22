@@ -11,6 +11,11 @@ export {
   AC004_GATEWAY_TOOLS,
   M3_CANDIDATE_GATEWAY_TOOL,
   M3_METADATA_GATEWAY_TOOL,
+  M4_ACTIVE_SKILLS_GATEWAY_TOOL,
+  M4_ASSESSMENT_SUBMIT_TOOL,
+  M4_CRITIC_REQUEST_TOOL,
+  M4_CRITIC_RESULT_GET_TOOL,
+  M4_TAKES_COMPARE_TOOL,
 } from "./gateway.js";
 export type {
   AgentGatewayOptions,
@@ -52,6 +57,8 @@ export type {
   ToolCallRecord,
 } from "./audit-types.js";
 export { AdapterRegistry } from "./adapters/registry.js";
+export { StubCriticAdapter } from "./adapters/stub-critic.js";
+export type { StubCriticAdapterOptions } from "./adapters/stub-critic.js";
 export {
   EphemeralCredentialStore,
   FileCredentialStore,
@@ -85,6 +92,11 @@ export type {
   AdapterJobStatus,
   AdapterUserConfig,
   BrollProviderAdapter,
+  CriticAdapter,
+  CriticFileRef,
+  CritiqueFinding,
+  CritiqueRequest,
+  CritiqueResult,
   GenerationRequest,
   GenerationResult,
   ProviderAdapter,
@@ -92,7 +104,16 @@ export type {
   RestyleAdapter,
   RestyleRequest,
   RestyleResult,
+  RegisteredAdapter,
 } from "./adapters/types.js";
+export { CriticExecutionService } from "./critic-execution.js";
+export type {
+  CriticExecutionInput,
+  CriticExecutionServiceOptions,
+  DataBoundaryPolicy,
+} from "./critic-execution.js";
+export { AssessmentStore } from "./assessment-store.js";
+export type { AssessmentStoreOptions } from "./assessment-store.js";
 export { RestyleExecutionService } from "./restyle-execution.js";
 export type {
   RestyleExecutionServiceOptions,
@@ -100,3 +121,13 @@ export type {
   StartRestylePlanInput,
 } from "./restyle-execution.js";
 export * from "./skills/index.js";
+export {
+  buildTakeComparison,
+  takePreferenceRubric,
+} from "./take-comparison.js";
+export type {
+  TakeComparisonCandidateInput,
+  TakeComparisonInput,
+  TakePreferenceRubric,
+  TakePreferenceWeights,
+} from "./take-comparison.js";

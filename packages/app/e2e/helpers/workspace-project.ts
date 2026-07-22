@@ -161,7 +161,10 @@ async function addProposal(store: ProjectStore): Promise<void> {
     }],
     instruction: { kind: "annotation", annotation: "ann_bbbbbbbbbb" },
     actor: { kind: "agent", id: "stub-director", model: "deterministic" },
-    reason: { text: "Tighten the first beat", sources: [] },
+    reason: {
+      text: "Tighten the first beat",
+      sources: [{ kind: "annotation", ref: "ann_bbbbbbbbbb" }],
+    },
     addresses: ["ann_bbbbbbbbbb"],
   }));
 }

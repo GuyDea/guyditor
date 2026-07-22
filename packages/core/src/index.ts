@@ -1,4 +1,5 @@
 export * from "./anchors/index.js";
+export * from "./assessments/index.js";
 export * from "./assist/index.js";
 export * from "./annotations/index.js";
 export * from "./deliverables/operations.js";

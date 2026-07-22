@@ -152,7 +152,7 @@
     },
     "id": {
       "type": "string",
-      "pattern": "^(ast|clp|seq|lyr|trn|cts|ann|dlv|pre|tpl|skl|beat|mrk|tak|fx|prj|job|adp|gfx|ses|msk|kfr|avr)_[a-z2-7]{10}$"
+      "pattern": "^(ast|clp|seq|lyr|trn|cts|ann|dlv|pre|tpl|skl|beat|mrk|tak|tkc|asm|crt|fx|prj|job|adp|gfx|ses|msk|kfr|avr)_[a-z2-7]{10}$"
     },
     "sha256": {
       "type": "string",

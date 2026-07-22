@@ -141,6 +141,7 @@ import type {
 import type { IpcService } from "./rpc.js";
 import type { WindowEventPublisher } from "./events.js";
 import { skillRegistryService } from "./skill-service.js";
+import { TakeComparisonService } from "./take-comparison-service.js";
 
 interface AppHostSettings {
   auditRetentionDays: number;
@@ -186,6 +187,7 @@ interface ProjectServices {
   templates: TemplateRegistry;
   adapters: AdapterRegistry;
   restyle: RestyleExecutionService;
+  takeComparisons: TakeComparisonService;
   unsubscribeJobs: () => void;
 }
 
@@ -1160,6 +1162,14 @@ export class WindowServiceHost {
         });
       },
     });
+    const takeComparisons = new TakeComparisonService({
+      project: store,
+      jobs,
+      skillRegistry: this.#app.skillRegistry,
+      operationEngine: () => this.#coreEngine(this.#requireProject()),
+      onRevision: (revision) => this.publisher.publish({ kind: "project.revision", revision }),
+      onProposal: (proposalId) => this.publisher.publish({ kind: "proposal.updated", proposalId }),
+    });
     this.#project = {
       store,
       jobs,
@@ -1174,6 +1184,7 @@ export class WindowServiceHost {
       templates,
       adapters,
       restyle,
+      takeComparisons,
       unsubscribeJobs,
     };
     await capture.start(store.currentProject.watchFolders ?? []);
@@ -1350,6 +1361,11 @@ export class WindowServiceHost {
             return { watching: project.capture.configs.length };
           },
           listTakes: () => this.#takeSidecars(),
+          listTakeComparisons: () => project.takeComparisons.list(),
+          compareTakes: ({ takeIds }: { takeIds: string[] }) =>
+            project.takeComparisons.compare(takeIds),
+          selectTake: ({ comparisonId, takeId }: { comparisonId: string; takeId: string }) =>
+            project.takeComparisons.proposeSelection(comparisonId, takeId),
         };
       case "CompositorModel":
         return project === undefined ? undefined : {

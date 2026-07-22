@@ -110,6 +110,7 @@ import deliverablePublishApproveSchema from "./schemas/deliverable.publish.appro
 import deliverableThumbnailSelectSchema from "./schemas/deliverable.thumbnail.select.json" with { type: "json" };
 import deliverablePublishFilesSetSchema from "./schemas/deliverable.publish.files.set.json" with { type: "json" };
 import sidecarRegisterSchema from "./schemas/sidecar.register.json" with { type: "json" };
+import takeSelectSchema from "./schemas/take.select.json" with { type: "json" };
 import skillPinSetSchema from "./schemas/skill.pin.set.json" with { type: "json" };
 import {
   AnchorResolverRegistry,
@@ -130,6 +131,7 @@ import {
   success,
 } from "../errors.js";
 import type { Result } from "../errors.js";
+import { validateSubjectiveAssessment } from "../assessments/index.js";
 import {
   formatRevision,
   makeId,
@@ -158,6 +160,7 @@ import { applyAnchorOperation } from "./anchor.js";
 import { assessBatchRisk, buildSemanticDiff } from "./diff.js";
 import { applyGraphicOperation, applyTemplateOperation } from "./graphic.js";
 import { applyRestyleOperation } from "../restyle/operations.js";
+import { applyTakeOperation } from "../takes/operations.js";
 import { applyDeliverableOperation } from "../deliverables/operations.js";
 import {
   markAcceptedDeliverableStaleness,
@@ -587,6 +590,12 @@ const catalog = new Map<string, CatalogEntry>([
     "none",
     "Register sidecar {name}",
   )],
+  ["take.select", catalogEntry(
+    takeSelectSchema,
+    "normal",
+    "none",
+    "Select take from comparison",
+  )],
 ]);
 
 const RISK_RANK: Record<RiskClass, number> = {
@@ -1007,6 +1016,8 @@ export class OperationEngine {
           );
       } else if (requested.op.startsWith("restyle.") || requested.op.startsWith("seam.")) {
         application = await applyRestyleOperation(working, normalized, this.#templateProvider);
+      } else if (requested.op === "take.select") {
+        application = applyTakeOperation(working, normalized);
       } else if (requested.op.startsWith("deliverable.")) {
         application = await applyDeliverableOperation(working, normalized, this.#idFactory);
       } else if (this.#operationDispatcher === undefined) {
@@ -1347,11 +1358,33 @@ export class OperationEngine {
   public async createProposal(
     request: CreateProposalRequest,
   ): Promise<Result<Proposal>> {
+    if (
+      request.operations.length > 0 &&
+      (request.reason.text.trim() === "" || request.reason.text.length > 280 ||
+        request.reason.sources.length === 0 ||
+        request.reason.sources.some(({ ref }) => ref.trim() === ""))
+    ) {
+      return operationFailure(
+        "E_OP_REASON_REQUIRED",
+        "Every proposal operation requires a concise, inspectable Reason.",
+      );
+    }
     const store = this.#proposalStore;
     if (store === undefined) {
       return operationFailure(
         "E_PROPOSAL_STORE_UNAVAILABLE",
         "Proposal persistence is not configured for this operation engine.",
+      );
+    }
+    let attachedAssessment;
+    try {
+      attachedAssessment = request.assessment === undefined
+        ? undefined
+        : validateSubjectiveAssessment(request.assessment);
+    } catch (error: unknown) {
+      return operationFailure(
+        "E_ASSESSMENT_SCHEMA",
+        error instanceof Error ? error.message : String(error),
       );
     }
     const id = this.#idFactory("prp");
@@ -1371,6 +1404,10 @@ export class OperationEngine {
       ...(request.sessionId === undefined ? {} : { sessionId: request.sessionId }),
       ...(request.divergence === undefined ? {} : { divergence: request.divergence }),
       reason: structuredClone(request.reason),
+      ...(attachedAssessment === undefined ? {} : {
+        assessmentId: attachedAssessment.assessmentId,
+        assessment: attachedAssessment,
+      }),
       riskClass: "normal",
       addresses: [...request.addresses],
       ...(request.warnings === undefined
@@ -1400,16 +1437,6 @@ export class OperationEngine {
       },
     );
     if (!dryRun.ok) return dryRun;
-    if (
-      request.actor.kind === "agent" &&
-      dryRun.value.riskClass !== "low" &&
-      request.reason.text.trim() === ""
-    ) {
-      return operationFailure(
-        "E_OP_REASON_REQUIRED",
-        "Normal and consequential agent proposals require a concise reason.",
-      );
-    }
     const proposed = capturedProject;
     if (proposed === undefined) {
       return operationFailure(
@@ -1442,6 +1469,10 @@ export class OperationEngine {
       ...(request.sessionId === undefined ? {} : { sessionId: request.sessionId }),
       ...(request.divergence === undefined ? {} : { divergence: request.divergence }),
       reason: structuredClone(request.reason),
+      ...(attachedAssessment === undefined ? {} : {
+        assessmentId: attachedAssessment.assessmentId,
+        assessment: attachedAssessment,
+      }),
       riskClass: dryRun.value.riskClass,
       addresses: [...request.addresses],
       applied: dryRun.value.applied,

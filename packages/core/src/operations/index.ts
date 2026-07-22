@@ -6,6 +6,7 @@ export {
   isBuiltinLookPresetPinAvailable,
 } from "./audio-color.js";
 export { applyRestyleOperation } from "../restyle/operations.js";
+export { applyTakeOperation } from "../takes/operations.js";
 export type {
   DispatchedOperationApplication,
   IdFactory,

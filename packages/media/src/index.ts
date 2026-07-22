@@ -186,3 +186,9 @@ export type {
   MlworkerVadResult,
   MlworkerWord,
 } from "./mlworker/types.js";
+export { deriveTakeMetrics } from "./take-metrics.js";
+export type {
+  TakeDeliveryMetrics,
+  TakeMetricSignals,
+  TakeTechnicalMetrics,
+} from "./take-metrics.js";

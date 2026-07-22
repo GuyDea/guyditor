@@ -15,6 +15,12 @@ import { WindowEventPublisher } from "./events.js";
 import { AppServiceHost } from "./service-host.js";
 
 describe("AppServiceHost", () => {
+  it("routes take comparison through the persistent project job queue", async () => {
+    const source = await readFile(new URL("./take-comparison-service.ts", import.meta.url), "utf8");
+    expect(source).toContain('registerExecutor("assist.takes.compare"');
+    expect(source).toContain('kind: "assist.takes.compare"');
+  });
+
   it("exposes the skill library, project pin, immutable upgrade, and version diff over IPC", async () => {
     const root = await mkdtemp(join(tmpdir(), "guyditor-host-skills-"));
     const userDirectory = await mkdtemp(join(tmpdir(), "guyditor-host-skills-user-"));
@@ -415,7 +421,10 @@ describe("AppServiceHost", () => {
       }],
       instruction: { kind: "ui-direct" },
       actor: { kind: "human", id: "fixture" },
-      reason: { text: "Tighten the ending", sources: [] },
+      reason: {
+        text: "Tighten the ending",
+        sources: [{ kind: "annotation", ref: "ann_bbbbbbbbbb" }],
+      },
       addresses: ["ann_bbbbbbbbbb"],
     }));
     const events: GdEvent[] = [];

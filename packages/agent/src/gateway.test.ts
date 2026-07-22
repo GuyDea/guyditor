@@ -374,6 +374,75 @@ describe("AgentGateway", () => {
     ]));
   });
 
+  it("lets the director request and fetch advisory critic findings before translating them into a proposal", async () => {
+    const store = await annotatedProject();
+    const userDirectory = await mkdtemp(join(tmpdir(), "guyditor-critic-gateway-user-"));
+    temporaryDirectories.push(userDirectory);
+    const audit = new AuditLog({ userDir: userDirectory });
+    const { queue: jobs } = JobQueue.open(":memory:");
+    const critique = {
+      critiqueId: "crt_aaaaaaaaaa",
+      adapterId: "adp_4444444444",
+      model: "stub-critic-v1",
+      findings: [{
+        id: "cut-density",
+        severity: "minor" as const,
+        range: { durationSeconds: 10 },
+        observation: "Measured cut density is 0.7 cuts/second.",
+        suggestion: "Review whether each cut preserves legibility.",
+      }],
+      rawCostUnits: { seconds: 10 },
+    };
+    let calls = 0;
+    const gateway = new AgentGateway({
+      auditLog: audit,
+      jobQueue: jobs,
+      project: store,
+      stateDirectory: join(userDirectory, "state"),
+      sessionIdFactory: () => "ses_bbbbbbbbbb",
+      criticExecution: {
+        request: () => {
+          calls += 1;
+          return Promise.resolve({ ok: true, value: critique });
+        },
+        get: (critiqueId) => Promise.resolve(critiqueId === critique.critiqueId ? critique : undefined),
+      },
+    });
+    const started = await gateway.start();
+    try {
+      const result = await runStubDirector({
+        annotationId: "ann_bbbbbbbbbb",
+        clipId: "clp_aaaaaaaaaa",
+        gatewayStateFile: started.stateFile,
+        critic: {
+          adapterId: "adp_4444444444",
+          request: {
+            critiqueId: "crt_aaaaaaaaaa",
+            subject: {
+              deliverableId: "dlv_aaaaaaaaaa",
+              proxyFile: { path: ".guyditor/cache/proxies/ast_aaaaaaaaaa.mp4" },
+              range: { durationSeconds: 10 },
+            },
+            rubric: [{ id: "pacing", source: "inline", text: "Keep the opening legible." }],
+            questions: ["Is the promise legible?"],
+          },
+        },
+      });
+      expect(result.tools).toEqual(expect.arrayContaining(["critic_request", "critic_result_get"]));
+      expect(result.critiqueRequestResult).toEqual(critique);
+      expect(result.critiqueFetchedResult).toEqual(critique);
+      expect(calls).toBe(1);
+      expect(result.proposal.status).toBe("ready");
+    } finally {
+      await gateway.close();
+      jobs.close();
+    }
+    expect(audit.readSession("ses_bbbbbbbbbb").records).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "tool.call", tool: "critic_request" }),
+      expect.objectContaining({ type: "tool.call", tool: "critic_result_get" }),
+    ]));
+  });
+
   it("returns verified pinned skill content and resolves skill automation rules for a director session", async () => {
     const store = await annotatedProject();
     const userDirectory = await mkdtemp(join(tmpdir(), "guyditor-skills-gateway-user-"));

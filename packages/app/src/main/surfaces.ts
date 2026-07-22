@@ -426,6 +426,38 @@ export const IPC_SURFACES: readonly IpcSurface[] = Object.freeze([
     service: "CaptureWatcher",
     methods: {
       list: { paramsSchema: emptyParams, resultSchema: { type: "array" }, budgetMs: 20 },
+      listTakes: { paramsSchema: emptyParams, resultSchema: { type: "array" }, budgetMs: 50 },
+      listTakeComparisons: { paramsSchema: emptyParams, resultSchema: { type: "array" }, budgetMs: 50 },
+      compareTakes: {
+        paramsSchema: {
+          type: "object",
+          required: ["takeIds"],
+          properties: {
+            takeIds: {
+              type: "array",
+              minItems: 2,
+              uniqueItems: true,
+              items: { type: "string", pattern: "^tak_[a-z2-7]{10}$" },
+            },
+          },
+          additionalProperties: false,
+        },
+        resultSchema: { type: "array" },
+        budgetMs: 500,
+      },
+      selectTake: {
+        paramsSchema: {
+          type: "object",
+          required: ["comparisonId", "takeId"],
+          properties: {
+            comparisonId: { type: "string", pattern: "^tkc_[a-z2-7]{10}$" },
+            takeId: { type: "string", pattern: "^tak_[a-z2-7]{10}$" },
+          },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 150,
+      },
       configure: {
         paramsSchema: {
           type: "object",
@@ -462,7 +494,6 @@ export const IPC_SURFACES: readonly IpcSurface[] = Object.freeze([
         budgetMs: 200,
       },
       reconcile: { paramsSchema: emptyParams, resultSchema: anyResult, budgetMs: 200 },
-      listTakes: { paramsSchema: emptyParams, resultSchema: { type: "array" }, budgetMs: 50 },
     },
   },
   {

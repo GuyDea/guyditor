@@ -300,7 +300,10 @@ describe("SkillRegistry explicit preference examples", () => {
       }],
       instruction: { kind: "user-text", text: "Try a faster entrance" },
       actor: { kind: "agent", id: "ses_aaaaaaaaaa" },
-      reason: { text: "Test a more abrupt cut.", sources: [] },
+      reason: {
+        text: "Test a more abrupt cut.",
+        sources: [{ kind: "instruction", ref: "Try a faster entrance" }],
+      },
       addresses: [],
     }));
     await valueOf(rejectedEngine.rejectProposal(rejectedProposal.id, "creator"));

@@ -22,6 +22,11 @@ import {
 } from "../errors.js";
 import type { Result } from "../errors.js";
 import {
+  parseSubjectiveAssessment,
+  serializeSubjectiveAssessment,
+  validateSubjectiveAssessment,
+} from "../assessments/index.js";
+import {
   ID_PREFIXES,
   canonicalizeYaml,
   formatRevision,
@@ -61,6 +66,11 @@ import type {
   TransactionRecord,
 } from "./types.js";
 import { markRestylePlanStaleness } from "../deliverables/staleness.js";
+import {
+  serializeTakeComparison,
+  takeComparisonSidecarRef,
+  validateTakeComparison,
+} from "../takes/index.js";
 
 const MASTER_FILE = "episode.guyditor.yaml";
 const GITIGNORE = ".guyditor/\nproposals/*/previews/\nmedia/\n";
@@ -560,6 +570,17 @@ async function prepareRestyleCommit(
   const writes = new Map<string, string>();
   const copies: RestyleFileCopy[] = [];
   for (const operation of transaction.operations) {
+    if (operation.op === "take.select") {
+      const comparison = validateTakeComparison(operation.params["comparison"]);
+      const hashes = Object.fromEntries(model.assets.map(({ id, sha256 }) => [id, sha256]));
+      const reference = takeComparisonSidecarRef(comparison, hashes);
+      const registered = restyleSidecarReference(model, reference.name);
+      if (registered === undefined || registered.path !== reference.path ||
+          registered.sha256 !== reference.sha256) {
+        throw new Error(`Take comparison ${comparison.id} does not match its registered sidecar.`);
+      }
+      writes.set(sidecarFilePath(root, reference.path), serializeTakeComparison(comparison));
+    }
     if (operation.op === "restyle.plan.create") {
       const plan = structuredClone(operation.params["plan"] as RestylePlan);
       const reference = restylePlanSidecarRef(plan);
@@ -819,6 +840,16 @@ function proposalRecord(value: unknown, expectedId: string): Proposal | undefine
   const instruction = value["instruction"];
   const actor = value["actor"];
   const reason = value["reason"];
+  const assessmentId = value["assessmentId"];
+  const assessment = value["assessment"];
+  let assessmentValid = true;
+  if (assessment !== undefined) {
+    try {
+      assessmentValid = validateSubjectiveAssessment(assessment).assessmentId === assessmentId;
+    } catch {
+      assessmentValid = false;
+    }
+  }
   const prepared = value["status"] !== "draft";
   const terminal = value["status"] === "accepted" || value["status"] === "rejected" ||
     value["status"] === "superseded" || value["status"] === "withdrawn";
@@ -839,6 +870,9 @@ function proposalRecord(value: unknown, expectedId: string): Proposal | undefine
     Array.isArray(reason["sources"]) && reason["sources"].every((source) =>
       isRecord(source) && typeof source["kind"] === "string" && sources.has(source["kind"]) &&
       typeof source["ref"] === "string") &&
+    (assessmentId === undefined ||
+      typeof assessmentId === "string" && /^asm_[a-z2-7]{10}$/u.test(assessmentId)) &&
+    assessmentValid &&
     typeof value["riskClass"] === "string" && risks.has(value["riskClass"]) &&
     Array.isArray(value["operations"]) && value["operations"].every(semanticOperationRecord) &&
     Array.isArray(value["addresses"]) && value["addresses"].every((address) =>
@@ -881,9 +915,16 @@ function proposalAuthorship(proposal: Proposal): unknown {
     sessionId: proposal.sessionId,
     divergence: proposal.divergence,
     reason: proposal.reason,
+    assessmentId: proposal.assessmentId,
     addresses: proposal.addresses,
     createdAt: proposal.createdAt,
   };
+}
+
+function proposalJsonRecord(proposal: Proposal): Omit<Proposal, "assessment"> {
+  const record = { ...proposal };
+  delete record.assessment;
+  return record;
 }
 
 function proposalImmutableReadyFields(proposal: Proposal): unknown {
@@ -969,7 +1010,10 @@ async function validateActiveProposals(
             ? "auto"
             : accepted.acceptance.by,
         };
-        await atomicWrite(join(directory, "proposal.json"), `${canonicalJson(record)}\n`);
+        await atomicWrite(
+          join(directory, "proposal.json"),
+          `${canonicalJson(proposalJsonRecord(record))}\n`,
+        );
       }
       if (record.status !== "draft" && record.status !== "ready") {
         if (record.status === "accepted" && accepted === undefined) {
@@ -1024,9 +1068,19 @@ async function readProposalAt(path: string, id: string): Promise<Result<Proposal
   try {
     const parsed = JSON.parse(await readFile(join(path, "proposal.json"), "utf8")) as unknown;
     const proposal = proposalRecord(parsed, id);
-    return proposal === undefined
-      ? storeFailure("E_PROJECT_PROPOSAL", `Proposal ${id} has an invalid proposal.json record.`)
-      : success(proposal);
+    if (proposal === undefined) {
+      return storeFailure("E_PROJECT_PROPOSAL", `Proposal ${id} has an invalid proposal.json record.`);
+    }
+    if (proposal.assessmentId === undefined) return success(proposal);
+    const assessmentText = await readOptional(join(path, "assessment.json"));
+    if (assessmentText === undefined) {
+      return storeFailure("E_PROJECT_PROPOSAL", `Proposal ${id} is missing assessment.json.`);
+    }
+    const assessment = parseSubjectiveAssessment(assessmentText);
+    if (assessment.assessmentId !== proposal.assessmentId) {
+      return storeFailure("E_PROJECT_PROPOSAL", `Proposal ${id} assessment ID does not match.`);
+    }
+    return success({ ...proposal, assessment });
   } catch (error: unknown) {
     return storeFailure(
       "E_PROJECT_PROPOSAL",
@@ -1527,7 +1581,16 @@ export class ProjectStore {
       const accepted = await readFile(join(this.#root, MASTER_FILE), "utf8");
       await atomicWrite(join(root, "master.proposed.yaml"), proposed);
       await atomicWrite(join(root, "diff.patch"), unifiedMasterDiff(accepted, proposed));
-      await atomicWrite(join(root, "proposal.json"), `${canonicalJson(proposal)}\n`);
+      if (proposal.assessment !== undefined) {
+        await atomicWrite(
+          join(root, "assessment.json"),
+          serializeSubjectiveAssessment(proposal.assessment),
+        );
+      }
+      await atomicWrite(
+        join(root, "proposal.json"),
+        `${canonicalJson(proposalJsonRecord(proposal))}\n`,
+      );
       return success(proposal);
     } catch (error: unknown) {
       return storeFailure(
@@ -1574,7 +1637,10 @@ export class ProjectStore {
           `Ready proposal ${proposal.id} may only receive lifecycle-resolution fields.`,
         );
       }
-      await atomicWrite(join(root, "proposal.json"), `${canonicalJson(proposal)}\n`);
+      await atomicWrite(
+        join(root, "proposal.json"),
+        `${canonicalJson(proposalJsonRecord(proposal))}\n`,
+      );
       return success(proposal);
     } catch (error: unknown) {
       return storeFailure(
