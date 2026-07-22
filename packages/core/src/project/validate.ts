@@ -280,6 +280,36 @@ function validateReferences(project: GuyditorProject): Result<GuyditorProject> |
   return undefined;
 }
 
+function validateDeliverables(project: GuyditorProject): Result<GuyditorProject> | undefined {
+  const longform = project.deliverables.filter(({ kind }) => kind === "longform");
+  if (longform.length !== 1) {
+    return invariantFailure(
+      "exactly one longform deliverable",
+      longform.length === 0
+        ? [project.project.id]
+        : longform.map(({ id }) => id),
+    );
+  }
+  if (longform[0]!.id !== project.settings.primaryDeliverable) {
+    return invariantFailure("primary deliverable is longform", [
+      project.settings.primaryDeliverable,
+      longform[0]!.id,
+    ]);
+  }
+  const ownerBySequence = new Map<string, string>();
+  for (const deliverable of project.deliverables) {
+    const owner = ownerBySequence.get(deliverable.sequenceId);
+    if (owner !== undefined) {
+      return invariantFailure("deliverable sequence ownership is exclusive", [
+        owner,
+        deliverable.id,
+      ]);
+    }
+    ownerBySequence.set(deliverable.sequenceId, deliverable.id);
+  }
+  return undefined;
+}
+
 function validateComposition(project: GuyditorProject): Result<GuyditorProject> | undefined {
   const layerById = new Map(project.layers.map((layer) => [layer.id, layer] as const));
   for (const layer of project.layers) {
@@ -475,6 +505,7 @@ export function validateProject(value: unknown): Result<GuyditorProject> {
   const checks = [
     validateUniqueIds,
     validateReferences,
+    validateDeliverables,
     validateComposition,
     validateSourceRanges,
     validateBoundaries,

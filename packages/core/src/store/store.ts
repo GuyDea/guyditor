@@ -60,6 +60,7 @@ import type {
   RevisionLock,
   TransactionRecord,
 } from "./types.js";
+import { markRestylePlanStaleness } from "../deliverables/staleness.js";
 
 const MASTER_FILE = "episode.guyditor.yaml";
 const GITIGNORE = ".guyditor/\nproposals/*/previews/\nmedia/\n";
@@ -549,13 +550,6 @@ function restyleSidecarReference(
   return project.sidecars.find((sidecar) => sidecar.name === name);
 }
 
-function rangesOverlap(
-  left: { startFrame: number; endFrame: number },
-  right: { startFrame: number; endFrame: number },
-): boolean {
-  return left.startFrame < right.endFrame && right.startFrame < left.endFrame;
-}
-
 async function prepareRestyleCommit(
   root: string,
   before: GuyditorProject,
@@ -687,40 +681,25 @@ async function prepareRestyleCommit(
         if (source === undefined) continue;
         const parsed = parseRestylePlan(source);
         if (!parsed.ok) throw new Error(parsed.error.message);
-        const plan = parsed.value;
-        let changed = false;
-        for (const chunk of plan.chunks) {
-          if (
-            (chunk.status === "approved" || chunk.status === "generated") &&
-            changedRanges.some((range) => rangesOverlap(chunk.sourceRange, range))
-          ) {
-            chunk.status = "stale";
-            chunk.stale = {
-              reason: "source-range-overlap",
-              markedAt: transaction.acceptance.at,
-              transactionId: transaction.id,
-            };
-            for (const seam of plan.seams) {
-              if (seam.beforeChunkId !== chunk.id && seam.afterChunkId !== chunk.id) continue;
-              seam.status = "review";
-              seam.review = {
-                reason: "adjacent-chunk-stale",
-                markedAt: transaction.acceptance.at,
-                transactionId: transaction.id,
-              };
-              delete seam.application;
-            }
-            changed = true;
-          }
-        }
-        if (!changed) continue;
-        const replacement = restylePlanSidecarRef(plan);
+        const staleness = markRestylePlanStaleness(
+          parsed.value,
+          changedRanges.map((range) => ({
+            start: range.startFrame,
+            end: range.endFrame,
+          })),
+          {
+            transactionId: transaction.id,
+            detectedAt: transaction.acceptance.at,
+          },
+        );
+        if (!staleness.changed) continue;
+        const replacement = restylePlanSidecarRef(staleness.plan);
         model = {
           ...model,
           sidecars: model.sidecars.map((sidecar) =>
             sidecar.name === replacement.name ? replacement : sidecar),
         };
-        writes.set(sidecarFilePath(root, replacement.path), serializeRestylePlan(plan));
+        writes.set(sidecarFilePath(root, replacement.path), serializeRestylePlan(staleness.plan));
       }
     }
   }
@@ -836,6 +815,7 @@ function proposalRecord(value: unknown, expectedId: string): Proposal | undefine
   const instructions = new Set(["user-text", "annotation", "ui-direct", "skill-policy"]);
   const actors = new Set(["human", "agent", "tool"]);
   const sources = new Set(["instruction", "annotation", "skill-rule", "media-evidence"]);
+  const divergences = new Set(["hook", "order", "pacing", "cuts", "graphics", "captions", "cta", "ending", "framing"]);
   const instruction = value["instruction"];
   const actor = value["actor"];
   const reason = value["reason"];
@@ -853,6 +833,8 @@ function proposalRecord(value: unknown, expectedId: string): Proposal | undefine
     (actor["model"] === undefined || typeof actor["model"] === "string") &&
     (value["sessionId"] === undefined ||
       typeof value["sessionId"] === "string" && isId("ses", value["sessionId"])) &&
+    (value["divergence"] === undefined ||
+      typeof value["divergence"] === "string" && divergences.has(value["divergence"])) &&
     isRecord(reason) && typeof reason["text"] === "string" &&
     Array.isArray(reason["sources"]) && reason["sources"].every((source) =>
       isRecord(source) && typeof source["kind"] === "string" && sources.has(source["kind"]) &&
@@ -897,6 +879,7 @@ function proposalAuthorship(proposal: Proposal): unknown {
     instruction: proposal.instruction,
     actor: proposal.actor,
     sessionId: proposal.sessionId,
+    divergence: proposal.divergence,
     reason: proposal.reason,
     addresses: proposal.addresses,
     createdAt: proposal.createdAt,

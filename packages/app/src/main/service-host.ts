@@ -89,8 +89,20 @@ import type {
   KlingAdapterConfig,
 } from "../../../agent/src/index.js";
 import { CompositorModel } from "../../../compositor/src/index.js";
-import { createRestylePlan } from "../../../deliver/src/index.js";
-import type { RestylePlanningSignals } from "../../../deliver/src/index.js";
+import {
+  createRefreshProposal,
+  createRestylePlan,
+  discoverShortCandidates,
+  loadPlatformProfile,
+  resolveDerivationSources,
+  writeCandidateCache,
+} from "../../../deliver/src/index.js";
+import type {
+  DeliverableTranscript,
+  DerivationSelection,
+  RestylePlanningSignals,
+  ShortCandidate,
+} from "../../../deliver/src/index.js";
 
 import type {
   ExecuteRequest,
@@ -215,6 +227,40 @@ async function transcriptSidecars(store: ProjectStore) {
     .map(async ({ path }) => parseTranscriptSidecar(
       await readFile(join(store.root, path), "utf8"),
     )));
+}
+
+function deliverableTranscripts(
+  sidecars: Awaited<ReturnType<typeof transcriptSidecars>>,
+): DeliverableTranscript[] {
+  return sidecars.map((sidecar) => ({
+    assetId: sidecar.assetId,
+    words: sidecar.segments.flatMap(({ words }) => words).flatMap((id) => {
+      const word = sidecar.words[id];
+      return word === undefined ? [] : [{
+        id,
+        text: word.text,
+        punctAfter: word.punctAfter,
+        state: word.state,
+        start: structuredClone(word.start),
+        end: structuredClone(word.end),
+      }];
+    }),
+  }));
+}
+
+async function candidateCache(store: ProjectStore): Promise<ShortCandidate[]> {
+  try {
+    const parsed = JSON.parse(await readFile(join(
+      store.root,
+      ".guyditor",
+      "cache",
+      "candidates",
+      `${store.currentProject.revision}.json`,
+    ), "utf8")) as { candidates?: ShortCandidate[] };
+    return parsed.candidates ?? [];
+  } catch {
+    return [];
+  }
 }
 
 async function acceptedRestylePlan(
@@ -579,6 +625,55 @@ export class WindowServiceHost {
         external: () => restyleRuntime.service?.externalWaits() ?? [],
       },
     });
+    jobs.registerExecutor("candidates", async (job, context) => {
+      const payload = jsonRecord(job.payload);
+      const profilePin = payload?.["profile"];
+      const revision = payload?.["revision"];
+      if (typeof profilePin !== "string" || typeof revision !== "string") {
+        throw new Error("Candidate discovery payload is incomplete.");
+      }
+      if (store.currentProject.revision !== revision) {
+        throw new Error(`Candidate discovery base ${revision} is stale; enqueue it again at ${store.currentProject.revision}.`);
+      }
+      context.reportProgress(0.15);
+      const loaded = await loadPlatformProfile(profilePin, {
+        projectRoot: join(store.root, "profiles"),
+        userRoot: join(this.#app.userDirectory, "profiles"),
+        builtinsRoot: this.#app.profilesRoot,
+      });
+      if (loaded.profile.kind !== "short" || loaded.profile.duration.maxSeconds === null) {
+        throw new Error(`Candidate discovery requires a bounded short profile, received ${profilePin}.`);
+      }
+      const constraints = jsonRecord(payload?.["constraints"]);
+      const durationRecord = jsonRecord(constraints?.["durationSeconds"]);
+      const mustIncludeBeats = Array.isArray(constraints?.["mustIncludeBeats"])
+        ? constraints["mustIncludeBeats"].filter((id): id is string => typeof id === "string")
+        : undefined;
+      const candidates = discoverShortCandidates({
+        project: store.currentProject,
+        transcripts: deliverableTranscripts(await transcriptSidecars(store)),
+        profile: profilePin,
+        duration: {
+          minSeconds: loaded.profile.duration.minSeconds,
+          maxSeconds: loaded.profile.duration.maxSeconds,
+        },
+        ...(typeof payload?.["maxCandidates"] === "number"
+          ? { maxCandidates: payload["maxCandidates"] }
+          : {}),
+        ...(constraints === undefined ? {} : {
+          constraints: {
+            ...(mustIncludeBeats === undefined ? {} : { mustIncludeBeats }),
+            ...(typeof durationRecord?.["min"] === "number" && typeof durationRecord["max"] === "number"
+              ? { durationSeconds: { min: durationRecord["min"], max: durationRecord["max"] } }
+              : {}),
+          },
+        }),
+      });
+      context.reportProgress(0.85);
+      const path = await writeCandidateCache(store.root, revision, candidates);
+      context.reportProgress(1);
+      return { path, count: candidates.length };
+    });
     const media = new MediaEngine({ jobQueue: jobs, mlworker: this.#app.mlworker });
     registerKeyQcExecutor(jobs);
     const compositor = new CompositorModel({
@@ -929,6 +1024,103 @@ export class WindowServiceHost {
         };
       case "DeliverableService":
         return project === undefined ? undefined : {
+          profiles: async () => Promise.all([
+            "youtube-longform@1.0.0",
+            "youtube-shorts@1.0.0",
+            "tiktok@1.0.0",
+            "instagram-reels@1.0.0",
+          ].map(async (pin) => (await loadPlatformProfile(pin, {
+            projectRoot: join(project.store.root, "profiles"),
+            userRoot: join(this.#app.userDirectory, "profiles"),
+            builtinsRoot: this.#app.profilesRoot,
+          })).profile)),
+          candidates: () => candidateCache(project.store),
+          discoverCandidates: (params: {
+            profile: string;
+            maxCandidates?: number;
+            constraints?: {
+              mustIncludeBeats?: string[];
+              durationSeconds?: { min: number; max: number };
+            };
+          }) => publicJobStatus(project.jobs.enqueue({
+            kind: "candidates",
+            title: `Discover short candidates · ${params.profile}`,
+            cancellable: true,
+            payload: {
+              profile: params.profile,
+              revision: project.store.currentProject.revision,
+              ...(params.maxCandidates === undefined ? {} : { maxCandidates: params.maxCandidates }),
+              ...(params.constraints === undefined ? {} : { constraints: params.constraints }),
+            },
+          })),
+          derive: async (params: {
+            name: string;
+            profile: string;
+            profileOverrides?: Record<string, unknown>;
+            selection?: DerivationSelection;
+            candidateId?: string;
+          }) => {
+            let selection = params.selection;
+            if (params.candidateId !== undefined) {
+              const candidate = (await candidateCache(project.store))
+                .find(({ candidateId }) => candidateId === params.candidateId);
+              if (candidate === undefined) throw new Error(`Candidate ${params.candidateId} is unavailable at ${project.store.currentProject.revision}.`);
+              selection = { words: candidate.words };
+            }
+            if (selection === undefined) throw new Error("Derivation requires a selection or candidate.");
+            const resolved = resultValue(resolveDerivationSources(
+              project.store.currentProject,
+              deliverableTranscripts(await transcriptSidecars(project.store)),
+              selection,
+            ));
+            const sessionId = makeId("ses");
+            const proposal = resultValue(await this.#coreEngine(project).createProposal({
+              operations: [{
+                op: "deliverable.derive",
+                params: {
+                  kind: "short",
+                  name: params.name,
+                  profile: params.profile,
+                  ...(params.profileOverrides === undefined ? {} : { profileOverrides: params.profileOverrides }),
+                  from: structuredClone(selection),
+                  ...(params.candidateId === undefined ? {} : { candidateId: params.candidateId }),
+                  resolvedSources: resolved,
+                },
+              }],
+              instruction: { kind: "user-text", text: `Derive ${params.name}` },
+              actor: { kind: "agent", id: sessionId, model: "deliverable-service" },
+              sessionId,
+              reason: {
+                text: `Review the independent ${params.profile} sequence derived from the selected long-form source ranges.`,
+                sources: [{ kind: "instruction", ref: params.candidateId ?? "manual-selection" }],
+              },
+              addresses: [],
+            }));
+            this.publisher.publish({ kind: "proposal.updated", proposalId: proposal.id });
+            return proposal;
+          },
+          refresh: async ({ deliverableId }: { deliverableId: string }) => {
+            const proposal = resultValue(await createRefreshProposal({
+              project: project.store.currentProject,
+              transcripts: deliverableTranscripts(await transcriptSidecars(project.store)),
+              deliverableId,
+              history: await history(project.store),
+              createProposal: (request) => this.#coreEngine(project).createProposal(request),
+              attachPreview: async (ready) => project.jobs.enqueue({
+                kind: "render.preview",
+                title: `Refresh preview · ${deliverableId}`,
+                cancellable: true,
+                payload: {
+                  proposalId: ready.id,
+                  deliverableId,
+                  revision: project.store.currentProject.revision,
+                },
+              }).jobId,
+              updateProposal: (ready) => project.store.updateProposal(ready),
+            }));
+            this.publisher.publish({ kind: "proposal.updated", proposalId: proposal.id });
+            return proposal;
+          },
           restylePlan: async ({ deliverableId }: { deliverableId: string }) =>
             acceptedRestylePlan(project.store, deliverableId),
           createRestylePlan: async (params: {
@@ -1103,6 +1295,7 @@ export class WindowServiceHost {
       ...(request.intent === "redo" && request.undoOf !== undefined
         ? { redoOf: request.undoOf }
         : {}),
+      ...(request.divergence === undefined ? {} : { divergence: request.divergence }),
     };
     const containsTranscript = request.operations.some(({ op }) =>
       op.startsWith("transcript.") || op.startsWith("caption.") || op === "pickup.splice");
@@ -1130,6 +1323,7 @@ export class WindowServiceHost {
         instruction: context.instruction,
         ...(context.undoOf === undefined ? {} : { undoOf: context.undoOf }),
         ...(context.redoOf === undefined ? {} : { redoOf: context.redoOf }),
+        ...(context.divergence === undefined ? {} : { divergence: context.divergence }),
       }));
     }
     const txnId = result.transactionId;

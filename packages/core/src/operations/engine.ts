@@ -98,6 +98,11 @@ import templateUninstallSchema from "./schemas/template.uninstall.json" with { t
 import restylePlanCreateSchema from "./schemas/restyle.plan.create.json" with { type: "json" };
 import restyleSegmentApproveSchema from "./schemas/restyle.segment.approve.json" with { type: "json" };
 import seamTreatmentSetSchema from "./schemas/seam.treatment.set.json" with { type: "json" };
+import deliverableDeriveSchema from "./schemas/deliverable.derive.json" with { type: "json" };
+import deliverableStatusSetSchema from "./schemas/deliverable.status.set.json" with { type: "json" };
+import deliverableApproveSchema from "./schemas/deliverable.approve.json" with { type: "json" };
+import deliverableRefreshSchema from "./schemas/deliverable.refresh.json" with { type: "json" };
+import deliverableRemoveSchema from "./schemas/deliverable.remove.json" with { type: "json" };
 import {
   AnchorResolverRegistry,
   computeAnchorTransitions,
@@ -142,6 +147,19 @@ import { applyAnchorOperation } from "./anchor.js";
 import { assessBatchRisk, buildSemanticDiff } from "./diff.js";
 import { applyGraphicOperation, applyTemplateOperation } from "./graphic.js";
 import { applyRestyleOperation } from "../restyle/operations.js";
+import { applyDeliverableOperation } from "../deliverables/operations.js";
+import {
+  markAcceptedDeliverableStaleness,
+  sourceRangesOverlap,
+} from "../deliverables/staleness.js";
+import {
+  DIVERGENCE_CLASSES,
+} from "../deliverables/types.js";
+import type {
+  DependencyEntry,
+  DivergenceClass,
+} from "../deliverables/types.js";
+import { compareTime } from "../time/index.js";
 import type {
   AppliedOperation,
   AuditSink,
@@ -485,6 +503,36 @@ const catalog = new Map<string, CatalogEntry>([
     "none",
     "Set restyle seam {seamId} treatment to {treatment.kind}",
   )],
+  ["deliverable.derive", catalogEntry(
+    deliverableDeriveSchema,
+    "normal",
+    "none",
+    "Derive short {name} for {profile}",
+  )],
+  ["deliverable.status.set", catalogEntry(
+    deliverableStatusSetSchema,
+    "normal",
+    "none",
+    "Move {deliverableId} to {status}",
+  )],
+  ["deliverable.approve", catalogEntry(
+    deliverableApproveSchema,
+    "consequential",
+    "none",
+    "Approve {deliverableId}",
+  )],
+  ["deliverable.refresh", catalogEntry(
+    deliverableRefreshSchema,
+    "normal",
+    "realign",
+    "Refresh {deliverableId} for review",
+  )],
+  ["deliverable.remove", catalogEntry(
+    deliverableRemoveSchema,
+    "normal",
+    "shift",
+    "Remove {deliverableId}",
+  )],
 ]);
 
 const RISK_RANK: Record<RiskClass, number> = {
@@ -525,6 +573,131 @@ function instructionFor(context: OperationContext): TransactionRecord["instructi
   return context.origin === "ui"
     ? { kind: "ui-direct" }
     : { kind: "skill-policy" };
+}
+
+function nestedStrings(value: unknown): string[] {
+  if (typeof value === "string") return [value];
+  if (Array.isArray(value)) return value.flatMap(nestedStrings);
+  if (typeof value !== "object" || value === null) return [];
+  return Object.values(value).flatMap(nestedStrings);
+}
+
+function shortScopeIds(project: GuyditorProject, deliverableId: string): Set<string> {
+  const deliverable = project.deliverables.find(({ id }) => id === deliverableId);
+  if (deliverable === undefined || deliverable.kind !== "short") return new Set();
+  const sequence = project.sequences.find(({ id }) => id === deliverable.sequenceId);
+  return new Set([
+    deliverable.id,
+    deliverable.sequenceId,
+    ...(sequence?.clips.map(({ id }) => id) ?? []),
+    ...project.layers.filter(({ sequence: id }) => id === deliverable.sequenceId).map(({ id }) => id),
+    ...(deliverable.captionsTrackId === undefined ? [] : [deliverable.captionsTrackId]),
+  ]);
+}
+
+function touchedDerivativeIds(
+  before: GuyditorProject,
+  after: GuyditorProject,
+  applied: readonly AppliedOperation[],
+): string[] {
+  if (applied.every(({ op }) => op.startsWith("deliverable."))) return [];
+  const mentioned = new Set(applied.flatMap((operation) => [
+    ...operation.affected,
+    ...nestedStrings(operation.params),
+  ]));
+  const shortIds = new Set(
+    before.deliverables.filter(({ kind }) => kind === "short").map(({ id }) => id),
+  );
+  return [...shortIds].filter((deliverableId) => {
+    const scope = new Set([
+      ...shortScopeIds(before, deliverableId),
+      ...shortScopeIds(after, deliverableId),
+    ]);
+    return [...mentioned].some((id) => scope.has(id));
+  });
+}
+
+function rangeContains(container: DependencyEntry["source"]["range"], candidate: DependencyEntry["source"]["range"]): boolean {
+  const start = compareTime(container.start, candidate.start);
+  const end = compareTime(candidate.end, container.end);
+  return start.ok && end.ok && start.value !== 1 && end.value !== 1;
+}
+
+function synchronizeDerivativeDependencies(
+  before: GuyditorProject,
+  after: GuyditorProject,
+  applied: readonly AppliedOperation[],
+  touched: readonly string[],
+): GuyditorProject {
+  if (touched.length === 0) return after;
+  const model = structuredClone(after);
+  const splitIds = new Set(applied.flatMap((operation) =>
+    operation.op === "clip.split" && typeof operation.params["newClipId"] === "string"
+      ? [operation.params["newClipId"]]
+      : []));
+  for (const deliverableId of touched) {
+    const deliverable = model.deliverables.find(({ id }) => id === deliverableId);
+    const priorDeliverable = before.deliverables.find(({ id }) => id === deliverableId);
+    const sequence = deliverable === undefined
+      ? undefined
+      : model.sequences.find(({ id }) => id === deliverable.sequenceId);
+    if (deliverable === undefined || priorDeliverable === undefined || sequence === undefined) continue;
+    const existing = priorDeliverable.dependencies ?? [];
+    const byClip = new Map(existing.map((dependency) => [dependency.derivativeClipId, dependency] as const));
+    const dependencies: DependencyEntry[] = [];
+    for (const clip of sequence.clips) {
+      const range = {
+        start: structuredClone(clip.source.in),
+        end: structuredClone(clip.source.out),
+      };
+      const direct = byClip.get(clip.id);
+      if (direct !== undefined && clip.origin !== "local") {
+        dependencies.push({
+          derivativeClipId: clip.id,
+          source: { ...structuredClone(direct.source), range },
+        });
+        continue;
+      }
+      const parent = splitIds.has(clip.id)
+        ? existing.find((dependency) =>
+            dependency.source.assetId === clip.asset &&
+            sourceRangesOverlap(dependency.source.range, range) &&
+            rangeContains(dependency.source.range, range))
+        : undefined;
+      if (parent !== undefined) {
+        delete clip.origin;
+        dependencies.push({
+          derivativeClipId: clip.id,
+          source: { ...structuredClone(parent.source), range },
+        });
+      } else if (!byClip.has(clip.id)) {
+        clip.origin = "local";
+      }
+    }
+    deliverable.dependencies = dependencies;
+  }
+  return model;
+}
+
+function recordDivergence(
+  project: GuyditorProject,
+  deliverableIds: readonly string[],
+  divergence: DivergenceClass,
+  transactionId: string,
+): GuyditorProject {
+  if (deliverableIds.length === 0) return project;
+  const touched = new Set(deliverableIds);
+  return {
+    ...project,
+    deliverables: project.deliverables.map((deliverable) => {
+      if (!touched.has(deliverable.id)) return deliverable;
+      const divergences = structuredClone(deliverable.divergences ?? []);
+      const existing = divergences.find(({ class: candidate }) => candidate === divergence);
+      if (existing === undefined) divergences.push({ class: divergence, transactionIds: [transactionId] });
+      else existing.transactionIds.push(transactionId);
+      return { ...deliverable, divergences };
+    }),
+  };
 }
 
 export class OperationEngine {
@@ -613,11 +786,12 @@ export class OperationEngine {
       !context.dryRun && !allowProposalCommit &&
       batch.some(({ op }) =>
         op === "restyle.plan.create" || op === "restyle.segment.approve" ||
-        op === "seam.treatment.set")
+        op === "seam.treatment.set" || op === "deliverable.derive" ||
+        op === "deliverable.refresh")
     ) {
       return operationFailure(
         "E_OP_PROPOSAL_REQUIRED",
-        "Restyle plans, segment approvals, and seam treatments must be committed through proposal acceptance.",
+        "Restyle and deliverable derivation/refresh operations must be committed through proposal acceptance.",
         batch.filter(({ op }) => op.startsWith("restyle.") || op.startsWith("seam."))
           .map(({ op }) => op),
       );
@@ -700,6 +874,8 @@ export class OperationEngine {
           );
       } else if (requested.op.startsWith("restyle.") || requested.op.startsWith("seam.")) {
         application = await applyRestyleOperation(working, normalized, this.#templateProvider);
+      } else if (requested.op.startsWith("deliverable.")) {
+        application = await applyDeliverableOperation(working, normalized, this.#idFactory);
       } else if (this.#operationDispatcher === undefined) {
         application = operationFailure(
           "E_OP_DISPATCH_UNAVAILABLE",
@@ -739,6 +915,27 @@ export class OperationEngine {
       });
     }
 
+    const derivativeIds = touchedDerivativeIds(base, working, applied);
+    const suppliedDivergence = context.divergence;
+    if (
+      suppliedDivergence !== undefined &&
+      !DIVERGENCE_CLASSES.includes(suppliedDivergence)
+    ) {
+      return operationFailure(
+        "E_DIVERGENCE_CLASS",
+        `Unknown derivative divergence class ${String(suppliedDivergence)}.`,
+        derivativeIds,
+      );
+    }
+    if (derivativeIds.length > 0 && suppliedDivergence === undefined) {
+      return operationFailure(
+        "E_DIVERGENCE_REQUIRED",
+        "Transactions touching a derivative sequence require a divergence classification.",
+        derivativeIds,
+      );
+    }
+    working = synchronizeDerivativeDependencies(base, working, applied, derivativeIds);
+
     const transitions = await computeAnchorTransitions(
       base,
       working,
@@ -775,9 +972,28 @@ export class OperationEngine {
     }
 
     const resultRevision = formatRevision(parseRevision(base.revision) + 1);
-    const committedCandidate = { ...working, revision: resultRevision };
     const transactionId = this.#idFactory("txn");
     const actor = context.actor ?? actorFor(context);
+    let committedCandidate = { ...working, revision: resultRevision };
+    if (derivativeIds.length > 0 && suppliedDivergence !== undefined) {
+      committedCandidate = recordDivergence(
+        committedCandidate,
+        derivativeIds,
+        suppliedDivergence,
+        transactionId,
+      );
+    }
+    const acceptedAt = context.acceptance?.at ?? this.#now().toISOString();
+    committedCandidate = markAcceptedDeliverableStaleness({
+      before: base,
+      after: committedCandidate,
+      applied,
+      transactionId,
+      revision: resultRevision,
+      detectedAt: acceptedAt,
+    });
+    const committedValid = validateProject(committedCandidate);
+    if (!committedValid.ok) return committedValid;
     const transaction: TransactionRecord = {
       id: transactionId,
       baseRevision: base.revision,
@@ -806,7 +1022,7 @@ export class OperationEngine {
       acceptance: context.acceptance ?? {
         status: "accepted",
         by: actor.id,
-        at: this.#now().toISOString(),
+        at: acceptedAt,
         ...(context.proposalId === undefined
           ? {}
           : { proposal: context.proposalId }),
@@ -817,6 +1033,7 @@ export class OperationEngine {
         anchor,
       })),
       addresses: [...(context.addresses ?? [])],
+      ...(suppliedDivergence === undefined ? {} : { divergence: suppliedDivergence }),
       ...(context.undoOf === undefined ? {} : { undoOf: context.undoOf }),
       ...(context.redoOf === undefined ? {} : { redoOf: context.redoOf }),
     };
@@ -1013,6 +1230,7 @@ export class OperationEngine {
       instruction: structuredClone(request.instruction),
       actor: structuredClone(request.actor),
       ...(request.sessionId === undefined ? {} : { sessionId: request.sessionId }),
+      ...(request.divergence === undefined ? {} : { divergence: request.divergence }),
       reason: structuredClone(request.reason),
       riskClass: "normal",
       addresses: [...request.addresses],
@@ -1034,6 +1252,7 @@ export class OperationEngine {
         baseRevision: draft.baseRevision,
         origin: request.actor.kind === "agent" ? "agent" : "system",
         ...(request.sessionId === undefined ? {} : { sessionId: request.sessionId }),
+        ...(request.divergence === undefined ? {} : { divergence: request.divergence }),
         dryRun: true,
       },
       false,
@@ -1082,6 +1301,7 @@ export class OperationEngine {
       instruction: structuredClone(request.instruction),
       actor: structuredClone(request.actor),
       ...(request.sessionId === undefined ? {} : { sessionId: request.sessionId }),
+      ...(request.divergence === undefined ? {} : { divergence: request.divergence }),
       reason: structuredClone(request.reason),
       riskClass: dryRun.value.riskClass,
       addresses: [...request.addresses],
@@ -1161,6 +1381,7 @@ export class OperationEngine {
         baseRevision: proposal.baseRevision,
         origin: proposal.actor.kind === "agent" ? "agent" : "system",
         ...(proposal.sessionId === undefined ? {} : { sessionId: proposal.sessionId }),
+        ...(proposal.divergence === undefined ? {} : { divergence: proposal.divergence }),
         proposalId: proposal.id,
         dryRun: false,
         actor: proposal.actor,

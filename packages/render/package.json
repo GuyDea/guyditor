@@ -9,6 +9,7 @@
   "dependencies": {
     "@guyditor/compositor": "workspace:*",
     "@guyditor/core": "workspace:*",
+    "@guyditor/deliver": "workspace:*",
     "@guyditor/media": "workspace:*",
     "@guyditor/transcript": "workspace:*",
     "@napi-rs/canvas": "1.0.2",
@@ -17,7 +18,6 @@
     "yaml": "^2.9.0"
   },
   "devDependencies": {
-    "@guyditor/agent": "workspace:*",
-    "@guyditor/deliver": "workspace:*"
+    "@guyditor/agent": "workspace:*"
   }
 }

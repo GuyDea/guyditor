@@ -17,12 +17,9 @@ import {
   OperationEngine,
 } from "../../core/src/index.js";
 import type {
-  AnnotationContextPackage,
   AnnotationTranscriptSource,
-  JobOverview,
   OperationInput,
   ProjectStore,
-  Proposal,
   TemplateProvider,
 } from "../../core/src/index.js";
 import type { DataClass } from "./audit-types.js";
@@ -46,6 +43,17 @@ export const AC004_GATEWAY_TOOLS = Object.freeze([
   "proposal_get",
 ] as const);
 
+export const M3_CANDIDATE_GATEWAY_TOOL = "deliverable_candidates_discover" as const;
+
+export interface CandidateDiscoveryToolInput {
+  profile: string;
+  maxCandidates?: number;
+  constraints?: {
+    mustIncludeBeats?: string[];
+    durationSeconds?: { min: number; max: number };
+  };
+}
+
 export interface GatewayDirector {
   profileId: string;
   modelLabel: string;
@@ -62,6 +70,7 @@ export interface AgentGatewayOptions {
   transcript?: AnnotationTranscriptSource;
   sessionIdFactory?: () => string;
   templateProvider?: TemplateProvider;
+  candidateDiscovery?: (input: CandidateDiscoveryToolInput) => Promise<unknown>;
 }
 
 export interface StartedAgentGateway {
@@ -146,6 +155,7 @@ export class AgentGateway {
   readonly #policySnapshot: object;
   readonly #transcript: AnnotationTranscriptSource | undefined;
   readonly #templateProvider: TemplateProvider | undefined;
+  readonly #candidateDiscovery: AgentGatewayOptions["candidateDiscovery"];
   readonly #sessions: SessionManager;
   readonly #transports = new Map<string, ActiveTransport>();
   #http: Server | undefined;
@@ -164,6 +174,7 @@ export class AgentGateway {
     this.#policySnapshot = structuredClone(options.policySnapshot ?? {});
     this.#transcript = options.transcript;
     this.#templateProvider = options.templateProvider;
+    this.#candidateDiscovery = options.candidateDiscovery;
     this.#sessions = new SessionManager(this.#audit, {
       ...(options.sessionIdFactory === undefined
         ? {}
@@ -387,13 +398,14 @@ export class AgentGateway {
           params: z.record(z.string(), z.unknown()),
         })).min(1),
         addresses: z.array(z.string().regex(ANNOTATION_ID)).min(1),
+        divergence: z.enum(["hook", "order", "pacing", "cuts", "graphics", "captions", "cta", "ending", "framing"]).optional(),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
-    }, async ({ title, ops, addresses }, extra) => this.#toolCall(
+    }, async ({ title, ops, addresses, divergence }, extra) => this.#toolCall(
       session,
       "proposal_create",
       String(extra.requestId),
-      { title, ops, addresses },
+      { title, ops, addresses, divergence },
       async () => {
         const engine = new OperationEngine(this.#project.currentProject, {
           appVersion: "0.0.0",
@@ -412,6 +424,7 @@ export class AgentGateway {
             model: session.director.modelLabel,
           },
           sessionId: session.sessionId,
+          ...(divergence === undefined ? {} : { divergence }),
           reason: {
             text: title,
             sources: addresses.map((annotationId) => ({
@@ -441,12 +454,51 @@ export class AgentGateway {
         return { value: result.value, dataClasses: ["metadata" as const] };
       },
     ));
+    if (this.#candidateDiscovery !== undefined) {
+      server.registerTool(M3_CANDIDATE_GATEWAY_TOOL, {
+        description: "Enqueue deterministic short-candidate discovery and return the cache-backed candidate records with disclosed hook/coherence/payoff criteria.",
+        inputSchema: {
+          profile: z.string().regex(/^[a-z0-9-]+@[0-9]+\.[0-9]+\.[0-9]+$/u),
+          maxCandidates: z.number().int().min(1).max(100).optional(),
+          constraints: z.object({
+            mustIncludeBeats: z.array(z.string().regex(/^beat_[a-z2-7]{10}$/u)).optional(),
+            durationSeconds: z.object({
+              min: z.number().nonnegative(),
+              max: z.number().positive(),
+            }).optional(),
+          }).optional(),
+        },
+        annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+      }, async (params, extra) => this.#toolCall(
+        session,
+        M3_CANDIDATE_GATEWAY_TOOL,
+        String(extra.requestId),
+        params,
+        async () => ({
+          value: await this.#candidateDiscovery!({
+            profile: params.profile,
+            ...(params.maxCandidates === undefined ? {} : { maxCandidates: params.maxCandidates }),
+            ...(params.constraints === undefined ? {} : {
+              constraints: {
+                ...(params.constraints.mustIncludeBeats === undefined
+                  ? {}
+                  : { mustIncludeBeats: params.constraints.mustIncludeBeats }),
+                ...(params.constraints.durationSeconds === undefined
+                  ? {}
+                  : { durationSeconds: params.constraints.durationSeconds }),
+              },
+            }),
+          }),
+          dataClasses: ["metadata" as const],
+        }),
+      ));
+    }
     return server;
   }
 
-  async #toolCall<Value extends AnnotationContextPackage | JobOverview | Proposal>(
+  async #toolCall<Value>(
     session: GatewaySession,
-    tool: typeof AC004_GATEWAY_TOOLS[number],
+    tool: typeof AC004_GATEWAY_TOOLS[number] | typeof M3_CANDIDATE_GATEWAY_TOOL,
     callId: string,
     params: unknown,
     execute: () => Promise<{ value: Value; dataClasses: DataClass[] }>,

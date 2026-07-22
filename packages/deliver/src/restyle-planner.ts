@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import {
   deriveTimeline,
   failure,
+  integerRangesOverlap,
   makeGuyditorError,
   success,
 } from "../../core/src/index.js";
@@ -72,10 +73,6 @@ function fpsValue(fps: string): number | undefined {
 
 function rounded(value: number): number {
   return Math.round((value + Number.EPSILON) * 1_000_000) / 1_000_000;
-}
-
-function rangesOverlap(left: RestyleFrameRange, right: RestyleFrameRange): boolean {
-  return left.startFrame < right.endFrame && right.startFrame < left.endFrame;
 }
 
 function normalizeRanges(
@@ -381,7 +378,10 @@ export function createRestylePlan(
       startFrame: clip.start.frames,
       endFrame: clip.start.frames + clip.duration.frames,
     };
-    if (ranges.some((range) => rangesOverlap(range, clipRange))) {
+    if (ranges.some((range) => integerRangesOverlap(
+      { start: range.startFrame, end: range.endFrame },
+      { start: clipRange.startFrame, end: clipRange.endFrame },
+    ))) {
       const assetId = clipById.get(clip.clipId)?.asset;
       if (assetId !== undefined) sourceAssetIds.add(assetId);
     }

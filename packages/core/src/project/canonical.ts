@@ -151,6 +151,12 @@ const ORDERS = {
     "captionsTrackId", "status", "approvedRevision", "dependencies",
     "divergences", "staleReasons", "publishFiles",
   ],
+  dependency: ["derivativeClipId", "source"],
+  dependencySource: ["assetId", "range", "words", "longformClipId"],
+  sourceRange: ["start", "end"],
+  wordRange: ["startWordId", "endWordId"],
+  staleReason: ["transactionId", "revision", "affected", "detectedAt"],
+  staleAffected: ["dependency", "change"],
   divergence: ["class", "transactionIds"],
   publishFile: ["path", "sha256"],
   templatePin: ["version", "contentHash"],
@@ -267,6 +273,18 @@ function orderFor(
   if (key === "moveTransition") return ORDERS.moveTransition;
   if (key === "rect" && includesPath(path, "avoidRegions")) return ORDERS.normalizedRect;
   if (key === "summary" && includesPath(path, "annotations")) return ORDERS.annotationSummary;
+  if ("derivativeClipId" in value && "source" in value) return ORDERS.dependency;
+  if ("assetId" in value && "range" in value && includesPath(path, "dependencies")) {
+    return ORDERS.dependencySource;
+  }
+  if ("startWordId" in value && "endWordId" in value) return ORDERS.wordRange;
+  if ("transactionId" in value && "revision" in value && "affected" in value) {
+    return ORDERS.staleReason;
+  }
+  if ("dependency" in value && "change" in value) return ORDERS.staleAffected;
+  if ("start" in value && "end" in value && includesPath(path, "dependencies")) {
+    return ORDERS.sourceRange;
+  }
   if (key === "generatedBy") return ORDERS.generatedBy;
   if (typeof path.at(-1) === "number" && path.at(-2) === "inputs" && includesPath(path, "sidecars")) {
     return ORDERS.sidecarInput;

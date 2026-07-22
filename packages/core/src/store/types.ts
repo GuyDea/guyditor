@@ -1,5 +1,6 @@
 import type { SemanticAnchor } from "../project/index.js";
 import type { FrameTime } from "../time/index.js";
+import type { DivergenceClass } from "../deliverables/types.js";
 
 export interface SemanticOperation {
   op: string;
@@ -36,7 +37,7 @@ export interface TransactionRecord {
   reason?: string;
   orphanedAnchors: { owner: string; anchor: SemanticAnchor }[];
   addresses: string[];
-  divergence?: string;
+  divergence?: DivergenceClass;
   undoOf?: string;
   redoOf?: string;
 }

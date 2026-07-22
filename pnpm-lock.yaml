@@ -120,6 +120,12 @@ importers:
       '@guyditor/core':
         specifier: workspace:*
         version: link:../core
+      ajv:
+        specifier: ^8.20.0
+        version: 8.20.0
+      yaml:
+        specifier: ^2.9.0
+        version: 2.9.0
 
   packages/media:
     dependencies:
@@ -138,6 +144,9 @@ importers:
       '@guyditor/core':
         specifier: workspace:*
         version: link:../core
+      '@guyditor/deliver':
+        specifier: workspace:*
+        version: link:../deliver
       '@guyditor/media':
         specifier: workspace:*
         version: link:../media
@@ -160,9 +169,6 @@ importers:
       '@guyditor/agent':
         specifier: workspace:*
         version: link:../agent
-      '@guyditor/deliver':
-        specifier: workspace:*
-        version: link:../deliver
 
   packages/transcript:
     dependencies:

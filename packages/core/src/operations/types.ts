@@ -2,6 +2,7 @@ import type { FrameTime } from "../time/index.js";
 import type { OrphanedAnchorRecord } from "../anchors/bookkeeping.js";
 import type { Result } from "../errors.js";
 import type { GuyditorProject, SemanticAnchor } from "../project/index.js";
+import type { DivergenceClass } from "../deliverables/types.js";
 import type { SemanticOperation, TransactionRecord } from "../store/types.js";
 
 export type RiskClass = "low" | "normal" | "consequential";
@@ -59,6 +60,7 @@ export interface OperationContext {
   undoOf?: string;
   redoOf?: string;
   recordUndo?: boolean;
+  divergence?: DivergenceClass;
 }
 
 export interface ValidationIssue {
@@ -179,6 +181,7 @@ export interface Proposal {
   instruction: TransactionRecord["instruction"];
   actor: TransactionRecord["actor"];
   sessionId?: string;
+  divergence?: DivergenceClass;
   reason: ProposalReason;
   riskClass: RiskClass;
   addresses: string[];
@@ -200,6 +203,7 @@ export interface CreateProposalRequest {
   instruction: TransactionRecord["instruction"];
   actor: TransactionRecord["actor"];
   sessionId?: string;
+  divergence?: DivergenceClass;
   reason: ProposalReason;
   addresses: string[];
   warnings?: ContinuityWarning[];

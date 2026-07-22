@@ -1,5 +1,6 @@
 import {
   absoluteSeconds,
+  applyDeliverableOperation,
   applyClipOperation,
   convertTimeRounding,
   failure,
@@ -474,58 +475,63 @@ function shortCandidate(
 ): Result<DispatchedOperationApplication> {
   const removeCandidateId = input.params["removeCandidateId"] as string | undefined;
   if (removeCandidateId !== undefined) {
-    const index = project.deliverables.findIndex(({ id, kind }) =>
-      id === removeCandidateId && kind === "short");
-    const candidate = project.deliverables[index];
-    if (candidate === undefined) {
-      return operationFailure(
-        "E_OP_NOT_FOUND",
-        `Short-form candidate ${removeCandidateId} does not exist.`,
-        [removeCandidateId],
-      );
-    }
-    const deliverables = project.deliverables.slice();
-    deliverables.splice(index, 1);
-    return success({
-      model: { ...project, deliverables },
-      inverse: [],
-      affected: [removeCandidateId],
-      summary: `Remove short-form candidate ${candidate.name}`,
-    });
+    return applyDeliverableOperation(project, {
+      op: "deliverable.remove",
+      params: { deliverableId: removeCandidateId },
+    }, idFactory);
   }
   const wordRange = input.params["wordRange"] as TranscriptWordRange;
   const range = mappedRange(project, sidecars, wordRange, 0, "none");
   if (!range.ok) return range;
-  const sequenceId = primarySequenceId(project);
-  if (!sequenceId.ok) return sequenceId;
-  const candidateId = (input.params["createdCandidateId"] as string | undefined) ?? idFactory("dlv");
-  if (project.deliverables.some(({ id }) => id === candidateId)) {
-    return operationFailure("E_OP_ID_CONFLICT", `Deliverable ${candidateId} already exists.`, [candidateId]);
-  }
   const sidecar = sidecars.find(({ assetId }) => assetId === range.value.assetId)!;
   const name = (input.params["title"] as string | undefined) ??
     `Short candidate: ${excerpt(sidecar, range.value)}`;
-  return success({
-    model: {
-      ...project,
-      deliverables: [...project.deliverables, {
-        id: candidateId,
-        kind: "short",
-        name,
-        profile: "short-candidate@1.0.0",
-        sequenceId: sequenceId.value,
-        status: "draft",
+  const fps = project.settings.timeline.fps;
+  const start = sampleToFrame(range.value.start, fps);
+  if (!start.ok) return start;
+  const end = sampleToFrame(range.value.end, fps);
+  if (!end.ok) return end;
+  const longformSequenceId = primarySequenceId(project);
+  if (!longformSequenceId.ok) return longformSequenceId;
+  const longformClipId = project.sequences
+    .find(({ id }) => id === longformSequenceId.value)
+    ?.clips.find((clip) =>
+      clip.asset === range.value.assetId &&
+      clip.source.in.frames <= start.value && clip.source.out.frames >= end.value)?.id;
+  const created = input.params["created"] as {
+    deliverableId: string;
+    sequenceId: string;
+    layerId: string;
+    additionalLayerIds?: string[];
+    captionsTrackId: string;
+    clipIds: string[];
+  } | undefined;
+  const application = applyDeliverableOperation(project, {
+    op: "deliverable.derive",
+    params: {
+      kind: "short",
+      name,
+      profile: (input.params["profile"] as string | undefined) ?? "youtube-shorts@1.0.0",
+      from: { words: { startWordId: wordRange.fromWord, endWordId: wordRange.toWord } },
+      resolvedSources: [{
+        assetId: range.value.assetId,
+        range: {
+          start: { frames: start.value, fps },
+          end: { frames: end.value, fps },
+        },
+        words: { startWordId: wordRange.fromWord, endWordId: wordRange.toWord },
+        ...(longformClipId === undefined ? {} : { longformClipId }),
       }],
+      ...(created === undefined ? {} : { created }),
     },
-    inverse: [{
-      op: input.op,
-      params: { removeCandidateId: candidateId },
-    }],
-    redo: {
-      op: input.op,
-      params: { ...input.params, createdCandidateId: candidateId },
-    },
-    affected: [candidateId, wordRange.fromWord, wordRange.toWord],
+  }, idFactory);
+  if (!application.ok) return application;
+  const captured = application.value.redo?.params["created"];
+  return success({
+    ...application.value,
+    inverse: application.value.inverse,
+    redo: { op: input.op, params: { ...input.params, created: captured } },
+    affected: [...application.value.affected, wordRange.fromWord, wordRange.toWord],
     summary: `Mark ${excerpt(sidecar, range.value)} as short-form candidate`,
   });
 }

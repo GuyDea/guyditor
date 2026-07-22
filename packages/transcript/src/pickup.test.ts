@@ -90,7 +90,7 @@ function project(): GuyditorProject {
     }],
     annotations: { sidecar: "annotations", summary: { open: 0, resolved: 0, rejected: 0, reopened: 0 } },
     deliverables: [{
-      id: "dlv_aaaaaaaaaa", kind: "longform", name: "master", profile: "youtube@1",
+      id: "dlv_aaaaaaaaaa", kind: "longform", name: "master", profile: "youtube@1.0.0",
       sequenceId: "seq_aaaaaaaaaa", captionsTrackId: "cts_aaaaaaaaaa", status: "draft",
     }],
     presets: [], skills: [], sidecars: [],

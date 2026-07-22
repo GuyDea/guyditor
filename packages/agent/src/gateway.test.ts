@@ -271,4 +271,58 @@ describe("AgentGateway", () => {
       jobs.close();
     }
   });
+
+  it("exposes cache-backed short-candidate discovery as an audited gateway tool", async () => {
+    const store = await annotatedProject();
+    const userDirectory = await mkdtemp(join(tmpdir(), "guyditor-candidate-gateway-user-"));
+    temporaryDirectories.push(userDirectory);
+    const audit = new AuditLog({ userDir: userDirectory });
+    const { queue: jobs } = JobQueue.open(":memory:");
+    const calls: unknown[] = [];
+    const records = [{
+      candidateId: "candidate-0123456789ab",
+      words: { startWordId: "w000001", endWordId: "w000020" },
+      beats: ["beat_aaaaaaaaaa"],
+      durationSeconds: 18,
+      scores: { hook: 0.8, coherence: 0.7, payoff: 0.9, overall: 0.79 },
+      evidence: {
+        hookLine: "Why this works",
+        reasons: ["question in first 2.5 seconds"],
+        criteria: ["question", "payoff-beat-final-third"],
+      },
+    }];
+    const gateway = new AgentGateway({
+      auditLog: audit,
+      jobQueue: jobs,
+      project: store,
+      stateDirectory: join(userDirectory, "state"),
+      sessionIdFactory: () => "ses_bbbbbbbbbb",
+      candidateDiscovery: (input) => {
+        calls.push(input);
+        return Promise.resolve(records);
+      },
+    });
+    const started = await gateway.start();
+    try {
+      const result = await runStubDirector({
+        annotationId: "ann_bbbbbbbbbb",
+        clipId: "clp_aaaaaaaaaa",
+        gatewayStateFile: started.stateFile,
+        candidateDiscovery: {
+          profile: "youtube-shorts@1.0.0",
+          maxCandidates: 3,
+        },
+      });
+
+      expect(result.tools).toContain("deliverable_candidates_discover");
+      expect(calls).toEqual([{
+        profile: "youtube-shorts@1.0.0",
+        maxCandidates: 3,
+      }]);
+      expect(result.candidateResult).toEqual(records);
+    } finally {
+      await gateway.close();
+      jobs.close();
+    }
+  });
 });

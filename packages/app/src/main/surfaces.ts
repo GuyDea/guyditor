@@ -71,6 +71,7 @@ export const IPC_SURFACES: readonly IpcSurface[] = Object.freeze([
             intent: { enum: ["direct", "undo", "redo"] },
             label: { type: "string", minLength: 1 },
             undoOf: { type: "string", pattern: "^txn_[a-z2-7]{10}$" },
+            divergence: { enum: ["hook", "order", "pacing", "cuts", "graphics", "captions", "cta", "ending", "framing"] },
           },
           additionalProperties: false,
         },
@@ -346,6 +347,49 @@ export const IPC_SURFACES: readonly IpcSurface[] = Object.freeze([
   {
     service: "DeliverableService",
     methods: {
+      profiles: { paramsSchema: emptyParams, resultSchema: { type: "array" }, budgetMs: 50 },
+      candidates: { paramsSchema: emptyParams, resultSchema: { type: "array" }, budgetMs: 50 },
+      discoverCandidates: {
+        paramsSchema: {
+          type: "object",
+          required: ["profile"],
+          properties: {
+            profile: { type: "string", pattern: "^[a-z0-9-]+@[0-9]+\\.[0-9]+\\.[0-9]+$" },
+            maxCandidates: { type: "integer", minimum: 1, maximum: 100 },
+            constraints: { type: "object" },
+          },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 20,
+      },
+      derive: {
+        paramsSchema: {
+          type: "object",
+          required: ["name", "profile"],
+          anyOf: [{ required: ["selection"] }, { required: ["candidateId"] }],
+          properties: {
+            name: { type: "string", minLength: 1 },
+            profile: { type: "string", pattern: "^[a-z0-9-]+@[0-9]+\\.[0-9]+\\.[0-9]+$" },
+            profileOverrides: { type: "object" },
+            selection: { type: "object" },
+            candidateId: { type: "string", minLength: 1 },
+          },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 150,
+      },
+      refresh: {
+        paramsSchema: {
+          type: "object",
+          required: ["deliverableId"],
+          properties: { deliverableId: { type: "string", pattern: "^dlv_[a-z2-7]{10}$" } },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 150,
+      },
       restylePlan: {
         paramsSchema: {
           type: "object",

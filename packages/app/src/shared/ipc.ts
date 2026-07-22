@@ -1,6 +1,6 @@
 // This file is the single renderer/main source of truth for Part 1 §1.3.
 
-import type { GuyditorProject, SidecarRef } from "../../../core/src/index.js";
+import type { DivergenceClass, GuyditorProject, SidecarRef } from "../../../core/src/index.js";
 
 export interface GuyditorError {              // Part 0 §0.4 envelope, verbatim
   code: string;                               // "E_" + SCREAMING_SNAKE, e.g. "E_MLWORKER_DOWN"
@@ -167,6 +167,7 @@ export interface ExecuteRequest {
   intent: "direct" | "undo" | "redo";
   label: string;
   undoOf?: string;
+  divergence?: DivergenceClass;
 }
 
 export interface ExecuteResult {

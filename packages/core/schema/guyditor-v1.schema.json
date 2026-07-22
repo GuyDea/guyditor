@@ -431,6 +431,7 @@
       "properties": {
         "id": { "type": "string", "pattern": "^clp_[a-z2-7]{10}$" },
         "asset": { "type": "string", "pattern": "^ast_[a-z2-7]{10}$" },
+        "origin": { "const": "local" },
         "source": { "$ref": "#/$defs/frameRange" },
         "gapBefore": { "$ref": "#/$defs/frameTime" },
         "overlapPrevious": { "$ref": "#/$defs/frameTime" },
@@ -1324,15 +1325,15 @@
         "id": { "type": "string", "pattern": "^dlv_[a-z2-7]{10}$" },
         "kind": { "enum": ["longform", "short"] },
         "name": { "type": "string" },
-        "profile": { "type": "string" },
+        "profile": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*@(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$" },
         "profileOverrides": { "$ref": "#/$defs/unknownRecord" },
         "sequenceId": { "type": "string", "pattern": "^seq_[a-z2-7]{10}$" },
         "captionsTrackId": { "type": "string", "pattern": "^cts_[a-z2-7]{10}$" },
         "status": { "enum": ["draft", "in-review", "approved", "stale"] },
         "approvedRevision": { "type": "string", "pattern": "^rev_[0-9]{5}$" },
-        "dependencies": true,
+        "dependencies": { "type": "array", "items": { "$ref": "#/$defs/dependencyEntry" } },
         "divergences": { "type": "array", "items": { "$ref": "#/$defs/divergence" } },
-        "staleReasons": true,
+        "staleReasons": { "type": "array", "items": { "$ref": "#/$defs/staleReason" } },
         "publishFiles": { "type": "array", "items": { "$ref": "#/$defs/publishFile" } }
         ,"restyle": { "$ref": "#/$defs/restyleDeliverable" }
       }
@@ -1351,8 +1352,68 @@
       "additionalProperties": false,
       "required": ["class", "transactionIds"],
       "properties": {
-        "class": { "type": "string" },
+        "class": { "enum": ["hook", "order", "pacing", "cuts", "graphics", "captions", "cta", "ending", "framing"] },
         "transactionIds": { "type": "array", "items": { "type": "string", "pattern": "^txn_[a-z2-7]{10}$" } }
+      }
+    },
+    "wordRange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["startWordId", "endWordId"],
+      "properties": {
+        "startWordId": { "$ref": "#/$defs/wordId" },
+        "endWordId": { "$ref": "#/$defs/wordId" }
+      }
+    },
+    "sourceRangeRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["assetId", "range"],
+      "properties": {
+        "assetId": { "type": "string", "pattern": "^ast_[a-z2-7]{10}$" },
+        "range": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["start", "end"],
+          "properties": {
+            "start": { "$ref": "#/$defs/frameTime" },
+            "end": { "$ref": "#/$defs/frameTime" }
+          }
+        },
+        "words": { "$ref": "#/$defs/wordRange" },
+        "longformClipId": { "type": "string", "pattern": "^clp_[a-z2-7]{10}$" }
+      }
+    },
+    "dependencyEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["derivativeClipId", "source"],
+      "properties": {
+        "derivativeClipId": { "type": "string", "pattern": "^clp_[a-z2-7]{10}$" },
+        "source": { "$ref": "#/$defs/sourceRangeRef" }
+      }
+    },
+    "staleReason": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["transactionId", "revision", "affected", "detectedAt"],
+      "properties": {
+        "transactionId": { "type": "string", "pattern": "^txn_[a-z2-7]{10}$" },
+        "revision": { "type": "string", "pattern": "^rev_[0-9]{5}$" },
+        "affected": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["dependency", "change"],
+            "properties": {
+              "dependency": { "$ref": "#/$defs/dependencyEntry" },
+              "change": { "type": "string", "minLength": 1 }
+            }
+          }
+        },
+        "detectedAt": { "$ref": "#/$defs/iso8601" }
       }
     },
     "publishFile": {

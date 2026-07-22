@@ -67,3 +67,13 @@ export type {
   WatchFolderConfig,
 } from "./model.js";
 export { validateProject } from "./validate.js";
+export type {
+  DeliverableDivergence,
+  DeliverableKind,
+  DeliverableStatus,
+  DependencyEntry,
+  DivergenceClass,
+  SourceRangeRef,
+  StaleReason,
+  WordRange,
+} from "../deliverables/types.js";

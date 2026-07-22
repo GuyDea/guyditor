@@ -10,6 +10,13 @@ import type {
   SemanticAnchor,
 } from "../anchors/types.js";
 import type { RightsMetadata } from "../restyle/types.js";
+import type {
+  DeliverableDivergence,
+  DeliverableKind,
+  DeliverableStatus,
+  DependencyEntry,
+  StaleReason,
+} from "../deliverables/types.js";
 
 export type { AnchorRange, SemanticAnchor } from "../anchors/types.js";
 
@@ -190,6 +197,7 @@ export interface LookApplication extends ColorCorrection {
 export interface Clip {
   id: string;
   asset: string;
+  origin?: "local";
   source: { in: FrameTime; out: FrameTime };
   gapBefore?: FrameTime;
   overlapPrevious?: FrameTime;
@@ -522,17 +530,17 @@ export interface AnnotationIndex {
 
 export interface Deliverable {
   id: string;
-  kind: "longform" | "short";
+  kind: DeliverableKind;
   name: string;
   profile: string;
   profileOverrides?: Record<string, unknown>;
   sequenceId: string;
   captionsTrackId?: string;
-  status: "draft" | "in-review" | "approved" | "stale";
+  status: DeliverableStatus;
   approvedRevision?: string;
-  dependencies?: unknown[];
-  divergences?: { class: string; transactionIds: string[] }[];
-  staleReasons?: unknown[];
+  dependencies?: DependencyEntry[];
+  divergences?: DeliverableDivergence[];
+  staleReasons?: StaleReason[];
   publishFiles?: { path: string; sha256: string }[];
   restyle?: {
     coverageMode: "full" | "ranges";

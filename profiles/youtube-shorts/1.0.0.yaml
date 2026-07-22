@@ -1,0 +1,40 @@
+format: guyditor-profile/v1
+id: youtube-shorts
+version: 1.0.0
+displayName: "YouTube Shorts"
+kind: short
+video:
+  aspect: "9:16"
+  resolution: { width: 1080, height: 1920 }
+  fps: { allowed: ["30/1", "60/1", "30000/1001", "60000/1001"], default: "30/1" }
+  container: mp4
+  codec: h264
+  codecProfile: high
+  pixelFormat: yuv420p
+  colorSpace: bt709
+  rateControl: { mode: crf, crf: 18, maxBitrateKbps: 12000 }
+duration: { minSeconds: 1, maxSeconds: 180, recommendedMaxSeconds: 60 }
+audio:
+  codec: aac
+  sampleRate: 48000
+  channels: 2
+  bitrateKbps: 256
+  loudness: { integratedLufs: -14, toleranceLu: 1.0, truePeakDbtp: -1.0, lraMaxLu: 11 }
+safeAreas:
+  title: { top: 0.06, bottom: 0.26, left: 0.05, right: 0.16 }
+  action: { top: 0.03, bottom: 0.20, left: 0.02, right: 0.12 }
+  platformUi:
+    - { name: right-rail, rect: { x: 0.86, y: 0.38, w: 0.14, h: 0.42 } }
+    - { name: bottom-meta, rect: { x: 0.00, y: 0.82, w: 0.80, h: 0.18 } }
+captionDefaults:
+  maxLines: 2
+  maxCharsPerLine: 18
+  placement: { anchor: center, verticalCenter: 0.62 }
+  perWordHighlight: true
+metadata:
+  title: { maxChars: 100 }
+  description: { maxChars: 5000 }
+  tags: { maxCount: 60, totalMaxChars: 500 }
+  hashtags: { maxCount: 20, countedIn: description }
+cover: { resolution: { width: 1080, height: 1920 }, formats: [jpg, png], maxBytes: 2097152 }
+chapters: null

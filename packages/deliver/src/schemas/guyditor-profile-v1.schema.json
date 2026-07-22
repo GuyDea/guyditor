@@ -1,0 +1,215 @@
+{
+  "$id": "guyditor:profile/v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "id", "version", "displayName", "kind", "video", "duration", "audio", "safeAreas", "captionDefaults", "metadata", "cover", "chapters"],
+  "properties": {
+    "format": { "const": "guyditor-profile/v1" },
+    "id": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
+    "version": { "type": "string", "pattern": "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)$" },
+    "displayName": { "type": "string", "minLength": 1 },
+    "kind": { "enum": ["short", "longform"] },
+    "video": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["aspect", "resolution", "fps", "container", "codec", "codecProfile", "pixelFormat", "colorSpace", "rateControl"],
+      "properties": {
+        "aspect": { "type": "string", "pattern": "^[1-9][0-9]*:[1-9][0-9]*$" },
+        "resolution": { "$ref": "#/$defs/resolution" },
+        "resolutionsAllowed": { "type": "array", "items": { "$ref": "#/$defs/resolution" }, "minItems": 1 },
+        "fps": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["allowed", "default"],
+          "properties": {
+            "allowed": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "$ref": "#/$defs/rational" } },
+            "default": { "$ref": "#/$defs/rational" }
+          }
+        },
+        "container": { "enum": ["mp4", "mov", "webm"] },
+        "codec": { "type": "string", "minLength": 1 },
+        "codecProfile": { "type": "string", "minLength": 1 },
+        "pixelFormat": { "type": "string", "minLength": 1 },
+        "colorSpace": { "type": "string", "minLength": 1 },
+        "rateControl": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mode", "crf", "maxBitrateKbps"],
+          "properties": {
+            "mode": { "const": "crf" },
+            "crf": { "type": "integer", "minimum": 0, "maximum": 63 },
+            "maxBitrateKbps": { "type": "integer", "minimum": 1 }
+          }
+        }
+      }
+    },
+    "duration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["minSeconds", "maxSeconds", "recommendedMaxSeconds"],
+      "properties": {
+        "minSeconds": { "type": "number", "minimum": 0 },
+        "maxSeconds": { "type": ["number", "null"], "exclusiveMinimum": 0 },
+        "recommendedMaxSeconds": { "type": ["number", "null"], "exclusiveMinimum": 0 }
+      }
+    },
+    "audio": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["codec", "sampleRate", "channels", "bitrateKbps", "loudness"],
+      "properties": {
+        "codec": { "type": "string", "minLength": 1 },
+        "sampleRate": { "type": "integer", "minimum": 8000 },
+        "channels": { "type": "integer", "minimum": 1 },
+        "bitrateKbps": { "type": "integer", "minimum": 1 },
+        "loudness": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["integratedLufs", "toleranceLu", "truePeakDbtp", "lraMaxLu"],
+          "properties": {
+            "integratedLufs": { "type": "number" },
+            "toleranceLu": { "type": "number", "minimum": 0 },
+            "truePeakDbtp": { "type": "number" },
+            "lraMaxLu": { "type": "number", "minimum": 0 }
+          }
+        }
+      }
+    },
+    "safeAreas": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title", "action", "platformUi"],
+      "properties": {
+        "title": { "$ref": "#/$defs/insets" },
+        "action": { "$ref": "#/$defs/insets" },
+        "platformUi": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "rect"],
+            "properties": {
+              "name": { "type": "string", "minLength": 1 },
+              "rect": { "$ref": "#/$defs/rect" }
+            }
+          }
+        }
+      }
+    },
+    "captionDefaults": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["maxLines", "maxCharsPerLine", "placement", "perWordHighlight"],
+      "properties": {
+        "maxLines": { "type": "integer", "minimum": 1, "maximum": 3 },
+        "maxCharsPerLine": { "type": "integer", "minimum": 1 },
+        "placement": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["anchor", "verticalCenter"],
+          "properties": {
+            "anchor": { "enum": ["left", "center", "right"] },
+            "verticalCenter": { "type": "number", "minimum": 0, "maximum": 1 }
+          }
+        },
+        "perWordHighlight": { "type": "boolean" }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title", "description", "tags", "hashtags"],
+      "properties": {
+        "title": { "oneOf": [{ "$ref": "#/$defs/maxChars" }, { "type": "null" }] },
+        "description": { "$ref": "#/$defs/maxChars" },
+        "tags": { "oneOf": [{ "$ref": "#/$defs/tags" }, { "type": "null" }] },
+        "hashtags": { "oneOf": [{ "$ref": "#/$defs/hashtags" }, { "type": "null" }] }
+      }
+    },
+    "cover": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["resolution", "formats", "maxBytes"],
+      "properties": {
+        "resolution": { "$ref": "#/$defs/resolution" },
+        "formats": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "enum": ["jpg", "png"] } },
+        "maxBytes": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "chapters": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["minCount", "minChapterSeconds", "firstMustBeZero"],
+          "properties": {
+            "minCount": { "type": "integer", "minimum": 1 },
+            "minChapterSeconds": { "type": "number", "minimum": 0 },
+            "firstMustBeZero": { "type": "boolean" }
+          }
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "rational": { "type": "string", "pattern": "^(?:0|[1-9][0-9]*)/[1-9][0-9]*$" },
+    "resolution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["width", "height"],
+      "properties": {
+        "width": { "type": "integer", "minimum": 1 },
+        "height": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "insets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["top", "bottom", "left", "right"],
+      "properties": {
+        "top": { "type": "number", "minimum": 0, "maximum": 1 },
+        "bottom": { "type": "number", "minimum": 0, "maximum": 1 },
+        "left": { "type": "number", "minimum": 0, "maximum": 1 },
+        "right": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "rect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y", "w", "h"],
+      "properties": {
+        "x": { "type": "number", "minimum": 0, "maximum": 1 },
+        "y": { "type": "number", "minimum": 0, "maximum": 1 },
+        "w": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
+        "h": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 }
+      }
+    },
+    "maxChars": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["maxChars"],
+      "properties": { "maxChars": { "type": "integer", "minimum": 1 } }
+    },
+    "tags": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["maxCount", "totalMaxChars"],
+      "properties": {
+        "maxCount": { "type": "integer", "minimum": 1 },
+        "totalMaxChars": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "hashtags": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["maxCount", "countedIn"],
+      "properties": {
+        "maxCount": { "type": "integer", "minimum": 1 },
+        "recommendedMaxCount": { "type": "integer", "minimum": 1 },
+        "countedIn": { "enum": ["description", "caption"] }
+      }
+    }
+  }
+}

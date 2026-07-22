@@ -600,6 +600,19 @@ export class RenderService {
     if (isProposalRevision(req.revision)) {
       throw renderUnsupported(`proposal revision ${req.revision}`, "Part 5", [req.revision]);
     }
+    const lifecycleProject = await this.#loadProject(req.revision);
+    const lifecycleDeliverable = lifecycleProject.deliverables.find(({ id }) => id === req.deliverableId);
+    if (lifecycleDeliverable?.status === "stale") {
+      throw makeGuyditorError(
+        "E_DELIVERABLE_STALE",
+        `Deliverable ${req.deliverableId} is stale and cannot be exported.`,
+        {
+          affected: [req.deliverableId],
+          retry: "none",
+          suggestion: "Run deliverable.refresh and review the diff",
+        },
+      );
+    }
     const variants = [...new Set(req.variants)];
     if (variants.length === 0) {
       throw renderUnsupported("an export without a variant", "Part 12", [req.deliverableId]);
@@ -825,7 +838,11 @@ export class RenderService {
       }
     }
     try {
-      const profile = await loadRenderProfile(deliverable.profile, this.#profilesRoot);
+      const profile = await loadRenderProfile(
+        deliverable.profile,
+        this.#profilesRoot,
+        deliverable.profileOverrides,
+      );
       const resolved = this.#withResolvedAssetPaths(project);
       const sidecars = await this.#captionSidecars(project);
       const anchorFrames = await this.#renderAnchorFrames(
@@ -1118,7 +1135,11 @@ export class RenderService {
         { affected: [req.deliverableId, project.revision] },
       );
     }
-    const profile = await loadRenderProfile(deliverable.profile, this.#profilesRoot);
+    const profile = await loadRenderProfile(
+      deliverable.profile,
+      this.#profilesRoot,
+      deliverable.profileOverrides,
+    );
     const captionModel = await this.#captionModel(project, deliverable);
     let overlays: Parameters<typeof compileRenderGraph>[0]["overlays"] = [];
     if (captionModel !== undefined) {
