@@ -298,6 +298,18 @@ export function TimelinePanel({
                 />
               ))}
             </div>
+            <div className="restyle-timeline-seams" aria-label="Restyle seam treatments">
+              {restylePlan?.seams.map((seam) => (
+                <span
+                  key={seam.id}
+                  data-kind={seam.treatment.kind}
+                  data-state={seam.status}
+                  data-testid={`restyle-timeline-seam-${seam.id}`}
+                  title={`${seam.id} · ${seam.treatment.kind} · ${String(seam.frame)}f`}
+                  style={{ left: `${String(seam.frame * zoom)}px` }}
+                />
+              ))}
+            </div>
             <div className="timeline-clips">
               {visibleClips.map((timed) => {
                 const clip = sequence?.clips.find(({ id }) => id === timed.clipId);

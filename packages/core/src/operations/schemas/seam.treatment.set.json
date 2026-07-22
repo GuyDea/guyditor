@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["deliverableId", "plan", "seamId", "treatment"],
+  "properties": {
+    "deliverableId": { "type": "string", "pattern": "^dlv_[a-z2-7]{10}$" },
+    "plan": { "type": "object" },
+    "seamId": { "type": "string", "pattern": "^restyle-seam-[A-Za-z0-9._-]+$" },
+    "treatment": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "templateId", "params", "durationFrames", "resumeExact"],
+          "properties": {
+            "kind": { "const": "interstitial" },
+            "templateId": { "type": "string", "pattern": "^tpl_[a-z2-7]{10}$" },
+            "params": { "type": "object" },
+            "durationFrames": { "type": "integer", "minimum": 1 },
+            "resumeExact": { "const": true }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": { "kind": { "const": "punch-in" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": { "kind": { "const": "none" } }
+        }
+      ]
+    }
+  }
+}

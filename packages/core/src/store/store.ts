@@ -578,6 +578,18 @@ async function prepareRestyleCommit(
       }
       writes.set(sidecarFilePath(root, reference.path), serializeRestylePlan(plan));
     }
+    if (operation.op === "seam.treatment.set") {
+      const plan = structuredClone(operation.params["plan"] as RestylePlan);
+      const reference = restylePlanSidecarRef(plan);
+      const registered = restyleSidecarReference(model, reference.name);
+      if (
+        registered === undefined || registered.path !== reference.path ||
+        registered.sha256 !== reference.sha256
+      ) {
+        throw new Error(`Restyle seam update ${plan.id} does not match its registered sidecar.`);
+      }
+      writes.set(sidecarFilePath(root, reference.path), serializeRestylePlan(plan));
+    }
     if (operation.op === "restyle.segment.approve") {
       const proposedPlan = structuredClone(operation.params["plan"] as RestylePlan);
       const provenance = structuredClone(
@@ -605,6 +617,14 @@ async function prepareRestyleCommit(
         throw new Error(`Restyle approval chunk ${String(operation.params["chunkId"])} is invalid.`);
       }
       Object.assign(targetChunk, structuredClone(approvedChunk));
+      for (const proposedSeam of proposedPlan.seams) {
+        if (proposedSeam.application?.chunkId !== approvedChunk.id) continue;
+        const targetSeam = currentPlan.value.seams.find(({ id }) => id === proposedSeam.id);
+        if (targetSeam === undefined) {
+          throw new Error(`Restyle approval seam ${proposedSeam.id} is invalid.`);
+        }
+        Object.assign(targetSeam, structuredClone(proposedSeam));
+      }
       const mergedPlan = currentPlan.value;
       const planReference = restylePlanSidecarRef(mergedPlan);
       const provenanceReference = restyleProvenanceSidecarRef(provenance, mergedPlan);
@@ -643,7 +663,8 @@ async function prepareRestyleCommit(
     }
   }
 
-  const isRestyleTransaction = transaction.operations.some(({ op }) => op.startsWith("restyle."));
+  const isRestyleTransaction = transaction.operations.some(({ op }) =>
+    op.startsWith("restyle.") || op.startsWith("seam."));
   if (!isRestyleTransaction && !transaction.operations.some(({ op }) => op === "project.restore")) {
     const affectedIds = transaction.operations.flatMap(({ params }) => [...objectIds(params)]);
     const changedRanges = computeChangedRanges(before, model, affectedIds).map((range) => ({
@@ -679,6 +700,16 @@ async function prepareRestyleCommit(
               markedAt: transaction.acceptance.at,
               transactionId: transaction.id,
             };
+            for (const seam of plan.seams) {
+              if (seam.beforeChunkId !== chunk.id && seam.afterChunkId !== chunk.id) continue;
+              seam.status = "review";
+              seam.review = {
+                reason: "adjacent-chunk-stale",
+                markedAt: transaction.acceptance.at,
+                transactionId: transaction.id,
+              };
+              delete seam.application;
+            }
             changed = true;
           }
         }

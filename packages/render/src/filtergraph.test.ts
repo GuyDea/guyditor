@@ -256,6 +256,76 @@ describe("compileFiltergraph", () => {
     expect(command.expectedDurationFrames).toBe(130);
   });
 
+  it("lowers exact-resume seam insertions to frame/sample splits without consuming source", () => {
+    const rendered = graph("/tmp/source.mp4", undefined, false, (project) => {
+      project.layers.push({
+        id: "lyr_bbbbbbbbbb",
+        kind: "animation",
+        name: "Restyle seam",
+        order: 10,
+        enabled: true,
+        locked: false,
+        items: [{
+          id: "gfx_aaaaaaaaaa",
+          template: "tpl_d2e3f4g5h6",
+          at: "timeline:seq_aaaaaaaaaa@30",
+          duration: { frames: 30, fps: "30/1" },
+          params: { title: "Exact resume" },
+          seed: 609,
+          layout: {
+            restyleSeam: {
+              planId: "restyle-plan-render",
+              seamId: "restyle-seam-001",
+              sourceFrame: 30,
+              durationFrames: 30,
+              resumeExact: true,
+            },
+          },
+        }],
+      });
+    });
+
+    const command = compileFiltergraph(rendered, "/tmp/restyle-seam.mp4");
+    expect(command.expectedDurationFrames).toBe(180);
+    expect(command.filterComplex).toContain("split=2");
+    expect(command.filterComplex).toContain("trim=start_frame=0:end_frame=30");
+    expect(command.filterComplex).toContain("trim=start_frame=30:end_frame=150");
+    expect(command.filterComplex).toContain("color=c=0x00000000");
+    expect(command.filterComplex).toContain("asplit=2");
+    expect(command.filterComplex).toContain("atrim=start_sample=0:end_sample=48000");
+    expect(command.filterComplex).toContain("atrim=start_sample=48000:end_sample=240000");
+    expect(command.filterComplex).toContain("concat=n=3:v=1:a=0");
+    expect(command.filterComplex).toContain("concat=n=3:v=0:a=1");
+  });
+
+  it("preserves alpha across every frame of an anchored video item", () => {
+    const rendered = graph("/tmp/source.mp4", undefined, false, (project) => {
+      project.layers.push({
+        id: "lyr_bbbbbbbbbb",
+        kind: "video",
+        name: "Anchored generated range",
+        order: 10,
+        enabled: true,
+        locked: false,
+        items: [{
+          id: "gfx_bbbbbbbbbb",
+          asset: "ast_aaaaaaaaaa",
+          at: "timeline:seq_aaaaaaaaaa@30",
+          duration: { frames: 30, fps: "30/1" },
+          source: {
+            in: { frames: 0, fps: "30/1" },
+            out: { frames: 30, fps: "30/1" },
+          },
+        }],
+      });
+    });
+
+    const command = compileFiltergraph(rendered, "/tmp/anchored.mp4");
+    expect(command.filterComplex).toContain(
+      "tpad=start=30:stop=90:color=black@0,trim=start_frame=0:end_frame=150",
+    );
+  });
+
   it("supports the M0 compileFiltergraph(graph) surface with a local derived output", () => {
     const command = compileFiltergraph(graph());
     const deliverableId = "dlv_aaaaaaaaaa";

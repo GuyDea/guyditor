@@ -4,6 +4,7 @@ affects: ["BRD §13 (FR-600..606)", "BRD §10 (FR-311)", "BRD §19 (NFR-006)", "
 brd_ids: [FR-603, FR-604, FR-605, FR-311, NFR-006]
 author: Claude Fable 5 (coordinator), from creator requirements 2026-07-18
 date: 2026-07-18
+implemented: 2026-07-22
 ---
 
 # Amendment 001 — Segmented AI restyling of primary footage with seam concealment

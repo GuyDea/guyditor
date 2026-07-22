@@ -42,7 +42,12 @@ export function ProposalPanel({
           ? { instruction: revisionInstruction.trim() || "Revise this proposal with the latest feedback" }
           : {}),
       });
-      await Promise.all([refreshProject(), refreshAnnotations(), refreshProposals()]);
+      await Promise.all([
+        refreshProject(),
+        refreshAnnotations(),
+        refreshProposals(),
+        refreshRestylePlan(),
+      ]);
       setNotice(`${action === "acceptProposal" ? "Accepted" : action === "rejectProposal" ? "Rejected" : "Superseded"} ${proposal.id}.`);
       setRevisionInstruction("");
     } catch (error: unknown) {
@@ -69,7 +74,8 @@ export function ProposalPanel({
         {proposals.map((proposal) => {
           const stale = proposal.staleBase === true || proposal.baseRevision !== snapshot?.revision;
           const rebasableRestyle = proposal.operations.length > 0 &&
-            proposal.operations.every(({ op }) => op === "restyle.segment.approve");
+            proposal.operations.every(({ op }) =>
+              op === "restyle.segment.approve" || op === "clip.split" || op === "clip.punchin.set");
           const expanded = expandedProposalId === proposal.id || proposals.length === 1;
           return (
             <li key={proposal.id} data-testid={`proposal-${proposal.id}`}>

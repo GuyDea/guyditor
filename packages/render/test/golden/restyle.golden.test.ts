@@ -1,3 +1,5 @@
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { cp, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -26,15 +28,27 @@ import {
   RestyleExecutionService,
 } from "../../../agent/src/index.js";
 import { resolveFfmpeg } from "../../../media/src/index.js";
-import { RenderService, exportOutputPath } from "../../src/index.js";
-import { dhashFrame, rgbFrameHash } from "./dhash.js";
+import {
+  RenderService,
+  TemplateRegistry,
+  exportOutputPath,
+  renderGraphicFrame,
+  renderGraphicOverlaySequence,
+} from "../../src/index.js";
+import { rgbFrameHash } from "./dhash.js";
 
 interface RestyleGoldenManifest {
   id: string;
   project: string;
   deliverable: string;
-  filteredFrame: { at: number; dhash: string; rgbHash: string; maxDistance: number };
-  untouchedFrame: { at: number; dhash: string; rgbHash: string; maxDistance: number };
+  filteredFrames: Array<{ at: number; sourceAt: number; rgbHash: string }>;
+  interstitialFrame: { at: number; rgbHash: string; overlayPngSha256: string };
+  exactResume: {
+    outputFrames: [number, number];
+    generatedFrames: [number, number];
+    maxRegionMae: number;
+  };
+  punchInFrame: { at: number; sourceAt: number; level: number; rgbHash: string };
   toolVersions: { ffmpeg: string; stubFilter: string };
 }
 
@@ -49,11 +63,8 @@ afterEach(async () => {
 
 function ids(): (prefix: IdPrefix) => string {
   const ordinals = new Map<IdPrefix, number>();
-  const alphabet = "bcdefghijklmnopqrstuvwxyz";
+  const alphabet = "lmnopqrstuvwxyz234567abcdefghijk";
   return (prefix) => {
-    if (prefix === "ast" || prefix === "lyr" || prefix === "gfx") {
-      return `${prefix}_llllllllll`;
-    }
     const ordinal = ordinals.get(prefix) ?? 0;
     ordinals.set(prefix, ordinal + 1);
     return `${prefix}_${alphabet[Math.min(ordinal, alphabet.length - 1)]!.repeat(10)}`;
@@ -99,8 +110,40 @@ function proposalId(job: JobRecord): string {
   return value;
 }
 
-describe("FR-607/608 Kling stub golden", () => {
-  it("filters only the approved chunk in a burnin render and freezes its provenance", async () => {
+function frameRegion(filePath: string, frame: number): Buffer {
+  const ffmpeg = resolveFfmpeg();
+  const result = spawnSync(ffmpeg.path, [
+    "-hide_banner",
+    "-loglevel",
+    "error",
+    "-nostdin",
+    "-i",
+    filePath,
+    "-vf",
+    `select=eq(n\\,${String(frame)}),crop=260:150:0:0,scale=130:75:flags=neighbor,format=rgb24`,
+    "-frames:v",
+    "1",
+    "-f",
+    "rawvideo",
+    "pipe:1",
+  ], { encoding: null, maxBuffer: 1024 * 1024, shell: false });
+  if (result.error !== undefined || result.status !== 0 || result.stdout.length !== 130 * 75 * 3) {
+    throw new Error(`Could not extract frame-counter region ${String(frame)} from ${filePath}.`);
+  }
+  return result.stdout;
+}
+
+function meanAbsoluteError(left: Buffer, right: Buffer): number {
+  expect(left.length).toBe(right.length);
+  let difference = 0;
+  for (let index = 0; index < left.length; index += 1) {
+    difference += Math.abs(left[index]! - right[index]!);
+  }
+  return difference / left.length;
+}
+
+describe("FR-607/608/609 Kling stub golden", () => {
+  it("completes plan, generation, seam approval, exact resume, and punch-in in one burnin workflow", async () => {
     const manifest = JSON.parse(await readFile(
       new URL("./restyle.golden.json", import.meta.url),
       "utf8",
@@ -115,21 +158,27 @@ describe("FR-607/608 Kling stub golden", () => {
     await cp(resolve(".fixtures/projects", manifest.project), projectRoot, { recursive: true });
     const store = await valueOf(openProject(projectRoot, { appVersion: "0.0.0-golden" }));
     const idFactory = ids();
+    const templateRegistry = new TemplateRegistry({
+      builtinsRoot: resolve("templates"),
+      userRoot: join(userDir, "templates"),
+      projectRoot: join(projectRoot, "templates"),
+    });
     const engine = new OperationEngine(store.currentProject, {
       appVersion: "0.0.0-golden",
       committer: store,
       proposalStore: store,
       idFactory,
       now: () => NOW,
+      templateProvider: templateRegistry,
     });
     const planned = createRestylePlan({
       project: store.currentProject,
       deliverableId: manifest.deliverable,
-      coverage: [{ startFrame: 0, endFrame: 30 }],
+      coverage: [{ startFrame: 0, endFrame: 60 }],
       adapterId: "adp_klingaaaaa",
       model: "kling-video-o1",
       constraints: {
-        maxSegmentSeconds: 10,
+        maxSegmentSeconds: 1,
         maxResolution: { width: 2048, height: 2048 },
         fpsSupport: ["30/1"],
         costPerSecond: 0.14,
@@ -143,6 +192,27 @@ describe("FR-607/608 Kling stub golden", () => {
     });
     expect(planned.ok).toBe(true);
     if (!planned.ok) throw planned.error;
+    expect(planned.value.chunks.map(({ sourceRange }) => sourceRange)).toEqual([
+      { startFrame: 0, endFrame: 30 },
+      { startFrame: 30, endFrame: 60 },
+    ]);
+    expect(planned.value.seams).toMatchObject([
+      {
+        frame: 30,
+        boundary: "internal",
+        treatment: {
+          kind: "interstitial",
+          templateId: "tpl_d2e3f4g5h6",
+          durationFrames: 30,
+          resumeExact: true,
+        },
+      },
+      {
+        frame: 60,
+        boundary: "restyled-to-untouched",
+        treatment: { kind: "punch-in" },
+      },
+    ]);
     const planProposal = await valueOf(engine.createProposal({
       operations: [{
         op: "restyle.plan.create",
@@ -152,7 +222,7 @@ describe("FR-607/608 Kling stub golden", () => {
       actor: { kind: "agent", id: "ses_aaaaaaaaaa", model: "golden" },
       sessionId: "ses_aaaaaaaaaa",
       reason: {
-        text: "Exercise the accepted segmented restyle path.",
+        text: "Exercise the accepted segmented restyle and seam path.",
         sources: [{ kind: "instruction", ref: manifest.id }],
       },
       addresses: [],
@@ -200,10 +270,26 @@ describe("FR-607/608 Kling stub golden", () => {
       });
       expect(started.verdict).toBe("enqueued");
       if (started.verdict !== "enqueued") throw new Error(started.message);
-      const generated = await terminal(queue, started.jobs[0]!.jobId);
-      expect(generated, generated.error?.message).toMatchObject({ state: "done" });
-      const approval = await valueOf(engine.acceptProposal(proposalId(generated), "creator"));
-      expect(approval).toMatchObject({ status: "accepted" } satisfies Partial<Proposal>);
+      for (const startedJob of started.jobs) {
+        const generated = await terminal(queue, startedJob.jobId);
+        expect(generated, generated.error?.message).toMatchObject({ state: "done" });
+        let proposal = await valueOf(store.readProposal(proposalId(generated)));
+        if (proposal.baseRevision !== store.currentProject.revision) {
+          proposal = await valueOf(engine.supersedeProposal(proposal.id, {
+            operations: proposal.operations.map(({ op, params }) => ({ op, params })),
+            instruction: structuredClone(proposal.instruction),
+            actor: structuredClone(proposal.actor),
+            ...(proposal.sessionId === undefined ? {} : { sessionId: proposal.sessionId }),
+            reason: {
+              text: `${proposal.reason.text} Rebased for sequential golden approval.`,
+              sources: [...proposal.reason.sources],
+            },
+            addresses: [...proposal.addresses],
+          }));
+        }
+        const approval = await valueOf(engine.acceptProposal(proposal.id, "creator"));
+        expect(approval).toMatchObject({ status: "accepted" } satisfies Partial<Proposal>);
+      }
 
       const acceptedPlanRef = store.currentProject.sidecars.find(({ schema }) =>
         schema === "guyditor.restyle/v1");
@@ -214,14 +300,26 @@ describe("FR-607/608 Kling stub golden", () => {
       ));
       expect(acceptedPlan).toMatchObject({
         ok: true,
-        value: { chunks: [{ status: "approved", assetId: expect.stringMatching(/^ast_/) }] },
+        value: {
+          chunks: [
+            { status: "approved", assetId: expect.stringMatching(/^ast_/) },
+            { status: "approved", assetId: expect.stringMatching(/^ast_/) },
+          ],
+          seams: [
+            { status: "applied", treatment: { kind: "interstitial", resumeExact: true } },
+            { status: "applied", treatment: { kind: "punch-in" } },
+          ],
+        },
       });
-      const frozen = store.currentProject.assets.find(({ kind, provenance }) =>
-        kind === "generated" && provenance?.sidecar.startsWith("provenance-"));
-      expect(frozen).toBeDefined();
-      await expect(readFile(join(projectRoot, frozen!.path))).resolves.not.toHaveLength(0);
+      if (!acceptedPlan.ok) throw acceptedPlan.error;
+      const frozen = acceptedPlan.value.chunks.map((chunk) =>
+        store.currentProject.assets.find(({ id }) => id === chunk.assetId));
+      expect(frozen).toHaveLength(2);
+      expect(frozen.every((asset) => asset?.kind === "generated")).toBe(true);
+      await Promise.all(frozen.map((asset) =>
+        expect(readFile(join(projectRoot, asset!.path))).resolves.not.toHaveLength(0)));
       const provenanceRef = store.currentProject.sidecars.find(({ name }) =>
-        name === frozen!.provenance!.sidecar);
+        name === frozen[0]!.provenance!.sidecar);
       const provenance = JSON.parse(await readFile(
         join(projectRoot, provenanceRef!.path),
         "utf8",
@@ -235,6 +333,37 @@ describe("FR-607/608 Kling stub golden", () => {
         },
         rights: { origin: "generated" },
         contentHash: expect.stringMatching(/^sha256:/),
+      });
+
+      const seam = acceptedPlan.value.seams.find(({ boundary }) => boundary === "internal")!;
+      const graphicOptions = {
+        project: store.currentProject,
+        sequenceId: acceptedPlan.value.sequenceId,
+        registry: templateRegistry,
+        width: store.currentProject.settings.timeline.width,
+        height: store.currentProject.settings.timeline.height,
+        fps: store.currentProject.settings.timeline.fps,
+        brand: { palette: {} },
+      };
+      const painted = await renderGraphicFrame({ ...graphicOptions, frame: seam.frame });
+      const overlayPlan = await renderGraphicOverlaySequence({
+        ...graphicOptions,
+        cacheRoot: join(root, "seam-overlay"),
+      });
+      if (overlayPlan === undefined) throw new Error("Applied seam did not paint an overlay.");
+      expect(overlayPlan).toMatchObject({ atOutputFrame: 30, durationFrames: 30 });
+      const cachedFirstFrame = await readFile(
+        overlayPlan.pathPattern.replace("%08d", "00000000"),
+      );
+      expect(cachedFirstFrame.equals(painted)).toBe(true);
+      expect(createHash("sha256").update(painted).digest("hex"))
+        .toBe(manifest.interstitialFrame.overlayPngSha256);
+
+      const sequence = store.currentProject.sequences.find(({ id }) => id === acceptedPlan.value.sequenceId)!;
+      const punchClip = sequence.clips.find(({ punchIn }) => punchIn?.level === manifest.punchInFrame.level);
+      expect(punchClip?.punchIn).toEqual({
+        level: manifest.punchInFrame.level,
+        anchor: { x: 0.5, y: 0.5 },
       });
 
       const render = new RenderService({
@@ -254,16 +383,37 @@ describe("FR-607/608 Kling stub golden", () => {
       expect(rendered, rendered.error?.message).toMatchObject({ state: "done" });
       const output = exportOutputPath(outputDir, manifest.deliverable, "burnin", "mp4");
       const source = store.currentProject.assets.find(({ id }) => id === "ast_aaaaaaaaaa")!.path;
-      const filteredHash = dhashFrame(output, manifest.filteredFrame.at);
-      const untouchedHash = dhashFrame(output, manifest.untouchedFrame.at);
-      expect(filteredHash).toBe(manifest.filteredFrame.dhash);
-      expect(untouchedHash).toBe(manifest.untouchedFrame.dhash);
-      const filteredRgbHash = rgbFrameHash(output, manifest.filteredFrame.at);
-      const untouchedRgbHash = rgbFrameHash(output, manifest.untouchedFrame.at);
-      expect(filteredRgbHash).toBe(manifest.filteredFrame.rgbHash);
-      expect(untouchedRgbHash).toBe(manifest.untouchedFrame.rgbHash);
-      expect(filteredRgbHash).not.toBe(rgbFrameHash(source, manifest.filteredFrame.at));
-      expect(untouchedHash).toBe(dhashFrame(source, manifest.untouchedFrame.at));
+      const actualHashes = {
+        filtered: manifest.filteredFrames.map((frame) => rgbFrameHash(output, frame.at)),
+        interstitial: rgbFrameHash(output, manifest.interstitialFrame.at),
+        punchIn: rgbFrameHash(output, manifest.punchInFrame.at),
+      };
+      expect(actualHashes).toEqual({
+        filtered: manifest.filteredFrames.map(({ rgbHash }) => rgbHash),
+        interstitial: manifest.interstitialFrame.rgbHash,
+        punchIn: manifest.punchInFrame.rgbHash,
+      });
+      for (const [index, frame] of manifest.filteredFrames.entries()) {
+        expect(actualHashes.filtered[index]).not.toBe(rgbFrameHash(source, frame.sourceAt));
+      }
+      expect(actualHashes.punchIn)
+        .not.toBe(rgbFrameHash(source, manifest.punchInFrame.sourceAt));
+
+      const secondGenerated = join(projectRoot, frozen[1]!.path);
+      const [resume0, resume1] = manifest.exactResume.outputFrames;
+      const [generated0, generated1] = manifest.exactResume.generatedFrames;
+      const outputRegion0 = frameRegion(output, resume0);
+      const outputRegion1 = frameRegion(output, resume1);
+      const generatedRegion0 = frameRegion(secondGenerated, generated0);
+      const generatedRegion1 = frameRegion(secondGenerated, generated1);
+      const correct0 = meanAbsoluteError(outputRegion0, generatedRegion0);
+      const incorrect0 = meanAbsoluteError(outputRegion0, generatedRegion1);
+      const correct1 = meanAbsoluteError(outputRegion1, generatedRegion1);
+      const incorrect1 = meanAbsoluteError(outputRegion1, generatedRegion0);
+      expect(correct0).toBeLessThanOrEqual(manifest.exactResume.maxRegionMae);
+      expect(correct1).toBeLessThanOrEqual(manifest.exactResume.maxRegionMae);
+      expect(correct0).toBeLessThan(incorrect0);
+      expect(correct1).toBeLessThan(incorrect1);
     } finally {
       queue.close();
       meter.close();

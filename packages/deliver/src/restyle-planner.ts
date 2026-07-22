@@ -12,8 +12,14 @@ import type {
   RestyleBoundaryKind,
   RestyleFrameRange,
   RestylePlan,
+  RestyleSeamDefault,
+  RestyleSeamPolicy,
+  RestyleSeamTreatment,
   Result,
 } from "../../core/src/index.js";
+
+export const DEFAULT_RESTYLE_INTERSTITIAL_TEMPLATE_ID = "tpl_d2e3f4g5h6";
+export const DEFAULT_RESTYLE_INTERSTITIAL_SECONDS = 1;
 
 export interface RestyleWordBoundary {
   id: string;
@@ -41,6 +47,7 @@ export interface CreateRestylePlanRequest {
   providerSettings: Record<string, unknown>;
   createdAt: string;
   signals: RestylePlanningSignals;
+  seamPolicy?: RestyleSeamPolicy;
 }
 
 interface BoundaryCandidate {
@@ -207,7 +214,11 @@ function semanticAnchor(
     : `timeline:${sequenceId}@${String(frame)}`;
 }
 
-function stablePlanId(request: CreateRestylePlanRequest, ranges: RestyleFrameRange[]): string {
+function stablePlanId(
+  request: CreateRestylePlanRequest,
+  ranges: RestyleFrameRange[],
+  seamPolicy: RestyleSeamPolicy,
+): string {
   const identity = JSON.stringify({
     adapterId: request.adapterId,
     constraints: request.constraints,
@@ -218,9 +229,46 @@ function stablePlanId(request: CreateRestylePlanRequest, ranges: RestyleFrameRan
     prompt: request.prompt,
     providerSettings: request.providerSettings,
     seed: request.seed,
+    seamPolicy,
     signals: request.signals,
   });
   return `restyle-plan-${createHash("sha256").update(identity).digest("hex").slice(0, 16)}`;
+}
+
+function defaultSeamPolicy(
+  request: CreateRestylePlanRequest,
+  durationFrames: number,
+): RestyleSeamPolicy {
+  const deliverable = request.project.deliverables.find(({ id }) => id === request.deliverableId);
+  return {
+    internal: { kind: "interstitial" },
+    rangeEdge: { kind: "punch-in" },
+    interstitial: {
+      templateId: DEFAULT_RESTYLE_INTERSTITIAL_TEMPLATE_ID,
+      params: {
+        title: deliverable?.name ?? request.project.project.name,
+        body: request.project.project.name,
+        accent: "#77E7C4",
+        logoSlot: "brand",
+      },
+      durationFrames,
+    },
+  };
+}
+
+function seamTreatment(
+  selected: RestyleSeamDefault,
+  policy: RestyleSeamPolicy,
+): RestyleSeamTreatment {
+  return selected.kind === "interstitial"
+    ? {
+        kind: "interstitial",
+        templateId: policy.interstitial.templateId,
+        params: structuredClone(policy.interstitial.params),
+        durationFrames: policy.interstitial.durationFrames,
+        resumeExact: true,
+      }
+    : structuredClone(selected);
 }
 
 export function createRestylePlan(
@@ -264,7 +312,24 @@ export function createRestylePlan(
     Math.round(2 * numericFps),
     Math.round(maxFrames * 0.4),
   ));
-  const planId = stablePlanId(request, ranges);
+  const nominalSecondFrames = Math.max(1, Math.round(
+    numericFps * DEFAULT_RESTYLE_INTERSTITIAL_SECONDS,
+  ));
+  const seamPolicy = structuredClone(
+    request.seamPolicy ?? defaultSeamPolicy(request, nominalSecondFrames),
+  );
+  const interstitialSeconds = seamPolicy.interstitial.durationFrames / numericFps;
+  if (
+    !Number.isSafeInteger(seamPolicy.interstitial.durationFrames) ||
+    interstitialSeconds < 0.5 || interstitialSeconds > 2 ||
+    seamPolicy.interstitial.templateId.trim() === ""
+  ) {
+    return plannerFailure(
+      "Interstitial seam duration must be an integer frame count between 0.5 and 2 seconds, with a template ID.",
+      [request.deliverableId],
+    );
+  }
+  const planId = stablePlanId(request, ranges, seamPolicy);
   const chunks: RestylePlan["chunks"] = [];
   for (const range of ranges) {
     let cursor = range.startFrame;
@@ -326,6 +391,49 @@ export function createRestylePlan(
     return { assetId, sha256: asset.sha256 };
   });
   const amount = rounded(chunks.reduce((sum, chunk) => sum + chunk.estimatedCostUsd, 0));
+  const seams: RestylePlan["seams"] = [];
+  for (const range of ranges) {
+    const rangeChunks = chunks.filter((chunk) =>
+      chunk.sourceRange.startFrame >= range.startFrame &&
+      chunk.sourceRange.endFrame <= range.endFrame);
+    if (range.startFrame > 0 && rangeChunks[0] !== undefined) {
+      seams.push({
+        id: "",
+        frame: range.startFrame,
+        boundary: "untouched-to-restyled",
+        afterChunkId: rangeChunks[0].id,
+        treatment: seamTreatment(seamPolicy.rangeEdge, seamPolicy),
+        status: "planned",
+      });
+    }
+    for (let index = 1; index < rangeChunks.length; index += 1) {
+      const before = rangeChunks[index - 1]!;
+      const after = rangeChunks[index]!;
+      seams.push({
+        id: "",
+        frame: after.sourceRange.startFrame,
+        boundary: "internal",
+        beforeChunkId: before.id,
+        afterChunkId: after.id,
+        treatment: seamTreatment(seamPolicy.internal, seamPolicy),
+        status: "planned",
+      });
+    }
+    if (range.endFrame < durationFrames && rangeChunks.at(-1) !== undefined) {
+      seams.push({
+        id: "",
+        frame: range.endFrame,
+        boundary: "restyled-to-untouched",
+        beforeChunkId: rangeChunks.at(-1)!.id,
+        treatment: seamTreatment(seamPolicy.rangeEdge, seamPolicy),
+        status: "planned",
+      });
+    }
+  }
+  seams.sort((left, right) => left.frame - right.frame || left.boundary.localeCompare(right.boundary));
+  seams.forEach((seam, index) => {
+    seam.id = `restyle-seam-${String(index + 1).padStart(3, "0")}`;
+  });
   return success({
     schema: "guyditor.restyle/v1",
     id: planId,
@@ -349,6 +457,7 @@ export function createRestylePlan(
       providerSettings: structuredClone(request.providerSettings),
     },
     chunks,
+    seams,
     estimatedCost: { currency: "USD", amount },
   });
 }

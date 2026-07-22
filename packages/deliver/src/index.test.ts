@@ -93,6 +93,26 @@ describe("@guyditor/deliver", () => {
       { startFrame: 0, endFrame: 288 },
       { startFrame: 288, endFrame: 420 },
     ]);
+    expect(result.value.seams).toEqual([{
+      id: "restyle-seam-001",
+      frame: 288,
+      boundary: "internal",
+      beforeChunkId: "restyle-chunk-001",
+      afterChunkId: "restyle-chunk-002",
+      status: "planned",
+      treatment: {
+        kind: "interstitial",
+        templateId: "tpl_d2e3f4g5h6",
+        params: {
+          title: "primary",
+          body: "M1 basic template",
+          accent: "#77E7C4",
+          logoSlot: "brand",
+        },
+        durationFrames: 30,
+        resumeExact: true,
+      },
+    }]);
     expect(result.value.chunks[0]).toMatchObject({
       semanticAnchors: {
         start: expect.stringMatching(/^word:/),
@@ -141,6 +161,55 @@ describe("@guyditor/deliver", () => {
       durationSeconds: 2,
       estimatedCostUsd: 0.28,
     })]);
+    expect(result.value.seams).toEqual([
+      {
+        id: "restyle-seam-001",
+        frame: 20,
+        boundary: "untouched-to-restyled",
+        afterChunkId: "restyle-chunk-001",
+        status: "planned",
+        treatment: { kind: "punch-in" },
+      },
+      {
+        id: "restyle-seam-002",
+        frame: 80,
+        boundary: "restyled-to-untouched",
+        beforeChunkId: "restyle-chunk-001",
+        status: "planned",
+        treatment: { kind: "punch-in" },
+      },
+    ]);
+  });
+
+  it("accepts a configured per-plan seam policy including explicit none", async () => {
+    const result = createRestylePlan({
+      project: await basicFixture(),
+      deliverableId: "dlv_aaaaaaaaaa",
+      coverage: [{ startFrame: 0, endFrame: 60 }],
+      adapterId: "adp_klingaaaaa",
+      model: "kling-video-o1",
+      constraints: { ...CONSTRAINTS, maxSegmentSeconds: 1 },
+      prompt: "Ink wash",
+      providerSettings: {},
+      createdAt: "2026-07-19T10:00:00.000Z",
+      signals: { words: [], beats: [], vadSilences: [], lowMotionFrames: [] },
+      seamPolicy: {
+        internal: { kind: "none" },
+        rangeEdge: { kind: "none" },
+        interstitial: {
+          templateId: "tpl_d2e3f4g5h6",
+          params: { title: "Episode", body: "Override", accent: "#112233", logoSlot: "none" },
+          durationFrames: 45,
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error(result.error.message);
+    expect(result.value.seams.map(({ treatment }) => treatment)).toEqual([
+      { kind: "none" },
+      { kind: "none" },
+    ]);
   });
 
   it("snaps to low motion without words and rejects unsupported output constraints", async () => {

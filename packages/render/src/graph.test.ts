@@ -503,6 +503,101 @@ describe("compileRenderGraph", () => {
     }));
   });
 
+  it("inserts an exact-resume interstitial and shifts source-anchored restyle footage", () => {
+    const model = project();
+    model.assets.push({
+      id: "ast_cccccccccc",
+      kind: "generated",
+      path: "/tmp/restyled.mp4",
+      sha256: "c".repeat(64),
+      probe: { duration: { frames: 30, fps: "30/1" }, fps: "30/1" },
+      provenance: { sidecar: "provenance-ast_cccccccccc" },
+      rights: { origin: "generated", restrictions: [] },
+    });
+    model.layers.push(
+      {
+        id: "lyr_bbbbbbbbbb",
+        kind: "video",
+        name: "AI restyle · 2",
+        order: 10,
+        enabled: true,
+        locked: false,
+        items: [{
+          id: "gfx_bbbbbbbbbb",
+          asset: "ast_cccccccccc",
+          at: "timeline:seq_aaaaaaaaaa@30",
+          duration: { frames: 30, fps: "30/1" },
+          source: {
+            in: { frames: 0, fps: "30/1" },
+            out: { frames: 30, fps: "30/1" },
+          },
+          params: {
+            restyle: {
+              planId: "restyle-plan-render",
+              chunkId: "restyle-chunk-002",
+              sourceRange: { startFrame: 30, endFrame: 60 },
+            },
+          },
+        }],
+      },
+      {
+        id: "lyr_cccccccccc",
+        kind: "animation",
+        name: "Restyle seam · 1",
+        order: 20,
+        enabled: true,
+        locked: false,
+        items: [{
+          id: "gfx_cccccccccc",
+          template: "tpl_d2e3f4g5h6",
+          at: "timeline:seq_aaaaaaaaaa@30",
+          duration: { frames: 30, fps: "30/1" },
+          params: { title: "Exact resume" },
+          seed: 609,
+          layout: {
+            restyleSeam: {
+              planId: "restyle-plan-render",
+              seamId: "restyle-seam-001",
+              sourceFrame: 30,
+              durationFrames: 30,
+              resumeExact: true,
+            },
+          },
+        }],
+      },
+    );
+
+    const rendered = compile(model);
+    expect(rendered.nodes.filter(({ kind }) => kind === "timeline-insert")).toHaveLength(2);
+    expect(rendered.nodes).toContainEqual(expect.objectContaining({
+      kind: "timeline-insert",
+      params: {
+        stream: "video",
+        sourceDuration: 210,
+        outputDuration: 240,
+        insertions: [{ at: 30, duration: 30 }],
+      },
+    }));
+    expect(rendered.nodes).toContainEqual(expect.objectContaining({
+      kind: "timeline-insert",
+      params: {
+        stream: "audio",
+        sourceDuration: 336_000,
+        outputDuration: 384_000,
+        insertions: [{ at: 48_000, duration: 48_000 }],
+      },
+    }));
+    const anchored = rendered.nodes.find(({ kind, params }) =>
+      kind === "composite" && "mode" in params && params.mode === "timeline.anchored");
+    expect(anchored?.params).toMatchObject({
+      durationFrames: 240,
+      inputSettings: [{ atOutputFrame: 60, durationFrames: 30 }],
+    });
+    const stack = rendered.nodes.find(({ kind, params }) =>
+      kind === "composite" && "mode" in params && params.mode === "stack");
+    expect(stack?.params).toMatchObject({ durationFrames: 240 });
+  });
+
   it("uses a deterministic black visual slot for an audio-only speech clip", () => {
     const model = project();
     model.assets = [{

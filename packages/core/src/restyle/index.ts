@@ -16,6 +16,12 @@ export type {
   RestyleFrameRange,
   RestyleGenerationProvenance,
   RestylePlan,
+  RestyleSeam,
+  RestyleSeamBoundary,
+  RestyleSeamDefault,
+  RestyleSeamPolicy,
+  RestyleSeamStatus,
+  RestyleSeamTreatment,
   RestyleSemanticAnchors,
   RightsMetadata,
 } from "./types.js";

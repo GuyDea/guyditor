@@ -60,6 +60,37 @@ test("shows a ready proposal as waiting on the creator and jumps to review", asy
   }
 });
 
+test("reviews restyle seam markers, previews an interstitial, and proposes its override", async () => {
+  const template = await createWorkspaceProject();
+  const launched = await launchApp({ projectTemplate: template });
+  try {
+    await launched.page.getByTestId("restyle-coverage").selectOption("range");
+    await launched.page.getByLabel("Restyle start frame").fill("1");
+    await launched.page.getByLabel("Restyle end frame").fill("47");
+    await launched.page.getByTestId("restyle-plan-create").click();
+    await expect(launched.page.getByTestId("restyle-seam-list")).toContainText("2 boundaries");
+    await expect(launched.page.getByTestId("proposal-list")).toContainText("restyle-seam");
+    await launched.page.getByRole("button", { name: "Accept", exact: true }).click();
+    await expect(launched.page.getByTestId("restyle-plan-review")).toContainText("accepted plan");
+    await expect(launched.page.getByTestId("restyle-timeline-seam-restyle-seam-001"))
+      .toHaveAttribute("data-kind", "punch-in");
+
+    await launched.page.getByTestId("restyle-seam-kind-restyle-seam-001")
+      .selectOption("interstitial");
+    await expect(launched.page.getByTestId("restyle-seam-preview-restyle-seam-001"))
+      .toHaveAttribute("src", /^data:image\/png;base64,/u);
+    await launched.page.getByTestId("restyle-seam-duration-restyle-seam-001").fill("24");
+    await launched.page.getByTestId("restyle-seam-propose-restyle-seam-001").click();
+    await expect(launched.page.getByTestId("shell-status"))
+      .toContainText("Prepared interstitial override");
+    await expect(launched.page.getByTestId("proposal-list")).toContainText("restyle-seam");
+    await expect(launched.page.getByTestId("proposal-list")).toContainText("interstitial");
+  } finally {
+    await launched.electronApp.close();
+    await rm(template, { recursive: true, force: true });
+  }
+});
+
 test("cancels queued work from the global progress popover", async () => {
   const template = await createWorkspaceProject({ queuedJob: true });
   const launched = await launchApp({ projectTemplate: template });

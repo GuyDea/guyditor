@@ -88,9 +88,17 @@ export type {
   RenderNodeKind,
   SourceNodeParams,
   ToolchainManifest,
+  TimelineInsertNodeParams,
   TransformNodeParams,
   TrimNodeParams,
 } from "./ir.js";
+export {
+  insertedDurationFrames,
+  restyleTimelineInsertionForItem,
+  restyleTimelineInsertions,
+  sourceFrameToOutputFrame,
+} from "./timeline-insertions.js";
+export type { RestyleTimelineInsertion } from "./timeline-insertions.js";
 export { compileDuckingEnvelope } from "./ducking.js";
 export type {
   CompileDuckingEnvelopeInput,

@@ -10,6 +10,7 @@ import {
   makeGuyditorError,
   makeId,
   parseRestylePlan,
+  planRestylePunchInAlternation,
   restylePlanSidecarRef,
 } from "../../core/src/index.js";
 import type {
@@ -425,6 +426,71 @@ export class RestyleExecutionService {
       updatedChunk.assetId = assetId;
       updatedChunk.jobId = job.jobId;
       updatedChunk.providerJobId = handle.providerJobId;
+      const seamPlacements: Array<{
+        seamId: string;
+        layerId: string;
+        itemId: string;
+        seed: number;
+      }> = [];
+      const seamOperations: Array<{ op: string; params: Record<string, unknown> }> = [];
+      let chunkPunchIn: { seamId: string; effectId: string; level: number } | undefined;
+      for (const seam of updatedPlan.seams) {
+        const ownerChunkId = seam.boundary === "internal" && seam.treatment.kind === "punch-in"
+          ? seam.afterChunkId
+          : seam.beforeChunkId ?? seam.afterChunkId;
+        if (ownerChunkId !== chunk.id) continue;
+        seam.status = "applied";
+        delete seam.review;
+        if (seam.treatment.kind === "interstitial") {
+          const seamItemId = this.#idFactory("gfx");
+          seam.application = {
+            chunkId: chunk.id,
+            atFrame: seam.frame,
+            itemId: seamItemId,
+          };
+          seamPlacements.push({
+            seamId: seam.id,
+            layerId: this.#idFactory("lyr"),
+            itemId: seamItemId,
+            seed: 609,
+          });
+        } else {
+          seam.application = { chunkId: chunk.id, atFrame: seam.frame };
+          if (seam.treatment.kind !== "punch-in") continue;
+          if (seam.boundary === "internal") {
+            chunkPunchIn = {
+              seamId: seam.id,
+              effectId: this.#idFactory("fx"),
+              level: 1.12,
+            };
+            continue;
+          }
+          const existingClipIds = new Set(
+            this.#projectStore.currentProject.sequences.flatMap(({ clips }) =>
+              clips.map(({ id }) => id)),
+          );
+          let newClipId = this.#idFactory("clp");
+          for (let attempts = 0; existingClipIds.has(newClipId) && attempts < 100; attempts += 1) {
+            newClipId = this.#idFactory("clp");
+          }
+          if (existingClipIds.has(newClipId)) {
+            throw makeGuyditorError(
+              "E_OP_ID_CONFLICT",
+              "Could not allocate an unused clip ID for restyle seam punch-in.",
+              { affected: [seam.id] },
+            );
+          }
+          const alternation = planRestylePunchInAlternation({
+            project: this.#projectStore.currentProject,
+            sequenceId: updatedPlan.sequenceId,
+            frame: seam.frame,
+            side: seam.boundary === "untouched-to-restyled" ? "before" : "after",
+            newClipId,
+          });
+          if (!alternation.ok) throw alternation.error;
+          seamOperations.push(...alternation.value.operations);
+        }
+      }
       const provenance: RestyleGenerationProvenance = {
         schema: "guyditor.provenance/v1",
         assetId,
@@ -456,19 +522,24 @@ export class RestyleExecutionService {
         contentHash: `sha256:${contentHash}`,
       };
       const proposal = await this.#operationEngine.createProposal({
-        operations: [{
-          op: "restyle.segment.approve",
-          params: {
-            deliverableId: payload.plan.deliverableId,
-            plan: updatedPlan,
-            chunkId: chunk.id,
-            cachedPath: result.output.filePath,
-            layerId: this.#idFactory("lyr"),
-            itemId: this.#idFactory("gfx"),
-            asset,
-            provenance,
+        operations: [
+          {
+            op: "restyle.segment.approve",
+            params: {
+              deliverableId: payload.plan.deliverableId,
+              plan: updatedPlan,
+              chunkId: chunk.id,
+              cachedPath: result.output.filePath,
+              layerId: this.#idFactory("lyr"),
+              itemId: this.#idFactory("gfx"),
+              asset,
+              provenance,
+              ...(seamPlacements.length === 0 ? {} : { seamPlacements }),
+              ...(chunkPunchIn === undefined ? {} : { chunkPunchIn }),
+            },
           },
-        }],
+          ...seamOperations,
+        ],
         instruction: { kind: "skill-policy", text: `Review restyle chunk ${chunk.id}` },
         actor: {
           kind: "agent",

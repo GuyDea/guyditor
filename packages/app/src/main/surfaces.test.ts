@@ -33,7 +33,7 @@ describe("workspace IPC surfaces", () => {
       CaptureWatcher: ["list", "configure", "reconcile", "listTakes"],
       AnnotationService: ["list", "get", "contextPackage"],
       AdapterRegistry: ["list"],
-      DeliverableService: ["restylePlan", "createRestylePlan", "startRestyle"],
+      DeliverableService: ["restylePlan", "createRestylePlan", "startRestyle", "setRestyleSeamTreatment"],
       RenderService: [
         "renderExport",
         "exportReport",

@@ -63,6 +63,60 @@ export interface RestyleChunk {
   };
 }
 
+export type RestyleSeamTreatment =
+  | {
+      kind: "interstitial";
+      templateId: string;
+      params: Record<string, unknown>;
+      durationFrames: number;
+      resumeExact: true;
+    }
+  | { kind: "punch-in" }
+  | { kind: "none" };
+
+export type RestyleSeamBoundary =
+  | "internal"
+  | "untouched-to-restyled"
+  | "restyled-to-untouched";
+
+export type RestyleSeamStatus = "planned" | "applied" | "review";
+
+export interface RestyleSeam {
+  id: string;
+  /** Exact source-timeline frame at which the boundary occurs. */
+  frame: number;
+  boundary: RestyleSeamBoundary;
+  beforeChunkId?: string;
+  afterChunkId?: string;
+  treatment: RestyleSeamTreatment;
+  status: RestyleSeamStatus;
+  application?: {
+    chunkId: string;
+    atFrame: number;
+    itemId?: string;
+  };
+  review?: {
+    reason: "adjacent-chunk-stale" | "treatment-changed";
+    markedAt?: string;
+    transactionId?: string;
+  };
+}
+
+export type RestyleSeamDefault =
+  | { kind: "interstitial" }
+  | { kind: "punch-in" }
+  | { kind: "none" };
+
+export interface RestyleSeamPolicy {
+  internal: RestyleSeamDefault;
+  rangeEdge: RestyleSeamDefault;
+  interstitial: {
+    templateId: string;
+    params: Record<string, unknown>;
+    durationFrames: number;
+  };
+}
+
 export interface RestylePlan {
   schema: "guyditor.restyle/v1";
   id: string;
@@ -81,6 +135,7 @@ export interface RestylePlan {
     providerSettings: Record<string, unknown>;
   };
   chunks: RestyleChunk[];
+  seams: RestyleSeam[];
   estimatedCost: { currency: "USD"; amount: number };
 }
 

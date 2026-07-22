@@ -3,7 +3,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema", "id", "deliverableId", "sequenceId", "sourceAssets", "adapterId", "model", "createdAt", "coverage", "constraints", "settings", "chunks", "estimatedCost"],
+  "required": ["schema", "id", "deliverableId", "sequenceId", "sourceAssets", "adapterId", "model", "createdAt", "coverage", "constraints", "settings", "chunks", "seams", "estimatedCost"],
   "properties": {
     "schema": { "const": "guyditor.restyle/v1" },
     "id": { "type": "string", "pattern": "^restyle-plan-[A-Za-z0-9._-]+$" },
@@ -32,6 +32,10 @@
       "type": "array",
       "minItems": 1,
       "items": { "$ref": "#/$defs/chunk" }
+    },
+    "seams": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/seam" }
     },
     "estimatedCost": {
       "type": "object",
@@ -117,6 +121,68 @@
         "reason": { "const": "source-range-overlap" },
         "markedAt": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T.*Z$" },
         "transactionId": { "type": "string", "pattern": "^txn_[a-z2-7]{10}$" }
+      }
+    },
+    "seamTreatment": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "templateId", "params", "durationFrames", "resumeExact"],
+          "properties": {
+            "kind": { "const": "interstitial" },
+            "templateId": { "type": "string", "pattern": "^tpl_[a-z2-7]{10}$" },
+            "params": { "type": "object" },
+            "durationFrames": { "type": "integer", "minimum": 1 },
+            "resumeExact": { "const": true }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": { "kind": { "const": "punch-in" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": { "kind": { "const": "none" } }
+        }
+      ]
+    },
+    "seam": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "frame", "boundary", "treatment", "status"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^restyle-seam-[A-Za-z0-9._-]+$" },
+        "frame": { "type": "integer", "minimum": 0 },
+        "boundary": { "enum": ["internal", "untouched-to-restyled", "restyled-to-untouched"] },
+        "beforeChunkId": { "type": "string", "pattern": "^restyle-chunk-[A-Za-z0-9._-]+$" },
+        "afterChunkId": { "type": "string", "pattern": "^restyle-chunk-[A-Za-z0-9._-]+$" },
+        "treatment": { "$ref": "#/$defs/seamTreatment" },
+        "status": { "enum": ["planned", "applied", "review"] },
+        "application": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["chunkId", "atFrame"],
+          "properties": {
+            "chunkId": { "type": "string", "pattern": "^restyle-chunk-[A-Za-z0-9._-]+$" },
+            "atFrame": { "type": "integer", "minimum": 0 },
+            "itemId": { "type": "string", "pattern": "^gfx_[a-z2-7]{10}$" }
+          }
+        },
+        "review": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["reason"],
+          "properties": {
+            "reason": { "enum": ["adjacent-chunk-stale", "treatment-changed"] },
+            "markedAt": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T.*Z$" },
+            "transactionId": { "type": "string", "pattern": "^txn_[a-z2-7]{10}$" }
+          }
+        }
       }
     },
     "chunk": {

@@ -6,6 +6,7 @@ import {
   DEFAULT_JUMP_CUT_CONCEALMENT_CONFIG,
   findJumpCutWarnings,
   planJumpCutConcealment,
+  planRestylePunchInAlternation,
 } from "./jumpcuts.js";
 
 function jumpCut(beforeClip: string, afterClip: string): ContinuityWarning {
@@ -183,6 +184,44 @@ describe("jump-cut concealment planning", () => {
       angleSwitching: "not-applicable",
       declined: [],
       report: "No jump-cut boundaries were flagged in the requested scope.",
+    });
+  });
+
+  it("reuses punch-in alternation at an exact restyle edge, splitting without dropping source frames", () => {
+    const project = projectFixture();
+    const result = planRestylePunchInAlternation({
+      project,
+      sequenceId: "seq_aaaaaaaaaa",
+      frame: 12,
+      side: "after",
+      newClipId: "clp_cccccccccc",
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        targetClipId: "clp_cccccccccc",
+        level: 1.12,
+        operations: [
+          {
+            op: "clip.split",
+            params: {
+              clipId: "clp_aaaaaaaaaa",
+              at: 12,
+              newClipId: "clp_cccccccccc",
+              evidence: "Restyle seam at timeline frame 12",
+            },
+          },
+          {
+            op: "clip.punchin.set",
+            params: {
+              clipId: "clp_cccccccccc",
+              level: 1.12,
+              anchor: { x: 0.5, y: 0.5 },
+            },
+          },
+        ],
+      },
     });
   });
 });

@@ -1,7 +1,12 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
-import type { RestylePlan } from "../../../../core/src/index.js";
+import type {
+  RestylePlan,
+  RestyleSeam,
+  RestyleSeamTreatment,
+} from "../../../../core/src/index.js";
 import type { RestyleStartResult } from "../../../../agent/src/index.js";
+import type { TemplateCatalogEntry } from "../../../../render/src/index.js";
 import { errorMessage } from "../ipc.js";
 import { useJobsStore } from "../state/jobs.js";
 import type { WorkspacePanelProps } from "./types.js";
@@ -17,6 +22,189 @@ function frameSeconds(frame: number, fps: string): string {
   return `${(frame * Number(match[2]) / Number(match[1])).toFixed(2)}s`;
 }
 
+function oneSecondFrames(fps: string): number {
+  const match = /^(\d+)\/([1-9]\d*)$/u.exec(fps);
+  return match === null ? 24 : Math.max(1, Math.round(Number(match[1]) / Number(match[2])));
+}
+
+function defaultInterstitialParams(
+  catalog: readonly TemplateCatalogEntry[],
+  projectName: string,
+  deliverableName: string,
+): Record<string, unknown> {
+  const entry = catalog.find(({ id }) => id === "tpl_d2e3f4g5h6") ?? catalog[0];
+  return {
+    ...(entry === undefined ? {} : structuredClone(entry.previewParams)),
+    title: deliverableName,
+    body: projectName,
+  };
+}
+
+function SeamEditor({
+  seam,
+  catalog,
+  accepted,
+  deliverableId,
+  fps,
+  projectName,
+  deliverableName,
+  refreshProposals,
+  setNotice,
+}: {
+  seam: RestyleSeam;
+  catalog: readonly TemplateCatalogEntry[];
+  accepted: boolean;
+  deliverableId: string | undefined;
+  fps: string;
+  projectName: string;
+  deliverableName: string;
+  refreshProposals: () => Promise<void>;
+  setNotice: (notice: string) => void;
+}): React.JSX.Element {
+  const initial = seam.treatment;
+  const [kind, setKind] = useState<RestyleSeamTreatment["kind"]>(initial.kind);
+  const [templateId, setTemplateId] = useState(
+    initial.kind === "interstitial" ? initial.templateId : "tpl_d2e3f4g5h6",
+  );
+  const [durationFrames, setDurationFrames] = useState(
+    initial.kind === "interstitial" ? initial.durationFrames : oneSecondFrames(fps),
+  );
+  const [params, setParams] = useState<Record<string, unknown>>(
+    initial.kind === "interstitial"
+      ? structuredClone(initial.params)
+      : defaultInterstitialParams(catalog, projectName, deliverableName),
+  );
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    let current = true;
+    if (kind !== "interstitial" || templateId.length === 0) {
+      setPreviewUrl(null);
+      return () => { current = false; };
+    }
+    const timer = window.setTimeout(() => {
+      void window.guyditor.call<{ dataUrl: string }>("RenderService", "templateFrame", {
+        templateId,
+        params,
+        seed: 609,
+      }).then(({ dataUrl }) => {
+        if (current) setPreviewUrl(dataUrl);
+      }).catch(() => {
+        if (current) setPreviewUrl(null);
+      });
+    }, 80);
+    return () => {
+      current = false;
+      window.clearTimeout(timer);
+    };
+  }, [kind, params, templateId]);
+
+  function chooseTemplate(nextId: string): void {
+    setTemplateId(nextId);
+    const entry = catalog.find(({ id }) => id === nextId);
+    if (entry !== undefined) setParams(structuredClone(entry.previewParams));
+  }
+
+  async function propose(): Promise<void> {
+    if (deliverableId === undefined || !accepted) return;
+    const treatment: RestyleSeamTreatment = kind === "interstitial"
+      ? { kind, templateId, params, durationFrames, resumeExact: true }
+      : { kind };
+    try {
+      const result = await window.guyditor.call<{ proposal: { id: string } }>(
+        "DeliverableService",
+        "setRestyleSeamTreatment",
+        { deliverableId, seamId: seam.id, treatment },
+      );
+      await refreshProposals();
+      setNotice(`Prepared ${kind} override for ${seam.id} in ${result.proposal.id}.`);
+    } catch (error: unknown) {
+      setNotice(errorMessage(error));
+    }
+  }
+
+  return (
+    <li className="restyle-seam-editor" data-testid={`restyle-seam-${seam.id}`}>
+      <header>
+        <span className="restyle-seam-glyph" data-kind={kind} aria-hidden="true" />
+        <strong>{String(seam.frame)}f · {seam.boundary}</strong>
+        <span className="state-chip" data-state={seam.status}>{seam.status}</span>
+      </header>
+      <div className="restyle-seam-controls">
+        <label>Treatment
+          <select
+            value={kind}
+            data-testid={`restyle-seam-kind-${seam.id}`}
+            onChange={(event) => setKind(event.currentTarget.value as RestyleSeamTreatment["kind"])}
+          >
+            <option value="interstitial">Infographic</option>
+            <option value="punch-in">Punch-in</option>
+            <option value="none">None</option>
+          </select>
+        </label>
+        {kind !== "interstitial" ? null : (
+          <>
+            <label>Template
+              <select
+                value={templateId}
+                data-testid={`restyle-seam-template-${seam.id}`}
+                onChange={(event) => chooseTemplate(event.currentTarget.value)}
+              >
+                {catalog.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}
+              </select>
+            </label>
+            <label>Duration (frames)
+              <input
+                type="number"
+                min={Math.ceil(oneSecondFrames(fps) / 2)}
+                max={oneSecondFrames(fps) * 2}
+                value={durationFrames}
+                data-testid={`restyle-seam-duration-${seam.id}`}
+                onChange={(event) => setDurationFrames(Math.max(1, event.currentTarget.valueAsNumber || 1))}
+              />
+            </label>
+          </>
+        )}
+      </div>
+      {kind !== "interstitial" ? null : (
+        <div className="restyle-seam-interstitial">
+          {previewUrl === null ? null : (
+            <img
+              src={previewUrl}
+              alt="Interstitial template preview"
+              data-testid={`restyle-seam-preview-${seam.id}`}
+            />
+          )}
+          <div>
+            {Object.entries(params).map(([name, value]) => (
+              typeof value === "string" || typeof value === "number" ? (
+                <label key={name}>{name}
+                  <input
+                    value={String(value)}
+                    data-testid={`restyle-seam-param-${seam.id}-${name}`}
+                    onChange={(event) => setParams((current) => ({
+                      ...current,
+                      [name]: typeof value === "number"
+                        ? Number(event.currentTarget.value)
+                        : event.currentTarget.value,
+                    }))}
+                  />
+                </label>
+              ) : null
+            ))}
+          </div>
+        </div>
+      )}
+      <button
+        type="button"
+        disabled={!accepted || (kind === "interstitial" && templateId.length === 0)}
+        data-testid={`restyle-seam-propose-${seam.id}`}
+        onClick={() => void propose()}
+      >Propose seam change</button>
+    </li>
+  );
+}
+
 export function RestylePlanReview({
   snapshot,
   restylePlan,
@@ -29,6 +217,7 @@ export function RestylePlanReview({
   const [startFrame, setStartFrame] = useState(0);
   const [endFrame, setEndFrame] = useState(300);
   const [draft, setDraft] = useState<RestylePlan | null>(null);
+  const [catalog, setCatalog] = useState<TemplateCatalogEntry[]>([]);
   const [confirmation, setConfirmation] = useState<Extract<
     RestyleStartResult,
     { verdict: "warn" }
@@ -38,6 +227,20 @@ export function RestylePlanReview({
   const accepted = restylePlan !== null;
   const deliverableId = snapshot?.master.settings.primaryDeliverable;
   const fps = snapshot?.master.settings.timeline.fps ?? "24/1";
+  const projectName = snapshot?.master.project.name ?? "Episode";
+  const deliverableName = snapshot?.master.deliverables.find(({ id }) => id === deliverableId)?.name ?? "Episode";
+  const planExtent = plan?.chunks.reduce(
+    (maximum, chunk) => Math.max(maximum, chunk.sourceRange.endFrame),
+    1,
+  ) ?? 1;
+
+  useEffect(() => {
+    let current = true;
+    void window.guyditor.call<TemplateCatalogEntry[]>("RenderService", "templateCatalog", {})
+      .then((entries) => { if (current) setCatalog(entries); })
+      .catch(() => { if (current) setCatalog([]); });
+    return () => { current = false; };
+  }, [snapshot?.projectPath]);
 
   async function createPlan(): Promise<void> {
     if (deliverableId === undefined || prompt.trim().length === 0) return;
@@ -175,6 +378,41 @@ export function RestylePlanReview({
               );
             })}
           </ol>
+          <section className="restyle-seams" data-testid="restyle-seam-list">
+            <header>
+              <strong>Seam concealment</strong>
+              <small>{String(plan.seams.length)} boundaries · proposal-gated</small>
+            </header>
+            <div className="restyle-seam-track" aria-label="Restyle seam markers">
+              {plan.seams.map((seam) => (
+                <i
+                  key={seam.id}
+                  data-kind={seam.treatment.kind}
+                  data-state={seam.status}
+                  title={`${seam.id} · ${seam.treatment.kind} · ${String(seam.frame)}f`}
+                  style={{
+                    left: `${String(seam.frame / planExtent * 100)}%`,
+                  }}
+                />
+              ))}
+            </div>
+            <ol>
+              {plan.seams.map((seam) => (
+                <SeamEditor
+                  key={`${seam.id}:${seam.status}:${seam.treatment.kind}:${String(catalog.length)}`}
+                  seam={seam}
+                  catalog={catalog}
+                  accepted={accepted}
+                  deliverableId={deliverableId}
+                  fps={fps}
+                  projectName={projectName}
+                  deliverableName={deliverableName}
+                  refreshProposals={refreshProposals}
+                  setNotice={setNotice}
+                />
+              ))}
+            </ol>
+          </section>
           <div className="restyle-run-row">
             <button
               type="button"

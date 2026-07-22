@@ -37,6 +37,7 @@ import type {
   Result,
   RestyleFrameRange,
   RestylePlan,
+  RestyleSeamTreatment,
   TakeMarkerSidecar,
   TransactionRecord,
   WatchFolderConfig,
@@ -996,6 +997,44 @@ export class WindowServiceHost {
               ...(confirmToken === undefined ? {} : { confirmToken }),
             });
           },
+          setRestyleSeamTreatment: async (params: {
+            deliverableId: string;
+            seamId: string;
+            treatment: RestyleSeamTreatment;
+          }) => {
+            const plan = await acceptedRestylePlan(project.store, params.deliverableId);
+            if (plan === null) {
+              throw new Error(`Deliverable ${params.deliverableId} has no accepted restyle plan.`);
+            }
+            if (!plan.seams.some(({ id }) => id === params.seamId)) {
+              throw new Error(`Restyle seam ${params.seamId} is not in plan ${plan.id}.`);
+            }
+            const sessionId = makeId("ses");
+            const proposal = resultValue(await this.#coreEngine(project).createProposal({
+              operations: [{
+                op: "seam.treatment.set",
+                params: {
+                  deliverableId: params.deliverableId,
+                  plan,
+                  seamId: params.seamId,
+                  treatment: structuredClone(params.treatment),
+                },
+              }],
+              instruction: {
+                kind: "user-text",
+                text: `Set ${params.seamId} treatment to ${params.treatment.kind}`,
+              },
+              actor: { kind: "agent", id: sessionId, model: "restyle-seam-editor" },
+              sessionId,
+              reason: {
+                text: `Review the ${params.treatment.kind} treatment for ${params.seamId}.`,
+                sources: [{ kind: "instruction", ref: params.seamId }],
+              },
+              addresses: [],
+            }));
+            this.publisher.publish({ kind: "proposal.updated", proposalId: proposal.id });
+            return { proposal };
+          },
         };
       case "RenderService":
         return project === undefined ? undefined : {
@@ -1122,7 +1161,8 @@ export class WindowServiceHost {
     if (
       current.baseRevision !== project.store.currentProject.revision &&
       current.operations.length > 0 &&
-      current.operations.every(({ op }) => op === "restyle.segment.approve")
+      current.operations.every(({ op }) =>
+        op === "restyle.segment.approve" || op === "clip.split" || op === "clip.punchin.set")
     ) {
       const rebased = resultValue(await this.#coreEngine(project).supersedeProposal(
         current.id,

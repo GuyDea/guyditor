@@ -3,6 +3,7 @@ export {
   DEFAULT_JUMP_CUT_CONCEALMENT_CONFIG,
   findJumpCutWarnings,
   planJumpCutConcealment,
+  planRestylePunchInAlternation,
   validateJumpCutConcealmentConfig,
 } from "./jumpcuts.js";
 export type {
@@ -12,6 +13,8 @@ export type {
   JumpCutDecline,
   JumpCutOperationReason,
   PlanJumpCutConcealmentInput,
+  PlanRestylePunchInAlternationInput,
+  RestylePunchInAlternationPlan,
 } from "./jumpcuts.js";
 export type {
   DisfluencyLexicon,

@@ -19,6 +19,7 @@ import type {
   RenderGraph,
   RenderNode,
   SourceNodeParams,
+  TimelineInsertNodeParams,
   TransformNodeParams,
   TrimNodeParams,
 } from "./ir.js";
@@ -274,6 +275,12 @@ export function compileFiltergraph(graph: RenderGraph, outputPath?: string): Com
     if (node.kind === "composite") {
       const composite = params<CompositeNodeParams>(node, "composite");
       return secondsForFrames(composite.durationFrames ?? 1, graph.outputFps);
+    }
+    if (node.kind === "timeline-insert") {
+      const insertion = params<TimelineInsertNodeParams>(node, "timeline-insert");
+      return insertion.stream === "video"
+        ? secondsForFrames(insertion.outputDuration, graph.outputFps)
+        : fraction(BigInt(insertion.outputDuration), BigInt(outputSampleRate ?? 48_000));
     }
     if (node.inputs.length === 0) graphInvalid(`Node ${node.id} has no duration-bearing input.`, [node.id]);
     return durationForNode(node.inputs[0]!);
@@ -702,8 +709,25 @@ export function compileFiltergraph(graph: RenderGraph, outputPath?: string): Com
   }
 
   function compileAnchored(node: RenderNode, composite: CompositeNodeParams): void {
-    const duration = secondsForFrames(composite.durationFrames ?? 1, graph.outputFps);
+    const durationFrames = composite.durationFrames ?? 1;
+    const duration = secondsForFrames(durationFrames, graph.outputFps);
     const label = compiledNodeLabel(node);
+    if (node.inputs.length === 1) {
+      const setting = composite.inputSettings?.[0];
+      const start = setting?.atOutputFrame ?? 0;
+      const itemDuration = setting?.durationFrames ?? 1;
+      if (start < 0 || itemDuration < 1 || start >= durationFrames) {
+        graphInvalid(`Anchored composite ${node.id} has an invalid exact frame span.`, [node.id]);
+      }
+      const stop = Math.max(0, durationFrames - start - itemDuration);
+      filters.push(
+        `${inputLabel(compiledInput(node))}setpts=PTS-STARTPTS,` +
+        `tpad=start=${String(start)}:stop=${String(stop)}:color=black@0,` +
+        `trim=start_frame=0:end_frame=${String(durationFrames)},setpts=PTS-STARTPTS[${label}]`,
+      );
+      labels.set(node.id, label);
+      return;
+    }
     let current = `${label}base`;
     filters.push(
       `color=c=0x00000000:s=${String(composite.canvas.w)}x${String(composite.canvas.h)}` +
@@ -721,7 +745,7 @@ export function compileFiltergraph(graph: RenderGraph, outputPath?: string): Com
       );
       filters.push(
         `[${current}][${shifted}]overlay=enable='between(n,${String(start)},${String(end)})':` +
-        `eof_action=pass:shortest=0[${next}]`,
+        `eof_action=pass:shortest=0:format=auto[${next}]`,
       );
       current = next;
     }
@@ -797,6 +821,66 @@ export function compileFiltergraph(graph: RenderGraph, outputPath?: string): Com
       `${inputLabel(compiledInput(node))}[${overlayLabel}]overlay=enable='between(n,` +
       `${String(overlay.atOutputFrame)},${String(overlay.atOutputFrame + overlay.durationFrames - 1)})':` +
       `eof_action=pass:shortest=0[${label}]`,
+    );
+    labels.set(node.id, label);
+  }
+
+  function compileTimelineInsert(node: RenderNode): void {
+    const insertion = params<TimelineInsertNodeParams>(node, "timeline-insert");
+    const input = compiledInput(node);
+    const label = compiledNodeLabel(node);
+    const segmentLabels = insertion.insertions.map((_, index) => `${label}s${String(index)}`);
+    segmentLabels.push(`${label}s${String(insertion.insertions.length)}`);
+    const split = insertion.stream === "video" ? "split" : "asplit";
+    filters.push(
+      `${inputLabel(input)}${split}=${String(segmentLabels.length)}` +
+      segmentLabels.map(inputLabel).join(""),
+    );
+    const outputs: string[] = [];
+    let start = 0;
+    for (const [index, entry] of insertion.insertions.entries()) {
+      const segment = `${label}t${String(index)}`;
+      const gap = `${label}g${String(index)}`;
+      if (insertion.stream === "video") {
+        filters.push(
+          `[${segmentLabels[index]}]trim=start_frame=${String(start)}:end_frame=${String(entry.at)},` +
+          `setpts=PTS-STARTPTS[${segment}]`,
+        );
+        filters.push(
+          `color=c=0x00000000:s=${String(graph.outputSize.w)}x${String(graph.outputSize.h)}` +
+          `:r=${graph.outputFps}:d=${decimal(secondsForFrames(entry.duration, graph.outputFps))},` +
+          `format=yuva444p[${gap}]`,
+        );
+      } else {
+        filters.push(
+          `[${segmentLabels[index]}]atrim=start_sample=${String(start)}:end_sample=${String(entry.at)},` +
+          `asetpts=PTS-STARTPTS[${segment}]`,
+        );
+        filters.push(
+          `anullsrc=r=${String(outputSampleRate ?? 48_000)}:cl=stereo,` +
+          `atrim=start_sample=0:end_sample=${String(entry.duration)},` +
+          `asetpts=PTS-STARTPTS[${gap}]`,
+        );
+      }
+      outputs.push(segment, gap);
+      start = entry.at;
+    }
+    const tail = `${label}t${String(insertion.insertions.length)}`;
+    if (insertion.stream === "video") {
+      filters.push(
+        `[${segmentLabels.at(-1)!}]trim=start_frame=${String(start)}:` +
+        `end_frame=${String(insertion.sourceDuration)},setpts=PTS-STARTPTS[${tail}]`,
+      );
+    } else {
+      filters.push(
+        `[${segmentLabels.at(-1)!}]atrim=start_sample=${String(start)}:` +
+        `end_sample=${String(insertion.sourceDuration)},asetpts=PTS-STARTPTS[${tail}]`,
+      );
+    }
+    outputs.push(tail);
+    filters.push(
+      `${outputs.map(inputLabel).join("")}concat=n=${String(outputs.length)}:` +
+      `${insertion.stream === "video" ? "v=1:a=0" : "v=0:a=1"}[${label}]`,
     );
     labels.set(node.id, label);
   }
@@ -988,6 +1072,7 @@ export function compileFiltergraph(graph: RenderGraph, outputPath?: string): Com
       case "pip": compilePip(node); break;
       case "key": compileKey(node); break;
       case "composite": compileComposite(node); break;
+      case "timeline-insert": compileTimelineInsert(node); break;
       case "overlay": compileOverlay(node); break;
       case "audiochain": compileAudiochain(node); break;
       case "encode": break;

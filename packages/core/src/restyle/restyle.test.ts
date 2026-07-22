@@ -8,13 +8,56 @@ import {
   serializeRestylePlan,
 } from "../index.js";
 import type {
+  Asset,
   IdPrefix,
+  RestyleGenerationProvenance,
   RestylePlan,
   Result,
+  TemplateProvider,
 } from "../index.js";
 import { projectFixture } from "../project/test-fixtures.js";
 
 const HASH = "b".repeat(64);
+
+function generatedAsset(id: string, hash = HASH): Asset {
+  return {
+    id,
+    kind: "generated",
+    path: `media/generated/${id}.mp4`,
+    sha256: hash,
+    probe: {
+      duration: { frames: 48, fps: "24/1" },
+      width: 1920,
+      height: 1080,
+      fps: "24/1",
+    },
+    provenance: { sidecar: `provenance-${id}` },
+    rights: { origin: "generated", restrictions: [] },
+  };
+}
+
+function generatedProvenance(id: string, hash = HASH): RestyleGenerationProvenance {
+  return {
+    schema: "guyditor.provenance/v1",
+    assetId: id,
+    generation: {
+      adapterId: "adp_klingaaaaa",
+      adapterVersion: "1.0.0",
+      provider: "Kling AI",
+      model: "kling-video-o1",
+      prompt: "Watercolor documentary",
+      settings: {},
+      requestId: `restyle-request-${id}`,
+      jobId: "job_aaaaaaaaaa",
+      referenceAssetIds: ["ast_aaaaaaaaaa"],
+      sourceRange: { sequenceId: "seq_aaaaaaaaaa", startFrame: 0, endFrame: 48 },
+      createdAt: "2026-07-19T10:00:01.000Z",
+      providerMetadata: {},
+    },
+    rights: { origin: "generated", restrictions: [] },
+    contentHash: `sha256:${hash}`,
+  };
+}
 
 function plan(): RestylePlan {
   return {
@@ -51,6 +94,7 @@ function plan(): RestylePlan {
       estimatedCostUsd: 0.28,
       status: "planned",
     }],
+    seams: [],
     estimatedCost: { currency: "USD", amount: 0.28 },
   };
 }
@@ -107,10 +151,19 @@ describe("FR-607/608 restyle core contract", () => {
   it("dry-runs plan creation as consequential and records coverage on the deliverable", async () => {
     const project = projectFixture();
     const engine = new OperationEngine(project, { idFactory: ids });
+    const proposed = plan();
+    proposed.seams = [{
+      id: "restyle-seam-001",
+      frame: 48,
+      boundary: "restyled-to-untouched",
+      beforeChunkId: "restyle-chunk-001",
+      treatment: { kind: "punch-in" },
+      status: "planned",
+    }];
 
     const result = await valueOf(engine.execute([{
       op: "restyle.plan.create",
-      params: { deliverableId: "dlv_aaaaaaaaaa", plan: plan() },
+      params: { deliverableId: "dlv_aaaaaaaaaa", plan: proposed },
     }], {
       baseRevision: project.revision,
       origin: "system",
@@ -118,9 +171,9 @@ describe("FR-607/608 restyle core contract", () => {
     }));
 
     expect(result.riskClass).toBe("consequential");
-    const application = applyRestyleOperation(project, {
+    const application = await applyRestyleOperation(project, {
       op: "restyle.plan.create",
-      params: { deliverableId: "dlv_aaaaaaaaaa", plan: plan() },
+      params: { deliverableId: "dlv_aaaaaaaaaa", plan: proposed },
     });
     expect(application.ok).toBe(true);
     if (!application.ok) throw new Error(application.error.message);
@@ -128,7 +181,136 @@ describe("FR-607/608 restyle core contract", () => {
       coverageMode: "full",
       planSidecar: "restyle-restyle-plan-001",
     });
-    expect(application.value.model.sidecars.at(-1)).toEqual(restylePlanSidecarRef(plan()));
+    expect(application.value.model.sidecars.at(-1)).toEqual(restylePlanSidecarRef(proposed));
+    expect(result.diff.entries).toContainEqual(expect.objectContaining({
+      entityId: "restyle-seam-001",
+      entityType: "restyle-seam",
+      change: "added",
+      fields: expect.arrayContaining([expect.objectContaining({
+        field: "treatment",
+        after: { kind: "punch-in" },
+      })]),
+    }));
+  });
+
+  it("pins and validates every interstitial template when the plan is proposed", async () => {
+    const project = projectFixture();
+    const source = plan();
+    source.seams = [{
+      id: "restyle-seam-001",
+      frame: 24,
+      boundary: "internal",
+      beforeChunkId: "restyle-chunk-001",
+      afterChunkId: "restyle-chunk-002",
+      treatment: {
+        kind: "interstitial",
+        templateId: "tpl_d2e3f4g5h6",
+        params: { title: "Episode" },
+        durationFrames: 24,
+        resumeExact: true,
+      },
+      status: "planned",
+    }];
+    const provider: TemplateProvider = {
+      latest: () => ({
+        ok: true,
+        value: {
+          schema: "guyditor/template/v1",
+          id: "tpl_d2e3f4g5h6",
+          name: "Full-frame infographic",
+          kind: "diagram",
+          version: "1.0.0",
+          engine: "overlay/v1",
+          duration: { mode: "fixed", default: { frames: 24, fps: "24/1" } },
+          params: {
+            type: "object",
+            additionalProperties: false,
+            required: ["title"],
+            properties: { title: { type: "string", minLength: 1 } },
+          },
+          contentHash: "c".repeat(64),
+        },
+      }),
+      get: () => { throw new Error("unexpected pinned lookup"); },
+    };
+
+    const application = await applyRestyleOperation(project, {
+      op: "restyle.plan.create",
+      params: { deliverableId: source.deliverableId, plan: source },
+    }, provider);
+
+    expect(application).toMatchObject({
+      ok: true,
+      value: {
+        model: {
+          templates: {
+            tpl_d2e3f4g5h6: { version: "1.0.0", contentHash: "c".repeat(64) },
+          },
+        },
+      },
+    });
+
+    const originalTreatment = source.seams[0]!.treatment;
+    if (originalTreatment.kind !== "interstitial") throw new Error("expected interstitial");
+    source.seams[0]!.treatment = { ...originalTreatment, params: {} };
+    const invalid = await applyRestyleOperation(project, {
+      op: "restyle.plan.create",
+      params: { deliverableId: source.deliverableId, plan: source },
+    }, provider);
+    expect(invalid).toMatchObject({ ok: false, error: { code: "E_TEMPLATE_PARAMS_INVALID" } });
+  });
+
+  it("review-gates a per-seam treatment override and exposes its semantic delta", async () => {
+    const project = projectFixture();
+    const source = plan();
+    source.seams = [{
+      id: "restyle-seam-001",
+      frame: 48,
+      boundary: "restyled-to-untouched",
+      beforeChunkId: "restyle-chunk-001",
+      treatment: { kind: "punch-in" },
+      status: "applied",
+      application: { chunkId: "restyle-chunk-001", atFrame: 48 },
+    }];
+    project.deliverables[0]!.restyle = {
+      coverageMode: "full",
+      planSidecar: "restyle-restyle-plan-001",
+    };
+    project.sidecars.push(restylePlanSidecarRef(source));
+    const engine = new OperationEngine(project, { idFactory: ids });
+
+    const direct = await engine.execute([{
+      op: "seam.treatment.set",
+      params: {
+        deliverableId: "dlv_aaaaaaaaaa",
+        plan: source,
+        seamId: "restyle-seam-001",
+        treatment: { kind: "none" },
+      },
+    }], { baseRevision: project.revision, origin: "ui", dryRun: false });
+    expect(direct).toMatchObject({
+      ok: false,
+      error: { code: "E_OP_PROPOSAL_REQUIRED", acceptedStateChanged: false },
+    });
+
+    const dryRun = await valueOf(engine.execute([{
+      op: "seam.treatment.set",
+      params: {
+        deliverableId: "dlv_aaaaaaaaaa",
+        plan: source,
+        seamId: "restyle-seam-001",
+        treatment: { kind: "none" },
+      },
+    }], { baseRevision: project.revision, origin: "system", dryRun: true }));
+    expect(dryRun.diff.entries).toContainEqual(expect.objectContaining({
+      entityId: "restyle-seam-001",
+      entityType: "restyle-seam",
+      change: "modified",
+      fields: expect.arrayContaining([
+        { field: "treatment", before: { kind: "punch-in" }, after: { kind: "none" } },
+        { field: "status", before: "applied", after: "review" },
+      ]),
+    }));
   });
 
   it("places an accepted generated asset over the exact source range on a top video layer", async () => {
@@ -217,5 +399,218 @@ describe("FR-607/608 restyle core contract", () => {
         "gfx_bbbbbbbbbb",
       ],
     });
+  });
+
+  it("places an applied interstitial seam as a pinned full-frame template instance", async () => {
+    const project = projectFixture();
+    project.templates = {
+      tpl_d2e3f4g5h6: { version: "1.0.0", contentHash: "c".repeat(64) },
+    };
+    project.deliverables[0]!.restyle = {
+      coverageMode: "full",
+      planSidecar: "restyle-restyle-plan-001",
+    };
+    const approvedPlan = plan();
+    approvedPlan.chunks[0]!.status = "approved";
+    approvedPlan.chunks[0]!.assetId = "ast_bbbbbbbbbb";
+    approvedPlan.seams = [{
+      id: "restyle-seam-001",
+      frame: 48,
+      boundary: "restyled-to-untouched",
+      beforeChunkId: "restyle-chunk-001",
+      treatment: {
+        kind: "interstitial",
+        templateId: "tpl_d2e3f4g5h6",
+        params: {
+          title: "Episode title",
+          body: "A precise source-resume beat",
+          accent: "#77E7C4",
+          logoSlot: "brand",
+        },
+        durationFrames: 24,
+        resumeExact: true,
+      },
+      status: "applied",
+      application: {
+        chunkId: "restyle-chunk-001",
+        atFrame: 48,
+        itemId: "gfx_cccccccccc",
+      },
+    }];
+
+    const application = await applyRestyleOperation(project, {
+      op: "restyle.segment.approve",
+      params: {
+        deliverableId: "dlv_aaaaaaaaaa",
+        plan: approvedPlan,
+        chunkId: "restyle-chunk-001",
+        layerId: "lyr_bbbbbbbbbb",
+        itemId: "gfx_bbbbbbbbbb",
+        asset: {
+          id: "ast_bbbbbbbbbb",
+          kind: "generated",
+          path: "media/generated/ast_bbbbbbbbbb.mp4",
+          sha256: HASH,
+          probe: {
+            duration: { frames: 48, fps: "24/1" },
+            width: 1920,
+            height: 1080,
+            fps: "24/1",
+          },
+          provenance: { sidecar: "provenance-ast_bbbbbbbbbb" },
+        },
+        provenance: {
+          schema: "guyditor.provenance/v1",
+          assetId: "ast_bbbbbbbbbb",
+          generation: {
+            adapterId: "adp_klingaaaaa",
+            adapterVersion: "1.0.0",
+            provider: "Kling AI",
+            model: "kling-video-o1",
+            prompt: "Watercolor documentary",
+            settings: {},
+            requestId: "restyle-request-001",
+            jobId: "job_aaaaaaaaaa",
+            referenceAssetIds: ["ast_aaaaaaaaaa"],
+            sourceRange: { sequenceId: "seq_aaaaaaaaaa", startFrame: 0, endFrame: 48 },
+            createdAt: "2026-07-19T10:00:01.000Z",
+            providerMetadata: {},
+          },
+          rights: { origin: "generated", restrictions: [] },
+          contentHash: `sha256:${HASH}`,
+        },
+        seamPlacements: [{
+          seamId: "restyle-seam-001",
+          layerId: "lyr_cccccccccc",
+          itemId: "gfx_cccccccccc",
+          seed: 609,
+        }],
+      },
+    });
+
+    expect(application.ok).toBe(true);
+    if (!application.ok) throw new Error(application.error.message);
+    expect(application.value.model.layers.at(-1)).toEqual({
+      id: "lyr_cccccccccc",
+      kind: "animation",
+      name: "Restyle seam · restyle-seam-001",
+      order: 2,
+      enabled: true,
+      locked: false,
+      items: [{
+        id: "gfx_cccccccccc",
+        template: "tpl_d2e3f4g5h6",
+        at: "timeline:seq_aaaaaaaaaa@48",
+        duration: { frames: 24, fps: "24/1" },
+        params: approvedPlan.seams[0]!.treatment.kind === "interstitial"
+          ? approvedPlan.seams[0]!.treatment.params
+          : {},
+        seed: 609,
+        layout: {
+          restyleSeam: {
+            planId: "restyle-plan-001",
+            seamId: "restyle-seam-001",
+            sourceFrame: 48,
+            durationFrames: 24,
+            resumeExact: true,
+          },
+        },
+      }],
+    });
+  });
+
+  it("re-evaluates a stale chunk approval by replacing its prior chunk and seam placements", async () => {
+    const project = projectFixture();
+    project.templates = {
+      tpl_d2e3f4g5h6: { version: "1.0.0", contentHash: "c".repeat(64) },
+    };
+    project.deliverables[0]!.restyle = {
+      coverageMode: "full",
+      planSidecar: "restyle-restyle-plan-001",
+    };
+    const approvedPlan = plan();
+    approvedPlan.chunks[0]!.status = "approved";
+    approvedPlan.chunks[0]!.assetId = "ast_bbbbbbbbbb";
+    approvedPlan.seams = [{
+      id: "restyle-seam-001",
+      frame: 48,
+      boundary: "restyled-to-untouched",
+      beforeChunkId: "restyle-chunk-001",
+      treatment: {
+        kind: "interstitial",
+        templateId: "tpl_d2e3f4g5h6",
+        params: { title: "First placement" },
+        durationFrames: 24,
+        resumeExact: true,
+      },
+      status: "applied",
+      application: {
+        chunkId: "restyle-chunk-001",
+        atFrame: 48,
+        itemId: "gfx_cccccccccc",
+      },
+    }];
+    const first = await applyRestyleOperation(project, {
+      op: "restyle.segment.approve",
+      params: {
+        deliverableId: approvedPlan.deliverableId,
+        plan: approvedPlan,
+        chunkId: "restyle-chunk-001",
+        layerId: "lyr_bbbbbbbbbb",
+        itemId: "gfx_bbbbbbbbbb",
+        asset: generatedAsset("ast_bbbbbbbbbb"),
+        provenance: generatedProvenance("ast_bbbbbbbbbb"),
+        seamPlacements: [{
+          seamId: "restyle-seam-001",
+          layerId: "lyr_cccccccccc",
+          itemId: "gfx_cccccccccc",
+          seed: 609,
+        }],
+      },
+    });
+    expect(first.ok).toBe(true);
+    if (!first.ok) throw first.error;
+
+    const reapprovedPlan = structuredClone(approvedPlan);
+    reapprovedPlan.chunks[0]!.assetId = "ast_dddddddddd";
+    reapprovedPlan.seams[0]!.application = {
+      chunkId: "restyle-chunk-001",
+      atFrame: 48,
+      itemId: "gfx_eeeeeeeeee",
+    };
+    const second = await applyRestyleOperation(first.value.model, {
+      op: "restyle.segment.approve",
+      params: {
+        deliverableId: reapprovedPlan.deliverableId,
+        plan: reapprovedPlan,
+        chunkId: "restyle-chunk-001",
+        layerId: "lyr_dddddddddd",
+        itemId: "gfx_dddddddddd",
+        asset: generatedAsset("ast_dddddddddd", "d".repeat(64)),
+        provenance: generatedProvenance("ast_dddddddddd", "d".repeat(64)),
+        seamPlacements: [{
+          seamId: "restyle-seam-001",
+          layerId: "lyr_eeeeeeeeee",
+          itemId: "gfx_eeeeeeeeee",
+          seed: 610,
+        }],
+      },
+    });
+    expect(second.ok).toBe(true);
+    if (!second.ok) throw second.error;
+    const restyleItems = second.value.model.layers.flatMap(({ items }) => items ?? [])
+      .filter((item) => {
+        const metadata = item.params?.["restyle"];
+        return typeof metadata === "object" && metadata !== null &&
+          (metadata as Record<string, unknown>)["chunkId"] === "restyle-chunk-001";
+      });
+    const seamItems = second.value.model.layers.flatMap(({ items }) => items ?? [])
+      .filter((item) => {
+        const metadata = item.layout?.["restyleSeam"];
+        return typeof metadata === "object" && metadata !== null &&
+          (metadata as Record<string, unknown>)["seamId"] === "restyle-seam-001";
+      });
+    expect(restyleItems.map(({ id }) => id)).toEqual(["gfx_dddddddddd"]);
+    expect(seamItems.map(({ id }) => id)).toEqual(["gfx_eeeeeeeeee"]);
   });
 });

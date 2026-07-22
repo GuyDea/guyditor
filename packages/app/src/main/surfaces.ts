@@ -406,6 +406,47 @@ export const IPC_SURFACES: readonly IpcSurface[] = Object.freeze([
         resultSchema: anyResult,
         budgetMs: 20,
       },
+      setRestyleSeamTreatment: {
+        paramsSchema: {
+          type: "object",
+          required: ["deliverableId", "seamId", "treatment"],
+          properties: {
+            deliverableId: { type: "string", pattern: "^dlv_[a-z2-7]{10}$" },
+            seamId: { type: "string", pattern: "^restyle-seam-[A-Za-z0-9._-]+$" },
+            treatment: {
+              oneOf: [
+                {
+                  type: "object",
+                  required: ["kind", "templateId", "params", "durationFrames", "resumeExact"],
+                  properties: {
+                    kind: { const: "interstitial" },
+                    templateId: { type: "string", pattern: "^tpl_[a-z2-7]{10}$" },
+                    params: { type: "object" },
+                    durationFrames: { type: "integer", minimum: 1 },
+                    resumeExact: { const: true },
+                  },
+                  additionalProperties: false,
+                },
+                {
+                  type: "object",
+                  required: ["kind"],
+                  properties: { kind: { const: "punch-in" } },
+                  additionalProperties: false,
+                },
+                {
+                  type: "object",
+                  required: ["kind"],
+                  properties: { kind: { const: "none" } },
+                  additionalProperties: false,
+                },
+              ],
+            },
+          },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 150,
+      },
     },
   },
   {

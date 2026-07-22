@@ -137,6 +137,7 @@ export type SemanticEntityType =
   | "preset"
   | "skill"
   | "sidecar"
+  | "restyle-seam"
   | "avoid-region";
 
 export interface SemanticDiff {

@@ -12,5 +12,29 @@
     "itemId": { "type": "string", "pattern": "^gfx_[a-z2-7]{10}$" },
     "asset": { "type": "object" },
     "provenance": { "type": "object" }
+    ,"seamPlacements": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["seamId", "layerId", "itemId", "seed"],
+        "properties": {
+          "seamId": { "type": "string", "pattern": "^restyle-seam-[A-Za-z0-9._-]+$" },
+          "layerId": { "type": "string", "pattern": "^lyr_[a-z2-7]{10}$" },
+          "itemId": { "type": "string", "pattern": "^gfx_[a-z2-7]{10}$" },
+          "seed": { "type": "integer", "minimum": 0, "maximum": 4294967295 }
+        }
+      }
+    }
+    ,"chunkPunchIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["seamId", "effectId", "level"],
+      "properties": {
+        "seamId": { "type": "string", "pattern": "^restyle-seam-[A-Za-z0-9._-]+$" },
+        "effectId": { "type": "string", "pattern": "^fx_[a-z2-7]{10}$" },
+        "level": { "type": "number", "exclusiveMinimum": 1 }
+      }
+    }
   }
 }

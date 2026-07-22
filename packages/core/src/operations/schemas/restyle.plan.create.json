@@ -7,7 +7,7 @@
     "deliverableId": { "type": "string", "pattern": "^dlv_[a-z2-7]{10}$" },
     "plan": {
       "type": "object",
-      "required": ["schema", "id", "deliverableId", "sequenceId", "sourceAssets", "adapterId", "model", "createdAt", "coverage", "constraints", "settings", "chunks", "estimatedCost"],
+      "required": ["schema", "id", "deliverableId", "sequenceId", "sourceAssets", "adapterId", "model", "createdAt", "coverage", "constraints", "settings", "chunks", "seams", "estimatedCost"],
       "properties": {
         "schema": { "const": "guyditor.restyle/v1" },
         "id": { "type": "string" },
@@ -21,6 +21,7 @@
         "constraints": { "type": "object" },
         "settings": { "type": "object" },
         "chunks": { "type": "array" },
+        "seams": { "type": "array" },
         "estimatedCost": { "type": "object" }
       }
     }

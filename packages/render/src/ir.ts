@@ -6,6 +6,7 @@ export type RenderNodeKind =
   | "pip"
   | "key"
   | "composite"
+  | "timeline-insert"
   | "overlay"
   | "audiochain"
   | "encode";
@@ -15,7 +16,7 @@ export interface RenderNode {
   kind: RenderNodeKind;
   inputs: string[];
   params: SourceNodeParams | TrimNodeParams | TransformNodeParams | ColorNodeParams | PipNodeParams | KeyNodeParams
-        | CompositeNodeParams | OverlayNodeParams | AudioChainNodeParams | EncodeNodeParams;
+        | CompositeNodeParams | TimelineInsertNodeParams | OverlayNodeParams | AudioChainNodeParams | EncodeNodeParams;
 }
 
 export interface PipNodeParams {
@@ -121,6 +122,16 @@ export interface CompositeNodeParams {
     blend?: "normal" | "multiply" | "screen" | "overlay" | "darken"
       | "lighten" | "addition" | "subtract" | "difference";
     opacity?: number;
+  }>;
+}
+
+export interface TimelineInsertNodeParams {
+  stream: "video" | "audio";
+  sourceDuration: number;
+  outputDuration: number;
+  insertions: Array<{
+    at: number;
+    duration: number;
   }>;
 }
 

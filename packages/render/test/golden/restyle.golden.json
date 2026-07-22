@@ -1,18 +1,26 @@
 {
-  "id": "fr607-fr608-kling-stub-burnin",
+  "id": "fr607-fr608-fr609-kling-stub-burnin",
   "project": "basic",
   "deliverable": "dlv_aaaaaaaaaa",
-  "filteredFrame": {
-    "at": 15,
-    "dhash": "7e7e7e7e7ec18888",
-    "rgbHash": "72ea6a88c0fd2caeb6a36fcaad5fe85c9113246736ebcc6c0db5bb962760da3a",
-    "maxDistance": 2
-  },
-  "untouchedFrame": {
+  "filteredFrames": [
+    { "at": 15, "sourceAt": 15, "rgbHash": "accf50cd25a7d526414b900a31cb9b0c9c6921121f6835906358bbff105bf0fa" },
+    { "at": 75, "sourceAt": 45, "rgbHash": "3081c453c1b7ee1baa26e91d3fcafab82d1b2d93baf6215eca22cf9d6f188e72" }
+  ],
+  "interstitialFrame": {
     "at": 45,
-    "dhash": "7e7e7e7e7ec18888",
-    "rgbHash": "6f9d8c73da147e79ca38168382f653c3e500ab7bda38fb8c4a2fc7c8708b5995",
-    "maxDistance": 2
+    "rgbHash": "7636c9f8da9a82f9a9fcd804a25795a9c900e1c7e19f7442a7b113c8ccd64eb2",
+    "overlayPngSha256": "8d7cae97e92506f476f0b3e3b620c970d41941643cf1160cbaae60156802fab8"
+  },
+  "exactResume": {
+    "outputFrames": [60, 61],
+    "generatedFrames": [0, 1],
+    "maxRegionMae": 12
+  },
+  "punchInFrame": {
+    "at": 105,
+    "sourceAt": 75,
+    "level": 1.12,
+    "rgbHash": "4fee7b6c723ee1ca8083a5a7a14ae10ebf4295a69c2f13c11909ef2d1f5e49d1"
   },
   "toolVersions": {
     "ffmpeg": "ffmpeg version 4.4.2-0ubuntu0.22.04.1 Copyright (c) 2000-2021 the FFmpeg developers",

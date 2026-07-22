@@ -91,6 +91,15 @@ function planned(): RestylePlan {
       estimatedCostUsd: 0.116667,
       status: "planned",
     }],
+    seams: [{
+      id: "restyle-seam-store-001",
+      frame: 20,
+      boundary: "restyled-to-untouched",
+      beforeChunkId: "restyle-chunk-store-001",
+      treatment: { kind: "punch-in" },
+      status: "applied",
+      application: { chunkId: "restyle-chunk-store-001", atFrame: 20 },
+    }],
     estimatedCost: { currency: "USD", amount: 0.116667 },
   };
 }
@@ -263,6 +272,14 @@ describe("restyle acceptance materialization", () => {
       status: "stale",
       stale: {
         reason: "source-range-overlap",
+        transactionId: expect.stringMatching(/^txn_/),
+        markedAt: NOW.toISOString(),
+      },
+    });
+    expect(stale.value.seams[0]).toMatchObject({
+      status: "review",
+      review: {
+        reason: "adjacent-chunk-stale",
         transactionId: expect.stringMatching(/^txn_/),
         markedAt: NOW.toISOString(),
       },

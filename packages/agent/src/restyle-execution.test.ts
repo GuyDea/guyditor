@@ -233,11 +233,12 @@ describe("FR-607/608 restyle execution", () => {
       const overview = await run.queue.overview();
       sawExternal ||= overview.waitingOnExternal.some((wait) =>
         wait.provider === "Kling AI" && wait.spendUsd === 0.14 && wait.elapsedSeconds === 0);
-      return run.queue.get(started.jobs[0]!.jobId)?.state === "done";
+      const state = run.queue.get(started.jobs[0]!.jobId)?.state;
+      return state === "done" || state === "failed" || state === "cancelled";
     });
     expect(sawExternal).toBe(true);
     const done = run.queue.get(started.jobs[0]!.jobId)!;
-    expect(done.state).toBe("done");
+    expect(done, done.error?.message).toMatchObject({ state: "done" });
     expect(jobResult(done)).toMatchObject({
       status: "waiting-for-approval",
       proposalId: expect.stringMatching(/^prp_/),
@@ -246,7 +247,12 @@ describe("FR-607/608 restyle execution", () => {
     });
 
     const proposalId = String(jobResult(done)["proposalId"]);
-    await valueOf(run.engine.acceptProposal(proposalId, "creator"));
+    const accepted = await valueOf(run.engine.acceptProposal(proposalId, "creator"));
+    expect(accepted.operations.map(({ op }) => op)).toEqual([
+      "restyle.segment.approve",
+      "clip.split",
+      "clip.punchin.set",
+    ]);
     const frozen = run.engine.currentProject.assets.find(({ id }) => id === "ast_llllllllll");
     expect(frozen).toMatchObject({
       kind: "generated",
@@ -263,6 +269,10 @@ describe("FR-607/608 restyle execution", () => {
         duration: { frames: 30, fps: "30/1" },
       }],
     });
+    expect(run.engine.currentProject.sequences[0]!.clips.slice(0, 2)).toMatchObject([
+      { id: "clp_aaaaaaaaaa", source: { out: { frames: 30, fps: "30/1" } } },
+      { source: { in: { frames: 30, fps: "30/1" } }, punchIn: { level: 1.12 } },
+    ]);
     await expect(readFile(join(run.projectRoot, frozen!.path))).resolves.not.toHaveLength(0);
     expect(await allTextFiles(run.projectRoot)).not.toContain(SECRET);
     expect(await allTextFiles(join(run.userDir, "audit"))).not.toContain(SECRET);
