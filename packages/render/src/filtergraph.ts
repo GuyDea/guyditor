@@ -429,11 +429,35 @@ export function compileFiltergraph(graph: RenderGraph, outputPath?: string): Com
       `color=c=0x00000000:s=${String(graph.outputSize.w)}x${String(graph.outputSize.h)}` +
       `:r=${graph.outputFps}:d=${decimal(duration)},format=yuva444p[${base}]`,
     );
-    filters.push(
-      `[${base}][${body}]overlay=x='${positionX}*main_w-` +
-      `${anchorX}*overlay_w':y='${positionY}*main_h-` +
-      `${anchorY}*overlay_h':eof_action=pass:shortest=0[${label}]`,
-    );
+    const x = `${positionX}*main_w-${anchorX}*overlay_w`;
+    const y = `${positionY}*main_h-${anchorY}*overlay_h`;
+    if (transform.framingDecisionId === undefined) {
+      filters.push(
+        `[${base}][${body}]overlay=x='${x}':y='${y}':eof_action=pass:shortest=0[${label}]`,
+      );
+    } else {
+      const visual = `${label}visual`;
+      const alphaSource = `${label}alphasource`;
+      const alpha = `${label}alpha`;
+      const placedVisual = `${label}placedvisual`;
+      const alphaBase = `${label}alphabase`;
+      const placedAlpha = `${label}placedalpha`;
+      filters.push(`[${body}]split[${visual}][${alphaSource}]`);
+      filters.push(`[${alphaSource}]alphaextract[${alpha}]`);
+      filters.push(
+        `[${base}][${visual}]overlay=x='${x}':y='${y}':` +
+        `eof_action=pass:shortest=0:format=auto[${placedVisual}]`,
+      );
+      filters.push(
+        `color=c=black:s=${String(graph.outputSize.w)}x${String(graph.outputSize.h)}` +
+        `:r=${graph.outputFps}:d=${decimal(duration)},format=gray[${alphaBase}]`,
+      );
+      filters.push(
+        `[${alphaBase}][${alpha}]overlay=x='${x}':y='${y}':` +
+        `eof_action=pass:shortest=0:format=auto,format=gray[${placedAlpha}]`,
+      );
+      filters.push(`[${placedVisual}][${placedAlpha}]alphamerge[${label}]`);
+    }
     labels.set(node.id, label);
   }
 

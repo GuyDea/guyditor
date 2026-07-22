@@ -121,6 +121,34 @@ export interface CompileCaptionTrackOptions {
   safeArea: NormRect;
   output: { width: number; height: number; fps: string };
   measureText?: (text: string, fontPx: number, style: CaptionStyle) => number;
+  maxCharsPerLine?: number;
+}
+
+export interface DerivativeCaptionProfile {
+  video: {
+    resolution: { width: number; height: number };
+    fps: { default: string };
+  };
+  safeAreas: {
+    title: { top: number; bottom: number; left: number; right: number };
+  };
+  captionDefaults: {
+    fontSizePct?: number;
+    weight?: CaptionStyle["weight"];
+    maxLines: 1 | 2 | 3;
+    maxCharsPerLine: number;
+    placement: { anchor: "left" | "center" | "right"; verticalCenter: number };
+    perWordHighlight: boolean;
+  };
+}
+
+export interface CompileDerivativeCaptionTrackOptions {
+  track: CaptionTrack;
+  timeline: WordTimelineMap;
+  sidecars: readonly TranscriptSidecar[];
+  presetStyle: CaptionStyle;
+  profile: DerivativeCaptionProfile;
+  measureText?: CompileCaptionTrackOptions["measureText"];
 }
 
 export interface SubtitleExportOptions {

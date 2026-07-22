@@ -12,9 +12,31 @@ describe("loadRenderProfile", () => {
     expect(loaded.profile).toEqual({
       id: "youtube-longform",
       version: "1.0.0",
-      video: { codec: "libx264", crf: 18, pixelFormat: "yuv420p" },
+      kind: "longform",
+      video: {
+        codec: "libx264",
+        crf: 18,
+        pixelFormat: "yuv420p",
+        resolution: { width: 3840, height: 2160 },
+        fps: "30/1",
+        aspect: "16:9",
+      },
       audio: { codec: "aac", bitrate: "256k" },
       container: "mp4",
+      safeAreas: {
+        title: { top: 0.05, bottom: 0.05, left: 0.05, right: 0.05 },
+        action: { top: 0.025, bottom: 0.025, left: 0.025, right: 0.025 },
+        platformUi: [{
+          name: "player-controls",
+          rect: { x: 0, y: 0.9, w: 1, h: 0.1 },
+        }],
+      },
+      captionDefaults: {
+        maxLines: 2,
+        maxCharsPerLine: 42,
+        placement: { anchor: "center", verticalCenter: 0.86 },
+        perWordHighlight: false,
+      },
     });
     expect(loaded.sha256).toMatch(/^[0-9a-f]{64}$/u);
   });

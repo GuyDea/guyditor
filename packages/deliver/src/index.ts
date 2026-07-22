@@ -9,6 +9,20 @@ export {
   resolveProfileOverrides,
 } from "./profile.js";
 export {
+  deriveFramingSidecar,
+  framingSidecarPath,
+  framingSidecarReference,
+  parseFramingSidecar,
+  serializeFramingSidecar,
+  writeFramingSidecar,
+} from "./framing.js";
+export type {
+  DeriveFramingInput,
+  FramingDecision,
+  FramingShot,
+  FramingSidecar,
+} from "./framing.js";
+export {
   discoverShortCandidates,
   buildRefreshOperation,
   createRefreshProposal,

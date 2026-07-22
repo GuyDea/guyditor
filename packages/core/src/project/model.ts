@@ -15,6 +15,7 @@ import type {
   DeliverableKind,
   DeliverableStatus,
   DependencyEntry,
+  FramingOverride,
   StaleReason,
 } from "../deliverables/types.js";
 
@@ -354,6 +355,10 @@ export interface ResponsivePlacement {
   overrides?: Partial<Record<AspectClass, Partial<PlacementConstraints>>>;
 }
 
+export interface ResponsiveKeyframePlacement extends PlacementConstraints {
+  overrides?: Partial<Record<AspectClass, Partial<PlacementConstraints>>>;
+}
+
 export interface PipTransition {
   preset: string;
   durationFrames: number;
@@ -363,7 +368,7 @@ export interface PipTransition {
 export interface PipKeyframe {
   id: string;
   at: SemanticAnchor;
-  placement: PlacementConstraints;
+  placement: ResponsiveKeyframePlacement;
   style?: Partial<PipStyle>;
   transition?: PipTransition;
 }
@@ -542,6 +547,7 @@ export interface Deliverable {
   divergences?: DeliverableDivergence[];
   staleReasons?: StaleReason[];
   publishFiles?: { path: string; sha256: string }[];
+  framingOverrides?: FramingOverride[];
   restyle?: {
     coverageMode: "full" | "ranges";
     planSidecar: string;

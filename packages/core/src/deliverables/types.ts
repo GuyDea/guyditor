@@ -53,3 +53,22 @@ export interface DeliverableDivergence {
   class: DivergenceClass;
   transactionIds: string[];
 }
+
+export interface FramingRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export interface FramingCrop {
+  keyframes: Array<{ at: FrameTime; rect: FramingRect }>;
+}
+
+export interface FramingOverride {
+  id: string;
+  decisionId: string;
+  crop?: FramingCrop;
+  layout?: string;
+  note?: string;
+}

@@ -117,6 +117,13 @@ export type {
   NormalizeMasterLoudnessResult,
 } from "./loudness.js";
 export { loadRenderProfile } from "./profile.js";
+export { framingPreviewSpec } from "./framing-preview.js";
+export type { FramingPreviewSpec, FramingPreviewSpecInput } from "./framing-preview.js";
+export { framingPreviewStripSvg, renderFramingPreviewStrip } from "./framing-strip.js";
+export type {
+  FramingPreviewStripInput,
+  FramingPreviewStripPanel,
+} from "./framing-strip.js";
 export type {
   LoadedRenderProfile,
   RenderProfile,

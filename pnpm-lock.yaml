@@ -117,9 +117,15 @@ importers:
 
   packages/deliver:
     dependencies:
+      '@guyditor/compositor':
+        specifier: workspace:*
+        version: link:../compositor
       '@guyditor/core':
         specifier: workspace:*
         version: link:../core
+      '@guyditor/media':
+        specifier: workspace:*
+        version: link:../media
       ajv:
         specifier: ^8.20.0
         version: 8.20.0

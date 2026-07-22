@@ -57,7 +57,9 @@ export interface PlatformProfile {
     platformUi: Array<{ name: string; rect: ProfileRect }>;
   };
   captionDefaults: {
-    maxLines: number;
+    fontSizePct?: number;
+    weight?: 100 | 200 | 300 | 400 | 500 | 600 | 700 | 800 | 900;
+    maxLines: 1 | 2 | 3;
     maxCharsPerLine: number;
     placement: { anchor: "left" | "center" | "right"; verticalCenter: number };
     perWordHighlight: boolean;

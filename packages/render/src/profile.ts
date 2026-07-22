@@ -1,13 +1,24 @@
 import { join } from "node:path";
 
 import { loadPlatformProfile } from "../../deliver/src/index.js";
+import type { PlatformProfile } from "../../deliver/src/index.js";
 
 export interface RenderProfile {
   id: string;
   version: string;
-  video: { codec: string; crf: number; pixelFormat: string };
+  kind?: PlatformProfile["kind"];
+  video: {
+    codec: string;
+    crf: number;
+    pixelFormat: string;
+    resolution?: PlatformProfile["video"]["resolution"];
+    fps?: string;
+    aspect?: string;
+  };
   audio: { codec: string; bitrate: string };
   container: "mp4" | "mov" | "webm";
+  safeAreas?: PlatformProfile["safeAreas"];
+  captionDefaults?: PlatformProfile["captionDefaults"];
 }
 
 export interface LoadedRenderProfile {
@@ -41,16 +52,22 @@ export async function loadRenderProfile(
     profile: {
       id: loaded.profile.id,
       version: loaded.profile.version,
+      kind: loaded.profile.kind,
       video: {
         codec: ffmpegVideoCodec(loaded.profile.video.codec),
         crf: loaded.profile.video.rateControl.crf,
         pixelFormat: loaded.profile.video.pixelFormat,
+        resolution: structuredClone(loaded.profile.video.resolution),
+        fps: loaded.profile.video.fps.default,
+        aspect: loaded.profile.video.aspect,
       },
       audio: {
         codec: loaded.profile.audio.codec,
         bitrate: `${String(loaded.profile.audio.bitrateKbps)}k`,
       },
       container: loaded.profile.video.container,
+      safeAreas: structuredClone(loaded.profile.safeAreas),
+      captionDefaults: structuredClone(loaded.profile.captionDefaults),
     },
   };
 }

@@ -1,0 +1,56 @@
+{
+  "$id": "guyditor:op/deliverable.framing.override",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["deliverableId"],
+  "properties": {
+    "deliverableId": { "type": "string", "pattern": "^dlv_[a-z2-7]{10}$" },
+    "override": { "$ref": "#/$defs/override" },
+    "restoreOverrides": { "type": "array", "items": { "$ref": "#/$defs/override" } }
+  },
+  "anyOf": [
+    { "properties": { "override": {} }, "required": ["override"] },
+    { "properties": { "restoreOverrides": {} }, "required": ["restoreOverrides"] }
+  ],
+  "$defs": {
+    "frameTime": {
+      "type": "object", "additionalProperties": false, "required": ["frames", "fps"],
+      "properties": {
+        "frames": { "type": "integer", "minimum": 0 },
+        "fps": { "type": "string", "pattern": "^(?:0|[1-9][0-9]*)/[1-9][0-9]*$" }
+      }
+    },
+    "rect": {
+      "type": "object", "additionalProperties": false, "required": ["x", "y", "w", "h"],
+      "properties": {
+        "x": { "type": "number", "minimum": 0, "maximum": 1 },
+        "y": { "type": "number", "minimum": 0, "maximum": 1 },
+        "w": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
+        "h": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 }
+      }
+    },
+    "crop": {
+      "type": "object", "additionalProperties": false, "required": ["keyframes"],
+      "properties": {
+        "keyframes": {
+          "type": "array", "minItems": 1,
+          "items": {
+            "type": "object", "additionalProperties": false, "required": ["at", "rect"],
+            "properties": { "at": { "$ref": "#/$defs/frameTime" }, "rect": { "$ref": "#/$defs/rect" } }
+          }
+        }
+      }
+    },
+    "override": {
+      "type": "object", "additionalProperties": false, "required": ["id", "decisionId"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "decisionId": { "type": "string", "pattern": "^fd_[0-9]+$" },
+        "crop": { "$ref": "#/$defs/crop" },
+        "layout": { "type": "string", "minLength": 1 },
+        "note": { "type": "string" }
+      }
+    }
+  }
+}

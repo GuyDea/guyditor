@@ -117,12 +117,16 @@ export const M2_PARTIAL_IDS = Object.freeze([
   "AC-006",
 ]);
 
-const M2_PARTIAL_STATUS_IDS = new Set(["FR-1101", "FR-505", "FR-510"]);
+const M2_PARTIAL_STATUS_IDS = new Set(["FR-1101", "FR-505"]);
 
 export const M3_PARTIAL_IDS = Object.freeze([
+  "FR-510",
+  "FR-511",
   "FR-800",
   "FR-801",
   "FR-802",
+  "FR-803",
+  "FR-804",
   "FR-805",
   "FR-807",
   "AC-008",

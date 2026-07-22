@@ -1,5 +1,6 @@
 import type {
   AnchorName,
+  AspectClass,
   AvoidRegion,
   OperationInput,
   PipConfig,
@@ -8,13 +9,37 @@ import type {
 } from "../../core/src/index.js";
 
 import type { NormalizedRect } from "./placement.js";
-import { solvePlacement } from "./placement.js";
+import { resolveResponsivePlacement, solvePlacement } from "./placement.js";
 
 export interface CaptionLayoutProvider {
   getCaptionBoxes(
     sequenceId: string,
     frameRange: { from: number; to: number },
-    aspectClass: "16:9" | "9:16" | "1:1" | "4:5",
+    aspectClass: AspectClass,
+  ): AvoidRegion[];
+}
+
+export interface SubjectTrackProvider {
+  getSubjectRegions(
+    sequenceId: string,
+    frameRange: { from: number; to: number },
+    aspectClass: AspectClass,
+  ): AvoidRegion[];
+}
+
+export interface DiagramLayoutProvider {
+  getDiagramRegions(
+    sequenceId: string,
+    frameRange: { from: number; to: number },
+    aspectClass: AspectClass,
+  ): AvoidRegion[];
+}
+
+export interface CursorRegionProvider {
+  getCursorRegions(
+    sequenceId: string,
+    frameRange: { from: number; to: number },
+    aspectClass: AspectClass,
   ): AvoidRegion[];
 }
 
@@ -84,6 +109,8 @@ export interface AvoidancePlan {
 
 export interface AvoidanceRequest {
   layerId: string;
+  sequenceId?: string;
+  aspectClass?: AspectClass;
   pip: PipConfig;
   regions: readonly AvoidRegion[];
   compW: number;
@@ -92,6 +119,10 @@ export interface AvoidanceRequest {
   toFrame: number;
   semanticAnchorAtFrame?: (frame: number) => SemanticAnchor;
   idFactory?: (frame: number, index: number) => string;
+  captionLayoutProvider?: CaptionLayoutProvider;
+  subjectTrackProvider?: SubjectTrackProvider;
+  diagramLayoutProvider?: DiagramLayoutProvider;
+  cursorRegionProvider?: CursorRegionProvider;
 }
 
 function placementAtAnchor(base: PlacementConstraints, anchor: AnchorName): PlacementConstraints {
@@ -116,14 +147,46 @@ export function planCollisionAvoidance(request: AvoidanceRequest): AvoidancePlan
     return { status: "proposal", operations: [], relocations: [], summaries: [], unavailableSources: [] };
   }
   const supported = new Set<AvoidRegion["source"]>(["caption", "marked", "safe_area"]);
+  for (const region of request.regions) supported.add(region.source);
+  const providerRegions: AvoidRegion[] = [];
+  const frameRange = { from: request.fromFrame, to: request.toFrame };
+  const aspectClass = request.aspectClass ?? "16:9";
+  const effectiveBase = resolveResponsivePlacement(request.pip.placement, aspectClass, aspectClass);
+  if (request.sequenceId !== undefined) {
+    if (request.captionLayoutProvider !== undefined) {
+      providerRegions.push(...request.captionLayoutProvider.getCaptionBoxes(
+        request.sequenceId, frameRange, aspectClass,
+      ));
+    }
+    if (request.subjectTrackProvider !== undefined) {
+      supported.add("face");
+      supported.add("subject");
+      providerRegions.push(...request.subjectTrackProvider.getSubjectRegions(
+        request.sequenceId, frameRange, aspectClass,
+      ));
+    }
+    if (request.diagramLayoutProvider !== undefined) {
+      supported.add("diagram");
+      providerRegions.push(...request.diagramLayoutProvider.getDiagramRegions(
+        request.sequenceId, frameRange, aspectClass,
+      ));
+    }
+    if (request.cursorRegionProvider !== undefined) {
+      supported.add("cursor");
+      providerRegions.push(...request.cursorRegionProvider.getCursorRegions(
+        request.sequenceId, frameRange, aspectClass,
+      ));
+    }
+  }
   const unavailableSources = config.sources.filter((source) => !supported.has(source));
-  const regions = request.regions.filter(({ source }) => config.sources.includes(source));
+  const regions = [...request.regions, ...providerRegions]
+    .filter(({ source }) => config.sources.includes(source));
   const fallback = config.fallbackAnchors.length === 0
-    ? [request.pip.placement.base.anchor]
+    ? [effectiveBase.anchor]
     : config.fallbackAnchors;
-  const authoredAnchor = request.pip.placement.base.anchor;
+  const authoredAnchor = effectiveBase.anchor;
   let currentAnchor = authoredAnchor;
-  let currentRect = solvePlacement(request.pip.placement.base, request.compW, request.compH);
+  let currentRect = solvePlacement(effectiveBase, request.compW, request.compH);
   let lastRelocation = Number.NEGATIVE_INFINITY;
   let softRun = 0;
   const relocations: AvoidRelocation[] = [];
@@ -140,7 +203,7 @@ export function planCollisionAvoidance(request: AvoidanceRequest): AvoidancePlan
     if (
       reason === undefined && currentAnchor !== authoredAnchor && canMove &&
       overlapWarningForRect(
-        solvePlacement(request.pip.placement.base, request.compW, request.compH),
+        solvePlacement(effectiveBase, request.compW, request.compH),
         regions,
         frame,
       ).severity === "none"
@@ -150,7 +213,7 @@ export function planCollisionAvoidance(request: AvoidanceRequest): AvoidancePlan
     const candidateAnchors = reason === "return" ? [authoredAnchor] : fallback;
     const candidates = candidateAnchors.flatMap((anchor, fallbackIndex) => {
       if (anchor === currentAnchor) return [];
-      const placement = placementAtAnchor(request.pip.placement.base, anchor);
+      const placement = placementAtAnchor(effectiveBase, anchor);
       const rect = solvePlacement(placement, request.compW, request.compH);
       let softTotal = 0;
       for (

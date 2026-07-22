@@ -103,6 +103,8 @@ import deliverableStatusSetSchema from "./schemas/deliverable.status.set.json" w
 import deliverableApproveSchema from "./schemas/deliverable.approve.json" with { type: "json" };
 import deliverableRefreshSchema from "./schemas/deliverable.refresh.json" with { type: "json" };
 import deliverableRemoveSchema from "./schemas/deliverable.remove.json" with { type: "json" };
+import deliverableFramingOverrideSchema from "./schemas/deliverable.framing.override.json" with { type: "json" };
+import sidecarRegisterSchema from "./schemas/sidecar.register.json" with { type: "json" };
 import {
   AnchorResolverRegistry,
   computeAnchorTransitions,
@@ -143,6 +145,7 @@ import { applyLayerOperation } from "./layer.js";
 import { applyTransitionOperation } from "./transition.js";
 import { applyAssetOperation } from "./asset.js";
 import { applyProjectOperation } from "./project.js";
+import { applySidecarOperation } from "./sidecar.js";
 import { applyAnchorOperation } from "./anchor.js";
 import { assessBatchRisk, buildSemanticDiff } from "./diff.js";
 import { applyGraphicOperation, applyTemplateOperation } from "./graphic.js";
@@ -533,6 +536,18 @@ const catalog = new Map<string, CatalogEntry>([
     "shift",
     "Remove {deliverableId}",
   )],
+  ["deliverable.framing.override", catalogEntry(
+    deliverableFramingOverrideSchema,
+    "low",
+    "none",
+    "Override framing for {deliverableId}",
+  )],
+  ["sidecar.register", catalogEntry(
+    sidecarRegisterSchema,
+    "low",
+    "none",
+    "Register sidecar {name}",
+  )],
 ]);
 
 const RISK_RANK: Record<RiskClass, number> = {
@@ -600,7 +615,13 @@ function touchedDerivativeIds(
   after: GuyditorProject,
   applied: readonly AppliedOperation[],
 ): string[] {
-  if (applied.every(({ op }) => op.startsWith("deliverable."))) return [];
+  if (applied.every(({ op }) => op.startsWith("deliverable."))) {
+    return [...new Set(applied.flatMap((operation) =>
+      operation.op === "deliverable.framing.override" &&
+      typeof operation.params["deliverableId"] === "string"
+        ? [operation.params["deliverableId"]]
+        : []))];
+  }
   const mentioned = new Set(applied.flatMap((operation) => [
     ...operation.affected,
     ...nestedStrings(operation.params),
@@ -835,6 +856,8 @@ export class OperationEngine {
         application = applyAudioColorOperation(working, normalized, this.#idFactory);
       } else if (requested.op.startsWith("project.")) {
         application = applyProjectOperation(working, normalized);
+      } else if (requested.op.startsWith("sidecar.")) {
+        application = applySidecarOperation(working, normalized);
       } else if (requested.op.startsWith("asset.")) {
         application = applyAssetOperation(working, normalized);
       } else if (requested.op === "anchor.rebind") {

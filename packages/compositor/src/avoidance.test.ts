@@ -63,4 +63,50 @@ describe("PiP collision avoidance", () => {
       severity: "soft",
     });
   });
+
+  it("collects subject and diagram provider regions for vertical collision solving", () => {
+    const subjectRegion: AvoidRegion = {
+      id: "avr_bbbbbbbbbb", source: "face", hardness: "soft",
+      rect: { x: 0.7, y: 0.7, w: 0.3, h: 0.3 }, frames: { from: 0, to: 20 },
+    };
+    const diagramRegion: AvoidRegion = {
+      id: "avr_cccccccccc", source: "diagram", hardness: "soft",
+      rect: { x: 0.1, y: 0.1, w: 0.2, h: 0.2 }, frames: { from: 0, to: 20 },
+    };
+    const planned = planCollisionAvoidance({
+      layerId: "lyr_aaaaaaaaaa",
+      sequenceId: "seq_aaaaaaaaaa",
+      aspectClass: "9:16",
+      pip: { ...pip, avoid: { ...pip.avoid!, sources: ["face", "diagram"] } },
+      regions: [], compW: 1080, compH: 1920, fromFrame: 0, toFrame: 40,
+      subjectTrackProvider: {
+        getSubjectRegions: (sequenceId, range, aspectClass) => {
+          expect({ sequenceId, range, aspectClass }).toEqual({
+            sequenceId: "seq_aaaaaaaaaa", range: { from: 0, to: 40 }, aspectClass: "9:16",
+          });
+          return [subjectRegion];
+        },
+      },
+      diagramLayoutProvider: {
+        getDiagramRegions: () => [diagramRegion],
+      },
+    });
+    expect(planned.unavailableSources).toEqual([]);
+    expect(planned.relocations[0]).toMatchObject({ reason: "soft-overlap" });
+  });
+
+  it("treats concrete tracked regions as available collision sources", () => {
+    const planned = planCollisionAvoidance({
+      layerId: "lyr_aaaaaaaaaa",
+      pip: { ...pip, avoid: { ...pip.avoid!, sources: ["face"] } },
+      regions: [{
+        id: "avr_dddddddddd", source: "face", hardness: "soft",
+        rect: { x: 0.7, y: 0.7, w: 0.3, h: 0.3 }, frames: { from: 0, to: 20 },
+      }],
+      compW: 1080, compH: 1920, fromFrame: 0, toFrame: 40,
+    });
+
+    expect(planned.unavailableSources).toEqual([]);
+    expect(planned.relocations[0]).toMatchObject({ reason: "soft-overlap" });
+  });
 });

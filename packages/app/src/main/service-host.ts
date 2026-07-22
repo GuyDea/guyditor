@@ -12,10 +12,12 @@ import {
   convertTimeRounding,
   DEFAULT_JUMP_CUT_CONCEALMENT_CONFIG,
   findJumpCutWarnings,
+  formatRevision,
   JobQueue,
   makeId,
   OperationEngine,
   openProject as openCoreProject,
+  parseRevision,
   parseRestylePlan,
   parseTakeMarkerSidecar,
   planJumpCutConcealment,
@@ -38,6 +40,7 @@ import type {
   RestyleFrameRange,
   RestylePlan,
   RestyleSeamTreatment,
+  SidecarRef,
   TakeMarkerSidecar,
   TransactionRecord,
   WatchFolderConfig,
@@ -45,6 +48,7 @@ import type {
 import {
   buildCaptureGuidanceReport,
   CaptureWatcher,
+  createSubjectTrackAnalysis,
   enqueueKeyQc,
   loadPeaks,
   MediaEngine,
@@ -52,9 +56,17 @@ import {
   probeMedia,
   proxyCachePaths,
   registerKeyQcExecutor,
+  parseSubjectTrackAnalysis,
+  subjectTrackSidecarPath,
+  writeSubjectTrackAnalysis,
   writeCaptureGuidanceReport,
 } from "../../../media/src/index.js";
-import type { KeyQcJobPayload, KeyQcReport } from "../../../media/src/index.js";
+import type {
+  KeyQcJobPayload,
+  KeyQcReport,
+  MlworkerTrackResult,
+  SubjectTrackAnalysis,
+} from "../../../media/src/index.js";
 import {
   compileFillerProposal,
   createAnnotationTranscriptSource,
@@ -73,7 +85,11 @@ import {
 import { assessSourceRangeContinuity } from "../../../transcript/src/continuity.js";
 import type { TranscribeResult } from "../../../transcript/src/index.js";
 import { loadTranscriptWorkspace } from "../../../transcript/src/operations.js";
-import { RenderService, TemplateRegistry } from "../../../render/src/index.js";
+import {
+  renderFramingPreviewStrip,
+  RenderService,
+  TemplateRegistry,
+} from "../../../render/src/index.js";
 import type { ExportReport } from "../../../render/src/index.js";
 import {
   AdapterRegistry,
@@ -92,10 +108,13 @@ import { CompositorModel } from "../../../compositor/src/index.js";
 import {
   createRefreshProposal,
   createRestylePlan,
+  deriveFramingSidecar,
   discoverShortCandidates,
   loadPlatformProfile,
+  parseFramingSidecar,
   resolveDerivationSources,
   writeCandidateCache,
+  writeFramingSidecar,
 } from "../../../deliver/src/index.js";
 import type {
   DeliverableTranscript,
@@ -674,6 +693,187 @@ export class WindowServiceHost {
       context.reportProgress(1);
       return { path, count: candidates.length };
     });
+    const registerDerivedSidecar = async (sidecar: SidecarRef): Promise<void> => {
+      resultValue(await new OperationEngine(store.currentProject, {
+        appVersion: this.#app.appVersion,
+        committer: store,
+        auditSink: this.#app.auditLog,
+      }).execute([{
+        op: "sidecar.register",
+        params: { name: sidecar.name, sidecar },
+      }], {
+        baseRevision: store.currentProject.revision,
+        origin: "system",
+        dryRun: false,
+        recordUndo: false,
+        instruction: { kind: "ui-direct", text: `Register derived sidecar ${sidecar.name}` },
+      }));
+    };
+    jobs.registerExecutor("reframe", async (job, context) => {
+      const payload = jsonRecord(job.payload);
+      const deliverableId = payload?.["deliverableId"];
+      if (typeof deliverableId !== "string") throw new Error("Reframe payload needs a deliverableId.");
+      const initial = store.currentProject;
+      const deliverable = initial.deliverables.find(({ id }) => id === deliverableId);
+      const sequence = initial.sequences.find(({ id }) => id === deliverable?.sequenceId);
+      if (deliverable?.kind !== "short" || sequence === undefined) {
+        throw new Error(`Short deliverable ${deliverableId} is unavailable.`);
+      }
+      const assetIds = [...new Set(sequence.clips.map(({ asset }) => asset))].sort();
+      const tracking: Record<string, SubjectTrackAnalysis | undefined> = {};
+      for (const [index, assetId] of assetIds.entries()) {
+        if (context.signal.aborted) throw new Error("Reframe cancelled.");
+        const current = store.currentProject;
+        const asset = current.assets.find(({ id }) => id === assetId);
+        if (asset === undefined) throw new Error(`Reframe asset ${assetId} is unavailable.`);
+        const relativePath = subjectTrackSidecarPath(asset.id);
+        const reference = current.sidecars.find(({ schema, path }) =>
+          schema === "guyditor.analysis/v1" && path === relativePath);
+        let existing: SubjectTrackAnalysis | undefined;
+        if (reference !== undefined) {
+          try {
+            const text = await readFile(join(store.root, relativePath), "utf8");
+            const hash = createHash("sha256").update(text).digest("hex");
+            const parsed = parseSubjectTrackAnalysis(text);
+            if (
+              hash === reference.sha256 &&
+              parsed.sourceHash.replace(/^sha256:/u, "") === asset.sha256
+            ) existing = parsed;
+          } catch {
+            existing = undefined;
+          }
+        }
+        if (existing === undefined) {
+          const tracked = await this.#app.mlworker.runTask("track", {
+            taskId: `${job.jobId}-${String(index)}`,
+            videoPath: isAbsolute(asset.path) ? asset.path : resolve(store.root, asset.path),
+            sampleEvery: 3,
+          }, {
+            signal: context.signal,
+            onProgress: ({ progress }) => context.reportProgress(
+              (index + progress) / Math.max(1, assetIds.length) * 0.7,
+            ),
+          });
+          if (!tracked.ok) throw tracked.error;
+          existing = createSubjectTrackAnalysis({
+            assetId: asset.id,
+            sourceHash: asset.sha256,
+            params: { sampleEvery: 3 },
+            toolVersions: {
+              mlworker: "0.0.0",
+              mediapipe: (tracked.value as unknown as MlworkerTrackResult).engine.version,
+            },
+            createdAt: new Date().toISOString(),
+            result: tracked.value as unknown as MlworkerTrackResult,
+          });
+          const written = await writeSubjectTrackAnalysis(store.root, existing);
+          await registerDerivedSidecar({
+            name: `analysis-${asset.id}-subject-track`,
+            path: written.path,
+            schema: "guyditor.analysis/v1",
+            sha256: written.sha256,
+            generatedBy: { tool: "mlworker/mediapipe", version: existing.data === undefined ? "unknown" :
+              (tracked.value as unknown as MlworkerTrackResult).engine.version, job: job.jobId },
+            inputs: [{ asset: asset.id, sha256: asset.sha256 }],
+          });
+        }
+        tracking[asset.id] = existing;
+        context.reportProgress((index + 1) / Math.max(1, assetIds.length) * 0.7);
+      }
+      const current = store.currentProject;
+      const profile = await loadPlatformProfile(deliverable.profile, {
+        projectRoot: join(store.root, "profiles"),
+        userRoot: join(this.#app.userDirectory, "profiles"),
+        builtinsRoot: this.#app.profilesRoot,
+        ...(deliverable.profileOverrides === undefined ? {} : { overrides: deliverable.profileOverrides }),
+      });
+      const sceneBoundaries: Record<string, number[] | undefined> = {};
+      for (const assetId of assetIds) {
+        const reference = current.sidecars.find(({ schema, path }) =>
+          schema === "guyditor.analysis/v1" && path === `sidecars/analysis/${assetId}.scene.shots.json`);
+        if (reference === undefined) continue;
+        try {
+          const value = JSON.parse(await readFile(join(store.root, reference.path), "utf8")) as unknown;
+          const data = jsonRecord(jsonRecord(value)?.["data"]);
+          const boundaries = data?.["boundaries"];
+          if (Array.isArray(boundaries)) {
+            sceneBoundaries[assetId] = boundaries.filter((frame): frame is number =>
+              typeof frame === "number" && Number.isSafeInteger(frame) && frame >= 0);
+          }
+        } catch {
+          sceneBoundaries[assetId] = undefined;
+        }
+      }
+      const framingPath = `sidecars/framing/${deliverable.id}.framing.json`;
+      const previousReference = current.sidecars.find(({ schema, path }) =>
+        schema === "guyditor.framing/v1" && path === framingPath);
+      const previous = previousReference === undefined
+        ? undefined
+        : parseFramingSidecar(await readFile(join(store.root, previousReference.path), "utf8"));
+      const sidecar = deriveFramingSidecar({
+        project: current,
+        deliverableId,
+        profile: profile.profile,
+        tracking,
+        sceneBoundaries,
+        ...(previous === undefined ? {} : { previous }),
+      });
+      sidecar.sourceRevision = formatRevision(parseRevision(current.revision) + 1);
+      context.reportProgress(0.85);
+      const trackReferences = current.sidecars.filter(({ path }) =>
+        assetIds.some((assetId) => path === subjectTrackSidecarPath(assetId)));
+      const framingReference = await writeFramingSidecar(store.root, sidecar, [
+        ...assetIds.map((assetId) => {
+          const asset = current.assets.find(({ id }) => id === assetId)!;
+          return { asset: asset.id, sha256: asset.sha256 };
+        }),
+        ...trackReferences.map((reference) => ({ sidecar: reference.name, sha256: reference.sha256 })),
+      ]);
+      await registerDerivedSidecar({
+        ...framingReference,
+        generatedBy: { tool: "@guyditor/deliver", version: "0.0.0", job: job.jobId },
+      });
+      const previewDirectory = join(store.root, ".guyditor/cache/reframe", deliverable.id);
+      await mkdir(previewDirectory, { recursive: true });
+      const previewStrips: Array<{ decisionId: string; path: string }> = [];
+      for (const [index, decision] of sidecar.decisions.entries()) {
+        if (context.signal.aborted) throw new Error("Reframe cancelled.");
+        const clip = sequence?.clips.find(({ id }) => id === decision.shot.clipId);
+        const asset = current.assets.find(({ id }) => id === clip?.asset);
+        if (asset === undefined) {
+          throw new Error(`Framing preview asset for ${decision.decisionId} is unavailable.`);
+        }
+        const name = `${decision.decisionId}.svg`;
+        await renderFramingPreviewStrip({
+          decision,
+          sourcePath: isAbsolute(asset.path) ? asset.path : resolve(store.root, asset.path),
+          outputPath: join(previewDirectory, name),
+          signal: context.signal,
+        });
+        previewStrips.push({ decisionId: decision.decisionId, path: name });
+        context.reportProgress(0.88 + (index + 1) / Math.max(1, sidecar.decisions.length) * 0.1);
+      }
+      await writeFile(
+        join(previewDirectory, "preview-strip.json"),
+        `${JSON.stringify({
+          format: "guyditor.reframe-preview/v1",
+          decisions: sidecar.decisions.map(({ decisionId, shot, crop, mode }) => ({
+            decisionId,
+            mode,
+            stripPath: previewStrips.find((strip) => strip.decisionId === decisionId)?.path,
+            frames: [
+              shot.source.start.frames,
+              Math.floor((shot.source.start.frames + shot.source.end.frames) / 2),
+              Math.max(shot.source.start.frames, shot.source.end.frames - 1),
+            ],
+            motionPath: crop?.keyframes.map(({ at, rect }) => ({ frame: at.frames, rect })) ?? [],
+          })),
+        }, null, 2)}\n`,
+        "utf8",
+      );
+      context.reportProgress(1);
+      return { deliverableId, framingPath: framingReference.path, decisionCount: sidecar.decisions.length };
+    });
     const media = new MediaEngine({ jobQueue: jobs, mlworker: this.#app.mlworker });
     registerKeyQcExecutor(jobs);
     const compositor = new CompositorModel({
@@ -779,6 +979,12 @@ export class WindowServiceHost {
         }
         if (job.state === "done" && job.kind === "keyqc.analyze") {
           void this.#writeCaptureGuidance(job).catch(() => undefined);
+        }
+        if (job.state === "done" && job.kind === "reframe") {
+          this.publisher.publish({
+            kind: "project.revision",
+            revision: store.currentProject.revision,
+          });
         }
         if (job.state === "done" && job.kind === "restyle.generate") {
           const proposalId = jsonRecord(job.payload)?.["proposalId"];
@@ -1233,6 +1439,8 @@ export class WindowServiceHost {
           cacheStats: () => project.render.cacheStats(),
           captionFrame: (params: Parameters<RenderService["captionFrame"]>[0]) =>
             project.render.captionFrame(params),
+          framingFrame: (params: Parameters<RenderService["framingFrame"]>[0]) =>
+            project.render.framingFrame(params),
           graphicsFrame: (params: Parameters<RenderService["graphicsFrame"]>[0]) =>
             project.render.graphicsFrame(params),
           templateCatalog: () => project.render.templateCatalog(),
@@ -1351,6 +1559,9 @@ export class WindowServiceHost {
 
   async #acceptProposal(proposalId: string): Promise<Proposal> {
     const project = this.#requireProject();
+    const shortsBefore = new Set(project.store.currentProject.deliverables
+      .filter(({ kind }) => kind === "short")
+      .map(({ id }) => id));
     let current = resultValue(await project.store.readProposal(proposalId));
     if (
       current.baseRevision !== project.store.currentProject.revision &&
@@ -1389,6 +1600,23 @@ export class WindowServiceHost {
           current.id,
           "creator",
         ));
+    const reframeIds = new Set([
+      ...project.store.currentProject.deliverables
+        .filter(({ id, kind }) => kind === "short" && !shortsBefore.has(id))
+        .map(({ id }) => id),
+      ...current.operations.flatMap(({ op, params }) =>
+        op === "deliverable.refresh" && typeof params["deliverableId"] === "string"
+          ? [params["deliverableId"]]
+          : []),
+    ]);
+    for (const deliverableId of reframeIds) {
+      project.jobs.enqueue({
+        kind: "reframe",
+        title: `Recompose vertical framing · ${deliverableId}`,
+        cancellable: true,
+        payload: { deliverableId },
+      });
+    }
     this.publisher.publish({ kind: "proposal.updated", proposalId: current.id });
     this.publisher.publish({
       kind: "project.revision",

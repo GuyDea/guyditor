@@ -296,4 +296,37 @@ describe("deliverable lifecycle and derivative independence", () => {
     expect(insertEngine.currentProject.sequences.at(-1)?.clips.at(-1)?.origin).toBe("local");
     expect(insertEngine.currentProject.deliverables.at(-1)?.dependencies).toHaveLength(1);
   });
+
+  it("stores a shot framing override in the master and records framing divergence", async () => {
+    const derived = valueOf(await applyDeliverableOperation(
+      projectFixture(), deriveInput(), idFactory,
+    )).model;
+    const engine = new OperationEngine(derived, { idFactory });
+    const operation = {
+      op: "deliverable.framing.override",
+      params: {
+        deliverableId: DERIVED_IDS.deliverableId,
+        override: {
+          id: "fov_aaaaaaaaaa",
+          decisionId: "fd_0001",
+          crop: { keyframes: [{
+            at: { frames: 4, fps: "24/1" },
+            rect: { x: 0.25, y: 0, w: 0.31640625, h: 1 },
+          }] },
+          note: "Keep the presenter on the left third",
+        },
+      },
+    };
+    const applied = await engine.execute([operation], {
+      baseRevision: derived.revision,
+      origin: "ui",
+      dryRun: false,
+      divergence: "framing",
+    });
+    expect(applied.ok).toBe(true);
+    expect(engine.currentProject.deliverables.at(-1)).toMatchObject({
+      framingOverrides: [{ id: "fov_aaaaaaaaaa", decisionId: "fd_0001" }],
+      divergences: [{ class: "framing", transactionIds: ["txn_bbbbbbbbbb"] }],
+    });
+  });
 });

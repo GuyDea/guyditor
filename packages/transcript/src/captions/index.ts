@@ -1,4 +1,5 @@
 export { compileCaptionTrack } from "./compiler.js";
+export { compileDerivativeCaptionTrack } from "./short-form.js";
 export {
   DEFAULT_CAPTION_STYLE,
   parseCaptionPreset,
@@ -27,6 +28,8 @@ export type {
   CaptionRenderModel,
   CaptionWordState,
   CompileCaptionTrackOptions,
+  CompileDerivativeCaptionTrackOptions,
+  DerivativeCaptionProfile,
   ImportedSubtitle,
   ImportSubtitleOptions,
   NormRect,

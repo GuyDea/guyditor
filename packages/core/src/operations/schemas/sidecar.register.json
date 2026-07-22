@@ -1,0 +1,49 @@
+{
+  "$id": "guyditor:op/sidecar.register",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name", "sidecar"],
+  "properties": {
+    "name": { "type": "string", "minLength": 1 },
+    "sidecar": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "path", "schema", "sha256", "inputs"],
+          "properties": {
+            "name": { "type": "string", "minLength": 1 },
+            "path": { "type": "string", "minLength": 1 },
+            "schema": { "type": "string", "minLength": 1 },
+            "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "generatedBy": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["tool", "version"],
+              "properties": {
+                "tool": { "type": "string" },
+                "version": { "type": "string" },
+                "job": { "type": "string", "pattern": "^job_[a-z2-7]{10}$" }
+              }
+            },
+            "inputs": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["sha256"],
+                "properties": {
+                  "asset": { "type": "string", "pattern": "^ast_[a-z2-7]{10}$" },
+                  "sidecar": { "type": "string" },
+                  "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

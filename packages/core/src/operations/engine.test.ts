@@ -53,6 +53,29 @@ function moduloGeneratedClipIds(project: GuyditorProject): GuyditorProject {
 }
 
 describe("OperationEngine", () => {
+  it("registers and replaces hashed derived sidecars as low-risk project metadata", async () => {
+    const original = projectFixture();
+    const engine = new OperationEngine(original, { idFactory });
+    const sidecar = {
+      name: "framing-dlv_aaaaaaaaaa",
+      path: "sidecars/framing/dlv_aaaaaaaaaa.framing.json",
+      schema: "guyditor.framing/v1",
+      sha256: "b".repeat(64),
+      generatedBy: { tool: "@guyditor/deliver", version: "0.0.0" },
+      inputs: [{ asset: "ast_aaaaaaaaaa", sha256: "a".repeat(64) }],
+    };
+
+    const result = await valueOf(engine.execute([{
+      op: "sidecar.register",
+      params: { name: sidecar.name, sidecar },
+    }], context()));
+
+    expect(result.riskClass).toBe("low");
+    expect(engine.currentProject.sidecars.find(({ name }) => name === sidecar.name)).toEqual(sidecar);
+    await valueOf(engine.execute(result.applied[0]!.inverse, context("rev_00002")));
+    expect(engine.currentProject.sidecars.find(({ name }) => name === sidecar.name)).toBeUndefined();
+  });
+
   it("emits a session-linked audit event after a commit succeeds", async () => {
     const events: AuditSinkEvent[] = [];
     const engine = new OperationEngine(projectFixture(), {

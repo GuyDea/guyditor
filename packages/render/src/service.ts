@@ -31,6 +31,7 @@ import {
   DEFAULT_CAPTION_STYLE,
   buildWordTimelineMap,
   compileCaptionTrack,
+  compileDerivativeCaptionTrack,
   createTranscriptWordLookup,
   loadPinnedCaptionPreset,
   parseTranscriptSidecar,
@@ -43,15 +44,20 @@ import type {
   TranscriptSidecar,
 } from "../../transcript/src/index.js";
 import {
+  parseSubjectTrackAnalysis,
   probeMedia,
   resolveFfmpeg,
   resolveFfprobe,
   runFfmpeg,
 } from "../../media/src/index.js";
 import type { LoudnessTarget } from "../../media/src/index.js";
+import { parseFramingSidecar } from "../../deliver/src/index.js";
+import type { FramingSidecar } from "../../deliver/src/index.js";
 
 import { compileFiltergraph } from "./filtergraph.js";
 import { compileRenderGraph } from "./graph.js";
+import { framingPreviewSpec } from "./framing-preview.js";
+import type { FramingPreviewSpec } from "./framing-preview.js";
 import type { DiagnosticBackground } from "./graph.js";
 import type {
   EncodeNodeParams,
@@ -60,7 +66,7 @@ import type {
   ToolchainManifest,
 } from "./ir.js";
 import { loadRenderProfile } from "./profile.js";
-import type { LoadedRenderProfile } from "./profile.js";
+import type { LoadedRenderProfile, RenderProfile } from "./profile.js";
 import {
   captionOverlayToolchain,
   createCaptionTextMeasurer,
@@ -515,6 +521,73 @@ export class RenderService {
     };
   }
 
+  public async framingFrame(request: {
+    revision: string;
+    deliverableId: string;
+    frame: number;
+  }): Promise<FramingPreviewSpec | null> {
+    requirePreviewFrame(request.frame, "Framing");
+    const project = await this.#loadProject(request.revision);
+    await this.#verifySidecars(project);
+    const deliverable = project.deliverables.find(({ id }) => id === request.deliverableId);
+    if (deliverable === undefined) {
+      throw makeGuyditorError(
+        "E_RENDER_DELIVERABLE_NOT_FOUND",
+        `Deliverable ${request.deliverableId} does not exist at ${project.revision}.`,
+        { affected: [request.deliverableId, project.revision] },
+      );
+    }
+    const framing = await this.#framingSidecar(project, deliverable);
+    if (framing === undefined) return null;
+    const sequence = project.sequences.find(({ id }) => id === deliverable.sequenceId);
+    if (sequence === undefined) return null;
+    const timeline = deriveTimeline(project, sequence.id);
+    if (!timeline.ok) throw timeline.error;
+    const timed = timeline.value.clips.find(({ start, duration }) =>
+      request.frame >= start.frames && request.frame < start.frames + duration.frames);
+    const clip = sequence.clips.find(({ id }) => id === timed?.clipId);
+    if (timed === undefined || clip === undefined) return null;
+    const sourceSpan = clip.source.out.frames - clip.source.in.frames;
+    const progress = timed.duration.frames === 0
+      ? 0
+      : (request.frame - timed.start.frames) / timed.duration.frames;
+    const sourceFrame = clip.source.in.frames + Math.round(progress * sourceSpan);
+    const decision = framing.decisions.find(({ shot }) =>
+      shot.clipId === clip.id &&
+      sourceFrame >= shot.source.start.frames && sourceFrame < shot.source.end.frames);
+    if (decision === undefined) return null;
+    const trackReference = project.sidecars.find(({ schema, path }) =>
+      schema === "guyditor.analysis/v1" &&
+      path === `sidecars/analysis/${clip.asset}.subject.track.json`);
+    const tracking = trackReference === undefined
+      ? undefined
+      : parseSubjectTrackAnalysis(await readFile(
+          resolvedMediaPath(this.#projectRoot, trackReference.path),
+          "utf8",
+        ));
+    const sample = tracking?.data.samples.slice().sort((left, right) =>
+      Math.abs(left.frame - sourceFrame) - Math.abs(right.frame - sourceFrame) ||
+      left.frame - right.frame)[0];
+    const profile = (await loadRenderProfile(
+      deliverable.profile,
+      this.#profilesRoot,
+      deliverable.profileOverrides,
+    )).profile;
+    const override = deliverable.framingOverrides?.find(({ decisionId }) =>
+      decisionId === decision.decisionId);
+    return framingPreviewSpec({
+      decision,
+      sourceFrame,
+      ...(override === undefined ? {} : { override }),
+      boxes: sample?.boxes ?? [],
+      output: profile.video.resolution ?? {
+        width: project.settings.timeline.width,
+        height: project.settings.timeline.height,
+      },
+      safeArea: profile.safeAreas?.title ?? { top: 0, bottom: 0, left: 0, right: 0 },
+    });
+  }
+
   public async templateCatalog(): Promise<TemplateCatalogEntry[]> {
     const catalog = await this.#templateRegistry.list();
     if (!catalog.ok) throw catalog.error;
@@ -850,6 +923,7 @@ export class RenderService {
         deliverable,
         sidecars,
       );
+      const framing = await this.#framingSidecar(project, deliverable);
       compileRenderGraph({
         project: resolved,
         revision: resolved.revision,
@@ -861,6 +935,7 @@ export class RenderService {
         toolchain: await toolchainManifest(),
         anchorFrames,
         speechIntervals: this.#speechIntervals(resolved, deliverable, sidecars),
+        ...(framing === undefined ? {} : { framing }),
       });
       checks.push({
         id: "VAL-200",
@@ -978,6 +1053,20 @@ export class RenderService {
     return sidecars;
   }
 
+  async #framingSidecar(
+    project: GuyditorProject,
+    deliverable: Deliverable,
+  ): Promise<FramingSidecar | undefined> {
+    const reference = project.sidecars.find(({ schema, path }) =>
+      schema === "guyditor.framing/v1" &&
+      path === `sidecars/framing/${deliverable.id}.framing.json`);
+    if (reference === undefined) return undefined;
+    return parseFramingSidecar(await readFile(
+      resolvedMediaPath(this.#projectRoot, reference.path),
+      "utf8",
+    ));
+  }
+
   async #renderAnchorFrames(
     project: GuyditorProject,
     deliverable: Deliverable,
@@ -1058,11 +1147,15 @@ export class RenderService {
     project: GuyditorProject,
     deliverable: Deliverable,
     anchorFrames: Readonly<Record<string, number>>,
+    profile: RenderProfile,
   ): Promise<Record<string, RasterizedPipAssets>> {
     const timeline = deriveTimeline(project, deliverable.sequenceId);
     if (!timeline.ok) throw timeline.error;
+    const profileFps = deliverable.kind === "short" ? profile.video.fps : undefined;
+    const profileResolution = deliverable.kind === "short" ? profile.video.resolution : undefined;
     const [durationNumerator = "0", durationDenominator = "1"] = timeline.value.duration.split("/");
-    const [fpsNumerator = "1", fpsDenominator = "1"] = project.settings.timeline.fps.split("/");
+    const [fpsNumerator = "1", fpsDenominator = "1"] =
+      (profileFps ?? project.settings.timeline.fps).split("/");
     const durationFrames = Number(
       BigInt(durationNumerator) * BigInt(fpsNumerator) /
       (BigInt(durationDenominator) * BigInt(fpsDenominator)),
@@ -1071,8 +1164,8 @@ export class RenderService {
       layer.enabled && layer.pip !== undefined
         ? [rasterizePipAssets({
             pip: layer.pip,
-            compWidth: project.settings.timeline.width,
-            compHeight: project.settings.timeline.height,
+            compWidth: profileResolution?.width ?? project.settings.timeline.width,
+            compHeight: profileResolution?.height ?? project.settings.timeline.height,
             durationFrames: Math.max(1, durationFrames),
             anchorFrames,
             cacheRoot: join(this.#projectRoot, ".guyditor/cache/render/pip"),
@@ -1084,6 +1177,7 @@ export class RenderService {
   async #captionModel(
     project: GuyditorProject,
     deliverable: Deliverable,
+    suppliedProfile?: RenderProfile,
   ): Promise<CaptionRenderModel | undefined> {
     const captionId = deliverable.captionsTrackId;
     if (captionId === undefined) return undefined;
@@ -1093,7 +1187,6 @@ export class RenderService {
       id === track.preset.presetId && version === track.preset.version);
     if (pin === undefined) throw new TypeError(`Caption preset ${track.preset.presetId}@${String(track.preset.version)} is not pinned.`);
     const preset = await loadPinnedCaptionPreset(this.#projectRoot, pin);
-    const style = resolveCaptionStyle(preset.style, track.styleOverrides);
     const sidecars = await this.#captionSidecars(project);
     const timeline = buildWordTimelineMap({
       project,
@@ -1101,6 +1194,35 @@ export class RenderService {
       track,
       sidecars,
     });
+    const profile = suppliedProfile ?? (await loadRenderProfile(
+      deliverable.profile,
+      this.#profilesRoot,
+      deliverable.profileOverrides,
+    )).profile;
+    if (
+      deliverable.kind === "short" &&
+      profile.video.resolution !== undefined &&
+      profile.video.fps !== undefined &&
+      profile.safeAreas !== undefined &&
+      profile.captionDefaults !== undefined
+    ) {
+      return compileDerivativeCaptionTrack({
+        track,
+        timeline,
+        sidecars,
+        presetStyle: preset.style,
+        profile: {
+          video: {
+            resolution: profile.video.resolution,
+            fps: { default: profile.video.fps },
+          },
+          safeAreas: { title: profile.safeAreas.title },
+          captionDefaults: profile.captionDefaults,
+        },
+        measureText: createCaptionTextMeasurer(),
+      });
+    }
+    const style = resolveCaptionStyle(preset.style, track.styleOverrides);
     const safeArea = style.safeArea === "none"
       ? { x: 0, y: 0, w: 1, h: 1 }
       : { x: 0.05, y: 0.05, w: 0.9, h: 0.9 };
@@ -1140,7 +1262,7 @@ export class RenderService {
       this.#profilesRoot,
       deliverable.profileOverrides,
     );
-    const captionModel = await this.#captionModel(project, deliverable);
+    const captionModel = await this.#captionModel(project, deliverable, profile.profile);
     let overlays: Parameters<typeof compileRenderGraph>[0]["overlays"] = [];
     if (captionModel !== undefined) {
       await mkdir(resolve(req.outputDir), { recursive: true });
@@ -1174,14 +1296,18 @@ export class RenderService {
       }
     }
     const transcriptSidecars = await this.#captionSidecars(project);
+    const profileResolution = deliverable.kind === "short"
+      ? profile.profile.video.resolution
+      : undefined;
+    const profileFps = deliverable.kind === "short" ? profile.profile.video.fps : undefined;
     const graphicPlan = await renderGraphicOverlaySequence({
       project,
       sequenceId: deliverable.sequenceId,
       registry: this.#templateRegistry,
       anchorDependencies: { wordLookup: createTranscriptWordLookup(transcriptSidecars) },
-      width: project.settings.timeline.width,
-      height: project.settings.timeline.height,
-      fps: project.settings.timeline.fps,
+      width: profileResolution?.width ?? project.settings.timeline.width,
+      height: profileResolution?.height ?? project.settings.timeline.height,
+      fps: profileFps ?? project.settings.timeline.fps,
       brand: { palette: {} },
       cacheRoot: join(this.#projectRoot, ".guyditor/cache/render/graphics"),
     });
@@ -1197,7 +1323,13 @@ export class RenderService {
     const maskAssets = await this.#rasterizedMasks(project, deliverable);
     const anchorFrames = await this.#renderAnchorFrames(project, deliverable, transcriptSidecars);
     const speechIntervals = this.#speechIntervals(project, deliverable, transcriptSidecars);
-    const pipAssets = await this.#rasterizedPips(project, deliverable, anchorFrames);
+    const pipAssets = await this.#rasterizedPips(
+      project,
+      deliverable,
+      anchorFrames,
+      profile.profile,
+    );
+    const framing = await this.#framingSidecar(project, deliverable);
     const graph = compileRenderGraph({
       project,
       revision: project.revision,
@@ -1213,6 +1345,7 @@ export class RenderService {
       anchorFrames,
       speechIntervals,
       pipAssets,
+      ...(framing === undefined ? {} : { framing }),
       ...(options.diagnostic === undefined ? {} : {
         diagnosticBackground: options.diagnostic.background,
         diagnosticSaturatedColor: options.diagnostic.saturatedColor,

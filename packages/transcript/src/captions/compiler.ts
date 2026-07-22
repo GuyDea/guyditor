@@ -116,6 +116,11 @@ function lineWidth(
   return words.reduce((sum, word, index) => sum + word.width + (index === 0 ? 0 : spaceWidth), 0);
 }
 
+function lineCharacters(words: readonly MeasuredWord[]): number {
+  return words.reduce((count, word, index) =>
+    count + [...word.displayText].length + (index === 0 ? 0 : 1), 0);
+}
+
 function layout(
   words: readonly MeasuredWord[],
   options: CompileCaptionTrackOptions,
@@ -131,7 +136,9 @@ function layout(
     const candidate = [...current, word];
     if (
       current.length > 0 &&
-      (current.length >= options.style.wordsPerLine || lineWidth(candidate, spaceWidth) > availableWidth)
+      (current.length >= options.style.wordsPerLine ||
+        lineWidth(candidate, spaceWidth) > availableWidth ||
+        (options.maxCharsPerLine !== undefined && lineCharacters(candidate) > options.maxCharsPerLine))
     ) {
       lines.push(current);
       current = [word];
@@ -147,7 +154,10 @@ function layout(
     if (last.length === 1 && previous.length >= 3) {
       const moved = previous.at(-1)!;
       const candidate = [moved, ...last];
-      if (lineWidth(candidate, spaceWidth) <= availableWidth) {
+      if (
+        lineWidth(candidate, spaceWidth) <= availableWidth &&
+        (options.maxCharsPerLine === undefined || lineCharacters(candidate) <= options.maxCharsPerLine)
+      ) {
         previous.pop();
         lines[index] = candidate;
       }

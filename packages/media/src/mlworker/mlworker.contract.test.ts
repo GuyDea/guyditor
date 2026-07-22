@@ -8,6 +8,7 @@ import { MlworkerSupervisor } from "./supervisor.js";
 import type {
   MlworkerAlignResult,
   MlworkerTranscribeResult,
+  MlworkerTrackResult,
   MlworkerVadResult,
   SampleTime,
 } from "./types.js";
@@ -16,13 +17,14 @@ const REPOSITORY_ROOT = path.resolve(import.meta.dirname, "../../../..");
 const WORKER_ROOT = path.join(REPOSITORY_ROOT, "workers/mlworker");
 const PYTHON = path.join(WORKER_ROOT, ".venv/bin/python");
 const FIXTURE = path.join(REPOSITORY_ROOT, ".fixtures/speech-48k-20s.wav");
+const TRACK_FIXTURE = path.join(REPOSITORY_ROOT, ".fixtures/disc-track-720p30-8s.mp4");
 const MANIFEST = path.join(REPOSITORY_ROOT, ".fixtures/manifest.json");
 const TRANSCRIPT_FIXTURE = path.join(
   REPOSITORY_ROOT,
   ".fixtures/transcripts/short-exact.json",
 );
 const AVAILABLE = existsSync(PYTHON) && existsSync(FIXTURE) &&
-  existsSync(MANIFEST) && existsSync(TRANSCRIPT_FIXTURE);
+  existsSync(TRACK_FIXTURE) && existsSync(MANIFEST) && existsSync(TRANSCRIPT_FIXTURE);
 const suiteName = AVAILABLE
   ? "mlworker real-process contract"
   : "mlworker real-process contract (skipped: run workers/mlworker/setup.sh and pnpm fixtures)";
@@ -70,6 +72,7 @@ describe.skipIf(!AVAILABLE)(suiteName, () => {
       "transcribe",
       "align",
       "vad",
+      "track",
     ]);
     expect(hello.value.capabilities.find(({ task }) => task === "align")).toEqual({
       task: "align",
@@ -85,8 +88,66 @@ describe.skipIf(!AVAILABLE)(suiteName, () => {
     expect(degraded.value.capabilities.map(({ task }) => task)).toEqual([
       "transcribe",
       "vad",
+      "track",
     ]);
     console.info(`mlworker contract handshake ${(performance.now() - startedAt).toFixed(0)} ms`);
+  });
+
+  it("tracks the disc within ten percent of frame width on at least ninety percent of frames", async () => {
+    const manifest = JSON.parse(await readFile(MANIFEST, "utf8")) as {
+      files: Record<string, {
+        groundTruth?: { centerPath?: Array<{ frame: number; x: number; y: number }> };
+      }>;
+    };
+    const expected = manifest.files["disc-track-720p30-8s.mp4"]?.groundTruth?.centerPath;
+    if (expected === undefined) throw new Error("fixture disc center path is missing");
+    const supervisor = realSupervisor();
+    const progress: number[] = [];
+    const response = await supervisor.runTask("track", {
+      taskId: "job_trackcase2",
+      videoPath: TRACK_FIXTURE,
+      sampleEvery: 1,
+    }, {
+      onProgress: (update) => progress.push(update.progress),
+    });
+    expect(response.ok).toBe(true);
+    if (!response.ok) throw new Error(response.error.message);
+    const result = response.value as unknown as MlworkerTrackResult;
+    expect(result).toMatchObject({
+      frameCount: expected.length,
+      width: 1280,
+      height: 720,
+      sampleEvery: 1,
+      engine: { name: "mediapipe" },
+    });
+    expect(progress.at(-1)).toBe(1);
+    const samples = new Map(result.samples.map((sample) => [sample.frame, sample]));
+    let accurate = 0;
+    let measured = 0;
+    const trackIds = new Set<string>();
+    for (const truth of expected) {
+      const objects = (samples.get(truth.frame)?.boxes ?? [])
+        .filter(({ kind }) => kind === "object")
+        .sort((left, right) => right.conf - left.conf);
+      const box = objects[0];
+      if (box === undefined) continue;
+      measured += 1;
+      trackIds.add(box.trackId);
+      const centerX = (box.x + box.w / 2) * result.width;
+      if (Math.abs(centerX - truth.x) <= result.width * 0.10) accurate += 1;
+    }
+    expect(measured / expected.length).toBeGreaterThanOrEqual(0.90);
+    expect(accurate / expected.length).toBeGreaterThanOrEqual(0.90);
+    expect(trackIds.size).toBe(1);
+    console.info(`mlworker contract track ${String(accurate)}/${String(expected.length)} accurate frames`);
+  }, 60_000);
+
+  it("omits track when GUYDITOR_ML_DISABLE names it", async () => {
+    const disabled = realSupervisor("track");
+    const hello = await disabled.start();
+    expect(hello.ok).toBe(true);
+    if (!hello.ok) throw new Error(hello.error.message);
+    expect(hello.value.capabilities.some(({ task }) => task === "track")).toBe(false);
   });
 
   it("detects manifest silence boundaries within 150 ms", async () => {

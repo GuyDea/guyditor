@@ -17,6 +17,7 @@ import type { ClipApplication, EntityMutation } from "../operations/clip.js";
 import type { IdFactory } from "../operations/engine.js";
 import type { OperationInput } from "../operations/types.js";
 import type { DependencyEntry, SourceRangeRef } from "./types.js";
+import type { FramingOverride } from "./types.js";
 
 interface DeriveCreatedIds {
   deliverableId: string;
@@ -394,6 +395,57 @@ function remove(project: GuyditorProject, input: OperationInput): Result<ClipApp
   });
 }
 
+function framingOverride(
+  project: GuyditorProject,
+  input: OperationInput,
+): Result<ClipApplication> {
+  const deliverableId = input.params["deliverableId"] as string;
+  const found = deliverableById(project, deliverableId);
+  if (!found.ok) return found;
+  if (found.value.kind !== "short") {
+    return deliverableFailure(
+      "E_DELIVERABLE_KIND",
+      `Deliverable ${deliverableId} is not a short-form derivative.`,
+      [deliverableId],
+    );
+  }
+  const before = structuredClone(found.value.framingOverrides ?? []);
+  const restore = input.params["restoreOverrides"] as FramingOverride[] | undefined;
+  let framingOverrides: FramingOverride[];
+  let summary: string;
+  if (restore !== undefined) {
+    framingOverrides = structuredClone(restore);
+    summary = `Restore framing overrides for ${found.value.name}`;
+  } else {
+    const override = structuredClone(input.params["override"] as FramingOverride);
+    const index = before.findIndex(({ decisionId }) => decisionId === override.decisionId);
+    framingOverrides = before.slice();
+    if (index === -1) framingOverrides.push(override);
+    else framingOverrides[index] = override;
+    summary = `Override framing decision ${override.decisionId} for ${found.value.name}`;
+  }
+  const replacement: Deliverable = { ...found.value, framingOverrides };
+  return success({
+    model: replaceDeliverable(project, replacement),
+    inverse: [{
+      op: "deliverable.framing.override",
+      params: { deliverableId, restoreOverrides: before },
+    }],
+    redo: {
+      op: "deliverable.framing.override",
+      params: structuredClone(input.params),
+    },
+    affected: [deliverableId, ...framingOverrides.map(({ decisionId }) => decisionId)],
+    summary,
+    mutations: [{
+      entityId: deliverableId,
+      entityType: "deliverable",
+      change: "modified",
+      fields: [{ field: "framingOverrides", before, after: framingOverrides }],
+    }],
+  });
+}
+
 export function applyDeliverableOperation(
   project: GuyditorProject,
   input: OperationInput,
@@ -404,6 +456,7 @@ export function applyDeliverableOperation(
     case "deliverable.status.set": return statusChange(project, input);
     case "deliverable.approve": return approve(project, input);
     case "deliverable.refresh": return refresh(project, input);
+    case "deliverable.framing.override": return framingOverride(project, input);
     case "deliverable.remove": return remove(project, input);
     default:
       return deliverableFailure("E_OP_UNKNOWN", `Unknown deliverable operation ${input.op}.`);

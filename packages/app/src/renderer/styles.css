@@ -257,7 +257,9 @@ small { color: var(--muted); }
 
 .panel-preview .panel-body { overflow: auto; background: #11171b; }
 .preview-surface { position: relative; width: min(100%, 680px); aspect-ratio: 16 / 9; margin: 7px auto 0; overflow: hidden; border: 1px solid #3b474e; background: #020304; }
+.preview-surface[data-aspect="portrait"] { width: min(100%, 360px); aspect-ratio: 9 / 16; box-shadow: 0 0 0 1px #10191d, 0 12px 30px rgb(0 0 0 / 32%); }
 .preview-surface video, .black-frame { width: 100%; height: 100%; object-fit: contain; }
+.preview-surface video[data-framed="true"] { transform-origin: top left; }
 .preview-video-source[data-empty="true"] { visibility: hidden; }
 .preview-video-source[data-keyed="true"] { opacity: 0; }
 .diagnostic-backdrop, .chroma-preview { position: absolute; inset: 0; width: 100%; height: 100%; }
@@ -272,6 +274,29 @@ small { color: var(--muted); }
 .pip-preview-canvas[data-overlap="hard"] { filter: drop-shadow(0 0 5px rgb(240 71 67 / 90%)); }
 .pip-avoid-region { position: absolute; z-index: 3; pointer-events: none; border: 1px dashed var(--amber); background: rgb(242 184 75 / 8%); }
 .pip-avoid-region[data-hardness="hard"] { border-color: var(--red); background: rgb(240 71 67 / 9%); }
+.framing-overlay { position: absolute; z-index: 6; inset: 0; overflow: hidden; pointer-events: none; }
+.framing-safe-area { position: absolute; border: 1px dotted rgb(101 207 221 / 66%); background: rgb(52 164 183 / 3%); }
+.framing-subject-box { position: absolute; border: 1px solid #f2b84b; box-shadow: 0 0 0 1px rgb(0 0 0 / 45%), inset 0 0 8px rgb(242 184 75 / 8%); }
+.framing-subject-box::before { content: attr(data-kind); position: absolute; left: -1px; bottom: 100%; padding: 2px 3px; color: #070a0c; background: #f2b84b; font: 700 5px/1 ui-monospace, monospace; text-transform: uppercase; }
+.framing-subject-box[data-kind="screen-region"] { border-color: #77a9ff; }
+.framing-subject-box[data-kind="screen-region"]::before { background: #77a9ff; }
+.framing-source-map { position: absolute; left: 7px; bottom: 7px; width: 42%; aspect-ratio: 16 / 9; overflow: hidden; border: 1px solid #54636a; background: rgb(2 5 7 / 82%); box-shadow: 0 4px 13px rgb(0 0 0 / 48%); }
+.framing-source-map > b { position: absolute; right: 3px; bottom: 2px; color: #9aa6a9; font: 700 5px/1 ui-monospace, monospace; letter-spacing: .08em; text-transform: uppercase; }
+.framing-source-subject, .framing-source-crop { position: absolute; }
+.framing-source-subject { border: 1px solid #f2b84b; background: rgb(242 184 75 / 10%); }
+.framing-source-subject[data-kind="screen-region"] { border-color: #77a9ff; background: rgb(119 169 255 / 10%); }
+.framing-source-crop { border: 1px solid #64d6e5; background: rgb(44 184 204 / 8%); box-shadow: 0 0 7px rgb(66 203 222 / 50%); }
+.framing-controls { display: grid; gap: 5px; margin: 6px 8px 2px; padding: 6px 7px; border: 1px solid #35464d; border-left: 3px solid #55bdcc; background: #0b1215; }
+.framing-controls > header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.framing-controls > header strong { color: #d7e3e4; font: 700 7px/1 ui-monospace, monospace; }
+.framing-controls > header span { color: #71c6d2; font: 650 6px/1 ui-monospace, monospace; text-transform: uppercase; }
+.framing-controls > header span[data-mode="pending"], .framing-controls > p { color: var(--muted); }
+.framing-controls > p, .framing-controls > small { margin: 0; font: 500 6px/1.25 ui-monospace, monospace; }
+.framing-controls > small { color: var(--amber); }
+.framing-crop-controls { display: grid; grid-template-columns: repeat(4, minmax(42px, 1fr)) auto; gap: 4px; align-items: end; }
+.framing-crop-controls label { display: grid; gap: 2px; color: var(--muted); font: 700 6px/1 ui-monospace, monospace; text-transform: uppercase; }
+.framing-crop-controls input { width: 100%; min-height: 21px; padding: 2px 3px; font: 600 7px/1 ui-monospace, monospace; }
+.framing-crop-controls button { min-height: 21px; padding: 2px 6px; font-size: 7px; }
 .black-frame { position: absolute; inset: 0; display: grid; place-items: center; color: #414b51; background: #010203; font: 650 10px/1 ui-monospace, monospace; letter-spacing: .18em; }
 .caption-overlay { position: absolute; inset: 0; width: 100%; height: 100%; }
 .graphic-overlay { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: fill; pointer-events: none; }

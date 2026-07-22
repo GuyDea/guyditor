@@ -1,7 +1,10 @@
 import { makeGuyditorError } from "../../core/src/errors.js";
 import type {
   AnchorName,
+  AspectClass,
   PlacementConstraints,
+  ResponsivePlacement,
+  ResponsiveKeyframePlacement,
 } from "../../core/src/index.js";
 
 export interface NormalizedRect {
@@ -32,6 +35,53 @@ type ConstraintKey = typeof KEYS[number];
 
 const PERCENT = /^(-?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+))%$/u;
 const ASPECT = /^([1-9][0-9]*):([1-9][0-9]*)$/u;
+const ASPECT_CLASSES = ["16:9", "9:16", "1:1", "4:5"] as const satisfies readonly AspectClass[];
+
+function ratio(value: string): number {
+  const match = ASPECT.exec(value);
+  if (match === null) constraintError(`aspect: ${value}`, "expected a positive W:H ratio");
+  return Number(match[1]) / Number(match[2]);
+}
+
+export function resolveAspectClass(
+  targetAspect: string,
+  pinned?: AspectClass,
+): AspectClass {
+  ratio(targetAspect);
+  if (pinned !== undefined) return pinned;
+  if ((ASPECT_CLASSES as readonly string[]).includes(targetAspect)) {
+    return targetAspect as AspectClass;
+  }
+  const target = ratio(targetAspect);
+  return ASPECT_CLASSES.slice().sort((left, right) =>
+    Math.abs(Math.log(target / ratio(left))) - Math.abs(Math.log(target / ratio(right))) ||
+    ASPECT_CLASSES.indexOf(left) - ASPECT_CLASSES.indexOf(right))[0]!;
+}
+
+export function resolveResponsivePlacement(
+  placement: ResponsivePlacement,
+  targetAspect: string,
+  pinned?: AspectClass,
+): PlacementConstraints {
+  const aspectClass = resolveAspectClass(targetAspect, pinned);
+  return validateConstraints({
+    ...structuredClone(placement.base),
+    ...structuredClone(placement.overrides?.[aspectClass] ?? {}),
+  });
+}
+
+export function resolveResponsiveKeyframePlacement(
+  placement: ResponsiveKeyframePlacement,
+  targetAspect: string,
+  pinned?: AspectClass,
+): PlacementConstraints {
+  const { overrides, ...base } = placement;
+  const aspectClass = resolveAspectClass(targetAspect, pinned);
+  return validateConstraints({
+    ...structuredClone(base),
+    ...structuredClone(overrides?.[aspectClass] ?? {}),
+  });
+}
 
 function constraintError(token: string, detail: string): never {
   throw makeGuyditorError(

@@ -53,6 +53,7 @@ export type {
   PresetPin,
   ProjectSettings,
   ResponsivePlacement,
+  ResponsiveKeyframePlacement,
   DuckingConfig,
   DuckingOverridePoint,
   DuckingSettings,

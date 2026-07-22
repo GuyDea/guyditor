@@ -754,6 +754,28 @@
         "fit": { "enum": ["contain", "cover", "stretch"] }
       }
     },
+    "responsiveKeyframePlacement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["anchor"],
+      "properties": {
+        "anchor": { "$ref": "#/$defs/anchorName" },
+        "width": { "$ref": "#/$defs/percent" },
+        "height": { "$ref": "#/$defs/percent" },
+        "margin": { "$ref": "#/$defs/percent" },
+        "margin_x": { "$ref": "#/$defs/percent" },
+        "margin_y": { "$ref": "#/$defs/percent" },
+        "offset_x": { "$ref": "#/$defs/percent" },
+        "offset_y": { "$ref": "#/$defs/percent" },
+        "aspect": { "$ref": "#/$defs/aspectRatio" },
+        "fit": { "enum": ["contain", "cover", "stretch"] },
+        "overrides": {
+          "type": "object",
+          "propertyNames": { "enum": ["16:9", "9:16", "1:1", "4:5"] },
+          "additionalProperties": { "$ref": "#/$defs/partialPlacementConstraints" }
+        }
+      }
+    },
     "responsivePlacement": {
       "type": "object",
       "additionalProperties": false,
@@ -851,7 +873,7 @@
       "properties": {
         "id": { "type": "string", "pattern": "^kfr_[a-z2-7]{10}$" },
         "at": { "$ref": "#/$defs/anchor" },
-        "placement": { "$ref": "#/$defs/placementConstraints" },
+        "placement": { "$ref": "#/$defs/responsiveKeyframePlacement" },
         "style": { "$ref": "#/$defs/partialPipStyle" },
         "transition": { "$ref": "#/$defs/pipTransition" }
       }
@@ -1334,8 +1356,43 @@
         "dependencies": { "type": "array", "items": { "$ref": "#/$defs/dependencyEntry" } },
         "divergences": { "type": "array", "items": { "$ref": "#/$defs/divergence" } },
         "staleReasons": { "type": "array", "items": { "$ref": "#/$defs/staleReason" } },
-        "publishFiles": { "type": "array", "items": { "$ref": "#/$defs/publishFile" } }
+        "publishFiles": { "type": "array", "items": { "$ref": "#/$defs/publishFile" } },
+        "framingOverrides": { "type": "array", "items": { "$ref": "#/$defs/framingOverride" } }
         ,"restyle": { "$ref": "#/$defs/restyleDeliverable" }
+      }
+    },
+    "framingRect": {
+      "type": "object", "additionalProperties": false, "required": ["x", "y", "w", "h"],
+      "properties": {
+        "x": { "type": "number", "minimum": 0, "maximum": 1 },
+        "y": { "type": "number", "minimum": 0, "maximum": 1 },
+        "w": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
+        "h": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 }
+      }
+    },
+    "framingCrop": {
+      "type": "object", "additionalProperties": false, "required": ["keyframes"],
+      "properties": {
+        "keyframes": {
+          "type": "array", "minItems": 1,
+          "items": {
+            "type": "object", "additionalProperties": false, "required": ["at", "rect"],
+            "properties": {
+              "at": { "$ref": "#/$defs/frameTime" },
+              "rect": { "$ref": "#/$defs/framingRect" }
+            }
+          }
+        }
+      }
+    },
+    "framingOverride": {
+      "type": "object", "additionalProperties": false, "required": ["id", "decisionId"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "decisionId": { "type": "string", "pattern": "^fd_[0-9]+$" },
+        "crop": { "$ref": "#/$defs/framingCrop" },
+        "layout": { "type": "string", "minLength": 1 },
+        "note": { "type": "string" }
       }
     },
     "restyleDeliverable": {

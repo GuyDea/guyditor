@@ -148,7 +148,7 @@ recorded
 }
 
 function completeM2Traceability() {
-  const partial = new Set(["FR-1101", "FR-505", "FR-510"]);
+  const partial = new Set(["FR-1101", "FR-505"]);
   return M2_PARTIAL_IDS.map((id) =>
     `| ${id} | Part | ${partial.has(id) ? "partial" : "implemented"} | \`test/${id}.test.ts\` | evidence |`
   ).join("\n");

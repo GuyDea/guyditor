@@ -112,6 +112,10 @@ const ORDERS = {
     "anchor", "width", "height", "margin", "margin_x", "margin_y",
     "offset_x", "offset_y", "aspect", "fit",
   ],
+  responsiveKeyframePlacement: [
+    "anchor", "width", "height", "margin", "margin_x", "margin_y",
+    "offset_x", "offset_y", "aspect", "fit", "overrides",
+  ],
   pipKeyframe: ["id", "at", "placement", "style", "transition"],
   pipTransition: ["preset", "durationFrames", "params"],
   avoidConfig: [
@@ -150,7 +154,12 @@ const ORDERS = {
     "id", "kind", "name", "profile", "profileOverrides", "sequenceId",
     "captionsTrackId", "status", "approvedRevision", "dependencies",
     "divergences", "staleReasons", "publishFiles",
+    "framingOverrides",
   ],
+  framingOverride: ["id", "decisionId", "crop", "layout", "note"],
+  framingCrop: ["keyframes"],
+  framingCropKeyframe: ["at", "rect"],
+  framingRect: ["x", "y", "w", "h"],
   dependency: ["derivativeClipId", "source"],
   dependencySource: ["assetId", "range", "words", "longformClipId"],
   sourceRange: ["start", "end"],
@@ -267,7 +276,9 @@ function orderFor(
   if (key === "deviceFrame") return ORDERS.deviceFrame;
   if (key === "placement" && "base" in value) return ORDERS.responsivePlacement;
   if (key === "base" && includesPath(path, "placement")) return ORDERS.placement;
-  if (key === "placement" && includesPath(path, "keyframes")) return ORDERS.placement;
+  if (key === "placement" && includesPath(path, "keyframes")) {
+    return "overrides" in value ? ORDERS.responsiveKeyframePlacement : ORDERS.placement;
+  }
   if (key === "transition" && includesPath(path, "keyframes")) return ORDERS.pipTransition;
   if (key === "avoid" && includesPath(path, "pip")) return ORDERS.avoidConfig;
   if (key === "moveTransition") return ORDERS.moveTransition;
