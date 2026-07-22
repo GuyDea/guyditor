@@ -7,9 +7,9 @@ To resume: open Claude Code in this directory and say "continue the Guyditor bui
 
 ## Where things stand
 
-- **`main`** contains milestones **M0, M1, M2 complete** (automated gates green:
-  536 unit/property tests, 19 Playwright e2e, golden + contract suites,
-  AC-001/002/003/004/005/006 automated, AC-009 harness).
+- **`main`** contains milestones **M0, M1, M2, M3 complete** (automated gates green:
+  645 unit/property tests, 21 Playwright e2e, golden + contract suites,
+  AC-001..008 + 011 automated, AC-009 harness).
   Gate reports: `docs/gates/`. Requirement coverage: `docs/traceability.md`.
 - **Amendment 001 (segmented AI restyle) is COMPLETE and merged** (a8953d5): adapter
   interface, Kling client (stub mode; live wire format PROVIDER-VERIFY-flagged in
@@ -20,8 +20,9 @@ To resume: open Claude Code in this directory and say "continue the Guyditor bui
 
 ## What Claude does on resume
 
-1. M3 campaign (in progress): shorts, platform profiles, vertical recomposition,
-   publish kits (BRD Priority C).
+1. M4 campaign (Priority D): editorial skills + preference examples, take
+   comparison, B-roll adapters + provenance, specialist critic, archival/
+   migration/backup hardening, AC-009/010/012.
 2. On credentials: verify the Kling wire format against live docs (one file:
    `packages/agent/src/adapters/kling-api.ts`).
 
@@ -29,7 +30,8 @@ To resume: open Claude Code in this directory and say "continue the Guyditor bui
 
 - **Kling API credentials** — needed for live restyle calls (stored in OS keychain;
   stub mode works without them).
-- **Real episode footage** — needed to run the M1/M2 dogfood episodes and formally
+- **Real episode footage** — needed for the M1/M2/M3 dogfood episodes (M3 needs a
+  long-form episode plus ≥2 published-quality shorts via upload kits) to formally
   close those milestones (`pnpm --filter @guyditor/app dev` launches the app).
 
 ## Useful commands
