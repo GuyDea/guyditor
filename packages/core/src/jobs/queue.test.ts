@@ -440,6 +440,55 @@ describe("JobQueue execution", () => {
     queue.close();
   });
 
+  it("runs a terminal aggregate after every dependency finishes even when one failed", async () => {
+    const path = await databasePath();
+    const { queue } = JobQueue.open(path, { concurrency: 3 });
+    queue.registerExecutor("batch.ok", async () => ({ output: "ok" }));
+    queue.registerExecutor("batch.fail", async () => {
+      throw new Error("fixture failure");
+    });
+    queue.registerExecutor("batch.parent", async (job) => ({
+      items: job.dependsOn.map((jobId) => ({
+        jobId,
+        state: queue.get(jobId)?.state ?? "failed",
+        error: queue.get(jobId)?.error?.code ?? null,
+      })),
+    }));
+    const ok = queue.enqueue({
+      kind: "batch.ok",
+      title: "Valid item",
+      payload: null,
+      cancellable: true,
+    });
+    const failed = queue.enqueue({
+      kind: "batch.fail",
+      title: "Invalid item",
+      payload: null,
+      cancellable: true,
+    });
+    const parent = queue.enqueue({
+      kind: "batch.parent",
+      title: "Batch aggregate",
+      payload: null,
+      cancellable: true,
+      dependsOn: [ok.jobId, failed.jobId],
+      dependencyMode: "terminal",
+    });
+
+    await waitFor(() => queue.get(parent.jobId)?.state === "done");
+    expect(queue.get(parent.jobId)).toMatchObject({
+      state: "done",
+      dependencyMode: "terminal",
+      payload: {
+        items: [
+          { jobId: ok.jobId, state: "done", error: null },
+          { jobId: failed.jobId, state: "failed", error: "E_JOB_EXECUTOR_FAILED" },
+        ],
+      },
+    });
+    queue.close();
+  });
+
   it("fails descendants when a dependency fails and retries the affected chain", async () => {
     const path = await databasePath();
     const { queue } = JobQueue.open(path, { concurrency: 3 });

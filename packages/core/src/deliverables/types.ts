@@ -72,3 +72,49 @@ export interface FramingOverride {
   layout?: string;
   note?: string;
 }
+
+export type PublishArtifactStatus = "draft" | "approved" | "stale";
+
+export interface PublishMetadataDocument {
+  format: "guyditor-publish/v1";
+  deliverableId: string;
+  profile: string;
+  language: string;
+  title: string;
+  description: string;
+  tags: string[];
+  hashtags: string[];
+  cta?: string;
+  status: PublishArtifactStatus;
+  draftedBy?: { agent: string; model: string; skillVersions: Record<string, string> };
+  approvedRevision?: string;
+}
+
+export interface PublishChapter {
+  beatId: string;
+  title: string;
+  startSeconds: number;
+}
+
+export interface PublishChapterList {
+  format: "guyditor-chapters/v1";
+  deliverableId: string;
+  derivedAtRevision: string;
+  status: PublishArtifactStatus;
+  chapters: PublishChapter[];
+  textSha256: string;
+  approvedRevision?: string;
+  warnings?: string[];
+  stale?: {
+    transactionId: string;
+    revision: string;
+    detectedAt: string;
+    warning: string;
+  };
+}
+
+export interface DeliverablePublishState {
+  metadata?: PublishMetadataDocument;
+  chapters?: PublishChapterList;
+  selectedThumbnail?: string;
+}

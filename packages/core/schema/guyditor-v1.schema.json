@@ -1357,8 +1357,84 @@
         "divergences": { "type": "array", "items": { "$ref": "#/$defs/divergence" } },
         "staleReasons": { "type": "array", "items": { "$ref": "#/$defs/staleReason" } },
         "publishFiles": { "type": "array", "items": { "$ref": "#/$defs/publishFile" } },
-        "framingOverrides": { "type": "array", "items": { "$ref": "#/$defs/framingOverride" } }
+        "framingOverrides": { "type": "array", "items": { "$ref": "#/$defs/framingOverride" } },
+        "publish": { "$ref": "#/$defs/deliverablePublishState" }
         ,"restyle": { "$ref": "#/$defs/restyleDeliverable" }
+      }
+    },
+    "deliverablePublishState": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "metadata": { "$ref": "#/$defs/publishMetadataDocument" },
+        "chapters": { "$ref": "#/$defs/publishChapterList" },
+        "selectedThumbnail": { "type": "string", "minLength": 1 }
+      }
+    },
+    "publishMetadataDocument": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format", "deliverableId", "profile", "language", "title", "description", "tags", "hashtags", "status"],
+      "properties": {
+        "format": { "const": "guyditor-publish/v1" },
+        "deliverableId": { "type": "string", "pattern": "^dlv_[a-z2-7]{10}$" },
+        "profile": { "type": "string", "minLength": 1 },
+        "language": { "type": "string", "minLength": 1 },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "tags": { "type": "array", "items": { "type": "string" } },
+        "hashtags": { "type": "array", "items": { "type": "string" } },
+        "cta": { "type": "string" },
+        "status": { "enum": ["draft", "approved", "stale"] },
+        "draftedBy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["agent", "model", "skillVersions"],
+          "properties": {
+            "agent": { "type": "string", "minLength": 1 },
+            "model": { "type": "string", "minLength": 1 },
+            "skillVersions": { "type": "object", "additionalProperties": { "type": "string" } }
+          }
+        },
+        "approvedRevision": { "type": "string", "pattern": "^rev_[0-9]{5}$" }
+      }
+    },
+    "publishChapterList": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format", "deliverableId", "derivedAtRevision", "status", "chapters", "textSha256"],
+      "properties": {
+        "format": { "const": "guyditor-chapters/v1" },
+        "deliverableId": { "type": "string", "pattern": "^dlv_[a-z2-7]{10}$" },
+        "derivedAtRevision": { "type": "string", "pattern": "^rev_[0-9]{5}$" },
+        "status": { "enum": ["draft", "approved", "stale"] },
+        "chapters": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["beatId", "title", "startSeconds"],
+            "properties": {
+              "beatId": { "type": "string", "pattern": "^beat_[a-z2-7]{10}$" },
+              "title": { "type": "string", "minLength": 1 },
+              "startSeconds": { "type": "integer", "minimum": 0 }
+            }
+          }
+        },
+        "textSha256": { "$ref": "#/$defs/sha256" },
+        "approvedRevision": { "type": "string", "pattern": "^rev_[0-9]{5}$" },
+        "warnings": { "type": "array", "items": { "type": "string" } },
+        "stale": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["transactionId", "revision", "detectedAt", "warning"],
+          "properties": {
+            "transactionId": { "type": "string", "pattern": "^txn_[a-z2-7]{10}$" },
+            "revision": { "type": "string", "pattern": "^rev_[0-9]{5}$" },
+            "detectedAt": { "$ref": "#/$defs/iso8601" },
+            "warning": { "type": "string", "minLength": 1 }
+          }
+        }
       }
     },
     "framingRect": {

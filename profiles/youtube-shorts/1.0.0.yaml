@@ -24,8 +24,8 @@ safeAreas:
   title: { top: 0.06, bottom: 0.26, left: 0.05, right: 0.16 }
   action: { top: 0.03, bottom: 0.20, left: 0.02, right: 0.12 }
   platformUi:
-    - { name: right-rail, rect: { x: 0.86, y: 0.38, w: 0.14, h: 0.42 } }
-    - { name: bottom-meta, rect: { x: 0.00, y: 0.82, w: 0.80, h: 0.18 } }
+    - { name: right-rail, strict: true, rect: { x: 0.86, y: 0.38, w: 0.14, h: 0.42 } }
+    - { name: bottom-meta, strict: true, rect: { x: 0.00, y: 0.82, w: 0.80, h: 0.18 } }
 captionDefaults:
   maxLines: 2
   maxCharsPerLine: 18

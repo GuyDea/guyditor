@@ -8,6 +8,7 @@ import { pathToFileURL } from "node:url";
 import {
   AnchorResolverRegistry,
   AnnotationService,
+  absoluteSeconds,
   buildAnnotationContext,
   convertTimeRounding,
   DEFAULT_JUMP_CUT_CONCEALMENT_CONFIG,
@@ -108,10 +109,15 @@ import { CompositorModel } from "../../../compositor/src/index.js";
 import {
   createRefreshProposal,
   createRestylePlan,
+  BatchExportService,
+  draftPublishMetadata,
   deriveFramingSidecar,
   discoverShortCandidates,
+  extractTranscriptText,
+  generateChapterList,
   loadPlatformProfile,
   parseFramingSidecar,
+  PublishService,
   resolveDerivationSources,
   writeCandidateCache,
   writeFramingSidecar,
@@ -119,6 +125,8 @@ import {
 import type {
   DeliverableTranscript,
   DerivationSelection,
+  PublishMetadata,
+  PublishFileResult,
   RestylePlanningSignals,
   ShortCandidate,
 } from "../../../deliver/src/index.js";
@@ -171,6 +179,8 @@ interface ProjectServices {
   annotations: AnnotationService;
   compositor: CompositorModel;
   render: RenderService;
+  publish: PublishService;
+  batch: BatchExportService;
   templates: TemplateRegistry;
   adapters: AdapterRegistry;
   restyle: RestyleExecutionService;
@@ -265,6 +275,83 @@ function deliverableTranscripts(
       }];
     }),
   }));
+}
+
+async function publishTranscript(store: ProjectStore, deliverableId: string): Promise<{
+  language: string;
+  text: string;
+}> {
+  const project = store.currentProject;
+  const deliverable = project.deliverables.find(({ id }) => id === deliverableId);
+  if (deliverable === undefined) throw new Error(`Deliverable ${deliverableId} does not exist.`);
+  const sidecars = await transcriptSidecars(store);
+  const words = sidecars.flatMap((sidecar) => Object.entries(sidecar.words).map(([id, word]) => ({
+    id,
+    assetId: sidecar.assetId,
+    text: word.text,
+    punctAfter: word.punctAfter,
+    startSamples: word.start.samples,
+    endSamples: word.end.samples,
+    rate: word.start.rate,
+    state: word.state,
+    ...(sidecar.speakers.find(({ id: speakerId }) => speakerId === sidecar.segments
+      .find(({ words: segmentWords }) => segmentWords.includes(id))?.speaker)?.label === undefined
+      ? {}
+      : { speaker: sidecar.speakers.find(({ id: speakerId }) => speakerId === sidecar.segments
+          .find(({ words: segmentWords }) => segmentWords.includes(id))?.speaker)!.label }),
+  })));
+  const clips = deliverable.dependencies?.flatMap(({ source }) => source.words === undefined ? [] : [{
+    assetId: source.assetId,
+    startWordId: source.words.startWordId,
+    endWordId: source.words.endWordId,
+  }]) ?? [];
+  if (clips.length === 0) {
+    const sequence = project.sequences.find(({ id }) => id === deliverable.sequenceId);
+    for (const clip of sequence?.clips ?? []) {
+      if (clip.origin === "local") continue;
+      const sidecar = sidecars.find(({ assetId }) => assetId === clip.asset);
+      if (sidecar === undefined) continue;
+      const [fpsNumerator = "0", fpsDenominator = "1"] = clip.source.in.fps.split("/");
+      const fps = Number(fpsNumerator) / Number(fpsDenominator);
+      const sourceStart = clip.source.in.frames / fps;
+      const sourceEnd = clip.source.out.frames / fps;
+      const ids = Object.entries(sidecar.words)
+        .filter(([, word]) => word.state === "active" &&
+          word.end.samples / word.end.rate > sourceStart &&
+          word.start.samples / word.start.rate < sourceEnd)
+        .map(([id]) => id)
+        .sort();
+      if (ids[0] !== undefined && ids.at(-1) !== undefined) {
+        clips.push({ assetId: sidecar.assetId, startWordId: ids[0], endWordId: ids.at(-1)! });
+      }
+    }
+  }
+  const beatWordIds = project.beats.flatMap(({ anchor }) => {
+    const match = /^word:(w[0-9]{6})/u.exec(anchor);
+    return match?.[1] === undefined ? [] : [match[1]];
+  });
+  return {
+    language: sidecars.find(({ language }) => language.length > 0)?.language ?? "en",
+    text: extractTranscriptText({ clips, beatWordIds, words }),
+  };
+}
+
+function secondsAt(frame: { frames: number; fps: string }): number {
+  const value = resultValue(absoluteSeconds(frame));
+  const [numerator, denominator] = value.split("/").map(Number);
+  if (numerator === undefined || denominator === undefined || denominator === 0) {
+    throw new TypeError(`Invalid exact second value ${value}.`);
+  }
+  return Math.floor(numerator / denominator);
+}
+
+function mergedPublishFiles(
+  deliverable: ProjectStore["currentProject"]["deliverables"][number],
+  results: readonly PublishFileResult[],
+): Array<{ path: string; sha256: string }> {
+  const files = new Map((deliverable.publishFiles ?? []).map((file) => [file.path, file]));
+  for (const { path, sha256 } of results) files.set(path, { path, sha256 });
+  return [...files.values()].sort((left, right) => left.path.localeCompare(right.path));
 }
 
 async function candidateCache(store: ProjectStore): Promise<ShortCandidate[]> {
@@ -410,7 +497,7 @@ async function latestExportReport(store: ProjectStore): Promise<ExportReport | n
     return null;
   }
   const reports = await Promise.all(names
-    .filter((name) => name.endsWith(".export-report.json"))
+    .filter((name) => name.endsWith("export-report.json"))
     .map(async (name) => {
       try {
         return JSON.parse(await readFile(join(root, name), "utf8")) as ExportReport;
@@ -923,6 +1010,57 @@ export class WindowServiceHost {
       profilesRoot: this.#app.profilesRoot,
       templateRegistry: templates,
     });
+    const publish = new PublishService({
+      projectRoot: store.root,
+      project: () => store.currentProject,
+      ...(this.#app.profilesRoot === undefined ? {} : { profilesRoot: this.#app.profilesRoot }),
+      userProfilesRoot: join(this.#app.userDirectory, "profiles"),
+      validateExport: (deliverableId, revision) => render.validateExport(deliverableId, revision),
+    });
+    jobs.registerExecutor("publish.kit", async (job) => {
+      const deliverableId = jsonRecord(job.payload)?.["deliverableId"];
+      if (typeof deliverableId !== "string") throw new Error("Upload-kit job needs a deliverableId.");
+      const built = await publish.buildKit(deliverableId);
+      return {
+        path: built.path,
+        deliverableId: built.manifest.deliverableId,
+        profile: built.manifest.profile,
+        revision: built.manifest.revision,
+        fileCount: built.manifest.files.length,
+      };
+    });
+    const batch = new BatchExportService({
+      queue: jobs,
+      revision: () => store.currentProject.revision,
+      validate: (deliverableId, revision) => {
+        const deliverable = store.currentProject.deliverables.find(({ id }) => id === deliverableId);
+        if (deliverable?.status !== "approved") {
+          return Promise.resolve({
+            outcome: "blocked" as const,
+            checks: [{
+              status: "fail" as const,
+              message: deliverable === undefined
+                ? `Deliverable ${deliverableId} does not exist.`
+                : `Deliverable ${deliverableId} must be approved and non-stale.`,
+              affected: [deliverableId],
+            }],
+          });
+        }
+        return render.validateExport(deliverableId, revision);
+      },
+      exportOutputSet: (deliverableId, revision) => render.renderOutputSet({
+        deliverableId,
+        revision,
+        outputDir: join(store.root, "exports"),
+      }),
+      enqueueKitBuild: (deliverableId, dependsOn) => Promise.resolve(jobs.enqueue({
+        kind: "publish.kit",
+        title: `Build upload kit · ${deliverableId}`,
+        cancellable: true,
+        dependsOn: [...dependsOn],
+        payload: { deliverableId },
+      })),
+    });
     const adapters = new AdapterRegistry();
     const kling = this.#app.restyleAdapter;
     if (kling.enabled) {
@@ -1025,6 +1163,8 @@ export class WindowServiceHost {
       annotations,
       compositor,
       render,
+      publish,
+      batch,
       templates,
       adapters,
       restyle,
@@ -1230,6 +1370,240 @@ export class WindowServiceHost {
         };
       case "DeliverableService":
         return project === undefined ? undefined : {
+          publishState: ({ deliverableId }: { deliverableId: string }) => {
+            const deliverable = project.store.currentProject.deliverables
+              .find(({ id }) => id === deliverableId);
+            if (deliverable === undefined) throw new Error(`Deliverable ${deliverableId} does not exist.`);
+            return structuredClone(deliverable.publish ?? {});
+          },
+          draftMetadata: async ({ deliverableId }: { deliverableId: string }) => {
+            const deliverable = project.store.currentProject.deliverables
+              .find(({ id }) => id === deliverableId);
+            if (deliverable === undefined) throw new Error(`Deliverable ${deliverableId} does not exist.`);
+            const transcript = await publishTranscript(project.store, deliverableId);
+            const metadata = draftPublishMetadata({
+              deliverableId,
+              profile: deliverable.profile,
+              language: transcript.language,
+              transcript: transcript.text,
+              beats: project.store.currentProject.beats.map(({ chapter, name }) => chapter?.title ?? name),
+            });
+            const [transcriptFile, metadataFile] = await Promise.all([
+              project.publish.writeText(deliverableId, "transcript", transcript.text),
+              project.publish.writeMetadata(metadata),
+            ]);
+            await this.#execute({
+              operations: [
+                { op: "deliverable.metadata.set", params: { deliverableId, metadata } },
+                {
+                  op: "deliverable.publish.files.set",
+                  params: {
+                    deliverableId,
+                    files: mergedPublishFiles(deliverable, [transcriptFile, metadataFile]),
+                  },
+                },
+              ],
+              intent: "direct",
+              label: `Draft publish metadata · ${deliverable.name}`,
+            });
+            return metadata;
+          },
+          saveMetadata: async ({ deliverableId, metadata }: {
+            deliverableId: string;
+            metadata: PublishMetadata;
+          }) => {
+            const deliverable = project.store.currentProject.deliverables
+              .find(({ id }) => id === deliverableId);
+            if (deliverable === undefined) throw new Error(`Deliverable ${deliverableId} does not exist.`);
+            const edited: PublishMetadata = {
+              ...structuredClone(metadata),
+              deliverableId,
+              profile: deliverable.profile,
+              status: "draft",
+            };
+            delete edited.approvedRevision;
+            const metadataFile = await project.publish.writeMetadata(edited);
+            await this.#execute({
+              operations: [
+                { op: "deliverable.metadata.set", params: { deliverableId, metadata: edited } },
+                {
+                  op: "deliverable.publish.files.set",
+                  params: {
+                    deliverableId,
+                    files: mergedPublishFiles(deliverable, [metadataFile]),
+                  },
+                },
+              ],
+              intent: "direct",
+              label: `Edit publish metadata · ${deliverable.name}`,
+            });
+            return edited;
+          },
+          generateChapters: async ({ deliverableId }: { deliverableId: string }) => {
+            const current = project.store.currentProject;
+            const deliverable = current.deliverables.find(({ id }) => id === deliverableId);
+            if (deliverable === undefined) throw new Error(`Deliverable ${deliverableId} does not exist.`);
+            const loaded = await loadPlatformProfile(deliverable.profile, {
+              projectRoot: join(project.store.root, "profiles"),
+              userRoot: join(this.#app.userDirectory, "profiles"),
+              builtinsRoot: this.#app.profilesRoot,
+              ...(deliverable.profileOverrides === undefined
+                ? {}
+                : { overrides: deliverable.profileOverrides }),
+            });
+            if (loaded.profile.chapters === null) {
+              throw new Error(`${loaded.profile.displayName} does not support chapters.`);
+            }
+            const sidecars = await transcriptSidecars(project.store);
+            const resolvers = new AnchorResolverRegistry();
+            resolvers.registerWordLookup(createTranscriptWordLookup(sidecars));
+            const beats = [];
+            for (const beat of current.beats) {
+              if (beat.chapter === undefined) continue;
+              const resolution = resultValue(await resolveAnchor(
+                current,
+                beat.anchor,
+                deliverable.sequenceId,
+                resolvers.dependencies(),
+              ));
+              if (resolution.status === "resolved" && resolution.timeline !== undefined) {
+                beats.push({
+                  beatId: beat.id,
+                  title: beat.chapter.title,
+                  startSeconds: secondsAt(resolution.timeline),
+                });
+              }
+            }
+            const generated = generateChapterList({
+              deliverableId,
+              revision: current.revision,
+              beats,
+              rules: loaded.profile.chapters,
+            });
+            const chapters = {
+              ...generated.list,
+              textSha256: createHash("sha256").update(generated.text).digest("hex"),
+              ...(generated.warnings.length === 0 ? {} : { warnings: generated.warnings }),
+            };
+            const chapterFiles = await project.publish.writeChapters(chapters);
+            await this.#execute({
+              operations: [
+                { op: "deliverable.chapters.set", params: { deliverableId, chapters } },
+                {
+                  op: "deliverable.publish.files.set",
+                  params: {
+                    deliverableId,
+                    files: mergedPublishFiles(deliverable, chapterFiles),
+                  },
+                },
+              ],
+              intent: "direct",
+              label: `Generate chapters · ${deliverable.name}`,
+            });
+            return { ...chapters, errors: generated.errors };
+          },
+          approvePublish: async ({ deliverableId, targets }: {
+            deliverableId: string;
+            targets: Array<"metadata" | "chapters">;
+          }) => {
+            const deliverable = project.store.currentProject.deliverables
+              .find(({ id }) => id === deliverableId);
+            if (deliverable === undefined) throw new Error(`Deliverable ${deliverableId} does not exist.`);
+            const approvedRevision = formatRevision(parseRevision(project.store.currentProject.revision) + 1);
+            const publishFiles: PublishFileResult[] = [];
+            if (targets.includes("metadata")) {
+              if (deliverable.publish?.metadata === undefined) throw new Error("Draft metadata before approval.");
+              publishFiles.push(await project.publish.writeMetadata({
+                ...deliverable.publish.metadata,
+                status: "approved",
+                approvedRevision,
+              }));
+            }
+            if (targets.includes("chapters")) {
+              const chapters = deliverable.publish?.chapters;
+              const loaded = await loadPlatformProfile(deliverable.profile, {
+                projectRoot: join(project.store.root, "profiles"),
+                userRoot: join(this.#app.userDirectory, "profiles"),
+                builtinsRoot: this.#app.profilesRoot,
+              });
+              if (chapters === undefined || loaded.profile.chapters === null ||
+                  chapters.chapters.length < loaded.profile.chapters.minCount) {
+                throw new Error("Generate a profile-valid chapter list before approval.");
+              }
+              publishFiles.push(...await project.publish.writeChapters({
+                ...chapters,
+                status: "approved",
+                approvedRevision,
+              }));
+            }
+            await this.#execute({
+              operations: [
+                { op: "deliverable.publish.approve", params: { deliverableId, targets } },
+                {
+                  op: "deliverable.publish.files.set",
+                  params: {
+                    deliverableId,
+                    files: mergedPublishFiles(deliverable, publishFiles),
+                  },
+                },
+              ],
+              intent: "direct",
+              label: `Approve publish assets · ${deliverable.name}`,
+            });
+            const approved = project.store.currentProject.deliverables
+              .find(({ id }) => id === deliverableId)?.publish;
+            return structuredClone(approved ?? {});
+          },
+          selectThumbnail: async ({ deliverableId, composition }: {
+            deliverableId: string;
+            composition: string | null;
+          }) => this.#execute({
+            operations: [{ op: "deliverable.thumbnail.select", params: { deliverableId, composition } }],
+            intent: "direct",
+            label: composition === null ? "Clear publish thumbnail" : `Select thumbnail ${composition}`,
+          }),
+          writeTextExports: async ({ deliverableId, targets }: {
+            deliverableId: string;
+            targets: Array<"transcript" | "chapters" | "metadata">;
+          }) => {
+            if (targets.includes("transcript")) {
+              const transcript = await publishTranscript(project.store, deliverableId);
+              await project.publish.writeText(deliverableId, "transcript", transcript.text);
+            }
+            const files = await project.publish.writeTextExports(deliverableId, targets);
+            const deliverable = project.store.currentProject.deliverables
+              .find(({ id }) => id === deliverableId);
+            if (deliverable === undefined) throw new Error(`Deliverable ${deliverableId} does not exist.`);
+            await this.#execute({
+              operations: [{
+                op: "deliverable.publish.files.set",
+                params: { deliverableId, files: mergedPublishFiles(deliverable, files) },
+              }],
+              intent: "direct",
+              label: `Register text exports · ${deliverable.name}`,
+            });
+            return files;
+          },
+          renderOutputSet: async ({ deliverableId }: { deliverableId: string }) => {
+            const result = await project.render.renderOutputSet({
+              deliverableId,
+              revision: project.store.currentProject.revision,
+              outputDir: join(project.store.root, "exports"),
+            });
+            return { ...result, job: publicJobStatus(project.jobs.get(result.jobId)!) };
+          },
+          buildKit: ({ deliverableId }: { deliverableId: string }) => publicJobStatus(
+            project.jobs.enqueue({
+              kind: "publish.kit",
+              title: `Build upload kit · ${deliverableId}`,
+              cancellable: true,
+              payload: { deliverableId },
+            }),
+          ),
+          batchExport: (params: { deliverableIds: string[]; buildKits?: boolean }) =>
+            project.batch.exportBatch(params),
+          batchResult: ({ jobId }: { jobId: string }) => project.batch.result(jobId),
+          retryBatch: ({ jobId }: { jobId: string }) => project.batch.retryBatch(jobId),
           profiles: async () => Promise.all([
             "youtube-longform@1.0.0",
             "youtube-shorts@1.0.0",

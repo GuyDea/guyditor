@@ -329,4 +329,136 @@ describe("deliverable lifecycle and derivative independence", () => {
       divergences: [{ class: "framing", transactionIds: ["txn_bbbbbbbbbb"] }],
     });
   });
+
+  it("retains a creator crop override when a stale short is re-derived", async () => {
+    const derived = valueOf(await applyDeliverableOperation(
+      projectFixture(), deriveInput(), idFactory,
+    )).model;
+    derived.deliverables.at(-1)!.status = "stale";
+    const engine = new OperationEngine(derived, { idFactory });
+    valueOf(await engine.execute([{
+      op: "deliverable.framing.override",
+      params: {
+        deliverableId: DERIVED_IDS.deliverableId,
+        override: {
+          id: "fov_aaaaaaaaaa",
+          decisionId: "fd_0001",
+          crop: { keyframes: [{
+            at: { frames: 4, fps: "24/1" },
+            rect: { x: 0.25, y: 0, w: 0.31640625, h: 1 },
+          }] },
+        },
+      },
+    }], { baseRevision: derived.revision, origin: "ui", dryRun: false, divergence: "framing" }));
+    const short = engine.currentProject.deliverables.at(-1)!;
+    const sequence = engine.currentProject.sequences.find(({ id }) => id === short.sequenceId)!;
+    const refreshed = valueOf(await applyDeliverableOperation(engine.currentProject, {
+      op: "deliverable.refresh",
+      params: {
+        deliverableId: short.id,
+        clips: sequence.clips,
+        dependencies: short.dependencies,
+      },
+    }, idFactory)).model;
+
+    expect(refreshed.deliverables.at(-1)).toMatchObject({
+      status: "in-review",
+      framingOverrides: [{ id: "fov_aaaaaaaaaa", decisionId: "fd_0001" }],
+    });
+  });
+
+  it("records low-risk metadata edits and approves publish artifacts at the result revision", async () => {
+    const project = projectFixture();
+    const engine = new OperationEngine(project, { idFactory });
+    const metadata = {
+      format: "guyditor-publish/v1",
+      deliverableId: "dlv_aaaaaaaaaa",
+      profile: "youtube@1.0.0",
+      language: "en",
+      title: "Exact cuts",
+      description: "A deterministic editing workflow.",
+      tags: ["editing"],
+      hashtags: ["#editing"],
+      status: "draft",
+    } as const;
+    const dryRun = await engine.execute([{
+      op: "deliverable.metadata.set",
+      params: { deliverableId: "dlv_aaaaaaaaaa", metadata },
+    }], { baseRevision: project.revision, origin: "ui", dryRun: true });
+    expect(dryRun).toMatchObject({ ok: true, value: { riskClass: "low" } });
+
+    const saved = await engine.execute([{
+      op: "deliverable.metadata.set",
+      params: { deliverableId: "dlv_aaaaaaaaaa", metadata },
+    }, {
+      op: "deliverable.chapters.set",
+      params: {
+        deliverableId: "dlv_aaaaaaaaaa",
+        chapters: {
+          format: "guyditor-chapters/v1",
+          deliverableId: "dlv_aaaaaaaaaa",
+          derivedAtRevision: "rev_00001",
+          status: "draft",
+          chapters: [
+            { beatId: "beat_aaaaaaaaaa", title: "Intro", startSeconds: 0 },
+            { beatId: "beat_bbbbbbbbbb", title: "Middle", startSeconds: 30 },
+            { beatId: "beat_cccccccccc", title: "End", startSeconds: 60 },
+          ],
+          textSha256: "b".repeat(64),
+        },
+      },
+    }], { baseRevision: project.revision, origin: "ui", dryRun: false });
+    expect(saved.ok).toBe(true);
+    expect(engine.currentProject.deliverables[0]?.publish).toMatchObject({
+      metadata,
+      chapters: { status: "draft", textSha256: "b".repeat(64) },
+    });
+
+    const approved = await engine.execute([{
+      op: "deliverable.publish.approve",
+      params: { deliverableId: "dlv_aaaaaaaaaa", targets: ["metadata", "chapters"] },
+    }], {
+      baseRevision: engine.currentProject.revision,
+      origin: "ui",
+      dryRun: false,
+    });
+    expect(approved.ok).toBe(true);
+    expect(engine.currentProject.deliverables[0]?.publish).toMatchObject({
+      metadata: { status: "approved", approvedRevision: "rev_00003" },
+      chapters: { status: "approved", approvedRevision: "rev_00003" },
+    });
+  });
+
+  it("selects a thumbnail through a reversible creator operation", async () => {
+    const project = projectFixture();
+    const first = valueOf(await applyDeliverableOperation(project, {
+      op: "deliverable.thumbnail.select",
+      params: { deliverableId: "dlv_aaaaaaaaaa", composition: "hero" },
+    }, idFactory));
+    expect(first.model.deliverables[0]?.publish?.selectedThumbnail).toBe("hero");
+    expect(first.inverse).toEqual([{
+      op: "deliverable.thumbnail.select",
+      params: { deliverableId: "dlv_aaaaaaaaaa", composition: null },
+    }]);
+  });
+
+  it("registers hashed publish files in deterministic path order", async () => {
+    const engine = new OperationEngine(projectFixture(), { idFactory });
+    const saved = await engine.execute([{
+      op: "deliverable.publish.files.set",
+      params: {
+        deliverableId: "dlv_aaaaaaaaaa",
+        files: [
+          { path: "publish/dlv_aaaaaaaaaa/transcript.txt", sha256: "b".repeat(64) },
+          { path: "publish/dlv_aaaaaaaaaa/metadata.yaml", sha256: "a".repeat(64) },
+        ],
+      },
+    }], { baseRevision: "rev_00001", origin: "ui", dryRun: false });
+
+    expect(saved).toMatchObject({ ok: true, value: { riskClass: "low" } });
+    expect(engine.currentProject.deliverables[0]!.publishFiles).toEqual([
+      { path: "publish/dlv_aaaaaaaaaa/metadata.yaml", sha256: "a".repeat(64) },
+      { path: "publish/dlv_aaaaaaaaaa/transcript.txt", sha256: "b".repeat(64) },
+    ]);
+  });
 });

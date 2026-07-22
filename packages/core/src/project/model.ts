@@ -13,6 +13,7 @@ import type { RightsMetadata } from "../restyle/types.js";
 import type {
   DeliverableDivergence,
   DeliverableKind,
+  DeliverablePublishState,
   DeliverableStatus,
   DependencyEntry,
   FramingOverride,
@@ -548,6 +549,7 @@ export interface Deliverable {
   staleReasons?: StaleReason[];
   publishFiles?: { path: string; sha256: string }[];
   framingOverrides?: FramingOverride[];
+  publish?: DeliverablePublishState;
   restyle?: {
     coverageMode: "full" | "ranges";
     planSidecar: string;

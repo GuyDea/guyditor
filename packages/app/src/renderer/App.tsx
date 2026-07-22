@@ -11,6 +11,7 @@ import { InspectorPanel } from "./panels/InspectorPanel.js";
 import { MediaBrowserPanel } from "./panels/MediaBrowserPanel.js";
 import { PreviewPanel } from "./panels/PreviewPanel.js";
 import { ProposalPanel } from "./panels/ProposalPanel.js";
+import { PublishPanel } from "./panels/PublishPanel.js";
 import { StatusStripPanel } from "./panels/StatusStripPanel.js";
 import { TimelinePanel } from "./panels/TimelinePanel.js";
 import { TranscriptPanel } from "./panels/TranscriptPanel.js";
@@ -43,6 +44,7 @@ export function App(): React.JSX.Element {
   const [exportReport, setExportReport] = useState<ExportReport | null>(null);
   const [notice, setNotice] = useState("Open a project directory to connect the edit journal.");
   const overviewGeneration = useRef(0);
+  const annotationGeneration = useRef(0);
   const replaceJobs = useJobsStore((state) => state.replace);
   const replaceOverview = useJobsStore((state) => state.replaceOverview);
   const applyJobEvent = useJobsStore((state) => state.applyEvent);
@@ -59,10 +61,12 @@ export function App(): React.JSX.Element {
   const redoCount = useUndoStore((state) => state.redo.length);
 
   const refreshAnnotations = useCallback(async (): Promise<void> => {
+    const generation = ++annotationGeneration.current;
     try {
-      setAnnotations(await window.guyditor.call<Annotation[]>("AnnotationService", "list", {}));
+      const next = await window.guyditor.call<Annotation[]>("AnnotationService", "list", {});
+      if (generation === annotationGeneration.current) setAnnotations(next);
     } catch {
-      setAnnotations([]);
+      if (generation === annotationGeneration.current) setAnnotations([]);
     }
   }, []);
 
@@ -242,8 +246,8 @@ export function App(): React.JSX.Element {
         const index = Math.max(0, annotations.findIndex(({ id }) => id === selected));
         const next = annotations[(index + (event.shiftKey ? -1 : 1) + annotations.length) % annotations.length];
         if (next !== undefined) selectAnnotation(next.id);
-      } else if (/^[1-8]$/u.test(event.key)) {
-        const id = (["media", "preview", "transcript", "inspector", "agent", "timeline", "status", "graphics"] as PanelId[])[Number(event.key) - 1];
+      } else if (/^[1-9]$/u.test(event.key)) {
+        const id = (["media", "preview", "transcript", "inspector", "agent", "timeline", "status", "graphics", "publish"] as PanelId[])[Number(event.key) - 1];
         if (id !== undefined) {
           focusPanel(id);
           document.querySelector<HTMLElement>(`[data-panel="${id}"]`)?.focus();
@@ -328,6 +332,7 @@ export function App(): React.JSX.Element {
         <div className="right-stack">
           <ProposalPanel {...panelProps} />
           <InspectorPanel {...panelProps} />
+          <PublishPanel {...panelProps} />
         </div>
         <TimelinePanel {...panelProps} />
         <StatusStripPanel {...panelProps} />

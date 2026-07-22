@@ -91,6 +91,7 @@
             "required": ["name", "rect"],
             "properties": {
               "name": { "type": "string", "minLength": 1 },
+              "strict": { "type": "boolean" },
               "rect": { "$ref": "#/$defs/rect" }
             }
           }

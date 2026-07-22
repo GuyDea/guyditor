@@ -8,13 +8,13 @@ import {
   M1_SHIP_IDS,
   M2_PARTIAL_COMMANDS,
   M2_PARTIAL_IDS,
-  M3_PARTIAL_COMMANDS,
-  M3_PARTIAL_IDS,
+  M3_COMMANDS,
+  M3_IDS,
   runGate,
   validateDogfoodReport,
   validateM1Traceability,
   validateM2PartialTraceability,
-  validateM3PartialTraceability,
+  validateM3Traceability,
 } from "./gate.mjs";
 import {
   REQUIRED_FIXTURE_PATHS,
@@ -155,8 +155,8 @@ function completeM2Traceability() {
 }
 
 function completeM3Traceability() {
-  return M3_PARTIAL_IDS.map((id) =>
-    `| ${id} | Part | ${id === "FR-800" ? "partial" : "implemented"} | \`test/${id}.test.ts\` | evidence |`
+  return M3_IDS.map((id) =>
+    `| ${id} | Part | implemented | \`test/${id}.test.ts\` | evidence |`
   ).join("\n");
 }
 
@@ -312,9 +312,10 @@ test("m2 runs the declared partial gate and enforces its scoped traceability", (
   assert.deepEqual(validateM2PartialTraceability(completeM2Traceability()), []);
 });
 
-test("m3 runs the deliverables partial gate and permits only FR-800 to remain partial", () => {
+test("m3 runs the complete §14.8 gate and requires all FR-800..813 and AC rows", () => {
   const commands = [];
   const output = [];
+  const reports = [];
   const status = runGate("m3", {
     log: (message) => output.push(message),
     readFixtureManifest: completeManifest,
@@ -324,11 +325,17 @@ test("m3 runs the deliverables partial gate and permits only FR-800 to remain pa
       return { status: 0 };
     },
     skipDogfood: true,
+    writeGateReport: (input) => {
+      reports.push(input);
+      return "/repo/docs/gates/m3-test.md";
+    },
   });
   assert.equal(status, 0);
-  assert.deepEqual(commands, M3_PARTIAL_COMMANDS.map(({ command, args }) => [command, ...args]));
-  assert.deepEqual(validateM3PartialTraceability(completeM3Traceability()), []);
+  assert.deepEqual(commands, M3_COMMANDS.map(({ command, args }) => [command, ...args]));
+  assert.deepEqual(validateM3Traceability(completeM3Traceability()), []);
+  assert.equal(reports[0].traceabilityCount, M3_IDS.length);
   assert.match(output.join("\n"), /agent candidate judgment.*dogfood.*skipped/iu);
+  assert.match(output.join("\n"), /full FR-800\.\.813/iu);
 });
 
 test("m1 rejects absent, incomplete, or un-evidenced checklist rows", () => {

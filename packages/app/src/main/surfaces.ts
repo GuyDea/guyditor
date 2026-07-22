@@ -35,6 +35,12 @@ const annotationIdParams: JsonSchema = {
   properties: { annotationId: { type: "string", pattern: "^ann_[a-z2-7]{10}$" } },
   additionalProperties: false,
 };
+const deliverableIdParams: JsonSchema = {
+  type: "object",
+  required: ["deliverableId"],
+  properties: { deliverableId: { type: "string", pattern: "^dlv_[a-z2-7]{10}$" } },
+  additionalProperties: false,
+};
 
 export const IPC_SURFACES: readonly IpcSurface[] = Object.freeze([
   {
@@ -347,6 +353,93 @@ export const IPC_SURFACES: readonly IpcSurface[] = Object.freeze([
   {
     service: "DeliverableService",
     methods: {
+      publishState: { paramsSchema: deliverableIdParams, resultSchema: anyResult, budgetMs: 20 },
+      draftMetadata: { paramsSchema: deliverableIdParams, resultSchema: anyResult, budgetMs: 150 },
+      saveMetadata: {
+        paramsSchema: {
+          type: "object",
+          required: ["deliverableId", "metadata"],
+          properties: {
+            deliverableId: { type: "string", pattern: "^dlv_[a-z2-7]{10}$" },
+            metadata: { type: "object" },
+          },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 150,
+      },
+      generateChapters: { paramsSchema: deliverableIdParams, resultSchema: anyResult, budgetMs: 150 },
+      approvePublish: {
+        paramsSchema: {
+          type: "object",
+          required: ["deliverableId", "targets"],
+          properties: {
+            deliverableId: { type: "string", pattern: "^dlv_[a-z2-7]{10}$" },
+            targets: {
+              type: "array",
+              minItems: 1,
+              uniqueItems: true,
+              items: { enum: ["metadata", "chapters"] },
+            },
+          },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 150,
+      },
+      selectThumbnail: {
+        paramsSchema: {
+          type: "object",
+          required: ["deliverableId", "composition"],
+          properties: {
+            deliverableId: { type: "string", pattern: "^dlv_[a-z2-7]{10}$" },
+            composition: { type: ["string", "null"] },
+          },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 150,
+      },
+      writeTextExports: {
+        paramsSchema: {
+          type: "object",
+          required: ["deliverableId", "targets"],
+          properties: {
+            deliverableId: { type: "string", pattern: "^dlv_[a-z2-7]{10}$" },
+            targets: {
+              type: "array",
+              minItems: 1,
+              uniqueItems: true,
+              items: { enum: ["transcript", "chapters", "metadata"] },
+            },
+          },
+          additionalProperties: false,
+        },
+        resultSchema: { type: "array" },
+        budgetMs: 150,
+      },
+      renderOutputSet: { paramsSchema: deliverableIdParams, resultSchema: anyResult, budgetMs: 150 },
+      buildKit: { paramsSchema: deliverableIdParams, resultSchema: anyResult, budgetMs: 20 },
+      batchExport: {
+        paramsSchema: {
+          type: "object",
+          required: ["deliverableIds"],
+          properties: {
+            deliverableIds: {
+              type: "array",
+              minItems: 1,
+              uniqueItems: true,
+              items: { type: "string", pattern: "^dlv_[a-z2-7]{10}$" },
+            },
+            buildKits: { type: "boolean" },
+          },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 150,
+      },
+      batchResult: { paramsSchema: jobIdParams, resultSchema: anyResult, budgetMs: 20 },
+      retryBatch: { paramsSchema: jobIdParams, resultSchema: anyResult, budgetMs: 150 },
       profiles: { paramsSchema: emptyParams, resultSchema: { type: "array" }, budgetMs: 50 },
       candidates: { paramsSchema: emptyParams, resultSchema: { type: "array" }, budgetMs: 50 },
       discoverCandidates: {

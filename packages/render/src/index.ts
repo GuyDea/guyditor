@@ -132,6 +132,7 @@ export {
   RenderService,
   exportOutputPath,
   exportReportPath,
+  outputSetPaths,
   subtitleOutputPaths,
 } from "./service.js";
 export type {
@@ -141,9 +142,23 @@ export type {
   ExportEnqueueResult,
   ExportReport,
   ExportRequest,
+  OutputSetPaths,
+  OutputSetEnqueueResult,
+  OutputSetRequest,
   ExportValidationCheckResult,
   ExportValidationResult,
   FunctionalEquivalenceSpec,
   RenderRequest,
   RenderServiceOptions,
 } from "./service.js";
+export { validateOverlayLayout, validatePublishMetadataCheck } from "./validation.js";
+export { laplacianVariance } from "./cover-analysis.js";
+export {
+  renderThumbnailComposition,
+  thumbnailCompositionPlan,
+  writeThumbnailComposition,
+} from "./thumbnail.js";
+export type {
+  ThumbnailComposition,
+  ThumbnailProviders,
+} from "./thumbnail.js";

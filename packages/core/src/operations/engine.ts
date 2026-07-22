@@ -1,6 +1,6 @@
 import { Ajv2020 } from "ajv/dist/2020.js";
 import type { ErrorObject, ValidateFunction } from "ajv";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 
 import trimSchema from "./schemas/clip.trim.json" with { type: "json" };
 import splitSchema from "./schemas/clip.split.json" with { type: "json" };
@@ -104,10 +104,16 @@ import deliverableApproveSchema from "./schemas/deliverable.approve.json" with {
 import deliverableRefreshSchema from "./schemas/deliverable.refresh.json" with { type: "json" };
 import deliverableRemoveSchema from "./schemas/deliverable.remove.json" with { type: "json" };
 import deliverableFramingOverrideSchema from "./schemas/deliverable.framing.override.json" with { type: "json" };
+import deliverableMetadataSetSchema from "./schemas/deliverable.metadata.set.json" with { type: "json" };
+import deliverableChaptersSetSchema from "./schemas/deliverable.chapters.set.json" with { type: "json" };
+import deliverablePublishApproveSchema from "./schemas/deliverable.publish.approve.json" with { type: "json" };
+import deliverableThumbnailSelectSchema from "./schemas/deliverable.thumbnail.select.json" with { type: "json" };
+import deliverablePublishFilesSetSchema from "./schemas/deliverable.publish.files.set.json" with { type: "json" };
 import sidecarRegisterSchema from "./schemas/sidecar.register.json" with { type: "json" };
 import {
   AnchorResolverRegistry,
   computeAnchorTransitions,
+  resolveAnchor,
   resolveNavigationTarget,
   validateProjectAnchors,
 } from "../anchors/index.js";
@@ -162,7 +168,7 @@ import type {
   DependencyEntry,
   DivergenceClass,
 } from "../deliverables/types.js";
-import { compareTime } from "../time/index.js";
+import { absoluteSeconds, compareTime } from "../time/index.js";
 import type {
   AppliedOperation,
   AuditSink,
@@ -542,6 +548,36 @@ const catalog = new Map<string, CatalogEntry>([
     "none",
     "Override framing for {deliverableId}",
   )],
+  ["deliverable.metadata.set", catalogEntry(
+    deliverableMetadataSetSchema,
+    "low",
+    "none",
+    "Edit publish metadata for {deliverableId}",
+  )],
+  ["deliverable.chapters.set", catalogEntry(
+    deliverableChaptersSetSchema,
+    "low",
+    "none",
+    "Generate publish chapters for {deliverableId}",
+  )],
+  ["deliverable.publish.approve", catalogEntry(
+    deliverablePublishApproveSchema,
+    "consequential",
+    "none",
+    "Approve publish artifacts for {deliverableId}",
+  )],
+  ["deliverable.thumbnail.select", catalogEntry(
+    deliverableThumbnailSelectSchema,
+    "low",
+    "none",
+    "Select thumbnail {composition} for {deliverableId}",
+  )],
+  ["deliverable.publish.files.set", catalogEntry(
+    deliverablePublishFilesSetSchema,
+    "low",
+    "none",
+    "Register publish files for {deliverableId}",
+  )],
   ["sidecar.register", catalogEntry(
     sidecarRegisterSchema,
     "low",
@@ -719,6 +755,75 @@ function recordDivergence(
       return { ...deliverable, divergences };
     }),
   };
+}
+
+function wholeSeconds(value: string): number {
+  const [numerator, denominator] = value.split("/");
+  if (numerator === undefined || denominator === undefined) {
+    throw new TypeError(`Invalid exact second value ${value}.`);
+  }
+  const divisor = BigInt(denominator);
+  if (divisor === 0n) throw new TypeError(`Invalid exact second value ${value}.`);
+  return Number(BigInt(numerator) / divisor);
+}
+
+function chapterTimestamp(seconds: number): string {
+  const hours = Math.floor(seconds / 3_600);
+  const minutes = Math.floor((seconds % 3_600) / 60);
+  const remaining = seconds % 60;
+  return hours > 0
+    ? `${String(hours)}:${String(minutes).padStart(2, "0")}:${String(remaining).padStart(2, "0")}`
+    : `${String(minutes)}:${String(remaining).padStart(2, "0")}`;
+}
+
+async function draftChapterUpdates(
+  project: GuyditorProject,
+  applied: readonly AppliedOperation[],
+  dependencies: AnchorResolverDependencies,
+): Promise<Readonly<Record<string, {
+  chapters: Array<{ beatId: string; title: string; startSeconds: number }>;
+  textSha256: string;
+}>>> {
+  const timelineChanged = applied.some(({ op }) =>
+    op === "clip.trim" || op === "clip.move" || op === "clip.split" ||
+    op === "clip.remove" || op === "clip.insert" || op === "clip.restore");
+  if (!timelineChanged) return {};
+  const updates: Record<string, {
+    chapters: Array<{ beatId: string; title: string; startSeconds: number }>;
+    textSha256: string;
+  }> = {};
+  for (const deliverable of project.deliverables) {
+    const existing = deliverable.publish?.chapters;
+    if (deliverable.kind !== "longform" || existing?.status !== "draft") continue;
+    const chapters = [];
+    for (const chapter of existing.chapters) {
+      const beat = project.beats.find(({ id }) => id === chapter.beatId);
+      if (beat === undefined) {
+        chapters.push(structuredClone(chapter));
+        continue;
+      }
+      const resolution = await resolveAnchor(project, beat.anchor, deliverable.sequenceId, dependencies);
+      if (!resolution.ok || resolution.value.status !== "resolved" ||
+          resolution.value.timeline === undefined) {
+        chapters.push(structuredClone(chapter));
+        continue;
+      }
+      const seconds = absoluteSeconds(resolution.value.timeline);
+      chapters.push({
+        ...structuredClone(chapter),
+        startSeconds: seconds.ok ? Math.max(0, wholeSeconds(seconds.value)) : chapter.startSeconds,
+      });
+    }
+    chapters.sort((left, right) =>
+      left.startSeconds - right.startSeconds || left.beatId.localeCompare(right.beatId));
+    const text = chapters.map(({ startSeconds, title }) =>
+      `${chapterTimestamp(startSeconds)} ${title}`).join("\n") + (chapters.length === 0 ? "" : "\n");
+    updates[deliverable.id] = {
+      chapters,
+      textSha256: createHash("sha256").update(text).digest("hex"),
+    };
+  }
+  return updates;
 }
 
 export class OperationEngine {
@@ -1007,6 +1112,11 @@ export class OperationEngine {
       );
     }
     const acceptedAt = context.acceptance?.at ?? this.#now().toISOString();
+    const refreshedDraftChapters = await draftChapterUpdates(
+      committedCandidate,
+      applied,
+      this.#anchorDependencies,
+    );
     committedCandidate = markAcceptedDeliverableStaleness({
       before: base,
       after: committedCandidate,
@@ -1014,6 +1124,7 @@ export class OperationEngine {
       transactionId,
       revision: resultRevision,
       detectedAt: acceptedAt,
+      draftChapterUpdates: refreshedDraftChapters,
     });
     const committedValid = validateProject(committedCandidate);
     if (!committedValid.ok) return committedValid;

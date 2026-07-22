@@ -15,10 +15,18 @@ export interface RenderProfile {
     fps?: string;
     aspect?: string;
   };
-  audio: { codec: string; bitrate: string };
+  audio: {
+    codec: string;
+    bitrate: string;
+    sampleRate?: number;
+    channels?: number;
+    loudness?: PlatformProfile["audio"]["loudness"];
+  };
   container: "mp4" | "mov" | "webm";
   safeAreas?: PlatformProfile["safeAreas"];
   captionDefaults?: PlatformProfile["captionDefaults"];
+  metadata?: PlatformProfile["metadata"];
+  cover?: PlatformProfile["cover"];
 }
 
 export interface LoadedRenderProfile {
@@ -64,10 +72,15 @@ export async function loadRenderProfile(
       audio: {
         codec: loaded.profile.audio.codec,
         bitrate: `${String(loaded.profile.audio.bitrateKbps)}k`,
+        sampleRate: loaded.profile.audio.sampleRate,
+        channels: loaded.profile.audio.channels,
+        loudness: structuredClone(loaded.profile.audio.loudness),
       },
       container: loaded.profile.video.container,
       safeAreas: structuredClone(loaded.profile.safeAreas),
       captionDefaults: structuredClone(loaded.profile.captionDefaults),
+      metadata: structuredClone(loaded.profile.metadata),
+      cover: structuredClone(loaded.profile.cover),
     },
   };
 }

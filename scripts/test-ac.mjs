@@ -85,14 +85,37 @@ export const M3_AC_COMMANDS = Object.freeze([
     args: [
       "exec", "vitest", "run", "--project", "unit",
       "packages/deliver/src/ac008.integration.test.ts",
+      "packages/deliver/src/ac011.integration.test.ts",
       "packages/deliver/src/deliverable-service.test.ts",
+      "packages/deliver/src/publish.test.ts",
+      "packages/deliver/src/publish-service.test.ts",
+      "packages/deliver/src/batch-export.test.ts",
       "packages/deliver/src/profile.test.ts",
       "packages/core/src/deliverables/operations.test.ts",
       "packages/core/src/deliverables/staleness.test.ts",
       "packages/agent/src/gateway.test.ts",
       "packages/transcript/src/range-operations.test.ts",
       "packages/render/src/deliverable-lifecycle.test.ts",
+      "packages/render/src/output-set.test.ts",
+      "packages/render/src/cover-analysis.test.ts",
+      "packages/render/src/thumbnail.test.ts",
       "packages/app/src/renderer/panels/StatusStripPanel.test.ts",
+      "packages/app/src/renderer/panels/PublishPanel.test.ts",
+    ],
+  }),
+  Object.freeze({
+    command: "pnpm",
+    args: [
+      "exec", "vitest", "run", "--project", "golden",
+      "packages/render/test/golden/ac007.golden.test.ts",
+    ],
+  }),
+  Object.freeze({ command: "pnpm", args: ["--filter", "@guyditor/app", "build"] }),
+  Object.freeze({
+    command: "pnpm",
+    args: [
+      "--filter", "@guyditor/app", "exec", "playwright", "test",
+      "--config", "playwright.config.ts", "e2e/ac/ac011.spec.ts",
     ],
   }),
 ]);
@@ -126,7 +149,7 @@ export function main(args = process.argv.slice(2)) {
     ? "test:ac m1: AC-001, AC-002, AC-004, and AC-009 passed"
     : milestone === "m2"
       ? "test:ac m2: AC-003 captions, AC-005 keyed presenter diagnostics, and AC-006 semantic PiP passed"
-      : "test:ac m3: AC-008 lifecycle, profile, derivation, staleness, refresh, and UI checks passed");
+      : "test:ac m3: AC-007 output sets, AC-008 lifecycle, and AC-011 upload packaging passed");
   return 0;
 }
 

@@ -46,3 +46,37 @@ export type {
   ProfileRect,
   ProfileResolution,
 } from "./profile.js";
+export {
+  chaptersTextBlock,
+  draftPublishMetadata,
+  extractTranscriptText,
+  generateChapterList,
+  metadataTextBlock,
+  selectCoverFrames,
+  validateMetadata,
+} from "./publish.js";
+export { PublishService } from "./publish-service.js";
+export type {
+  KitFileRole,
+  PublishFileResult,
+  PublishServiceOptions,
+  UploadKitManifest,
+} from "./publish-service.js";
+export { BatchExportService } from "./batch-export.js";
+export type {
+  BatchExportItem,
+  BatchExportResult,
+  BatchExportServiceOptions,
+  BatchValidationResult,
+} from "./batch-export.js";
+export type {
+  Chapter,
+  ChapterGenerationError,
+  ChapterGenerationResult,
+  ChapterList,
+  DraftPublishMetadataInput,
+  GenerateChapterListInput,
+  MetadataFieldError,
+  PublishMetadata,
+  PublishTranscriptWord,
+} from "./publish.js";

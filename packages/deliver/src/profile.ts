@@ -54,7 +54,7 @@ export interface PlatformProfile {
   safeAreas: {
     title: ProfileInsets;
     action: ProfileInsets;
-    platformUi: Array<{ name: string; rect: ProfileRect }>;
+    platformUi: Array<{ name: string; strict?: boolean; rect: ProfileRect }>;
   };
   captionDefaults: {
     fontSizePct?: number;

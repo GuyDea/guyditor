@@ -6,6 +6,7 @@ import { compareTime } from "../time/index.js";
 import type { FrameTime } from "../time/index.js";
 import type {
   DependencyEntry,
+  PublishChapter,
   SourceRangeRef,
   WordRange,
 } from "./types.js";
@@ -284,6 +285,10 @@ export interface AcceptedStalenessInput {
   transactionId: string;
   revision: string;
   detectedAt: string;
+  draftChapterUpdates?: Readonly<Record<string, {
+    chapters: readonly PublishChapter[];
+    textSha256: string;
+  }>>;
 }
 
 export function markAcceptedDeliverableStaleness(input: AcceptedStalenessInput): GuyditorProject {
@@ -292,6 +297,47 @@ export function markAcceptedDeliverableStaleness(input: AcceptedStalenessInput):
   if (changes.length === 0) return input.after;
   let changed = false;
   const deliverables = input.after.deliverables.map((deliverable) => {
+    if (deliverable.kind === "longform") {
+      const timelineOperation = input.applied.find(({ op }) =>
+        op === "clip.trim" || op === "clip.move" || op === "clip.split" ||
+        op === "clip.remove" || op === "clip.insert" || op === "clip.restore");
+      const transcriptOperation = input.applied.find(({ op }) => op.startsWith("transcript."));
+      const chapters = deliverable.publish?.chapters;
+      const metadata = deliverable.publish?.metadata;
+      const draftChapterUpdate = chapters?.status === "draft" && timelineOperation !== undefined
+        ? input.draftChapterUpdates?.[deliverable.id]
+        : undefined;
+      if (
+        (chapters?.status !== "approved" || timelineOperation === undefined) && draftChapterUpdate === undefined &&
+        (metadata?.status !== "approved" || transcriptOperation === undefined)
+      ) return deliverable;
+      const publish = structuredClone(deliverable.publish ?? {});
+      if (publish.chapters?.status === "draft" && draftChapterUpdate !== undefined) {
+        publish.chapters.chapters = structuredClone([...draftChapterUpdate.chapters]);
+        publish.chapters.derivedAtRevision = input.revision;
+        publish.chapters.textSha256 = draftChapterUpdate.textSha256;
+        delete publish.chapters.stale;
+      }
+      if (publish.chapters?.status === "approved" && timelineOperation !== undefined) {
+        const delta = timelineOperation.params["delta"];
+        const frames = typeof delta === "object" && delta !== null && "frames" in delta &&
+          typeof delta.frames === "number"
+          ? `${String(Math.abs(delta.frames))} frames: `
+          : "";
+        publish.chapters.status = "stale";
+        publish.chapters.stale = {
+          transactionId: input.transactionId,
+          revision: input.revision,
+          detectedAt: input.detectedAt,
+          warning: `Chapter timestamps are stale after ${frames}${timelineOperation.summary}; approved chapters.txt was not rewritten.`,
+        };
+      }
+      if (publish.metadata?.status === "approved" && transcriptOperation !== undefined) {
+        publish.metadata.status = "stale";
+      }
+      changed = true;
+      return { ...deliverable, publish };
+    }
     if (
       deliverable.kind !== "short" ||
       (deliverable.status !== "approved" && deliverable.status !== "in-review")
@@ -305,9 +351,13 @@ export function markAcceptedDeliverableStaleness(input: AcceptedStalenessInput):
     });
     if (affected.length === 0) return deliverable;
     changed = true;
+    const publish = structuredClone(deliverable.publish);
+    if (publish?.metadata?.status === "approved") publish.metadata.status = "stale";
+    if (publish?.chapters?.status === "approved") publish.chapters.status = "stale";
     return {
       ...deliverable,
       status: "stale" as const,
+      ...(publish === undefined ? {} : { publish }),
       staleReasons: [
         ...(deliverable.staleReasons ?? []),
         {

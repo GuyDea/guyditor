@@ -196,4 +196,100 @@ describe("FR-807 dependency staleness", () => {
     });
     expect(result.plan.seams[0]).not.toHaveProperty("application");
   });
+
+  it("flags approved long-form chapters stale after an opening trim without changing their text hash", async () => {
+    const project = projectFixture();
+    project.sequences[0]!.clips[0]!.source.out.frames = 120;
+    project.deliverables[0]!.status = "approved";
+    project.deliverables[0]!.approvedRevision = "rev_00001";
+    project.deliverables[0]!.publish = {
+      chapters: {
+        format: "guyditor-chapters/v1",
+        deliverableId: "dlv_aaaaaaaaaa",
+        derivedAtRevision: "rev_00001",
+        status: "approved",
+        approvedRevision: "rev_00001",
+        chapters: [
+          { beatId: "beat_aaaaaaaaaa", title: "Intro", startSeconds: 0 },
+          { beatId: "beat_bbbbbbbbbb", title: "Middle", startSeconds: 2 },
+          { beatId: "beat_cccccccccc", title: "End", startSeconds: 4 },
+        ],
+        textSha256: "c".repeat(64),
+      },
+    };
+    const engine = new OperationEngine(project, {
+      idFactory: (prefix) => prefix === "txn" ? "txn_cccccccccc" : `${prefix}_cccccccccc`,
+      now: () => new Date("2026-07-22T09:00:00Z"),
+    });
+    const accepted = await engine.execute([{
+      op: "clip.trim",
+      params: {
+        clipId: "clp_aaaaaaaaaa",
+        edge: "head",
+        delta: { frames: 30, fps: "24/1" },
+      },
+    }], { baseRevision: project.revision, origin: "ui", dryRun: false });
+
+    expect(accepted.ok).toBe(true);
+    expect(engine.currentProject.deliverables[0]?.publish?.chapters).toMatchObject({
+      status: "stale",
+      textSha256: "c".repeat(64),
+      stale: {
+        transactionId: "txn_cccccccccc",
+        revision: "rev_00002",
+        warning: expect.stringContaining("30 frames"),
+      },
+    });
+  });
+
+  it("reflows draft chapter timestamps from named beat anchors after an accepted timeline move", async () => {
+    const project = projectFixture();
+    project.beats = [
+      {
+        id: "beat_aaaaaaaaaa",
+        name: "First",
+        anchor: "clip:clp_aaaaaaaaaa@0",
+        chapter: { title: "First" },
+      },
+      {
+        id: "beat_bbbbbbbbbb",
+        name: "Second",
+        anchor: "clip:clp_bbbbbbbbbb@0",
+        chapter: { title: "Second" },
+      },
+    ];
+    project.deliverables[0]!.publish = {
+      chapters: {
+        format: "guyditor-chapters/v1",
+        deliverableId: "dlv_aaaaaaaaaa",
+        derivedAtRevision: "rev_00001",
+        status: "draft",
+        chapters: [
+          { beatId: "beat_aaaaaaaaaa", title: "First", startSeconds: 0 },
+          { beatId: "beat_bbbbbbbbbb", title: "Second", startSeconds: 1 },
+        ],
+        textSha256: "d".repeat(64),
+      },
+    };
+    const engine = new OperationEngine(project, {
+      idFactory: (prefix) => prefix === "txn" ? "txn_dddddddddd" : `${prefix}_dddddddddd`,
+      now: () => new Date("2026-07-22T10:00:00Z"),
+    });
+
+    const accepted = await engine.execute([{
+      op: "clip.move",
+      params: { clipId: "clp_bbbbbbbbbb", toIndex: 0 },
+    }], { baseRevision: project.revision, origin: "ui", dryRun: false });
+
+    expect(accepted.ok).toBe(true);
+    expect(engine.currentProject.deliverables[0]?.publish?.chapters).toMatchObject({
+      status: "draft",
+      derivedAtRevision: "rev_00002",
+      chapters: [
+        { beatId: "beat_bbbbbbbbbb", title: "Second", startSeconds: 0 },
+        { beatId: "beat_aaaaaaaaaa", title: "First", startSeconds: 1 },
+      ],
+      textSha256: expect.not.stringMatching(/^d{64}$/u),
+    });
+  });
 });

@@ -6,7 +6,12 @@ export type {
   OpenSessionInput,
   SessionManagerOptions,
 } from "./session.js";
-export { AgentGateway, AC004_GATEWAY_TOOLS, M3_CANDIDATE_GATEWAY_TOOL } from "./gateway.js";
+export {
+  AgentGateway,
+  AC004_GATEWAY_TOOLS,
+  M3_CANDIDATE_GATEWAY_TOOL,
+  M3_METADATA_GATEWAY_TOOL,
+} from "./gateway.js";
 export type {
   AgentGatewayOptions,
   CandidateDiscoveryToolInput,

@@ -44,6 +44,7 @@ export const AC004_GATEWAY_TOOLS = Object.freeze([
 ] as const);
 
 export const M3_CANDIDATE_GATEWAY_TOOL = "deliverable_candidates_discover" as const;
+export const M3_METADATA_GATEWAY_TOOL = "deliverable_metadata_draft" as const;
 
 export interface CandidateDiscoveryToolInput {
   profile: string;
@@ -71,6 +72,7 @@ export interface AgentGatewayOptions {
   sessionIdFactory?: () => string;
   templateProvider?: TemplateProvider;
   candidateDiscovery?: (input: CandidateDiscoveryToolInput) => Promise<unknown>;
+  metadataDraft?: (deliverableId: string) => Promise<unknown>;
 }
 
 export interface StartedAgentGateway {
@@ -156,6 +158,7 @@ export class AgentGateway {
   readonly #transcript: AnnotationTranscriptSource | undefined;
   readonly #templateProvider: TemplateProvider | undefined;
   readonly #candidateDiscovery: AgentGatewayOptions["candidateDiscovery"];
+  readonly #metadataDraft: AgentGatewayOptions["metadataDraft"];
   readonly #sessions: SessionManager;
   readonly #transports = new Map<string, ActiveTransport>();
   #http: Server | undefined;
@@ -175,6 +178,7 @@ export class AgentGateway {
     this.#transcript = options.transcript;
     this.#templateProvider = options.templateProvider;
     this.#candidateDiscovery = options.candidateDiscovery;
+    this.#metadataDraft = options.metadataDraft;
     this.#sessions = new SessionManager(this.#audit, {
       ...(options.sessionIdFactory === undefined
         ? {}
@@ -493,12 +497,32 @@ export class AgentGateway {
         }),
       ));
     }
+    if (this.#metadataDraft !== undefined) {
+      server.registerTool(M3_METADATA_GATEWAY_TOOL, {
+        description: "Draft creator-editable publish title, description, tags, hashtags, and CTA from accepted transcript and beat evidence.",
+        inputSchema: {
+          deliverableId: z.string().regex(/^dlv_[a-z2-7]{10}$/u),
+        },
+        annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+      }, async ({ deliverableId }, extra) => this.#toolCall(
+        session,
+        M3_METADATA_GATEWAY_TOOL,
+        String(extra.requestId),
+        { deliverableId },
+        async () => ({
+          value: await this.#metadataDraft!(deliverableId),
+          dataClasses: ["metadata" as const, "transcript" as const],
+        }),
+      ));
+    }
     return server;
   }
 
   async #toolCall<Value>(
     session: GatewaySession,
-    tool: typeof AC004_GATEWAY_TOOLS[number] | typeof M3_CANDIDATE_GATEWAY_TOOL,
+    tool: typeof AC004_GATEWAY_TOOLS[number] |
+      typeof M3_CANDIDATE_GATEWAY_TOOL |
+      typeof M3_METADATA_GATEWAY_TOOL,
     callId: string,
     params: unknown,
     execute: () => Promise<{ value: Value; dataClasses: DataClass[] }>,

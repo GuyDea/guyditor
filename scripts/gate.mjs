@@ -49,11 +49,15 @@ export const M2_PARTIAL_COMMANDS = Object.freeze([
   Object.freeze({ args: ["test:ac", "--", "m2"], command: "pnpm" }),
 ]);
 
-export const M3_PARTIAL_COMMANDS = Object.freeze([
+export const M3_COMMANDS = Object.freeze([
   Object.freeze({ args: ["fixtures"], command: "pnpm" }),
   Object.freeze({ args: ["check:conventions"], command: "pnpm" }),
-  Object.freeze({ args: ["-r", "typecheck"], command: "pnpm" }),
-  Object.freeze({ args: ["-r", "lint"], command: "pnpm" }),
+  Object.freeze({ args: ["test"], command: "pnpm" }),
+  Object.freeze({ args: ["test:contract"], command: "pnpm" }),
+  Object.freeze({ args: ["test:golden"], command: "pnpm" }),
+  Object.freeze({ args: ["test:e2e"], command: "pnpm" }),
+  Object.freeze({ args: ["test:ac", "--", "m1"], command: "pnpm" }),
+  Object.freeze({ args: ["test:ac", "--", "m2"], command: "pnpm" }),
   Object.freeze({ args: ["test:ac", "--", "m3"], command: "pnpm" }),
 ]);
 
@@ -119,17 +123,11 @@ export const M2_PARTIAL_IDS = Object.freeze([
 
 const M2_PARTIAL_STATUS_IDS = new Set(["FR-1101", "FR-505"]);
 
-export const M3_PARTIAL_IDS = Object.freeze([
-  "FR-510",
-  "FR-511",
-  "FR-800",
-  "FR-801",
-  "FR-802",
-  "FR-803",
-  "FR-804",
-  "FR-805",
-  "FR-807",
+export const M3_IDS = Object.freeze([
+  ...identifiers("FR", 800, 813, 3),
+  "AC-007",
   "AC-008",
+  "AC-011",
 ]);
 
 // The M1 table explicitly permits scoped rows ("core" and "foundation"), and the
@@ -216,18 +214,17 @@ export function validateM2PartialTraceability(markdown) {
   return errors;
 }
 
-export function validateM3PartialTraceability(markdown) {
+export function validateM3Traceability(markdown) {
   const rows = traceabilityRows(markdown);
   const errors = [];
-  for (const id of M3_PARTIAL_IDS) {
+  for (const id of M3_IDS) {
     const row = rows.get(id);
     if (row === undefined) {
       errors.push(`${id}: traceability row is missing`);
       continue;
     }
-    const expected = id === "FR-800" ? "partial" : "implemented";
-    if (row.status !== expected) {
-      errors.push(`${id}: M3 partial gate requires status ${expected} (received ${row.status})`);
+    if (row.status !== "implemented") {
+      errors.push(`${id}: M3 gate requires status implemented (received ${row.status})`);
     }
     if (row.evidence.length === 0) errors.push(`${id}: test evidence is required`);
   }
@@ -255,7 +252,7 @@ function emitGateReport({ date, dogfoodSkipped, milestone, traceabilityCount }) 
     ? "skipped by coordinator (`--skip-dogfood`); TODO before creator sign-off"
     : "complete";
   const commandRows = (milestone === "m3"
-    ? M3_PARTIAL_COMMANDS
+    ? M3_COMMANDS
     : milestone === "m2" ? M2_PARTIAL_COMMANDS
     : milestone === "m1" ? M1_COMMANDS : M0_COMMANDS)
     .map(({ command, args }) => `| \`${commandText(command, args)}\` | pass |`)
@@ -299,7 +296,7 @@ export function runGate(
   const commands = milestone === "m0"
     ? M0_COMMANDS
     : milestone === "m1" ? M1_COMMANDS
-    : milestone === "m2" ? M2_PARTIAL_COMMANDS : M3_PARTIAL_COMMANDS;
+    : milestone === "m2" ? M2_PARTIAL_COMMANDS : M3_COMMANDS;
   for (const { command, args } of commands) {
     const display = commandText(command, args);
     const executable = platform === "win32" && command === "pnpm" ? `${command}.cmd` : command;
@@ -357,14 +354,14 @@ export function runGate(
     ? validateM1Traceability(traceability)
     : milestone === "m2"
       ? validateM2PartialTraceability(traceability)
-      : validateM3PartialTraceability(traceability);
+      : validateM3Traceability(traceability);
   if (traceabilityErrors.length > 0) {
     error(`gate ${milestone}: traceability failed: ${traceabilityErrors.join("; ")}`);
     return 1;
   }
   const traceabilityCount = milestone === "m1"
     ? M1_SHIP_IDS.length + M1_AC_IDS.length
-    : milestone === "m2" ? M2_PARTIAL_IDS.length : M3_PARTIAL_IDS.length;
+    : milestone === "m2" ? M2_PARTIAL_IDS.length : M3_IDS.length;
   log(`gate ${milestone}: traceability passed for ${String(traceabilityCount)} rows`);
 
   if (milestone === "m2") {
@@ -389,7 +386,20 @@ export function runGate(
       }
       log("gate m3: real-model candidate coherence dogfood is recorded");
     }
-    log("gate m3: partial deliverable lifecycle/profile/derivation/staleness scope passed");
+    let reportPath;
+    try {
+      reportPath = writeGateReport({
+        date: currentDate(),
+        dogfoodSkipped: skipDogfood,
+        milestone,
+        traceabilityCount,
+      });
+    } catch (reportError) {
+      error(`gate m3: could not emit gate report: ${reportError.message}`);
+      return 1;
+    }
+    log(`gate m3: wrote ${path.relative(process.cwd(), reportPath)}`);
+    log("gate m3: full FR-800..813 and AC-007/008/011 milestone scope passed");
     return 0;
   }
 

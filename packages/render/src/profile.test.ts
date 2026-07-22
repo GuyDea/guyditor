@@ -21,7 +21,13 @@ describe("loadRenderProfile", () => {
         fps: "30/1",
         aspect: "16:9",
       },
-      audio: { codec: "aac", bitrate: "256k" },
+      audio: {
+        codec: "aac",
+        bitrate: "256k",
+        sampleRate: 48_000,
+        channels: 2,
+        loudness: { integratedLufs: -14, toleranceLu: 1, truePeakDbtp: -1, lraMaxLu: 11 },
+      },
       container: "mp4",
       safeAreas: {
         title: { top: 0.05, bottom: 0.05, left: 0.05, right: 0.05 },
@@ -36,6 +42,17 @@ describe("loadRenderProfile", () => {
         maxCharsPerLine: 42,
         placement: { anchor: "center", verticalCenter: 0.86 },
         perWordHighlight: false,
+      },
+      cover: {
+        resolution: { width: 1280, height: 720 },
+        formats: ["jpg", "png"],
+        maxBytes: 2097152,
+      },
+      metadata: {
+        title: { maxChars: 100 },
+        description: { maxChars: 5000 },
+        tags: { maxCount: 60, totalMaxChars: 500 },
+        hashtags: { maxCount: 15, countedIn: "description" },
       },
     });
     expect(loaded.sha256).toMatch(/^[0-9a-f]{64}$/u);

@@ -16,7 +16,12 @@ import { formatRevision, parseRevision } from "../project/ids.js";
 import type { ClipApplication, EntityMutation } from "../operations/clip.js";
 import type { IdFactory } from "../operations/engine.js";
 import type { OperationInput } from "../operations/types.js";
-import type { DependencyEntry, SourceRangeRef } from "./types.js";
+import type {
+  DependencyEntry,
+  PublishChapterList,
+  PublishMetadataDocument,
+  SourceRangeRef,
+} from "./types.js";
 import type { FramingOverride } from "./types.js";
 
 interface DeriveCreatedIds {
@@ -446,6 +451,170 @@ function framingOverride(
   });
 }
 
+function setMetadata(project: GuyditorProject, input: OperationInput): Result<ClipApplication> {
+  const deliverableId = input.params["deliverableId"] as string;
+  const found = deliverableById(project, deliverableId);
+  if (!found.ok) return found;
+  const metadata = structuredClone(input.params["metadata"] as PublishMetadataDocument);
+  if (metadata.deliverableId !== deliverableId || metadata.profile !== found.value.profile) {
+    return deliverableFailure(
+      "E_PUBLISH_METADATA_MISMATCH",
+      `Metadata must identify ${deliverableId} and its pinned profile ${found.value.profile}.`,
+      [deliverableId],
+    );
+  }
+  const before = found.value.publish?.metadata;
+  const replacement: Deliverable = {
+    ...found.value,
+    publish: { ...found.value.publish, metadata },
+  };
+  return success({
+    model: replaceDeliverable(project, replacement),
+    inverse: [],
+    redo: { op: input.op, params: structuredClone(input.params) },
+    affected: [deliverableId],
+    summary: `Edit publish metadata for ${found.value.name}`,
+    mutations: [{
+      entityId: deliverableId,
+      entityType: "deliverable",
+      change: "modified",
+      fields: [{ field: "publish.metadata", before, after: metadata }],
+    }],
+  });
+}
+
+function setChapters(project: GuyditorProject, input: OperationInput): Result<ClipApplication> {
+  const deliverableId = input.params["deliverableId"] as string;
+  const found = deliverableById(project, deliverableId);
+  if (!found.ok) return found;
+  if (found.value.kind !== "longform") {
+    return deliverableFailure(
+      "E_DELIVERABLE_KIND",
+      "Chapter generation is available only for long-form deliverables.",
+      [deliverableId],
+    );
+  }
+  const chapters = structuredClone(input.params["chapters"] as PublishChapterList);
+  if (chapters.deliverableId !== deliverableId) {
+    return deliverableFailure(
+      "E_PUBLISH_CHAPTER_MISMATCH",
+      `Chapter list must identify ${deliverableId}.`,
+      [deliverableId],
+    );
+  }
+  const before = found.value.publish?.chapters;
+  const replacement: Deliverable = {
+    ...found.value,
+    publish: { ...found.value.publish, chapters },
+  };
+  return success({
+    model: replaceDeliverable(project, replacement),
+    inverse: [],
+    redo: { op: input.op, params: structuredClone(input.params) },
+    affected: [deliverableId, ...chapters.chapters.map(({ beatId }) => beatId)],
+    summary: `Generate publish chapters for ${found.value.name}`,
+    mutations: [{
+      entityId: deliverableId,
+      entityType: "deliverable",
+      change: "modified",
+      fields: [{ field: "publish.chapters", before, after: chapters }],
+    }],
+  });
+}
+
+function approvePublish(project: GuyditorProject, input: OperationInput): Result<ClipApplication> {
+  const deliverableId = input.params["deliverableId"] as string;
+  const found = deliverableById(project, deliverableId);
+  if (!found.ok) return found;
+  const targets = input.params["targets"] as Array<"metadata" | "chapters">;
+  const approvedRevision = formatRevision(parseRevision(project.revision) + 1);
+  const publish = structuredClone(found.value.publish ?? {});
+  for (const target of targets) {
+    if (target === "metadata" && publish.metadata === undefined ||
+        target === "chapters" && publish.chapters === undefined) {
+      return deliverableFailure(
+        "E_PUBLISH_ARTIFACT_MISSING",
+        `${target} must be generated before approval.`,
+        [deliverableId],
+      );
+    }
+    if (target === "metadata") {
+      publish.metadata!.status = "approved";
+      publish.metadata!.approvedRevision = approvedRevision;
+    } else {
+      publish.chapters!.status = "approved";
+      publish.chapters!.approvedRevision = approvedRevision;
+      delete publish.chapters!.stale;
+    }
+  }
+  const replacement: Deliverable = { ...found.value, publish };
+  return success({
+    model: replaceDeliverable(project, replacement),
+    inverse: [],
+    affected: [deliverableId],
+    summary: `Approve ${targets.join(" and ")} for ${found.value.name}`,
+    mutations: [{
+      entityId: deliverableId,
+      entityType: "deliverable",
+      change: "modified",
+      fields: [{ field: "publish", before: found.value.publish, after: publish }],
+    }],
+  });
+}
+
+function selectThumbnail(project: GuyditorProject, input: OperationInput): Result<ClipApplication> {
+  const deliverableId = input.params["deliverableId"] as string;
+  const found = deliverableById(project, deliverableId);
+  if (!found.ok) return found;
+  const composition = input.params["composition"] as string | null;
+  const previous = found.value.publish?.selectedThumbnail ?? null;
+  const publish = structuredClone(found.value.publish ?? {});
+  if (composition === null) delete publish.selectedThumbnail;
+  else publish.selectedThumbnail = composition;
+  const replacement: Deliverable = { ...found.value, publish };
+  return success({
+    model: replaceDeliverable(project, replacement),
+    inverse: [{
+      op: "deliverable.thumbnail.select",
+      params: { deliverableId, composition: previous },
+    }],
+    redo: { op: input.op, params: structuredClone(input.params) },
+    affected: [deliverableId],
+    summary: composition === null
+      ? `Clear selected thumbnail for ${found.value.name}`
+      : `Select thumbnail ${composition} for ${found.value.name}`,
+    mutations: [{
+      entityId: deliverableId,
+      entityType: "deliverable",
+      change: "modified",
+      fields: [{ field: "publish.selectedThumbnail", before: previous, after: composition }],
+    }],
+  });
+}
+
+function setPublishFiles(project: GuyditorProject, input: OperationInput): Result<ClipApplication> {
+  const deliverableId = input.params["deliverableId"] as string;
+  const found = deliverableById(project, deliverableId);
+  if (!found.ok) return found;
+  const files = structuredClone(input.params["files"] as Array<{ path: string; sha256: string }>)
+    .sort((left, right) => left.path.localeCompare(right.path));
+  const before = structuredClone(found.value.publishFiles ?? []);
+  const replacement: Deliverable = { ...found.value, publishFiles: files };
+  return success({
+    model: replaceDeliverable(project, replacement),
+    inverse: [{ op: "deliverable.publish.files.set", params: { deliverableId, files: before } }],
+    redo: { op: input.op, params: structuredClone(input.params) },
+    affected: [deliverableId, ...files.map(({ path }) => path)],
+    summary: `Register ${String(files.length)} publish files for ${found.value.name}`,
+    mutations: [{
+      entityId: deliverableId,
+      entityType: "deliverable",
+      change: "modified",
+      fields: [{ field: "publishFiles", before, after: files }],
+    }],
+  });
+}
+
 export function applyDeliverableOperation(
   project: GuyditorProject,
   input: OperationInput,
@@ -457,6 +626,11 @@ export function applyDeliverableOperation(
     case "deliverable.approve": return approve(project, input);
     case "deliverable.refresh": return refresh(project, input);
     case "deliverable.framing.override": return framingOverride(project, input);
+    case "deliverable.metadata.set": return setMetadata(project, input);
+    case "deliverable.chapters.set": return setChapters(project, input);
+    case "deliverable.publish.approve": return approvePublish(project, input);
+    case "deliverable.thumbnail.select": return selectThumbnail(project, input);
+    case "deliverable.publish.files.set": return setPublishFiles(project, input);
     case "deliverable.remove": return remove(project, input);
     default:
       return deliverableFailure("E_OP_UNKNOWN", `Unknown deliverable operation ${input.op}.`);

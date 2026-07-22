@@ -52,7 +52,9 @@ CREATE TABLE IF NOT EXISTS jobs (
   finishedAt TEXT,
   etaSeconds REAL CHECK(etaSeconds IS NULL OR etaSeconds >= 0.0),
   attempt INTEGER NOT NULL CHECK(attempt >= 1),
-  dependsOn TEXT CHECK(dependsOn IS NULL OR json_valid(dependsOn))
+  dependsOn TEXT CHECK(dependsOn IS NULL OR json_valid(dependsOn)),
+  dependencyMode TEXT NOT NULL DEFAULT 'success'
+    CHECK(dependencyMode IN ('success', 'terminal'))
 ) STRICT;
 `;
 
@@ -141,12 +143,14 @@ function rowToJob(row: Record<string, unknown>): JobRecord {
   ) {
     throw new Error("Invalid jobs.sqlite value for dependsOn.");
   }
+  const dependencyMode = stringValue(row, "dependencyMode") as "success" | "terminal";
   const job: JobRecord = {
     jobId: stringValue(row, "id"),
     kind: stringValue(row, "kind"),
     state: stringValue(row, "state") as JobState,
     progress: numberValue(row, "progress"),
     dependsOn: [...dependsOnValue],
+    ...(dependencyMode === "success" ? {} : { dependencyMode }),
     title: stringValue(row, "title"),
     cancellable: numberValue(row, "cancellable") === 1,
     payload: JSON.parse(stringValue(row, "payload")) as JsonValue,
@@ -172,6 +176,7 @@ function publicJobStatus(job: JobRecord): JobStatus {
     state: job.state,
     progress: job.progress,
     dependsOn: [...job.dependsOn],
+    ...(job.dependencyMode === undefined ? {} : { dependencyMode: job.dependencyMode }),
     ...(job.error === undefined ? {} : { error: structuredClone(job.error) }),
     title: job.title,
     cancellable: job.cancellable,
@@ -229,6 +234,13 @@ function migrateJobsSchema(database: DatabaseSync): void {
     database.exec(`
       ALTER TABLE jobs
       ADD COLUMN dependsOn TEXT CHECK(dependsOn IS NULL OR json_valid(dependsOn));
+    `);
+  }
+  if (!columns.some((column) => column["name"] === "dependencyMode")) {
+    database.exec(`
+      ALTER TABLE jobs
+      ADD COLUMN dependencyMode TEXT NOT NULL DEFAULT 'success'
+        CHECK(dependencyMode IN ('success', 'terminal'));
     `);
   }
 }
@@ -326,8 +338,8 @@ export class JobQueue {
     this.#database.prepare(`
       INSERT INTO jobs (
         id, kind, state, progress, title, cancellable, payload, error,
-        createdAt, startedAt, finishedAt, etaSeconds, attempt, dependsOn
-      ) VALUES (?, ?, 'queued', 0.0, ?, ?, ?, NULL, ?, NULL, NULL, NULL, 1, ?)
+        createdAt, startedAt, finishedAt, etaSeconds, attempt, dependsOn, dependencyMode
+      ) VALUES (?, ?, 'queued', 0.0, ?, ?, ?, NULL, ?, NULL, NULL, NULL, 1, ?, ?)
     `).run(
       jobId,
       input.kind,
@@ -336,6 +348,7 @@ export class JobQueue {
       jsonText(input.payload),
       createdAt,
       dependsOn.length === 0 ? null : JSON.stringify(dependsOn),
+      input.dependencyMode ?? "success",
     );
     const job = this.get(jobId);
     if (job === undefined) throw new Error(`Failed to read enqueued job ${jobId}.`);
@@ -588,7 +601,12 @@ export class JobQueue {
       const next = jobs.filter((job) => job.state === "queued")
         .find((job) =>
           this.#executors.has(job.kind) && !this.#active.has(job.jobId) &&
-          job.dependsOn.every((dependencyId) => byId.get(dependencyId)?.state === "done"),
+          job.dependsOn.every((dependencyId) => {
+            const state = byId.get(dependencyId)?.state;
+            return job.dependencyMode === "terminal"
+              ? state === "done" || state === "failed" || state === "cancelled"
+              : state === "done";
+          }),
         );
       if (next === undefined) return;
       const executor = this.#executors.get(next.kind);
@@ -635,7 +653,7 @@ export class JobQueue {
     while (expanded) {
       expanded = false;
       for (const job of jobs) {
-        if (job.state !== "queued" || blocked.has(job.jobId)) continue;
+        if (job.state !== "queued" || job.dependencyMode === "terminal" || blocked.has(job.jobId)) continue;
         const failedDependencies = job.dependsOn.filter((dependencyId) => {
           const dependency = byId.get(dependencyId);
           return dependency === undefined || dependency.state === "failed" ||

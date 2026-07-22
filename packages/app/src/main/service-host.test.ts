@@ -391,6 +391,92 @@ describe("AppServiceHost", () => {
     await windowHost.close();
     await appHost.close();
   });
+
+  it("drafts, edits, approves, and persists publish metadata and resolved chapters", async () => {
+    const root = await mkdtemp(join(tmpdir(), "guyditor-host-publish-"));
+    const userDirectory = await mkdtemp(join(tmpdir(), "guyditor-host-user-"));
+    const model = projectFixture();
+    model.deliverables[0] = {
+      ...model.deliverables[0]!,
+      profile: "youtube-longform@1.0.0",
+      status: "approved",
+      approvedRevision: "rev_00001",
+    };
+    model.assets[0]!.probe.duration = { frames: 4_320, fps: "24/1" };
+    model.sequences[0]!.clips = [{
+      ...model.sequences[0]!.clips[0]!,
+      source: { in: { frames: 0, fps: "24/1" }, out: { frames: 4_320, fps: "24/1" } },
+    }];
+    model.beats = [
+      { id: "beat_aaaaaaaaaa", name: "Exact intro", anchor: "timeline:seq_aaaaaaaaaa@0", chapter: { title: "Exact intro" } },
+      { id: "beat_bbbbbbbbbb", name: "Build the cut", anchor: "timeline:seq_aaaaaaaaaa@1440", chapter: { title: "Build the cut" } },
+      { id: "beat_cccccccccc", name: "Package it", anchor: "timeline:seq_aaaaaaaaaa@2880", chapter: { title: "Package it" } },
+    ];
+    const created = await createProject(root, model);
+    if (!created.ok) throw created.error;
+    const appHost = testAppHost(userDirectory);
+    const windowHost = appHost.createWindowHost({
+      publisher: new WindowEventPublisher(() => undefined),
+    });
+    await windowHost.openProject(root);
+    const service = windowHost.resolveService("DeliverableService");
+    const draftMetadata = service?.["draftMetadata"];
+    const saveMetadata = service?.["saveMetadata"];
+    const generateChapters = service?.["generateChapters"];
+    const approvePublish = service?.["approvePublish"];
+    const publishState = service?.["publishState"];
+    if (
+      typeof draftMetadata !== "function" || typeof saveMetadata !== "function" ||
+      typeof generateChapters !== "function" || typeof approvePublish !== "function" ||
+      typeof publishState !== "function"
+    ) throw new Error("Publish service surface is unavailable.");
+
+    const drafted = await Reflect.apply(draftMetadata, service, [{ deliverableId: "dlv_aaaaaaaaaa" }]) as {
+      title: string; status: string;
+    };
+    expect(drafted).toMatchObject({ title: "Exact intro", status: "draft" });
+    await Reflect.apply(saveMetadata, service, [{
+      deliverableId: "dlv_aaaaaaaaaa",
+      metadata: { ...drafted, title: "Creator title" },
+    }]);
+    const chapters = await Reflect.apply(generateChapters, service, [{ deliverableId: "dlv_aaaaaaaaaa" }]) as {
+      chapters: Array<{ title: string; startSeconds: number }>;
+      errors: unknown[];
+    };
+    expect(chapters).toMatchObject({
+      chapters: [
+        { title: "Exact intro", startSeconds: 0 },
+        { title: "Build the cut", startSeconds: 60 },
+        { title: "Package it", startSeconds: 120 },
+      ],
+      errors: [],
+    });
+    await Reflect.apply(approvePublish, service, [{
+      deliverableId: "dlv_aaaaaaaaaa",
+      targets: ["metadata", "chapters"],
+    }]);
+    expect(await Reflect.apply(publishState, service, [{ deliverableId: "dlv_aaaaaaaaaa" }]))
+      .toMatchObject({
+        metadata: { title: "Creator title", status: "approved" },
+        chapters: {
+          status: "approved",
+          chapters: expect.arrayContaining([expect.objectContaining({ startSeconds: 0 })]),
+        },
+      });
+    expect(await readFile(join(root, "publish/dlv_aaaaaaaaaa/metadata.yaml"), "utf8"))
+      .toContain("title: Creator title");
+    expect(await readFile(join(root, "publish/dlv_aaaaaaaaaa/chapters.txt"), "utf8"))
+      .toBe("0:00 Exact intro\n1:00 Build the cut\n2:00 Package it\n");
+    expect(windowHost.snapshot().master.deliverables[0]!.publishFiles).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: "publish/dlv_aaaaaaaaaa/metadata.yaml" }),
+      expect.objectContaining({ path: "publish/dlv_aaaaaaaaaa/chapters.yaml" }),
+      expect.objectContaining({ path: "publish/dlv_aaaaaaaaaa/chapters.txt" }),
+      expect.objectContaining({ path: "publish/dlv_aaaaaaaaaa/transcript.txt" }),
+    ]));
+
+    await windowHost.close();
+    await appHost.close();
+  });
 });
 
 function testAppHost(userDirectory: string): AppServiceHost {
