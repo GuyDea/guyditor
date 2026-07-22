@@ -29,15 +29,24 @@ importers:
 
   packages/agent:
     dependencies:
+      '@guyditor/compositor':
+        specifier: workspace:*
+        version: link:../compositor
       '@guyditor/core':
         specifier: workspace:*
         version: link:../core
       '@guyditor/media':
         specifier: workspace:*
         version: link:../media
+      '@guyditor/transcript':
+        specifier: workspace:*
+        version: link:../transcript
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(zod@4.4.3)
+      yaml:
+        specifier: ^2.9.0
+        version: 2.9.0
       zod:
         specifier: ^4.4.3
         version: 4.4.3

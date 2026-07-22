@@ -7,9 +7,12 @@
     "lint": "eslint src"
   },
   "dependencies": {
+    "@guyditor/compositor": "workspace:*",
     "@guyditor/core": "workspace:*",
     "@guyditor/media": "workspace:*",
+    "@guyditor/transcript": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "yaml": "^2.9.0",
     "zod": "^4.4.3"
   }
 }

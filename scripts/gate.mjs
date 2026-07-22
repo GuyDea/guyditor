@@ -61,6 +61,16 @@ export const M3_COMMANDS = Object.freeze([
   Object.freeze({ args: ["test:ac", "--", "m3"], command: "pnpm" }),
 ]);
 
+export const M4_PARTIAL_COMMANDS = Object.freeze([
+  Object.freeze({ args: ["fixtures"], command: "pnpm" }),
+  Object.freeze({ args: ["check:conventions"], command: "pnpm" }),
+  Object.freeze({ args: ["-r", "typecheck"], command: "pnpm" }),
+  Object.freeze({ args: ["-r", "lint"], command: "pnpm" }),
+  Object.freeze({ args: ["exec", "vitest", "run", "--project", "unit"], command: "pnpm" }),
+  Object.freeze({ args: ["test:golden"], command: "pnpm" }),
+  Object.freeze({ args: ["test:ac", "--", "m4"], command: "pnpm" }),
+]);
+
 const DEFERRED_M0_STEPS = Object.freeze([
   "remaining milestone contract, golden, e2e, and AC coverage beyond the implemented M0/M1 suites",
   "milestone traceability-status enforcement",
@@ -128,6 +138,13 @@ export const M3_IDS = Object.freeze([
   "AC-007",
   "AC-008",
   "AC-011",
+]);
+
+export const M4_PARTIAL_IDS = Object.freeze([
+  "FR-700",
+  "FR-701",
+  "FR-705",
+  "AC-010",
 ]);
 
 // The M1 table explicitly permits scoped rows ("core" and "foundation"), and the
@@ -231,6 +248,23 @@ export function validateM3Traceability(markdown) {
   return errors;
 }
 
+export function validateM4PartialTraceability(markdown) {
+  const rows = traceabilityRows(markdown);
+  const errors = [];
+  for (const id of M4_PARTIAL_IDS) {
+    const row = rows.get(id);
+    if (row === undefined) {
+      errors.push(`${id}: traceability row is missing`);
+      continue;
+    }
+    if (row.status !== "implemented") {
+      errors.push(`${id}: M4 partial gate requires status implemented (received ${row.status})`);
+    }
+    if (row.evidence.length === 0) errors.push(`${id}: test evidence is required`);
+  }
+  return errors;
+}
+
 export function validateDogfoodReport(markdown) {
   const required = [
     [/episode title/iu, "episode title"],
@@ -251,8 +285,9 @@ function emitGateReport({ date, dogfoodSkipped, milestone, traceabilityCount }) 
   const dogfood = dogfoodSkipped
     ? "skipped by coordinator (`--skip-dogfood`); TODO before creator sign-off"
     : "complete";
-  const commandRows = (milestone === "m3"
-    ? M3_COMMANDS
+  const commandRows = (milestone === "m4"
+    ? M4_PARTIAL_COMMANDS
+    : milestone === "m3" ? M3_COMMANDS
     : milestone === "m2" ? M2_PARTIAL_COMMANDS
     : milestone === "m1" ? M1_COMMANDS : M0_COMMANDS)
     .map(({ command, args }) => `| \`${commandText(command, args)}\` | pass |`)
@@ -288,7 +323,7 @@ export function runGate(
     writeGateReport = emitGateReport,
   } = {},
 ) {
-  if (milestone !== "m0" && milestone !== "m1" && milestone !== "m2" && milestone !== "m3") {
+  if (milestone !== "m0" && milestone !== "m1" && milestone !== "m2" && milestone !== "m3" && milestone !== "m4") {
     error(`gate ${milestone ?? "<missing>"}: gate not yet defined`);
     return 1;
   }
@@ -296,7 +331,8 @@ export function runGate(
   const commands = milestone === "m0"
     ? M0_COMMANDS
     : milestone === "m1" ? M1_COMMANDS
-    : milestone === "m2" ? M2_PARTIAL_COMMANDS : M3_COMMANDS;
+    : milestone === "m2" ? M2_PARTIAL_COMMANDS
+    : milestone === "m3" ? M3_COMMANDS : M4_PARTIAL_COMMANDS;
   for (const { command, args } of commands) {
     const display = commandText(command, args);
     const executable = platform === "win32" && command === "pnpm" ? `${command}.cmd` : command;
@@ -354,18 +390,26 @@ export function runGate(
     ? validateM1Traceability(traceability)
     : milestone === "m2"
       ? validateM2PartialTraceability(traceability)
-      : validateM3Traceability(traceability);
+      : milestone === "m3"
+        ? validateM3Traceability(traceability)
+        : validateM4PartialTraceability(traceability);
   if (traceabilityErrors.length > 0) {
     error(`gate ${milestone}: traceability failed: ${traceabilityErrors.join("; ")}`);
     return 1;
   }
   const traceabilityCount = milestone === "m1"
     ? M1_SHIP_IDS.length + M1_AC_IDS.length
-    : milestone === "m2" ? M2_PARTIAL_IDS.length : M3_IDS.length;
+    : milestone === "m2" ? M2_PARTIAL_IDS.length
+    : milestone === "m3" ? M3_IDS.length : M4_PARTIAL_IDS.length;
   log(`gate ${milestone}: traceability passed for ${String(traceabilityCount)} rows`);
 
   if (milestone === "m2") {
     log("gate m2: partial milestone scope passed (captions, keyframed transforms, compositing/keying, PiP, AC-003, AC-005, AC-006)");
+    return 0;
+  }
+
+  if (milestone === "m4") {
+    log("gate m4: partial milestone scope passed (editorial skills, preference examples, controlled upgrades, AC-010)");
     return 0;
   }
 

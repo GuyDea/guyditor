@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["skillId", "pin"],
+  "properties": {
+    "skillId": { "type": "string", "pattern": "^skl_[a-z2-7]{10}$" },
+    "pin": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "name", "version", "path", "contentHash"],
+          "properties": {
+            "id": { "type": "string", "pattern": "^skl_[a-z2-7]{10}$" },
+            "name": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
+            "version": { "type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$" },
+            "path": { "type": "string", "pattern": "^skills/[a-z0-9]+(?:-[a-z0-9]+)*/(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)/$" },
+            "contentHash": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+          }
+        }
+      ]
+    }
+  }
+}

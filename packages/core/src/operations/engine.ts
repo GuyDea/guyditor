@@ -110,6 +110,7 @@ import deliverablePublishApproveSchema from "./schemas/deliverable.publish.appro
 import deliverableThumbnailSelectSchema from "./schemas/deliverable.thumbnail.select.json" with { type: "json" };
 import deliverablePublishFilesSetSchema from "./schemas/deliverable.publish.files.set.json" with { type: "json" };
 import sidecarRegisterSchema from "./schemas/sidecar.register.json" with { type: "json" };
+import skillPinSetSchema from "./schemas/skill.pin.set.json" with { type: "json" };
 import {
   AnchorResolverRegistry,
   computeAnchorTransitions,
@@ -152,6 +153,7 @@ import { applyTransitionOperation } from "./transition.js";
 import { applyAssetOperation } from "./asset.js";
 import { applyProjectOperation } from "./project.js";
 import { applySidecarOperation } from "./sidecar.js";
+import { applySkillOperation } from "./skill.js";
 import { applyAnchorOperation } from "./anchor.js";
 import { assessBatchRisk, buildSemanticDiff } from "./diff.js";
 import { applyGraphicOperation, applyTemplateOperation } from "./graphic.js";
@@ -256,6 +258,7 @@ const catalog = new Map<string, CatalogEntry>([
   ["asset.markers.attach", catalogEntry(assetMarkersAttachSchema, "low", "none", "Attach {n} markers to {asset}")],
   ["asset.takes.set", catalogEntry(assetTakesSetSchema, "low", "none", "Set take metadata for {asset}")],
   ["project.watchFolders.set", catalogEntry(projectWatchFoldersSetSchema, "low", "none", "Configure {n} capture watch folders")],
+  ["skill.pin.set", catalogEntry(skillPinSetSchema, "normal", "none", "Set skill {skillId} pin")],
   ["clip.trim", catalogEntry(trimSchema, "normal", "none", "Trim {clip}")],
   ["clip.split", catalogEntry(splitSchema, "normal", "none", "Split {clip}")],
   ["clip.join", catalogEntry(joinSchema, "normal", "none", "Join {clips}")],
@@ -959,6 +962,8 @@ export class OperationEngine {
       let application: Result<ClipApplication>;
       if (isAudioColorOperation(requested.op)) {
         application = applyAudioColorOperation(working, normalized, this.#idFactory);
+      } else if (requested.op.startsWith("skill.")) {
+        application = applySkillOperation(working, normalized);
       } else if (requested.op.startsWith("project.")) {
         application = applyProjectOperation(working, normalized);
       } else if (requested.op.startsWith("sidecar.")) {

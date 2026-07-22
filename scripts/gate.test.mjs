@@ -10,11 +10,14 @@ import {
   M2_PARTIAL_IDS,
   M3_COMMANDS,
   M3_IDS,
+  M4_PARTIAL_COMMANDS,
+  M4_PARTIAL_IDS,
   runGate,
   validateDogfoodReport,
   validateM1Traceability,
   validateM2PartialTraceability,
   validateM3Traceability,
+  validateM4PartialTraceability,
 } from "./gate.mjs";
 import {
   REQUIRED_FIXTURE_PATHS,
@@ -156,6 +159,12 @@ function completeM2Traceability() {
 
 function completeM3Traceability() {
   return M3_IDS.map((id) =>
+    `| ${id} | Part | implemented | \`test/${id}.test.ts\` | evidence |`
+  ).join("\n");
+}
+
+function completeM4Traceability() {
+  return M4_PARTIAL_IDS.map((id) =>
     `| ${id} | Part | implemented | \`test/${id}.test.ts\` | evidence |`
   ).join("\n");
 }
@@ -338,6 +347,25 @@ test("m3 runs the complete §14.8 gate and requires all FR-800..813 and AC rows"
   assert.match(output.join("\n"), /full FR-800\.\.813/iu);
 });
 
+test("m4 partial gate runs editorial-skill checks and enforces FR-700/701/705 plus AC-010", () => {
+  const commands = [];
+  const output = [];
+  const status = runGate("m4", {
+    log: (message) => output.push(message),
+    readFixtureManifest: completeManifest,
+    readTraceabilityReport: completeM4Traceability,
+    runCommand: (command, args) => {
+      commands.push([command, ...args]);
+      return { status: 0 };
+    },
+    skipDogfood: true,
+  });
+  assert.equal(status, 0);
+  assert.deepEqual(commands, M4_PARTIAL_COMMANDS.map(({ command, args }) => [command, ...args]));
+  assert.deepEqual(validateM4PartialTraceability(completeM4Traceability()), []);
+  assert.match(output.join("\n"), /partial milestone scope passed.*editorial skills/iu);
+});
+
 test("m1 rejects absent, incomplete, or un-evidenced checklist rows", () => {
   const missing = validateM1Traceability(completeTraceability().replace(
     /^\| FR-001 .*$/mu,
@@ -425,7 +453,7 @@ test("m0 rejects motion paths with missing coordinates", () => {
   assert.match(errors.join("\n"), /subjectBoundingBoxPath.*x.*y.*width.*height/);
 });
 
-for (const milestone of [undefined, "m4", "unsupported"]) {
+for (const milestone of [undefined, "m5", "unsupported"]) {
   test(`gate ${milestone ?? "<missing>"} exits one with a clear message`, () => {
     const gatePath = path.join(import.meta.dirname, "gate.mjs");
     const args = milestone === undefined ? [gatePath] : [gatePath, milestone];

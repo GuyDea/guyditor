@@ -41,6 +41,17 @@ const deliverableIdParams: JsonSchema = {
   properties: { deliverableId: { type: "string", pattern: "^dlv_[a-z2-7]{10}$" } },
   additionalProperties: false,
 };
+const skillIdProperty: JsonSchema = { type: "string", pattern: "^skl_[a-z2-7]{10}$" };
+const skillVersionProperty: JsonSchema = {
+  type: "string",
+  pattern: "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$",
+};
+const skillIdVersionParams: JsonSchema = {
+  type: "object",
+  required: ["skillId", "version"],
+  properties: { skillId: skillIdProperty, version: skillVersionProperty },
+  additionalProperties: false,
+};
 
 export const IPC_SURFACES: readonly IpcSurface[] = Object.freeze([
   {
@@ -63,6 +74,128 @@ export const IPC_SURFACES: readonly IpcSurface[] = Object.freeze([
       readTranscript: { paramsSchema: emptyParams, resultSchema: { type: "array" }, budgetMs: 50 },
       revealProject: { paramsSchema: emptyParams, resultSchema: anyResult, budgetMs: 20 },
       openMaster: { paramsSchema: emptyParams, resultSchema: anyResult, budgetMs: 20 },
+    },
+  },
+  {
+    service: "SkillRegistry",
+    methods: {
+      list: {
+        paramsSchema: {
+          type: "object",
+          required: ["scope"],
+          properties: { scope: { enum: ["global", "project", "all"] } },
+          additionalProperties: false,
+        },
+        resultSchema: { type: "array" },
+        budgetMs: 50,
+      },
+      versions: {
+        paramsSchema: {
+          type: "object",
+          required: ["skillId"],
+          properties: { skillId: skillIdProperty },
+          additionalProperties: false,
+        },
+        resultSchema: { type: "array" },
+        budgetMs: 50,
+      },
+      get: {
+        paramsSchema: {
+          type: "object",
+          required: ["skillId"],
+          properties: { skillId: skillIdProperty, version: skillVersionProperty },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 50,
+      },
+      publish: {
+        paramsSchema: {
+          type: "object",
+          required: ["directory"],
+          properties: { directory: { type: "string", minLength: 1 } },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 100,
+      },
+      verify: { paramsSchema: skillIdVersionParams, resultSchema: anyResult, budgetMs: 50 },
+      drafts: {
+        paramsSchema: {
+          type: "object",
+          properties: { skillId: skillIdProperty },
+          additionalProperties: false,
+        },
+        resultSchema: { type: "array" },
+        budgetMs: 50,
+      },
+      createDraft: {
+        paramsSchema: {
+          type: "object",
+          required: ["skillId", "baseVersion", "version"],
+          properties: {
+            skillId: skillIdProperty,
+            baseVersion: skillVersionProperty,
+            version: skillVersionProperty,
+          },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 100,
+      },
+      updateDraft: {
+        paramsSchema: {
+          type: "object",
+          required: ["skillId", "version"],
+          properties: {
+            skillId: skillIdProperty,
+            version: skillVersionProperty,
+            title: { type: "string", minLength: 1 },
+            summary: { type: "string", minLength: 1 },
+            categories: { type: "array", items: { type: "string" } },
+            rules: { type: "array", items: { type: "object" } },
+            examples: { type: "object" },
+            body: { type: "string" },
+          },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 100,
+      },
+      deleteDraft: { paramsSchema: skillIdVersionParams, resultSchema: anyResult, budgetMs: 100 },
+      publishDraft: { paramsSchema: skillIdVersionParams, resultSchema: anyResult, budgetMs: 100 },
+      diff: {
+        paramsSchema: {
+          type: "object",
+          required: ["skillId", "fromVersion", "toVersion"],
+          properties: {
+            skillId: skillIdProperty,
+            fromVersion: skillVersionProperty,
+            toVersion: skillVersionProperty,
+          },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 50,
+      },
+      pinned: { paramsSchema: emptyParams, resultSchema: { type: "array" }, budgetMs: 50 },
+      associate: { paramsSchema: skillIdVersionParams, resultSchema: anyResult, budgetMs: 150 },
+      upgrade: { paramsSchema: skillIdVersionParams, resultSchema: anyResult, budgetMs: 150 },
+      captureExample: {
+        paramsSchema: {
+          type: "object",
+          required: ["proposalId", "skillId", "decision", "description"],
+          properties: {
+            proposalId: { type: "string", pattern: "^prp_[a-z2-7]{10}$" },
+            skillId: skillIdProperty,
+            decision: { enum: ["approved", "rejected"] },
+            description: { type: "string", minLength: 1 },
+          },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 150,
+      },
     },
   },
   {

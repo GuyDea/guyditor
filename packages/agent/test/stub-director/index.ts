@@ -28,6 +28,7 @@ export interface StubDirectorOptions {
     maxCandidates?: number;
   };
   metadataDraft?: { deliverableId: string };
+  activeSkills?: boolean;
 }
 
 export interface StubDirectorResult {
@@ -38,6 +39,7 @@ export interface StubDirectorResult {
   status: Proposal;
   candidateResult?: unknown;
   metadataResult?: unknown;
+  activeSkillsResult?: unknown;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -104,6 +106,12 @@ export async function runStubDirector(
           name: "deliverable_metadata_draft",
           arguments: options.metadataDraft,
         }));
+    const activeSkillsResult = options.activeSkills !== true
+      ? undefined
+      : toolValue<unknown>(await client.callTool({
+          name: "active_skills_get",
+          arguments: {},
+        }));
     const context = toolValue<AnnotationContextPackage>(await client.callTool({
       name: "context_package",
       arguments: { annotationId: options.annotationId },
@@ -139,6 +147,7 @@ export async function runStubDirector(
       status,
       ...(candidateResult === undefined ? {} : { candidateResult }),
       ...(metadataResult === undefined ? {} : { metadataResult }),
+      ...(activeSkillsResult === undefined ? {} : { activeSkillsResult }),
     };
   } finally {
     await client.close();

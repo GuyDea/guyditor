@@ -7,6 +7,7 @@ export type DiagnosticBackground = "none" | "black" | "white" | "saturated" | "c
 export type PanelId =
   | "media"
   | "graphics"
+  | "skills"
   | "preview"
   | "transcript"
   | "inspector"
@@ -124,6 +125,7 @@ export const useTimelineViewStore = create<TimelineViewState>((set) => ({
 const expandedPanels: Record<PanelId, boolean> = {
   media: false,
   graphics: false,
+  skills: false,
   preview: false,
   transcript: false,
   inspector: false,

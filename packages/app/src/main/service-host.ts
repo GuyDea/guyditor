@@ -99,6 +99,7 @@ import {
   FileCredentialStore,
   KlingRestyleAdapter,
   RestyleExecutionService,
+  SkillRegistry,
 } from "../../../agent/src/index.js";
 import type {
   BudgetConfig,
@@ -139,6 +140,7 @@ import type {
 } from "../shared/ipc.js";
 import type { IpcService } from "./rpc.js";
 import type { WindowEventPublisher } from "./events.js";
+import { skillRegistryService } from "./skill-service.js";
 
 interface AppHostSettings {
   auditRetentionDays: number;
@@ -583,6 +585,7 @@ export class AppServiceHost {
   public readonly costMeter: CostMeter;
   public readonly mlworker: MlworkerSupervisor;
   public readonly credentials: CredentialStore;
+  public readonly skillRegistry: SkillRegistry;
   readonly #options: AppServiceHostOptions;
   readonly #windows = new Set<WindowServiceHost>();
 
@@ -595,6 +598,9 @@ export class AppServiceHost {
       userDir: options.userDirectory,
       retention: { retentionDays: options.settings.auditRetentionDays },
       credentialValues: () => this.credentials.knownValues(),
+    });
+    this.skillRegistry = new SkillRegistry({
+      globalRoot: join(options.userDirectory, "skills"),
     });
     this.auditLog.prune();
     this.costMeter = CostMeter.open({
@@ -1200,6 +1206,14 @@ export class WindowServiceHost {
             return { path };
           },
         };
+      case "SkillRegistry":
+        return skillRegistryService({
+          appVersion: this.#app.appVersion,
+          ...(project === undefined ? {} : { project: project.store }),
+          registry: this.#app.skillRegistry,
+          requireProject: () => this.#requireProject().store,
+          publishRevision: (revision) => this.publisher.publish({ kind: "project.revision", revision }),
+        });
       case "OperationEngine":
         return project === undefined ? undefined : {
           execute: (request: ExecuteRequest) => this.#execute(request),

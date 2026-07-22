@@ -14,6 +14,7 @@ import type {
   GuyditorProject,
   Layer,
   LookApplication,
+  PresetPin,
   SemanticAnchor,
   Sequence,
 } from "../project/index.js";
@@ -50,6 +51,16 @@ const BUILTIN_LOOKS: Readonly<Record<string, ColorCorrection>> = {
     saturation: 0.96,
   },
 };
+
+export function isBuiltinLookPresetPinAvailable(
+  pin: Pick<PresetPin, "kind" | "path" | "version">,
+): boolean {
+  if (pin.kind !== "look") return false;
+  const builtin = /^builtin:(look-[a-z-]+)@([0-9]+)$/u.exec(pin.path);
+  return builtin !== null &&
+    Number(builtin[2]) === pin.version &&
+    BUILTIN_LOOKS[builtin[1]!] !== undefined;
+}
 
 function operationFailure(
   code: `E_${Uppercase<string>}`,

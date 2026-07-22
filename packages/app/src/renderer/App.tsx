@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { Annotation, Proposal, RestylePlan } from "../../../core/src/index.js";
 import type { ExportReport } from "../../../render/src/index.js";
 import type { TranscriptSidecar } from "../../../transcript/src/index.js";
+import type { ResolvedSkill, SkillManifest } from "../../../agent/src/index.js";
 import type { JobOverview, JobStatus, ProjectSnapshot } from "../shared/ipc.js";
 import { GlobalProgress } from "./GlobalProgress.js";
 import { GraphicsPanel } from "./panels/GraphicsPanel.js";
@@ -13,6 +14,7 @@ import { PreviewPanel } from "./panels/PreviewPanel.js";
 import { ProposalPanel } from "./panels/ProposalPanel.js";
 import { PublishPanel } from "./panels/PublishPanel.js";
 import { StatusStripPanel } from "./panels/StatusStripPanel.js";
+import { SkillsPanel } from "./panels/SkillsPanel.js";
 import { TimelinePanel } from "./panels/TimelinePanel.js";
 import { TranscriptPanel } from "./panels/TranscriptPanel.js";
 import type { WorkspacePanelProps } from "./panels/types.js";
@@ -40,6 +42,9 @@ export function App(): React.JSX.Element {
   const [transcripts, setTranscripts] = useState<TranscriptSidecar[]>([]);
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
   const [proposals, setProposals] = useState<Proposal[]>([]);
+  const [skills, setSkills] = useState<SkillManifest[]>([]);
+  const [pinnedSkills, setPinnedSkills] = useState<ResolvedSkill[]>([]);
+  const [skillDrafts, setSkillDrafts] = useState<ResolvedSkill[]>([]);
   const [restylePlan, setRestylePlan] = useState<RestylePlan | null>(null);
   const [exportReport, setExportReport] = useState<ExportReport | null>(null);
   const [notice, setNotice] = useState("Open a project directory to connect the edit journal.");
@@ -75,6 +80,23 @@ export function App(): React.JSX.Element {
       setProposals(await window.guyditor.call<Proposal[]>("ProjectStore", "listProposals", {}));
     } catch {
       setProposals([]);
+    }
+  }, []);
+
+  const refreshSkills = useCallback(async (): Promise<void> => {
+    try {
+      const [library, pinned, drafts] = await Promise.all([
+        window.guyditor.call<SkillManifest[]>("SkillRegistry", "list", { scope: "global" }),
+        window.guyditor.call<ResolvedSkill[]>("SkillRegistry", "pinned", {}),
+        window.guyditor.call<ResolvedSkill[]>("SkillRegistry", "drafts", {}),
+      ]);
+      setSkills(library);
+      setPinnedSkills(pinned);
+      setSkillDrafts(drafts);
+    } catch {
+      setSkills([]);
+      setPinnedSkills([]);
+      setSkillDrafts([]);
     }
   }, []);
 
@@ -134,10 +156,11 @@ export function App(): React.JSX.Element {
     await Promise.all([
       refreshAnnotations(),
       refreshProposals(),
+      refreshSkills(),
       refreshExportReport(),
       refreshRestylePlan(),
     ]);
-  }, [refreshAnnotations, refreshExportReport, refreshProposals, refreshRestylePlan, replaceJobs, replaceOverview, replaceSnapshot]);
+  }, [refreshAnnotations, refreshExportReport, refreshProposals, refreshRestylePlan, refreshSkills, replaceJobs, replaceOverview, replaceSnapshot]);
 
   const refreshProject = useCallback(async (): Promise<void> => {
     const next = await getSnapshot();
@@ -286,11 +309,15 @@ export function App(): React.JSX.Element {
     transcripts,
     annotations,
     proposals,
+    skills,
+    pinnedSkills,
+    skillDrafts,
     restylePlan,
     exportReport,
     refreshProject,
     refreshAnnotations,
     refreshProposals,
+    refreshSkills,
     refreshRestylePlan,
     refreshExportReport,
     setNotice,
@@ -324,6 +351,7 @@ export function App(): React.JSX.Element {
         <div className="left-stack">
           <MediaBrowserPanel {...panelProps} />
           <GraphicsPanel {...panelProps} />
+          <SkillsPanel {...panelProps} />
         </div>
         <div className="center-stack">
           <PreviewPanel {...panelProps} />

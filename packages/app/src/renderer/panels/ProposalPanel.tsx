@@ -20,9 +20,11 @@ function grouped(entries: SemanticDiffEntry[]): Array<[string, SemanticDiffEntry
 export function ProposalPanel({
   snapshot,
   proposals,
+  pinnedSkills,
   refreshProject,
   refreshAnnotations,
   refreshProposals,
+  refreshSkills,
   restylePlan,
   refreshRestylePlan,
   setNotice,
@@ -30,13 +32,16 @@ export function ProposalPanel({
   const expandedProposalId = useAgentPanelStore((state) => state.expandedProposalId);
   const setExpandedProposal = useAgentPanelStore((state) => state.setExpandedProposal);
   const [revisionInstruction, setRevisionInstruction] = useState("");
+  const [captureSkillId, setCaptureSkillId] = useState("");
+  const [exampleDescription, setExampleDescription] = useState("");
+  const [resolvedExamples, setResolvedExamples] = useState<Proposal[]>([]);
 
   async function act(
     proposal: Proposal,
     action: "acceptProposal" | "rejectProposal" | "supersedeProposal",
   ): Promise<void> {
     try {
-      await window.guyditor.call("OperationEngine", action, {
+      const resolved = await window.guyditor.call<Proposal>("OperationEngine", action, {
         proposalId: proposal.id,
         ...(action === "supersedeProposal"
           ? { instruction: revisionInstruction.trim() || "Revise this proposal with the latest feedback" }
@@ -49,11 +54,76 @@ export function ProposalPanel({
         refreshRestylePlan(),
       ]);
       setNotice(`${action === "acceptProposal" ? "Accepted" : action === "rejectProposal" ? "Rejected" : "Superseded"} ${proposal.id}.`);
+      if (resolved.status === "accepted" || resolved.status === "rejected") {
+        setResolvedExamples((current) => [
+          resolved,
+          ...current.filter(({ id }) => id !== resolved.id),
+        ]);
+      }
       setRevisionInstruction("");
     } catch (error: unknown) {
       setNotice(errorMessage(error));
       await refreshProposals();
     }
+  }
+
+  async function saveExample(proposal: Proposal): Promise<void> {
+    const skillId = captureSkillId || pinnedSkills[0]?.manifest.id;
+    if (skillId === undefined) {
+      setNotice("Pin an editorial skill before saving a preference example.");
+      return;
+    }
+    if (proposal.status !== "accepted" && proposal.status !== "rejected") return;
+    try {
+      const draft = await window.guyditor.call<{ manifest: { version: string } }>(
+        "SkillRegistry",
+        "captureExample",
+        {
+          proposalId: proposal.id,
+          skillId,
+          decision: proposal.status === "accepted" ? "approved" : "rejected",
+          description: exampleDescription.trim() || proposal.reason.text,
+        },
+      );
+      await refreshSkills();
+      setExampleDescription("");
+      setNotice(`Saved ${proposal.status === "accepted" ? "approved" : "rejected"} example to inactive draft v${draft.manifest.version}. Publish and upgrade explicitly to activate it.`);
+    } catch (error: unknown) {
+      setNotice(errorMessage(error));
+    }
+  }
+
+  function exampleCapture(proposal: Proposal): React.JSX.Element | null {
+    if (proposal.status !== "accepted" && proposal.status !== "rejected") return null;
+    return (
+      <div className="preference-capture" data-testid={`proposal-example-${proposal.id}`}>
+        <strong>Save as {proposal.status === "accepted" ? "approved" : "rejected"} example</strong>
+        <select
+          aria-label="Editorial skill"
+          value={captureSkillId || pinnedSkills[0]?.manifest.id || ""}
+          disabled={pinnedSkills.length === 0}
+          onChange={(event) => setCaptureSkillId(event.target.value)}
+        >
+          {pinnedSkills.map(({ manifest }) => (
+            <option key={manifest.id} value={manifest.id}>{manifest.title} · v{manifest.version}</option>
+          ))}
+        </select>
+        <input
+          type="text"
+          aria-label="Example description"
+          placeholder="Why this edit matches—or misses—the preference"
+          value={exampleDescription}
+          onChange={(event) => setExampleDescription(event.target.value)}
+        />
+        <button
+          type="button"
+          className="primary-action"
+          disabled={pinnedSkills.length === 0}
+          data-testid={`proposal-save-example-${proposal.id}`}
+          onClick={() => void saveExample(proposal)}
+        >Save to new draft version</button>
+      </div>
+    );
   }
 
   return (
@@ -72,7 +142,8 @@ export function ProposalPanel({
       />
       <ol className="proposal-list" data-testid="proposal-list">
         {proposals.map((proposal) => {
-          const stale = proposal.staleBase === true || proposal.baseRevision !== snapshot?.revision;
+          const stale = proposal.status === "ready" &&
+            (proposal.staleBase === true || proposal.baseRevision !== snapshot?.revision);
           const rebasableRestyle = proposal.operations.length > 0 &&
             proposal.operations.every(({ op }) =>
               op === "restyle.segment.approve" || op === "clip.split" || op === "clip.punchin.set");
@@ -132,7 +203,7 @@ export function ProposalPanel({
                       </dl>
                     )}
                   </div>
-                  <div className="proposal-controls">
+                  {proposal.status === "ready" ? <div className="proposal-controls">
                     <button
                       type="button"
                       className="primary-action"
@@ -142,8 +213,8 @@ export function ProposalPanel({
                     >{stale && rebasableRestyle ? "Rebase + accept" : "Accept"}</button>
                     <button type="button" data-testid={`proposal-reject-${proposal.id}`} onClick={() => void act(proposal, "rejectProposal")}>Reject</button>
                     <button type="button" data-testid={`proposal-preview-${proposal.id}`} disabled title="Comparison rendering is M2">Compare summary</button>
-                  </div>
-                  <div className="revision-box">
+                  </div> : null}
+                  {proposal.status === "ready" ? <div className="revision-box">
                     <input
                       type="text"
                       value={revisionInstruction}
@@ -153,7 +224,8 @@ export function ProposalPanel({
                       onChange={(event) => setRevisionInstruction(event.target.value)}
                     />
                     <button type="button" data-testid={`proposal-supersede-${proposal.id}`} onClick={() => void act(proposal, "supersedeProposal")}>Supersede</button>
-                  </div>
+                  </div> : null}
+                  {exampleCapture(proposal)}
                 </div>
               ) : null}
             </li>
@@ -161,6 +233,17 @@ export function ProposalPanel({
         })}
         {proposals.length === 0 ? <li className="empty-copy">No open proposals.</li> : null}
       </ol>
+      {resolvedExamples.length === 0 ? null : (
+        <section className="resolved-example-tray" data-testid="resolved-example-tray">
+          <header><strong>Preference examples</strong><span>Resolved this session</span></header>
+          {resolvedExamples.map((proposal) => (
+            <article key={proposal.id}>
+              <p>{proposal.reason.text}</p>
+              {exampleCapture(proposal)}
+            </article>
+          ))}
+        </section>
+      )}
       <small className="m2-note">The M1 proposal panel renders semantic comparison summaries. Generated comparison frames and director conversation are M2/later surfaces.</small>
     </Panel>
   );

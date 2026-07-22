@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -7,6 +7,7 @@ import { AnnotationService, createProject, OperationEngine } from "../../../core
 import type { JobOverview, Proposal, Result } from "../../../core/src/index.js";
 import { projectFixture } from "../../../core/src/project/test-fixtures.js";
 import { TranscriptEngine } from "../../../transcript/src/index.js";
+import { SkillRegistry } from "../../../agent/src/index.js";
 import { describe, expect, it } from "vitest";
 
 import type { GdEvent } from "../shared/ipc.js";
@@ -14,6 +15,79 @@ import { WindowEventPublisher } from "./events.js";
 import { AppServiceHost } from "./service-host.js";
 
 describe("AppServiceHost", () => {
+  it("exposes the skill library, project pin, immutable upgrade, and version diff over IPC", async () => {
+    const root = await mkdtemp(join(tmpdir(), "guyditor-host-skills-"));
+    const userDirectory = await mkdtemp(join(tmpdir(), "guyditor-host-skills-user-"));
+    const model = projectFixture();
+    model.skills = [];
+    const created = await createProject(root, model);
+    if (!created.ok) throw created.error;
+    const registry = new SkillRegistry({ globalRoot: join(userDirectory, "skills") });
+    const source = await mkdtemp(join(tmpdir(), "guyditor-host-skill-source-"));
+    await mkdir(join(source, "examples"));
+    const manifest = (version: string, summary: string) => [
+      "format: guyditor-skill/v1",
+      "id: skl_aaaaaaaaaa",
+      "name: exact-pacing",
+      `version: ${version}`,
+      "title: Exact pacing",
+      "categories: [pacing]",
+      `summary: ${summary}`,
+      "rules:",
+      "  - id: rule_pacing",
+      "    category: pacing",
+      "    strength: prefer",
+      "    text: Keep deliberate pauses.",
+      "examples:",
+      "  approved: []",
+      "  rejected: []",
+      "body: SKILL.md",
+      "",
+    ].join("\n");
+    await writeFile(join(source, "skill.yaml"), manifest("1.0.0", "Original cadence."), "utf8");
+    await writeFile(join(source, "SKILL.md"), "# Exact pacing\n", "utf8");
+    await registry.publish(source);
+    await writeFile(join(source, "skill.yaml"), manifest("2.0.0", "Refined cadence."), "utf8");
+    await registry.publish(source);
+
+    const events: GdEvent[] = [];
+    const appHost = testAppHost(userDirectory);
+    const windowHost = appHost.createWindowHost({
+      publisher: new WindowEventPublisher((_channel, event) => events.push(event)),
+    });
+    await windowHost.openProject(root);
+    const service = windowHost.resolveService("SkillRegistry");
+    const list = service?.["list"];
+    const associate = service?.["associate"];
+    const pinned = service?.["pinned"];
+    const diff = service?.["diff"];
+    const upgrade = service?.["upgrade"];
+    if (
+      typeof list !== "function" || typeof associate !== "function" ||
+      typeof pinned !== "function" || typeof diff !== "function" ||
+      typeof upgrade !== "function"
+    ) throw new Error("SkillRegistry IPC is unavailable.");
+    expect(await Reflect.apply(list, service, [{ scope: "global" }])).toHaveLength(2);
+    await Reflect.apply(associate, service, [{ skillId: "skl_aaaaaaaaaa", version: "1.0.0" }]);
+    expect(await Reflect.apply(pinned, service, [{}])).toMatchObject([
+      { manifest: { version: "1.0.0" }, body: "# Exact pacing\n" },
+    ]);
+    expect(await Reflect.apply(diff, service, [{
+      skillId: "skl_aaaaaaaaaa",
+      fromVersion: "1.0.0",
+      toVersion: "2.0.0",
+    }])).toMatchObject({
+      metadata: { summary: { before: "Original cadence.", after: "Refined cadence." } },
+    });
+    await Reflect.apply(upgrade, service, [{ skillId: "skl_aaaaaaaaaa", version: "2.0.0" }]);
+    expect(windowHost.snapshot().master.skills).toMatchObject([{ version: "2.0.0" }]);
+    expect(events.filter(({ kind }) => kind === "project.revision")).toHaveLength(2);
+    expect(await readFile(join(root, "history/transactions.jsonl"), "utf8"))
+      .toContain('"op":"skill.pin.set"');
+    await windowHost.close();
+    await appHost.close();
+  });
+
   it("exposes a non-secret Kling registry entry and review-gates restyle plans", async () => {
     const root = await mkdtemp(join(tmpdir(), "guyditor-host-restyle-"));
     const userDirectory = await mkdtemp(join(tmpdir(), "guyditor-host-user-"));

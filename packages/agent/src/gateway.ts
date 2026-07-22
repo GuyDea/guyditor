@@ -18,6 +18,7 @@ import {
 } from "../../core/src/index.js";
 import type {
   AnnotationTranscriptSource,
+  AutomationPolicy,
   OperationInput,
   ProjectStore,
   TemplateProvider,
@@ -30,6 +31,8 @@ import {
 import type {
   GatewaySession,
 } from "./session.js";
+import { SkillRegistry } from "./skills/index.js";
+import type { ResolvedSkill } from "./skills/index.js";
 
 const MCP_PATH = "/mcp";
 const MAX_REQUEST_BYTES = 1024 * 1024;
@@ -45,6 +48,7 @@ export const AC004_GATEWAY_TOOLS = Object.freeze([
 
 export const M3_CANDIDATE_GATEWAY_TOOL = "deliverable_candidates_discover" as const;
 export const M3_METADATA_GATEWAY_TOOL = "deliverable_metadata_draft" as const;
+export const M4_ACTIVE_SKILLS_GATEWAY_TOOL = "active_skills_get" as const;
 
 export interface CandidateDiscoveryToolInput {
   profile: string;
@@ -61,6 +65,14 @@ export interface GatewayDirector {
   locality: "local" | "remote";
 }
 
+export interface GatewaySkillRegistry {
+  pinned(project: ProjectStore): Promise<ResolvedSkill[]>;
+  resolveAutomationPolicy(
+    policy: AutomationPolicy,
+    skills: readonly ResolvedSkill[],
+  ): AutomationPolicy;
+}
+
 export interface AgentGatewayOptions {
   auditLog: AuditLog;
   jobQueue: Pick<JobQueue, "overview">;
@@ -73,6 +85,7 @@ export interface AgentGatewayOptions {
   templateProvider?: TemplateProvider;
   candidateDiscovery?: (input: CandidateDiscoveryToolInput) => Promise<unknown>;
   metadataDraft?: (deliverableId: string) => Promise<unknown>;
+  skillRegistry?: GatewaySkillRegistry;
 }
 
 export interface StartedAgentGateway {
@@ -148,6 +161,35 @@ function sendJson(response: ServerResponse, status: number, value: unknown): voi
   response.end(JSON.stringify(value));
 }
 
+function automationPolicy(value: unknown): AutomationPolicy | undefined {
+  if (!isRecord(value)) return undefined;
+  const candidate = isRecord(value["automation"]) ? value["automation"] : value;
+  if (
+    typeof candidate["enabled"] !== "boolean" || candidate["maxRisk"] !== "low" ||
+    !Array.isArray(candidate["allowedOperations"]) ||
+    !candidate["allowedOperations"].every((entry) => typeof entry === "string") ||
+    typeof candidate["maxOpsPerProposal"] !== "number" ||
+    typeof candidate["maxAutoAcceptsPerSession"] !== "number" ||
+    typeof candidate["notify"] !== "string"
+  ) return undefined;
+  return {
+    enabled: candidate["enabled"],
+    maxRisk: "low",
+    allowedOperations: [...candidate["allowedOperations"]],
+    maxOpsPerProposal: candidate["maxOpsPerProposal"],
+    maxAutoAcceptsPerSession: candidate["maxAutoAcceptsPerSession"],
+    notify: candidate["notify"],
+  };
+}
+
+function withResolvedAutomation(
+  snapshot: object,
+  resolved: AutomationPolicy | undefined,
+): object {
+  if (resolved === undefined) return structuredClone(snapshot);
+  return { ...structuredClone(snapshot), automation: resolved };
+}
+
 export class AgentGateway {
   readonly #audit: AuditLog;
   readonly #jobs: Pick<JobQueue, "overview">;
@@ -159,6 +201,7 @@ export class AgentGateway {
   readonly #templateProvider: TemplateProvider | undefined;
   readonly #candidateDiscovery: AgentGatewayOptions["candidateDiscovery"];
   readonly #metadataDraft: AgentGatewayOptions["metadataDraft"];
+  readonly #skillRegistry: GatewaySkillRegistry;
   readonly #sessions: SessionManager;
   readonly #transports = new Map<string, ActiveTransport>();
   #http: Server | undefined;
@@ -179,6 +222,7 @@ export class AgentGateway {
     this.#templateProvider = options.templateProvider;
     this.#candidateDiscovery = options.candidateDiscovery;
     this.#metadataDraft = options.metadataDraft;
+    this.#skillRegistry = options.skillRegistry ?? new SkillRegistry();
     this.#sessions = new SessionManager(this.#audit, {
       ...(options.sessionIdFactory === undefined
         ? {}
@@ -188,6 +232,7 @@ export class AgentGateway {
 
   public async start(): Promise<StartedAgentGateway> {
     if (this.#started !== undefined) return structuredClone(this.#started);
+    await this.#skillRegistry.pinned(this.#project);
     const token = randomBytes(32).toString("hex");
     const http = createServer((request, response) => {
       void this.#handle(request, response, token).catch((error: unknown) => {
@@ -317,12 +362,18 @@ export class AgentGateway {
     response: ServerResponse,
     body: unknown,
   ): Promise<void> {
+    const skills = await this.#skillRegistry.pinned(this.#project);
+    const baseAutomation = automationPolicy(this.#policySnapshot) ??
+      automationPolicy(this.#project.currentProject.settings.automation);
+    const resolvedAutomation = baseAutomation === undefined
+      ? baseAutomation
+      : this.#skillRegistry.resolveAutomationPolicy(baseAutomation, skills);
     const session = this.#sessions.open({
       projectId: this.#project.currentProject.project.id,
       director: this.#director,
-      policySnapshot: this.#policySnapshot,
+      policySnapshot: withResolvedAutomation(this.#policySnapshot, resolvedAutomation),
     });
-    const server = this.#mcpServer(session);
+    const server = this.#mcpServer(session, skills, resolvedAutomation);
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: randomUUID,
       onsessioninitialized: (transportSessionId) => {
@@ -357,7 +408,11 @@ export class AgentGateway {
     }
   }
 
-  #mcpServer(session: GatewaySession): McpServer {
+  #mcpServer(
+    session: GatewaySession,
+    skills: readonly ResolvedSkill[],
+    resolvedAutomation: AutomationPolicy | undefined,
+  ): McpServer {
     const server = new McpServer({ name: "guyditor-agent-gateway", version: "0.0.0" });
     server.registerTool("progress_overview", {
       description: "Read all running, queued, creator-blocked, and external project work.",
@@ -415,6 +470,9 @@ export class AgentGateway {
           appVersion: "0.0.0",
           proposalStore: this.#project,
           auditSink: this.#audit,
+          ...(resolvedAutomation === undefined
+            ? {}
+            : { automationPolicy: resolvedAutomation }),
           ...(this.#templateProvider === undefined
             ? {}
             : { templateProvider: this.#templateProvider }),
@@ -458,6 +516,22 @@ export class AgentGateway {
         return { value: result.value, dataClasses: ["metadata" as const] };
       },
     ));
+    if (skills.length > 0) {
+      server.registerTool(M4_ACTIVE_SKILLS_GATEWAY_TOOL, {
+        description: "Read the verified, project-pinned editorial skills and their full prose context.",
+        inputSchema: {},
+        annotations: { readOnlyHint: true, openWorldHint: false },
+      }, async (_params, extra) => this.#toolCall(
+        session,
+        M4_ACTIVE_SKILLS_GATEWAY_TOOL,
+        String(extra.requestId),
+        {},
+        () => Promise.resolve({
+          value: structuredClone(skills),
+          dataClasses: ["metadata" as const, "prompt" as const],
+        }),
+      ));
+    }
     if (this.#candidateDiscovery !== undefined) {
       server.registerTool(M3_CANDIDATE_GATEWAY_TOOL, {
         description: "Enqueue deterministic short-candidate discovery and return the cache-backed candidate records with disclosed hook/coherence/payoff criteria.",
@@ -522,7 +596,8 @@ export class AgentGateway {
     session: GatewaySession,
     tool: typeof AC004_GATEWAY_TOOLS[number] |
       typeof M3_CANDIDATE_GATEWAY_TOOL |
-      typeof M3_METADATA_GATEWAY_TOOL,
+      typeof M3_METADATA_GATEWAY_TOOL |
+      typeof M4_ACTIVE_SKILLS_GATEWAY_TOOL,
     callId: string,
     params: unknown,
     execute: () => Promise<{ value: Value; dataClasses: DataClass[] }>,
