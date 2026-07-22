@@ -17,6 +17,7 @@
     "@guyditor/agent": "workspace:*",
     "@guyditor/compositor": "workspace:*",
     "@guyditor/core": "workspace:*",
+    "@guyditor/deliver": "workspace:*",
     "@guyditor/media": "workspace:*",
     "@guyditor/render": "workspace:*",
     "@guyditor/transcript": "workspace:*",

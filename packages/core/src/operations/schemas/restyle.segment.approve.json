@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["deliverableId", "plan", "chunkId", "cachedPath", "layerId", "itemId", "asset", "provenance"],
+  "properties": {
+    "deliverableId": { "type": "string", "pattern": "^dlv_[a-z2-7]{10}$" },
+    "plan": { "type": "object" },
+    "chunkId": { "type": "string", "pattern": "^restyle-chunk-[A-Za-z0-9._-]+$" },
+    "cachedPath": { "type": "string", "minLength": 1 },
+    "layerId": { "type": "string", "pattern": "^lyr_[a-z2-7]{10}$" },
+    "itemId": { "type": "string", "pattern": "^gfx_[a-z2-7]{10}$" },
+    "asset": { "type": "object" },
+    "provenance": { "type": "object" }
+    ,"seamPlacements": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["seamId", "layerId", "itemId", "seed"],
+        "properties": {
+          "seamId": { "type": "string", "pattern": "^restyle-seam-[A-Za-z0-9._-]+$" },
+          "layerId": { "type": "string", "pattern": "^lyr_[a-z2-7]{10}$" },
+          "itemId": { "type": "string", "pattern": "^gfx_[a-z2-7]{10}$" },
+          "seed": { "type": "integer", "minimum": 0, "maximum": 4294967295 }
+        }
+      }
+    }
+    ,"chunkPunchIn": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["seamId", "effectId", "level"],
+      "properties": {
+        "seamId": { "type": "string", "pattern": "^restyle-seam-[A-Za-z0-9._-]+$" },
+        "effectId": { "type": "string", "pattern": "^fx_[a-z2-7]{10}$" },
+        "level": { "type": "number", "exclusiveMinimum": 1 }
+      }
+    }
+  }
+}

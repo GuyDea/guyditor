@@ -14,6 +14,68 @@ import { WindowEventPublisher } from "./events.js";
 import { AppServiceHost } from "./service-host.js";
 
 describe("AppServiceHost", () => {
+  it("exposes a non-secret Kling registry entry and review-gates restyle plans", async () => {
+    const root = await mkdtemp(join(tmpdir(), "guyditor-host-restyle-"));
+    const userDirectory = await mkdtemp(join(tmpdir(), "guyditor-host-user-"));
+    const model = projectFixture();
+    const emptyAnnotations = "format: guyditor.annotations/v1\nannotations: []\n";
+    model.sidecars[0]!.inputs = [];
+    model.sidecars[0]!.sha256 = createHash("sha256").update(emptyAnnotations).digest("hex");
+    const created = await createProject(root, model);
+    if (!created.ok) throw created.error;
+    await writeFile(join(root, "sidecars/annotations.yaml"), emptyAnnotations, "utf8");
+    const appHost = testAppHost(userDirectory);
+    const windowHost = appHost.createWindowHost({
+      publisher: new WindowEventPublisher(() => undefined),
+    });
+    await windowHost.openProject(root);
+
+    const adapterService = windowHost.resolveService("AdapterRegistry");
+    const list = adapterService?.["list"];
+    if (typeof list !== "function") throw new Error("Adapter registry list is unavailable.");
+    const adapters = await Reflect.apply(list, adapterService, []) as Array<{
+      descriptor: { canonicalName: string };
+      configuration: Record<string, unknown>;
+    }>;
+    expect(adapters).toMatchObject([{
+      descriptor: { canonicalName: ["adp", "kling"].join("_") },
+      configuration: { enabled: true, apiKeyRef: "apiKey", model: "kling-video-o1" },
+    }]);
+    expect(JSON.stringify(adapters)).not.toMatch(/password|secret|bearer/iu);
+
+    const deliverableService = windowHost.resolveService("DeliverableService");
+    const createPlan = deliverableService?.["createRestylePlan"];
+    if (typeof createPlan !== "function") throw new Error("Restyle planner is unavailable.");
+    const planned = await Reflect.apply(createPlan, deliverableService, [{
+      deliverableId: "dlv_aaaaaaaaaa",
+      coverage: "full",
+      prompt: "Ink wash",
+      seed: 607,
+    }]) as { plan: { chunks: unknown[]; estimatedCost: { amount: number } }; proposal: Proposal };
+    expect(planned.plan).toMatchObject({
+      chunks: [expect.objectContaining({ sourceRange: { startFrame: 0, endFrame: 48 } })],
+      estimatedCost: { amount: 0.28 },
+    });
+    expect(planned.proposal).toMatchObject({
+      status: "ready",
+      operations: [{ op: "restyle.plan.create" }],
+    });
+    expect(windowHost.snapshot().revision).toBe("rev_00001");
+
+    const accept = windowHost.resolveService("OperationEngine")?.["acceptProposal"];
+    if (typeof accept !== "function") throw new Error("Proposal acceptance is unavailable.");
+    await Reflect.apply(accept, undefined, [{ proposalId: planned.proposal.id }]);
+    const readPlan = deliverableService?.["restylePlan"];
+    if (typeof readPlan !== "function") throw new Error("Restyle plan reader is unavailable.");
+    await expect(Reflect.apply(readPlan, deliverableService, [{
+      deliverableId: "dlv_aaaaaaaaaa",
+    }])).resolves.toMatchObject({ schema: "guyditor.restyle/v1" });
+    expect(windowHost.snapshot().revision).toBe("rev_00002");
+
+    await windowHost.close();
+    await appHost.close();
+  });
+
   it("executes clip.trim through a window service and emits the committed revision", async () => {
     const root = await mkdtemp(join(tmpdir(), "guyditor-host-project-"));
     const userDirectory = await mkdtemp(join(tmpdir(), "guyditor-host-user-"));

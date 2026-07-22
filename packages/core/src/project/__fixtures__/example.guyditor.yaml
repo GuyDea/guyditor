@@ -17,7 +17,7 @@ assets:                                      # ---- assets, immutable IDs (busin
   - { id: ast_music6h7j2, kind: audio, path: media/music/calm-loop.flac,
       sha256: 19581e27de7ced00ff1ce50b2047e7a567c76b1cbaebabe5ef03f7c3017bb5b7,
       probe: { duration: { samples: 8640000, rate: 48000 }, audio: { rate: 48000, channels: 2 } },
-      rights: { source: "artlist.io", license: "Artlist Unlimited 2026" } }
+      rights: { origin: licensed, licenseName: "Artlist Unlimited 2026", licensor: "artlist.io", restrictions: [] } }
   - { id: ast_broll3k4l5, kind: generated, path: media/generated/ast_broll3k4l5.mp4,   # frozen generated B-roll (rule 8, FR-605)
       sha256: 4b227777d4dd1fc61c6f884f48641d02b4d121d3fd328cb08b5531fcacdabf8a,
       probe: {},

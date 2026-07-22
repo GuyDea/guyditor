@@ -45,3 +45,51 @@ export type {
   SessionRecord,
   ToolCallRecord,
 } from "./audit-types.js";
+export { AdapterRegistry } from "./adapters/registry.js";
+export {
+  EphemeralCredentialStore,
+  FileCredentialStore,
+  SafeStorageCredentialStore,
+} from "./adapters/credentials.js";
+export type {
+  CredentialStore,
+  SafeStorageCodec,
+  SafeStorageCredentialStoreOptions,
+} from "./adapters/credentials.js";
+export {
+  KLING_ADAPTER_CANONICAL_NAME,
+  KLING_ADAPTER_ID,
+  KlingRestyleAdapter,
+} from "./adapters/kling.js";
+export type {
+  KlingAdapterConfig,
+  KlingApiFactoryInput,
+  KlingRestyleAdapterOptions,
+} from "./adapters/kling.js";
+export { HttpKlingApi } from "./adapters/kling-api.js";
+export type {
+  HttpKlingApiOptions,
+  KlingApi,
+  KlingApiTask,
+  KlingApiTaskOutput,
+} from "./adapters/kling-api.js";
+export type {
+  AdapterDescriptor,
+  AdapterJobHandle,
+  AdapterJobStatus,
+  AdapterUserConfig,
+  BrollProviderAdapter,
+  GenerationRequest,
+  GenerationResult,
+  ProviderAdapter,
+  QuotaInfo,
+  RestyleAdapter,
+  RestyleRequest,
+  RestyleResult,
+} from "./adapters/types.js";
+export { RestyleExecutionService } from "./restyle-execution.js";
+export type {
+  RestyleExecutionServiceOptions,
+  RestyleStartResult,
+  StartRestylePlanInput,
+} from "./restyle-execution.js";

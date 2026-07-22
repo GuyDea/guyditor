@@ -95,6 +95,9 @@ import graphicRemoveSchema from "./schemas/graphic.remove.json" with { type: "js
 import templatePinSchema from "./schemas/template.pin.json" with { type: "json" };
 import templateInstallSchema from "./schemas/template.install.json" with { type: "json" };
 import templateUninstallSchema from "./schemas/template.uninstall.json" with { type: "json" };
+import restylePlanCreateSchema from "./schemas/restyle.plan.create.json" with { type: "json" };
+import restyleSegmentApproveSchema from "./schemas/restyle.segment.approve.json" with { type: "json" };
+import seamTreatmentSetSchema from "./schemas/seam.treatment.set.json" with { type: "json" };
 import {
   AnchorResolverRegistry,
   computeAnchorTransitions,
@@ -138,6 +141,7 @@ import { applyProjectOperation } from "./project.js";
 import { applyAnchorOperation } from "./anchor.js";
 import { assessBatchRisk, buildSemanticDiff } from "./diff.js";
 import { applyGraphicOperation, applyTemplateOperation } from "./graphic.js";
+import { applyRestyleOperation } from "../restyle/operations.js";
 import type {
   AppliedOperation,
   AuditSink,
@@ -463,6 +467,24 @@ const catalog = new Map<string, CatalogEntry>([
     "none",
     "Uninstall template {templateId}@{version}",
   )],
+  ["restyle.plan.create", catalogEntry(
+    restylePlanCreateSchema,
+    "consequential",
+    "none",
+    "Create restyle plan for {deliverableId}",
+  )],
+  ["restyle.segment.approve", catalogEntry(
+    restyleSegmentApproveSchema,
+    "consequential",
+    "none",
+    "Approve restyle segment {chunkId}",
+  )],
+  ["seam.treatment.set", catalogEntry(
+    seamTreatmentSetSchema,
+    "consequential",
+    "none",
+    "Set restyle seam {seamId} treatment to {treatment.kind}",
+  )],
 ]);
 
 const RISK_RANK: Record<RiskClass, number> = {
@@ -587,6 +609,19 @@ export class OperationEngine {
         "Agent and proposal-linked operations must be committed through proposal acceptance.",
       );
     }
+    if (
+      !context.dryRun && !allowProposalCommit &&
+      batch.some(({ op }) =>
+        op === "restyle.plan.create" || op === "restyle.segment.approve" ||
+        op === "seam.treatment.set")
+    ) {
+      return operationFailure(
+        "E_OP_PROPOSAL_REQUIRED",
+        "Restyle plans, segment approvals, and seam treatments must be committed through proposal acceptance.",
+        batch.filter(({ op }) => op.startsWith("restyle.") || op.startsWith("seam."))
+          .map(({ op }) => op),
+      );
+    }
 
     let working = base;
     const applied: AppliedOperation[] = [];
@@ -662,7 +697,9 @@ export class OperationEngine {
               normalized,
               this.#templateProvider,
               context.dryRun,
-            );
+          );
+      } else if (requested.op.startsWith("restyle.") || requested.op.startsWith("seam.")) {
+        application = await applyRestyleOperation(working, normalized, this.#templateProvider);
       } else if (this.#operationDispatcher === undefined) {
         application = operationFailure(
           "E_OP_DISPATCH_UNAVAILABLE",

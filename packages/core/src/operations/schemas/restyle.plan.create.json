@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["deliverableId", "plan"],
+  "properties": {
+    "deliverableId": { "type": "string", "pattern": "^dlv_[a-z2-7]{10}$" },
+    "plan": {
+      "type": "object",
+      "required": ["schema", "id", "deliverableId", "sequenceId", "sourceAssets", "adapterId", "model", "createdAt", "coverage", "constraints", "settings", "chunks", "seams", "estimatedCost"],
+      "properties": {
+        "schema": { "const": "guyditor.restyle/v1" },
+        "id": { "type": "string" },
+        "deliverableId": { "type": "string" },
+        "sequenceId": { "type": "string" },
+        "sourceAssets": { "type": "array" },
+        "adapterId": { "type": "string" },
+        "model": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "coverage": { "type": "object" },
+        "constraints": { "type": "object" },
+        "settings": { "type": "object" },
+        "chunks": { "type": "array" },
+        "seams": { "type": "array" },
+        "estimatedCost": { "type": "object" }
+      }
+    }
+  }
+}

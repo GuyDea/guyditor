@@ -17,7 +17,7 @@ function graphicFailure(
   return failure(makeGuyditorError(code, message, { affected }));
 }
 
-async function descriptorForAdd(
+export async function resolveTemplateDescriptor(
   project: GuyditorProject,
   templateId: string,
   provider: TemplateProvider,
@@ -41,7 +41,7 @@ function formatParamError(error: ErrorObject): string {
   return `${path} ${error.message ?? error.keyword}`;
 }
 
-function validateParams(
+export function validateTemplateParams(
   descriptor: TemplateDescriptor,
   params: Record<string, unknown>,
 ): Result<Record<string, unknown>> {
@@ -160,10 +160,10 @@ async function applyAdd(
   seedFactory: () => number,
 ): Promise<Result<ClipApplication>> {
   const templateId = input.params["templateId"] as string;
-  const descriptor = await descriptorForAdd(project, templateId, provider);
+  const descriptor = await resolveTemplateDescriptor(project, templateId, provider);
   if (!descriptor.ok) return descriptor;
   const params = structuredClone(input.params["params"] as Record<string, unknown>);
-  const validated = validateParams(descriptor.value, params);
+  const validated = validateTemplateParams(descriptor.value, params);
   if (!validated.ok) return validated;
 
   const graphicId = input.params["graphicId"] as string | undefined ?? idFactory("gfx");
@@ -282,7 +282,7 @@ async function applyParamSet(
   if (!descriptor.ok) return descriptor;
   const before = structuredClone(located.item.params ?? {});
   const after = mergePatch(before, input.params["patch"] as Record<string, unknown>);
-  const validated = validateParams(descriptor.value, after);
+  const validated = validateTemplateParams(descriptor.value, after);
   if (!validated.ok) return validated;
   const item = { ...located.item, params: validated.value };
   const layer = {

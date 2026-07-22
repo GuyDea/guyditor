@@ -9,6 +9,7 @@ import {
   isFixtureManifestFresh,
   makeTranscriptFixture,
   parseFixtureArguments,
+  restylePlanningSignalsFixture,
 } from "./make-fixtures.mjs";
 import {
   FIXTURE_GENERATOR_VERSION,
@@ -103,6 +104,18 @@ test("makeTranscriptFixture creates deterministic exact 20-minute timing", () =>
   });
   assert.equal(first.segments[0].words[0], "w000001");
   assert.equal(first.segments[0].words.at(-1), "w002800");
+});
+
+test("restyle planning signals preserve manifest silences and a low-motion snap", () => {
+  const signals = restylePlanningSignalsFixture();
+  assert.deepEqual(signals.vadSilences, [
+    { startFrame: 90, endFrame: 114 },
+    { startFrame: 270, endFrame: 306 },
+    { startFrame: 465, endFrame: 480 },
+  ]);
+  assert.equal(signals.lowMotionFrames[1], 288);
+  assert.ok(signals.vadSilences[1].startFrame <= signals.lowMotionFrames[1]);
+  assert.ok(signals.lowMotionFrames[1] <= signals.vadSilences[1].endFrame);
 });
 
 test("isFixtureManifestFresh accepts only current manifests with every file", async () => {

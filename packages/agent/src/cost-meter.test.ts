@@ -249,4 +249,29 @@ describe("CostMeter", () => {
     expect(meter.outstandingConfirmations(callContext.projectId)).toEqual([]);
     meter.close();
   });
+
+  it("consumes an explicit creator confirmation exactly once", () => {
+    const userDir = userDirectory();
+    const audit = new AuditLog({ userDir, now: () => NOW });
+    const meter = CostMeter.open({
+      userDir,
+      auditLog: audit,
+      budgets: { ...NO_BUDGETS, task: { warnUsd: 1, capUsd: null } },
+      now: () => NOW,
+      confirmTokenFactory: () => "confirm-restyle-plan",
+    });
+    const callContext = context("ses_aaaaaaaaaa", "prj_aaaaaaaaaa", "restyle-plan-001");
+    expect(meter.preflight(estimate(1.5), callContext)).toMatchObject({
+      verdict: "warn",
+      confirmToken: "confirm-restyle-plan",
+    });
+
+    expect(meter.confirm("confirm-restyle-plan", callContext)).toBe(true);
+    expect(meter.confirm("confirm-restyle-plan", callContext)).toBe(false);
+    expect(meter.outstandingConfirmations(callContext.projectId)).toEqual([]);
+    expect(audit.readSession(callContext.sessionId).records).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "budget.event", kind: "creator_override" }),
+    ]));
+    meter.close();
+  });
 });

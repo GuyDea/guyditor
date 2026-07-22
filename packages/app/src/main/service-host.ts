@@ -16,6 +16,7 @@ import {
   makeId,
   OperationEngine,
   openProject as openCoreProject,
+  parseRestylePlan,
   parseTakeMarkerSidecar,
   planJumpCutConcealment,
   resolveAnchor,
@@ -34,6 +35,9 @@ import type {
   Proposal,
   ProjectStore,
   Result,
+  RestyleFrameRange,
+  RestylePlan,
+  RestyleSeamTreatment,
   TakeMarkerSidecar,
   TransactionRecord,
   WatchFolderConfig,
@@ -64,15 +68,29 @@ import {
   planPickupSplice,
   registerFillerDetectionExecutor,
   TranscriptEngine,
+  buildWordTimelineMap,
 } from "../../../transcript/src/index.js";
 import { assessSourceRangeContinuity } from "../../../transcript/src/continuity.js";
 import type { TranscribeResult } from "../../../transcript/src/index.js";
 import { loadTranscriptWorkspace } from "../../../transcript/src/operations.js";
 import { RenderService, TemplateRegistry } from "../../../render/src/index.js";
 import type { ExportReport } from "../../../render/src/index.js";
-import { AuditLog, CostMeter } from "../../../agent/src/index.js";
-import type { BudgetConfig } from "../../../agent/src/index.js";
+import {
+  AdapterRegistry,
+  AuditLog,
+  CostMeter,
+  FileCredentialStore,
+  KlingRestyleAdapter,
+  RestyleExecutionService,
+} from "../../../agent/src/index.js";
+import type {
+  BudgetConfig,
+  CredentialStore,
+  KlingAdapterConfig,
+} from "../../../agent/src/index.js";
 import { CompositorModel } from "../../../compositor/src/index.js";
+import { createRestylePlan } from "../../../deliver/src/index.js";
+import type { RestylePlanningSignals } from "../../../deliver/src/index.js";
 
 import type {
   ExecuteRequest,
@@ -87,12 +105,14 @@ interface AppHostSettings {
   auditRetentionDays: number;
   budgets: BudgetConfig;
   maxConcurrentJobs: number | "auto";
+  restyleAdapter?: KlingAdapterConfig & { enabled: boolean };
 }
 
 export interface AppServiceHostOptions {
   appVersion: string;
   userDirectory: string;
   settings: AppHostSettings;
+  credentials?: CredentialStore;
   autoStartMlworker: boolean;
   profilesRoot?: string;
   mlworker?: {
@@ -121,6 +141,8 @@ interface ProjectServices {
   compositor: CompositorModel;
   render: RenderService;
   templates: TemplateRegistry;
+  adapters: AdapterRegistry;
+  restyle: RestyleExecutionService;
   unsubscribeJobs: () => void;
 }
 
@@ -193,6 +215,116 @@ async function transcriptSidecars(store: ProjectStore) {
     .map(async ({ path }) => parseTranscriptSidecar(
       await readFile(join(store.root, path), "utf8"),
     )));
+}
+
+async function acceptedRestylePlan(
+  store: ProjectStore,
+  deliverableId: string,
+): Promise<RestylePlan | null> {
+  const deliverable = store.currentProject.deliverables.find(({ id }) => id === deliverableId);
+  const sidecarName = deliverable?.restyle?.planSidecar;
+  const reference = sidecarName === undefined
+    ? undefined
+    : store.currentProject.sidecars.find(({ name }) => name === sidecarName);
+  if (reference === undefined) return null;
+  const parsed = parseRestylePlan(await readFile(join(store.root, reference.path), "utf8"));
+  return resultValue(parsed);
+}
+
+function framesAtFps(
+  time: { num: number; den: number },
+  fps: string,
+): number {
+  const match = /^(\d+)\/([1-9]\d*)$/u.exec(fps);
+  if (match === null) throw new Error(`Timeline fps ${fps} is invalid.`);
+  return Math.round(time.num / time.den * Number(match[1]) / Number(match[2]));
+}
+
+function restyleAnalysisSignals(value: unknown): Pick<
+  RestylePlanningSignals,
+  "vadSilences" | "lowMotionFrames"
+> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return { vadSilences: [], lowMotionFrames: [] };
+  }
+  const record = value as Record<string, unknown>;
+  const vadSilences = Array.isArray(record["vadSilences"])
+    ? record["vadSilences"].flatMap((entry) => {
+        if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return [];
+        const range = entry as Record<string, unknown>;
+        return Number.isSafeInteger(range["startFrame"]) && Number.isSafeInteger(range["endFrame"])
+          ? [{ startFrame: Number(range["startFrame"]), endFrame: Number(range["endFrame"]) }]
+          : [];
+      })
+    : [];
+  const lowMotionFrames = Array.isArray(record["lowMotionFrames"])
+    ? record["lowMotionFrames"].filter((frame): frame is number =>
+        typeof frame === "number" && Number.isSafeInteger(frame) && frame >= 0)
+    : [];
+  return { vadSilences, lowMotionFrames };
+}
+
+async function planningSignals(
+  store: ProjectStore,
+  deliverableId: string,
+): Promise<RestylePlanningSignals> {
+  const project = store.currentProject;
+  const deliverable = project.deliverables.find(({ id }) => id === deliverableId);
+  if (deliverable === undefined) throw new Error(`Deliverable ${deliverableId} does not exist.`);
+  const sources = project.layers.filter(({ enabled, sequence }) =>
+    enabled && sequence === deliverable.sequenceId).map(({ id }) => id);
+  const sidecars = await transcriptSidecars(store);
+  const timeline = buildWordTimelineMap({
+    project,
+    sequenceId: deliverable.sequenceId,
+    sidecars,
+    track: {
+      id: "restyle-planning",
+      name: "Restyle planning",
+      sourceLayerIds: sources,
+      preset: { presetId: "restyle-planning", version: 1 },
+      styleOverrides: {},
+      breakOverrides: [],
+      emphasisOverrides: [],
+      timingOffsets: [],
+      enabled: true,
+    },
+  });
+  let analysis: Pick<RestylePlanningSignals, "vadSilences" | "lowMotionFrames"> = {
+    vadSilences: [],
+    lowMotionFrames: [],
+  };
+  try {
+    analysis = restyleAnalysisSignals(JSON.parse(await readFile(
+      join(store.root, "sidecars/analysis/restyle-signals.json"),
+      "utf8",
+    )) as unknown);
+  } catch {
+    // Word gaps remain the deterministic fallback when analysis is unavailable.
+  }
+  const resolvers = new AnchorResolverRegistry();
+  resolvers.registerWordLookup(createTranscriptWordLookup(sidecars));
+  const beats = await Promise.all(project.beats.map(async (beat) => {
+    const resolved = await resolveAnchor(
+      project,
+      beat.anchor,
+      deliverable.sequenceId,
+      resolvers.dependencies(),
+    );
+    return resolved.ok && resolved.value.status === "resolved" && resolved.value.timeline !== undefined
+      ? { id: beat.id, frame: resolved.value.timeline.frames }
+      : undefined;
+  }));
+  return {
+    words: timeline.instances.map((word) => ({
+      id: word.wordId,
+      startFrame: framesAtFps(word.start, project.settings.timeline.fps),
+      endFrame: framesAtFps(word.end, project.settings.timeline.fps),
+    })),
+    beats: beats.flatMap((beat) => beat === undefined ? [] : [beat]),
+    vadSilences: analysis.vadSilences,
+    lowMotionFrames: analysis.lowMotionFrames,
+  };
 }
 
 async function activeProposals(store: ProjectStore): Promise<Proposal[]> {
@@ -298,14 +430,19 @@ export class AppServiceHost {
   public readonly auditLog: AuditLog;
   public readonly costMeter: CostMeter;
   public readonly mlworker: MlworkerSupervisor;
+  public readonly credentials: CredentialStore;
   readonly #options: AppServiceHostOptions;
   readonly #windows = new Set<WindowServiceHost>();
 
   public constructor(options: AppServiceHostOptions) {
     this.#options = options;
+    this.credentials = options.credentials ?? new FileCredentialStore({
+      userDir: options.userDirectory,
+    });
     this.auditLog = new AuditLog({
       userDir: options.userDirectory,
       retention: { retentionDays: options.settings.auditRetentionDays },
+      credentialValues: () => this.credentials.knownValues(),
     });
     this.auditLog.prune();
     this.costMeter = CostMeter.open({
@@ -360,6 +497,28 @@ export class AppServiceHost {
   public get userDirectory(): string {
     return this.#options.userDirectory;
   }
+
+  public get restyleAdapter(): KlingAdapterConfig & {
+    enabled: boolean;
+    costPerSecond: number;
+    concurrency: number;
+  } {
+    const configured = this.#options.settings.restyleAdapter;
+    if (configured !== undefined) {
+      return {
+        ...configured,
+        costPerSecond: configured.costPerSecond ?? 0.14,
+        concurrency: configured.concurrency ?? 2,
+      };
+    }
+    return {
+      enabled: true,
+      apiKeyRef: "apiKey",
+      model: "kling-video-o1",
+      costPerSecond: 0.14,
+      concurrency: 2,
+    };
+  }
 }
 
 export class WindowServiceHost {
@@ -387,6 +546,7 @@ export class WindowServiceHost {
     const store = resultValue(opened);
     this.#closeProject();
     const annotations = new AnnotationService({ appVersion: this.#app.appVersion });
+    const restyleRuntime: { service?: RestyleExecutionService } = {};
     const { queue: jobs } = JobQueue.open(join(store.root, ".guyditor/jobs.sqlite"), {
       concurrency: this.#app.maxConcurrentJobs,
       overviewSources: {
@@ -416,6 +576,7 @@ export class WindowServiceHost {
             estimatedUsd: confirmation.estimatedUsd,
             createdAt: confirmation.createdAt,
           })),
+        external: () => restyleRuntime.service?.externalWaits() ?? [],
       },
     });
     const media = new MediaEngine({ jobQueue: jobs, mlworker: this.#app.mlworker });
@@ -467,6 +628,39 @@ export class WindowServiceHost {
       profilesRoot: this.#app.profilesRoot,
       templateRegistry: templates,
     });
+    const adapters = new AdapterRegistry();
+    const kling = this.#app.restyleAdapter;
+    if (kling.enabled) {
+      const adapter = new KlingRestyleAdapter({
+        credentials: this.#app.credentials,
+        config: {
+          apiKeyRef: kling.apiKeyRef,
+          model: kling.model,
+          costPerSecond: kling.costPerSecond,
+          concurrency: kling.concurrency,
+          ...(kling.baseUrl === undefined ? {} : { baseUrl: kling.baseUrl }),
+        },
+      });
+      adapters.register(adapter);
+      adapters.configure(adapter.descriptor.adapterId, {
+        enabled: true,
+        apiKeyRef: kling.apiKeyRef,
+        model: kling.model,
+        costPerSecond: kling.costPerSecond,
+        concurrency: kling.concurrency,
+        ...(kling.baseUrl === undefined ? {} : { baseUrl: kling.baseUrl }),
+      });
+    }
+    const restyle = new RestyleExecutionService({
+      projectStore: store,
+      operationEngine: {
+        createProposal: (input) => this.#coreEngine(this.#requireProject()).createProposal(input),
+      },
+      adapters,
+      jobs,
+      costMeter: this.#app.costMeter,
+    });
+    restyleRuntime.service = restyle;
     const unsubscribeJobs = jobs.onChange(({ kind, job }) => {
       if (kind === "job.progress") {
         this.publisher.publishProgress({
@@ -490,6 +684,12 @@ export class WindowServiceHost {
         }
         if (job.state === "done" && job.kind === "keyqc.analyze") {
           void this.#writeCaptureGuidance(job).catch(() => undefined);
+        }
+        if (job.state === "done" && job.kind === "restyle.generate") {
+          const proposalId = jsonRecord(job.payload)?.["proposalId"];
+          if (typeof proposalId === "string") {
+            this.publisher.publish({ kind: "proposal.updated", proposalId });
+          }
         }
       }
     });
@@ -525,6 +725,8 @@ export class WindowServiceHost {
       compositor,
       render,
       templates,
+      adapters,
+      restyle,
       unsubscribeJobs,
     };
     await capture.start(store.currentProject.watchFolders ?? []);
@@ -717,6 +919,123 @@ export class WindowServiceHost {
             }, annotationId));
           },
         };
+      case "AdapterRegistry":
+        return project === undefined ? undefined : {
+          list: () => project.adapters.restyleAdapters().map((adapter) => ({
+            descriptor: structuredClone(adapter.descriptor),
+            constraints: structuredClone(adapter.constraints),
+            configuration: project.adapters.configuration(adapter.descriptor.adapterId),
+          })),
+        };
+      case "DeliverableService":
+        return project === undefined ? undefined : {
+          restylePlan: async ({ deliverableId }: { deliverableId: string }) =>
+            acceptedRestylePlan(project.store, deliverableId),
+          createRestylePlan: async (params: {
+            deliverableId: string;
+            adapterId?: string;
+            coverage: "full" | RestyleFrameRange[];
+            prompt: string;
+            negativePrompt?: string;
+            seed?: number;
+            providerSettings?: Record<string, unknown>;
+          }) => {
+            const adapter = params.adapterId === undefined
+              ? project.adapters.restyleAdapters()[0]
+              : project.adapters.resolveRestyle(params.adapterId);
+            if (adapter === undefined) {
+              throw new Error("No enabled restyle adapter is available.");
+            }
+            const plan = resultValue(createRestylePlan({
+              project: project.store.currentProject,
+              deliverableId: params.deliverableId,
+              coverage: params.coverage,
+              adapterId: adapter.descriptor.adapterId,
+              model: adapter.descriptor.models[0]?.id ?? "kling-video-o1",
+              constraints: adapter.constraints,
+              prompt: params.prompt,
+              ...(params.negativePrompt === undefined
+                ? {}
+                : { negativePrompt: params.negativePrompt }),
+              ...(params.seed === undefined ? {} : { seed: params.seed }),
+              providerSettings: structuredClone(params.providerSettings ?? {}),
+              createdAt: new Date().toISOString(),
+              signals: await planningSignals(project.store, params.deliverableId),
+            }));
+            const sessionId = makeId("ses");
+            const proposal = resultValue(await this.#coreEngine(project).createProposal({
+              operations: [{
+                op: "restyle.plan.create",
+                params: { deliverableId: params.deliverableId, plan },
+              }],
+              instruction: { kind: "user-text", text: params.prompt },
+              actor: { kind: "agent", id: sessionId, model: "restyle-planner" },
+              sessionId,
+              reason: {
+                text: `Review the ${String(plan.chunks.length)}-chunk restyle plan before generation.`,
+                sources: [{ kind: "instruction", ref: params.prompt }],
+              },
+              addresses: [],
+            }));
+            this.publisher.publish({ kind: "proposal.updated", proposalId: proposal.id });
+            return { plan, proposal };
+          },
+          startRestyle: async ({
+            deliverableId,
+            confirmToken,
+          }: { deliverableId: string; confirmToken?: string }) => {
+            const plan = await acceptedRestylePlan(project.store, deliverableId);
+            if (plan === null) throw new Error(`Deliverable ${deliverableId} has no accepted restyle plan.`);
+            return project.restyle.startPlan({
+              plan,
+              context: {
+                sessionId: makeId("ses"),
+                projectId: project.store.currentProject.project.id,
+                taskId: plan.id,
+                initiator: "creator",
+              },
+              ...(confirmToken === undefined ? {} : { confirmToken }),
+            });
+          },
+          setRestyleSeamTreatment: async (params: {
+            deliverableId: string;
+            seamId: string;
+            treatment: RestyleSeamTreatment;
+          }) => {
+            const plan = await acceptedRestylePlan(project.store, params.deliverableId);
+            if (plan === null) {
+              throw new Error(`Deliverable ${params.deliverableId} has no accepted restyle plan.`);
+            }
+            if (!plan.seams.some(({ id }) => id === params.seamId)) {
+              throw new Error(`Restyle seam ${params.seamId} is not in plan ${plan.id}.`);
+            }
+            const sessionId = makeId("ses");
+            const proposal = resultValue(await this.#coreEngine(project).createProposal({
+              operations: [{
+                op: "seam.treatment.set",
+                params: {
+                  deliverableId: params.deliverableId,
+                  plan,
+                  seamId: params.seamId,
+                  treatment: structuredClone(params.treatment),
+                },
+              }],
+              instruction: {
+                kind: "user-text",
+                text: `Set ${params.seamId} treatment to ${params.treatment.kind}`,
+              },
+              actor: { kind: "agent", id: sessionId, model: "restyle-seam-editor" },
+              sessionId,
+              reason: {
+                text: `Review the ${params.treatment.kind} treatment for ${params.seamId}.`,
+                sources: [{ kind: "instruction", ref: params.seamId }],
+              },
+              addresses: [],
+            }));
+            this.publisher.publish({ kind: "proposal.updated", proposalId: proposal.id });
+            return { proposal };
+          },
+        };
       case "RenderService":
         return project === undefined ? undefined : {
           cacheStats: () => project.render.cacheStats(),
@@ -838,21 +1157,45 @@ export class WindowServiceHost {
 
   async #acceptProposal(proposalId: string): Promise<Proposal> {
     const project = this.#requireProject();
-    const current = resultValue(await project.store.readProposal(proposalId));
+    let current = resultValue(await project.store.readProposal(proposalId));
+    if (
+      current.baseRevision !== project.store.currentProject.revision &&
+      current.operations.length > 0 &&
+      current.operations.every(({ op }) =>
+        op === "restyle.segment.approve" || op === "clip.split" || op === "clip.punchin.set")
+    ) {
+      const rebased = resultValue(await this.#coreEngine(project).supersedeProposal(
+        current.id,
+        {
+          operations: current.operations.map(({ op, params }) => ({ op, params })),
+          instruction: structuredClone(current.instruction),
+          actor: structuredClone(current.actor),
+          ...(current.sessionId === undefined ? {} : { sessionId: current.sessionId }),
+          reason: {
+            text: `${current.reason.text} Rebased over independently approved restyle chunks.`,
+            sources: [...current.reason.sources],
+          },
+          addresses: [...current.addresses],
+        },
+      ));
+      this.publisher.publish({ kind: "proposal.updated", proposalId: current.id });
+      this.publisher.publish({ kind: "proposal.updated", proposalId: rebased.id });
+      current = rebased;
+    }
     const proposal = current.operations.some(({ op }) => op === "pickup.splice")
       ? resultValue(await project.transcript.acceptProposal(
           project.store,
-          proposalId,
+          current.id,
           "creator",
         ))
       : resultValue(await this.#coreEngine(project, undefined, {
           commit: (model, transaction) =>
             project.annotations.commitAccepted(project.store, model, transaction),
         }).acceptProposal(
-          proposalId,
+          current.id,
           "creator",
         ));
-    this.publisher.publish({ kind: "proposal.updated", proposalId });
+    this.publisher.publish({ kind: "proposal.updated", proposalId: current.id });
     this.publisher.publish({
       kind: "project.revision",
       revision: project.store.currentProject.revision,

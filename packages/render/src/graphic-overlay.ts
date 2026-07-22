@@ -26,6 +26,12 @@ import {
 } from "./template-runtime.js";
 import type { LoadedTemplateRuntime } from "./template-runtime.js";
 import type { TemplateRegistry } from "./template-registry.js";
+import {
+  insertedDurationFrames,
+  restyleTimelineInsertionForItem,
+  restyleTimelineInsertions,
+  sourceFrameToOutputFrame,
+} from "./timeline-insertions.js";
 
 export const GRAPHIC_OVERLAY_RENDERER_VERSION = "graphic-overlay/v1";
 
@@ -224,10 +230,12 @@ async function resolvedGraphics(options: GraphicOverlayOptions): Promise<Resolve
   const runtimes = new Map<string, LoadedTemplateRuntime>();
   const timeline = deriveTimeline(options.project, options.sequenceId);
   if (!timeline.ok) throw timeline.error;
-  const extent = timeline.value.clips.reduce(
+  const sourceExtent = timeline.value.clips.reduce(
     (maximum, clip) => Math.max(maximum, clip.start.frames + clip.duration.frames),
     0,
   );
+  const insertions = restyleTimelineInsertions(options.project, options.sequenceId);
+  const extent = sourceExtent + insertedDurationFrames(insertions);
   const layers = options.project.layers
     .filter((layer) =>
       layer.enabled &&
@@ -263,8 +271,17 @@ async function resolvedGraphics(options: GraphicOverlayOptions): Promise<Resolve
         runtime = loaded.value;
         runtimes.set(runtimeKey, runtime);
       }
-      const startFrame = await anchorFrame(options, item, item.at, "start");
-      const unclampedEnd = await endFrame(options, item, startFrame, runtime);
+      const sourceStartFrame = await anchorFrame(options, item, item.at, "start");
+      const sourceEndFrame = await endFrame(options, item, sourceStartFrame, runtime);
+      const seamInsertion = restyleTimelineInsertionForItem(item);
+      const startFrame = sourceFrameToOutputFrame(
+        sourceStartFrame,
+        insertions,
+        seamInsertion === undefined,
+      );
+      const unclampedEnd = seamInsertion === undefined
+        ? startFrame + (sourceEndFrame - sourceStartFrame)
+        : startFrame + seamInsertion.durationFrames;
       const clampedEnd = Math.min(extent, unclampedEnd);
       if (startFrame >= extent || clampedEnd <= startFrame) continue;
       resolved.push({

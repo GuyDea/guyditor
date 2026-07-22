@@ -23,6 +23,18 @@ export interface UserSettings {
     episode: { warnUsd: number | null; capUsd: number | null };
     cumulative: { warnUsd: number | null; capUsd: number | null };
   };
+  adapters: {
+    restyle: {
+      kling: {
+        enabled: boolean;
+        baseUrl?: string;
+        apiKeyRef: string;
+        model: string;
+        costPerSecond: number;
+        concurrency: number;
+      };
+    };
+  };
   dataBoundaries?: unknown;
 }
 
@@ -49,6 +61,17 @@ export const DEFAULT_SETTINGS = Object.freeze({
     task: { warnUsd: 1, capUsd: 5 },
     episode: { warnUsd: 25, capUsd: null },
     cumulative: { warnUsd: 100, capUsd: null },
+  },
+  adapters: {
+    restyle: {
+      kling: {
+        enabled: true,
+        apiKeyRef: "apiKey",
+        model: "kling-video-o1",
+        costPerSecond: 0.14,
+        concurrency: 2,
+      },
+    },
   },
 } satisfies UserSettings);
 

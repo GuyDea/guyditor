@@ -35,6 +35,7 @@ import type {
   RenderNodeKind,
   SourceNodeParams,
   ToolchainManifest,
+  TimelineInsertNodeParams,
   TransformNodeParams,
   TrimNodeParams,
 } from "./ir.js";
@@ -42,6 +43,11 @@ import type { RenderProfile } from "./profile.js";
 import {
   compileDuckingEnvelope,
 } from "./ducking.js";
+import {
+  insertedDurationFrames,
+  restyleTimelineInsertions,
+  sourceFrameToOutputFrame,
+} from "./timeline-insertions.js";
 import type {
   ResolvedDuckingOverride,
   SpeechInterval,
@@ -411,6 +417,27 @@ function itemStart(item: PlacedItem, sequenceId: string, outputFps: string): num
   unsupported(`unresolved item anchor ${item.at}`, "Part 0 anchor resolver", [item.id]);
 }
 
+function restyleSourceRange(
+  item: PlacedItem,
+): { startFrame: number; endFrame: number } | undefined {
+  const value = item.params?.["restyle"];
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const sourceRange = (value as Record<string, unknown>)["sourceRange"];
+  if (typeof sourceRange !== "object" || sourceRange === null || Array.isArray(sourceRange)) {
+    graphInvalid(`Restyle item ${item.id} has no source range.`, [item.id]);
+  }
+  const range = sourceRange as Record<string, unknown>;
+  const startFrame = range["startFrame"];
+  const endFrame = range["endFrame"];
+  if (
+    typeof startFrame !== "number" || !Number.isSafeInteger(startFrame) || startFrame < 0 ||
+    typeof endFrame !== "number" || !Number.isSafeInteger(endFrame) || endFrame <= startFrame
+  ) {
+    graphInvalid(`Restyle item ${item.id} has an invalid source range.`, [item.id]);
+  }
+  return { startFrame, endFrame };
+}
+
 function visualLayers(project: GuyditorProject): Layer[] {
   return project.layers
     .filter(({ enabled, kind }) => enabled && (
@@ -495,10 +522,21 @@ export function compileRenderGraph(options: CompileRenderGraphOptions): RenderGr
   }
   const mainTimeline = deriveTimeline(project, sequence.id);
   if (!mainTimeline.ok) throw mainTimeline.error;
-  const compositionDurationFrames = framesForSeconds(
+  const sourceCompositionDurationFrames = framesForSeconds(
     mainTimeline.value.duration,
     project.settings.timeline.fps,
   );
+  const timelineInsertions = restyleTimelineInsertions(project, sequence.id);
+  for (const insertion of timelineInsertions) {
+    if (insertion.sourceFrame <= 0 || insertion.sourceFrame >= sourceCompositionDurationFrames) {
+      graphInvalid(
+        `Restyle seam ${insertion.seamId} must fall inside the source composition.`,
+        [insertion.seamId],
+      );
+    }
+  }
+  const compositionDurationFrames = sourceCompositionDurationFrames +
+    insertedDurationFrames(timelineInsertions);
   const nodes: RenderNode[] = [];
   const nextId = idFactory(`${revision}:${deliverableId}:${variant}:${quality}`);
   const canvas = {
@@ -606,7 +644,7 @@ export function compileRenderGraph(options: CompileRenderGraphOptions): RenderGr
       });
     }
     const durationFrames = framesForSeconds(timeline.value.duration, project.settings.timeline.fps);
-    const root = pushNode(nodes, nextId, "composite", inputs.map(({ nodeId }) => nodeId), {
+    let root = pushNode(nodes, nextId, "composite", inputs.map(({ nodeId }) => nodeId), {
       canvas,
       mode: "timeline.sequential",
       durationFrames,
@@ -615,6 +653,21 @@ export function compileRenderGraph(options: CompileRenderGraphOptions): RenderGr
         ...(transitionFromPreviousFrames === undefined ? {} : { transitionFromPreviousFrames }),
       })),
     } satisfies CompositeNodeParams);
+    if (timelineInsertions.length > 0) {
+      const applicable = timelineInsertions.filter(({ sourceFrame }) => sourceFrame < durationFrames);
+      if (applicable.length === 0) return { root, durationFrames };
+      const outputDuration = durationFrames + insertedDurationFrames(applicable);
+      root = pushNode(nodes, nextId, "timeline-insert", [root.id], {
+        stream: "video",
+        sourceDuration: durationFrames,
+        outputDuration,
+        insertions: applicable.map(({ sourceFrame, durationFrames: duration }) => ({
+          at: sourceFrame,
+          duration,
+        })),
+      } satisfies TimelineInsertNodeParams);
+      return { root, durationFrames: outputDuration };
+    }
     return { root, durationFrames };
   }
 
@@ -635,8 +688,22 @@ export function compileRenderGraph(options: CompileRenderGraphOptions): RenderGr
         item,
         asset,
         project.settings.timeline.fps,
-        compositionDurationFrames,
+        sourceCompositionDurationFrames,
       );
+      const sourceStartFrame = itemStart(item, sequence.id, project.settings.timeline.fps);
+      const restyleRange = restyleSourceRange(item);
+      if (restyleRange !== undefined) {
+        if (
+          asset.kind !== "generated" || asset.provenance === undefined ||
+          sourceStartFrame !== restyleRange.startFrame ||
+          durationFrames !== restyleRange.endFrame - restyleRange.startFrame
+        ) {
+          graphInvalid(
+            `Restyle item ${item.id} must use a frozen generated asset over its exact source range.`,
+            [item.id, asset.id],
+          );
+        }
+      }
       let source: { in: FrameTime; out: FrameTime };
       if (item.source !== undefined && "in" in item.source) {
         source = item.source;
@@ -656,7 +723,7 @@ export function compileRenderGraph(options: CompileRenderGraphOptions): RenderGr
       inputs.push({
         nodeId: addVisualSource(item, asset, source, durationFrames),
         durationFrames,
-        atOutputFrame: itemStart(item, sequence.id, project.settings.timeline.fps),
+        atOutputFrame: sourceFrameToOutputFrame(sourceStartFrame, timelineInsertions),
       });
     }
     const root = pushNode(nodes, nextId, "composite", inputs.map(({ nodeId }) => nodeId), {
@@ -840,6 +907,10 @@ export function compileRenderGraph(options: CompileRenderGraphOptions): RenderGr
   }
 
   const outputSampleRate = project.settings.audio.sampleRate;
+  const sourceCompositionDurationSamples = samplesForFrames(
+    { frames: sourceCompositionDurationFrames, fps: project.settings.timeline.fps },
+    outputSampleRate,
+  );
   const compositionDurationSamples = samplesForFrames(
     { frames: compositionDurationFrames, fps: project.settings.timeline.fps },
     outputSampleRate,
@@ -965,7 +1036,7 @@ export function compileRenderGraph(options: CompileRenderGraphOptions): RenderGr
             loopCrossfadeSamples: clip.loop.crossfade === undefined
               ? 0
               : samplesForFrames(clip.loop.crossfade, outputSampleRate),
-            loopDurationSamples: Math.max(0, compositionDurationSamples - atOutputSample),
+            loopDurationSamples: Math.max(0, sourceCompositionDurationSamples - atOutputSample),
           }),
     });
     }
@@ -1017,7 +1088,7 @@ export function compileRenderGraph(options: CompileRenderGraphOptions): RenderGr
         config: layer.ducking,
         speech: options.speechIntervals ?? [],
         overrides,
-        duration: { samples: compositionDurationSamples, rate: outputSampleRate },
+        duration: { samples: sourceCompositionDurationSamples, rate: outputSampleRate },
       });
       stages.push({
         stage: "duck",
@@ -1029,7 +1100,7 @@ export function compileRenderGraph(options: CompileRenderGraphOptions): RenderGr
     }
     return pushNode(nodes, nextId, "audiochain", audioInputs, {
       mode,
-      durationSamples: compositionDurationSamples,
+      durationSamples: sourceCompositionDurationSamples,
       stages,
       inputSettings: audioSettings,
     } satisfies AudioChainNodeParams);
@@ -1049,9 +1120,9 @@ export function compileRenderGraph(options: CompileRenderGraphOptions): RenderGr
   const masterTarget = sequence.audio ?? { targetLufs: -14, truePeakDb: -1 };
   const masterAudio = pushNode(nodes, nextId, "audiochain", [mainAudio.id, ...roleAudio.map(({ id }) => id)], {
     mode: "mix",
-    durationSamples: compositionDurationSamples,
+    durationSamples: sourceCompositionDurationSamples,
     inputSettings: [mainAudio, ...roleAudio].map(() => ({
-      durationSamples: compositionDurationSamples,
+      durationSamples: sourceCompositionDurationSamples,
       stages: [],
     })),
     stages: [{
@@ -1065,7 +1136,28 @@ export function compileRenderGraph(options: CompileRenderGraphOptions): RenderGr
     }],
   } satisfies AudioChainNodeParams);
 
-  pushNode(nodes, nextId, "encode", [visualRoot.id, masterAudio.id], {
+  const encodedAudio = timelineInsertions.length === 0
+    ? masterAudio
+    : pushNode(nodes, nextId, "timeline-insert", [masterAudio.id], {
+        stream: "audio",
+        sourceDuration: samplesForFrames(
+          { frames: sourceCompositionDurationFrames, fps: project.settings.timeline.fps },
+          outputSampleRate,
+        ),
+        outputDuration: compositionDurationSamples,
+        insertions: timelineInsertions.map(({ sourceFrame, durationFrames }) => ({
+          at: samplesForFrames(
+            { frames: sourceFrame, fps: project.settings.timeline.fps },
+            outputSampleRate,
+          ),
+          duration: samplesForFrames(
+            { frames: durationFrames, fps: project.settings.timeline.fps },
+            outputSampleRate,
+          ),
+        })),
+      } satisfies TimelineInsertNodeParams);
+
+  pushNode(nodes, nextId, "encode", [visualRoot.id, encodedAudio.id], {
     profileId: profile.id,
     profileVersion: profile.version,
     profileSha256,
@@ -1115,6 +1207,32 @@ export function validateRenderGraph(graph: RenderGraph): void {
       (node.params as CompositeNodeParams).inputSettings!.length !== node.inputs.length
     ) {
       graphInvalid(`Composite ${node.id} input settings do not match its inputs.`, [node.id]);
+    }
+    if (node.kind === "timeline-insert") {
+      const insertion = node.params as TimelineInsertNodeParams;
+      if (
+        node.inputs.length !== 1 ||
+        !Number.isSafeInteger(insertion.sourceDuration) || insertion.sourceDuration < 1 ||
+        !Number.isSafeInteger(insertion.outputDuration) || insertion.outputDuration <= insertion.sourceDuration ||
+        insertion.insertions.length < 1
+      ) {
+        graphInvalid(`Timeline insertion ${node.id} has invalid duration metadata.`, [node.id]);
+      }
+      let previous = 0;
+      let total = 0;
+      for (const entry of insertion.insertions) {
+        if (
+          !Number.isSafeInteger(entry.at) || entry.at <= previous || entry.at >= insertion.sourceDuration ||
+          !Number.isSafeInteger(entry.duration) || entry.duration < 1
+        ) {
+          graphInvalid(`Timeline insertion ${node.id} has an invalid insertion point.`, [node.id]);
+        }
+        previous = entry.at;
+        total += entry.duration;
+      }
+      if (insertion.outputDuration !== insertion.sourceDuration + total) {
+        graphInvalid(`Timeline insertion ${node.id} output duration is inconsistent.`, [node.id]);
+      }
     }
   }
   const visiting = new Set<string>();

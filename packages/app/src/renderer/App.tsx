@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import type { Annotation, Proposal } from "../../../core/src/index.js";
+import type { Annotation, Proposal, RestylePlan } from "../../../core/src/index.js";
 import type { ExportReport } from "../../../render/src/index.js";
 import type { TranscriptSidecar } from "../../../transcript/src/index.js";
 import type { JobOverview, JobStatus, ProjectSnapshot } from "../shared/ipc.js";
@@ -39,6 +39,7 @@ export function App(): React.JSX.Element {
   const [transcripts, setTranscripts] = useState<TranscriptSidecar[]>([]);
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
   const [proposals, setProposals] = useState<Proposal[]>([]);
+  const [restylePlan, setRestylePlan] = useState<RestylePlan | null>(null);
   const [exportReport, setExportReport] = useState<ExportReport | null>(null);
   const [notice, setNotice] = useState("Open a project directory to connect the edit journal.");
   const overviewGeneration = useRef(0);
@@ -85,6 +86,23 @@ export function App(): React.JSX.Element {
     }
   }, []);
 
+  const refreshRestylePlan = useCallback(async (): Promise<void> => {
+    const deliverableId = useProjectMirror.getState().snapshot?.master.settings.primaryDeliverable;
+    if (deliverableId === undefined) {
+      setRestylePlan(null);
+      return;
+    }
+    try {
+      setRestylePlan(await window.guyditor.call<RestylePlan | null>(
+        "DeliverableService",
+        "restylePlan",
+        { deliverableId },
+      ));
+    } catch {
+      setRestylePlan(null);
+    }
+  }, []);
+
   const refreshOverview = useCallback(async (): Promise<void> => {
     const generation = ++overviewGeneration.current;
     try {
@@ -109,8 +127,13 @@ export function App(): React.JSX.Element {
     if (nextOverview !== null && generation === overviewGeneration.current) {
       replaceOverview(nextOverview);
     }
-    await Promise.all([refreshAnnotations(), refreshProposals(), refreshExportReport()]);
-  }, [refreshAnnotations, refreshExportReport, refreshProposals, replaceJobs, replaceOverview, replaceSnapshot]);
+    await Promise.all([
+      refreshAnnotations(),
+      refreshProposals(),
+      refreshExportReport(),
+      refreshRestylePlan(),
+    ]);
+  }, [refreshAnnotations, refreshExportReport, refreshProposals, refreshRestylePlan, replaceJobs, replaceOverview, replaceSnapshot]);
 
   const refreshProject = useCallback(async (): Promise<void> => {
     const next = await getSnapshot();
@@ -131,6 +154,9 @@ export function App(): React.JSX.Element {
       }
       if (event.job.state === "done" && event.job.kind === "ingest") {
         void refreshProject();
+      }
+      if (event.job.kind === "restyle.generate") {
+        void Promise.all([refreshProposals(), refreshRestylePlan()]);
       }
     });
     const offProgress = window.guyditor.on("job.progress", (event) => {
@@ -160,7 +186,7 @@ export function App(): React.JSX.Element {
       offAnnotation();
       offWatcher();
     };
-  }, [applyJobEvent, hydrate, refreshAnnotations, refreshExportReport, refreshOverview, refreshProject, refreshProposals, replaceJobs]);
+  }, [applyJobEvent, hydrate, refreshAnnotations, refreshExportReport, refreshOverview, refreshProject, refreshProposals, refreshRestylePlan, replaceJobs]);
 
   useEffect(() => {
     if (snapshot === null) return undefined;
@@ -256,10 +282,12 @@ export function App(): React.JSX.Element {
     transcripts,
     annotations,
     proposals,
+    restylePlan,
     exportReport,
     refreshProject,
     refreshAnnotations,
     refreshProposals,
+    refreshRestylePlan,
     refreshExportReport,
     setNotice,
   };

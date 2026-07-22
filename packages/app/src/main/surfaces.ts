@@ -338,6 +338,118 @@ export const IPC_SURFACES: readonly IpcSurface[] = Object.freeze([
     },
   },
   {
+    service: "AdapterRegistry",
+    methods: {
+      list: { paramsSchema: emptyParams, resultSchema: { type: "array" }, budgetMs: 20 },
+    },
+  },
+  {
+    service: "DeliverableService",
+    methods: {
+      restylePlan: {
+        paramsSchema: {
+          type: "object",
+          required: ["deliverableId"],
+          properties: {
+            deliverableId: { type: "string", pattern: "^dlv_[a-z2-7]{10}$" },
+          },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 50,
+      },
+      createRestylePlan: {
+        paramsSchema: {
+          type: "object",
+          required: ["deliverableId", "coverage", "prompt"],
+          properties: {
+            deliverableId: { type: "string", pattern: "^dlv_[a-z2-7]{10}$" },
+            adapterId: { type: "string", pattern: "^adp_[a-z2-7]{10}$" },
+            coverage: {
+              oneOf: [
+                { const: "full" },
+                {
+                  type: "array",
+                  minItems: 1,
+                  items: {
+                    type: "object",
+                    required: ["startFrame", "endFrame"],
+                    properties: {
+                      startFrame: { type: "integer", minimum: 0 },
+                      endFrame: { type: "integer", minimum: 1 },
+                    },
+                    additionalProperties: false,
+                  },
+                },
+              ],
+            },
+            prompt: { type: "string", minLength: 1 },
+            negativePrompt: { type: "string" },
+            seed: { type: "integer", minimum: 0, maximum: 4294967295 },
+            providerSettings: { type: "object" },
+          },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 150,
+      },
+      startRestyle: {
+        paramsSchema: {
+          type: "object",
+          required: ["deliverableId"],
+          properties: {
+            deliverableId: { type: "string", pattern: "^dlv_[a-z2-7]{10}$" },
+            confirmToken: { type: "string", minLength: 1 },
+          },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 20,
+      },
+      setRestyleSeamTreatment: {
+        paramsSchema: {
+          type: "object",
+          required: ["deliverableId", "seamId", "treatment"],
+          properties: {
+            deliverableId: { type: "string", pattern: "^dlv_[a-z2-7]{10}$" },
+            seamId: { type: "string", pattern: "^restyle-seam-[A-Za-z0-9._-]+$" },
+            treatment: {
+              oneOf: [
+                {
+                  type: "object",
+                  required: ["kind", "templateId", "params", "durationFrames", "resumeExact"],
+                  properties: {
+                    kind: { const: "interstitial" },
+                    templateId: { type: "string", pattern: "^tpl_[a-z2-7]{10}$" },
+                    params: { type: "object" },
+                    durationFrames: { type: "integer", minimum: 1 },
+                    resumeExact: { const: true },
+                  },
+                  additionalProperties: false,
+                },
+                {
+                  type: "object",
+                  required: ["kind"],
+                  properties: { kind: { const: "punch-in" } },
+                  additionalProperties: false,
+                },
+                {
+                  type: "object",
+                  required: ["kind"],
+                  properties: { kind: { const: "none" } },
+                  additionalProperties: false,
+                },
+              ],
+            },
+          },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 150,
+      },
+    },
+  },
+  {
     service: "RenderService",
     methods: {
       cacheStats: { paramsSchema: emptyParams, resultSchema: anyResult, budgetMs: 20 },

@@ -32,6 +32,9 @@ importers:
       '@guyditor/core':
         specifier: workspace:*
         version: link:../core
+      '@guyditor/media':
+        specifier: workspace:*
+        version: link:../media
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(zod@4.4.3)
@@ -50,6 +53,9 @@ importers:
       '@guyditor/core':
         specifier: workspace:*
         version: link:../core
+      '@guyditor/deliver':
+        specifier: workspace:*
+        version: link:../deliver
       '@guyditor/media':
         specifier: workspace:*
         version: link:../media
@@ -109,7 +115,11 @@ importers:
         specifier: ^2.9.0
         version: 2.9.0
 
-  packages/deliver: {}
+  packages/deliver:
+    dependencies:
+      '@guyditor/core':
+        specifier: workspace:*
+        version: link:../core
 
   packages/media:
     dependencies:
@@ -146,6 +156,13 @@ importers:
       yaml:
         specifier: ^2.9.0
         version: 2.9.0
+    devDependencies:
+      '@guyditor/agent':
+        specifier: workspace:*
+        version: link:../agent
+      '@guyditor/deliver':
+        specifier: workspace:*
+        version: link:../deliver
 
   packages/transcript:
     dependencies:

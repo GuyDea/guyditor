@@ -5,6 +5,10 @@ import type {
   GuyditorProject,
   OperationInput,
 } from "../index.js";
+import { failure, makeGuyditorError, success } from "../errors.js";
+import type { Result } from "../errors.js";
+import { deriveTimeline } from "../project/derive.js";
+import { convertTime } from "../time/index.js";
 
 export interface JumpCutConcealmentConfig {
   zoomLevels: number[];
@@ -56,6 +60,24 @@ export interface PlanJumpCutConcealmentInput {
   warnings: readonly ContinuityWarning[];
   config: JumpCutConcealmentConfig;
   faceTracks: Readonly<Record<string, FaceTrackAvailability>>;
+}
+
+export interface PlanRestylePunchInAlternationInput {
+  project: GuyditorProject;
+  sequenceId: string;
+  /** Exact source-timeline boundary frame. */
+  frame: number;
+  /** Side whose visible footage receives the alternating punch level. */
+  side: "before" | "after";
+  /** Required when the seam falls inside a clip. */
+  newClipId?: string;
+  anchor?: { x: number; y: number } | "face-track";
+}
+
+export interface RestylePunchInAlternationPlan {
+  targetClipId: string;
+  level: number;
+  operations: OperationInput[];
 }
 
 export const DEFAULT_JUMP_CUT_CONCEALMENT_CONFIG: JumpCutConcealmentConfig = {
@@ -224,6 +246,110 @@ function nextAdjacentLevel(
   if (index === feasible.length - 1) nextDirection = -1;
   else if (index === 0) nextDirection = 1;
   return { level: feasible[index + nextDirection]!, direction: nextDirection };
+}
+
+function restylePunchFailure(message: string, affected: readonly string[] = []) {
+  return failure(makeGuyditorError("E_RESTYLE_SEAM_PUNCH_IN", message, { affected }));
+}
+
+function exactSourceSplitOffset(
+  project: GuyditorProject,
+  clip: Clip,
+  outputOffsetFrames: number,
+): Result<number> {
+  const converted = convertTime(
+    { frames: outputOffsetFrames, fps: project.settings.timeline.fps },
+    clip.source.in.fps,
+  );
+  if (!converted.ok) return converted;
+  let numerator = converted.value.frames;
+  let denominator = 1;
+  const speed = clip.effects?.find(({ kind }) => kind === "speed")?.params["rate"];
+  if (speed !== undefined) {
+    if (typeof speed !== "string") {
+      return restylePunchFailure(`Clip ${clip.id} has a non-rational speed effect.`, [clip.id]);
+    }
+    const match = /^([1-9][0-9]*)\/([1-9][0-9]*)$/u.exec(speed);
+    if (match === null) {
+      return restylePunchFailure(`Clip ${clip.id} has invalid speed ${speed}.`, [clip.id]);
+    }
+    numerator *= Number(match[1]);
+    denominator = Number(match[2]);
+  }
+  if (numerator % denominator !== 0) {
+    return restylePunchFailure(
+      `Restyle seam cannot split ${clip.id} at an exact source frame.`,
+      [clip.id],
+    );
+  }
+  return success(numerator / denominator);
+}
+
+export function planRestylePunchInAlternation(
+  input: PlanRestylePunchInAlternationInput,
+): Result<RestylePunchInAlternationPlan> {
+  if (!Number.isSafeInteger(input.frame) || input.frame < 0) {
+    return restylePunchFailure("Restyle punch-in frame must be a non-negative integer.");
+  }
+  const sequence = input.project.sequences.find(({ id }) => id === input.sequenceId);
+  if (sequence === undefined) {
+    return restylePunchFailure(`Sequence ${input.sequenceId} does not exist.`, [input.sequenceId]);
+  }
+  const timeline = deriveTimeline(input.project, input.sequenceId);
+  if (!timeline.ok) return timeline;
+  const entries = timeline.value.clips.map((entry) => ({
+    entry,
+    clip: sequence.clips.find(({ id }) => id === entry.clipId)!,
+    start: entry.start.frames,
+    end: entry.start.frames + entry.duration.frames,
+  }));
+  const located = input.side === "after"
+    ? entries.find(({ start, end }) => start <= input.frame && input.frame < end)
+    : [...entries].reverse().find(({ start, end }) => start < input.frame && input.frame <= end);
+  if (located === undefined) {
+    return restylePunchFailure(
+      `No ${input.side} footage exists at restyle seam frame ${String(input.frame)}.`,
+      [input.sequenceId],
+    );
+  }
+  const inside = input.frame > located.start && input.frame < located.end;
+  const operations: OperationInput[] = [];
+  let targetClipId = located.clip.id;
+  if (inside) {
+    if (input.newClipId === undefined) {
+      return restylePunchFailure(
+        `Restyle seam frame ${String(input.frame)} requires a deterministic split clip ID.`,
+        [located.clip.id],
+      );
+    }
+    const offset = exactSourceSplitOffset(input.project, located.clip, input.frame - located.start);
+    if (!offset.ok) return offset;
+    operations.push({
+      op: "clip.split",
+      params: {
+        clipId: located.clip.id,
+        at: offset.value,
+        newClipId: input.newClipId,
+        evidence: `Restyle seam at timeline frame ${String(input.frame)}`,
+      },
+    });
+    if (input.side === "after") targetClipId = input.newClipId;
+  }
+  const currentLevel = located.clip.punchIn?.level ?? 1;
+  const adjacent = nextAdjacentLevel(
+    DEFAULT_JUMP_CUT_CONCEALMENT_CONFIG.zoomLevels,
+    currentLevel,
+    1,
+  );
+  operations.push({
+    op: "clip.punchin.set",
+    params: {
+      clipId: targetClipId,
+      level: adjacent.level,
+      anchor: structuredClone(input.anchor ?? { x: 0.5, y: 0.5 }),
+    },
+  });
+  return success({ targetClipId, level: adjacent.level, operations });
 }
 
 export function planJumpCutConcealment(

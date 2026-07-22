@@ -831,6 +831,20 @@ function groundTruthByPath() {
   };
 }
 
+export function restylePlanningSignalsFixture() {
+  return {
+    schema: "guyditor.restyle-signals/v1",
+    sourceAssetId: "ast_bbbbbbbbbb",
+    fps: "30/1",
+    vadSilences: [
+      { startFrame: 90, endFrame: 114 },
+      { startFrame: 270, endFrame: 306 },
+      { startFrame: 465, endFrame: 480 },
+    ],
+    lowMotionFrames: [102, 288, 473],
+  };
+}
+
 function kindOf(relativePath) {
   if (relativePath.endsWith(".mp4")) return "video";
   if (relativePath.endsWith(".wav")) return "audio";
@@ -1036,6 +1050,7 @@ async function createProjectTemplate(core, transcriptDomain, fixtureRoot, name) 
     generator: { name: "guyditor-fixture-generator", version: FIXTURE_GENERATOR_VERSION },
   }, null, 2)}\n`;
   const transcriptText = `${JSON.stringify(transcript, null, 2)}\n`;
+  const restyleSignals = `${JSON.stringify(restylePlanningSignalsFixture(), null, 2)}\n`;
   const model = {
     format: "guyditor/v1",
     revision: "rev_00001",
@@ -1075,6 +1090,7 @@ async function createProjectTemplate(core, transcriptDomain, fixtureRoot, name) 
       { name: "annotations", path: "sidecars/annotations.yaml", schema: "guyditor.annotations/v1", sha256: createHash("sha256").update(annotations).digest("hex"), inputs: [] },
       { name: "generation-frozen", path: "sidecars/generated-frozen.json", schema: "guyditor.generated-provenance/v1", sha256: createHash("sha256").update(generation).digest("hex"), generatedBy: { tool: "guyditor-fixture-generator", version: FIXTURE_GENERATOR_VERSION }, inputs: [{ asset: "ast_hhhhhhhhhh", sha256: assets.find(({ id }) => id === "ast_hhhhhhhhhh").sha256 }] },
       { name: "transcript-speech", path: "sidecars/transcript-speech.json", schema: "guyditor.transcript/v1", sha256: createHash("sha256").update(transcriptText).digest("hex"), generatedBy: { tool: "guyditor-fixture-generator", version: FIXTURE_GENERATOR_VERSION, job: "job_fixturezzz" }, inputs: [{ asset: "ast_bbbbbbbbbb", sha256: assets.find(({ id }) => id === "ast_bbbbbbbbbb").sha256 }] },
+      { name: "restyle-signals", path: "sidecars/analysis/restyle-signals.json", schema: "guyditor.restyle-signals/v1", sha256: createHash("sha256").update(restyleSignals).digest("hex"), generatedBy: { tool: "@guyditor/media", version: "1", job: "job_fixturezzz" }, inputs: [{ asset: "ast_bbbbbbbbbb", sha256: assets.find(({ id }) => id === "ast_bbbbbbbbbb").sha256 }] },
     ],
   };
   const created = await core.createProject(root, model, {
@@ -1083,10 +1099,12 @@ async function createProjectTemplate(core, transcriptDomain, fixtureRoot, name) 
     now: () => new Date(FIXED_CREATED_AT),
   });
   if (!created.ok) throw created.error;
+  await mkdir(path.join(root, "sidecars/analysis"), { recursive: true });
   await Promise.all([
     writeFile(path.join(root, "sidecars/annotations.yaml"), annotations),
     writeFile(path.join(root, "sidecars/generated-frozen.json"), generation),
     writeFile(path.join(root, "sidecars/transcript-speech.json"), transcriptText),
+    writeFile(path.join(root, "sidecars/analysis/restyle-signals.json"), restyleSignals),
   ]);
 }
 

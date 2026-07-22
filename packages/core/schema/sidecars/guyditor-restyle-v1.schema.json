@@ -1,0 +1,208 @@
+{
+  "$id": "https://guyditor.dev/schema/sidecars/guyditor-restyle-v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "id", "deliverableId", "sequenceId", "sourceAssets", "adapterId", "model", "createdAt", "coverage", "constraints", "settings", "chunks", "seams", "estimatedCost"],
+  "properties": {
+    "schema": { "const": "guyditor.restyle/v1" },
+    "id": { "type": "string", "pattern": "^restyle-plan-[A-Za-z0-9._-]+$" },
+    "deliverableId": { "type": "string", "pattern": "^dlv_[a-z2-7]{10}$" },
+    "sequenceId": { "type": "string", "pattern": "^seq_[a-z2-7]{10}$" },
+    "sourceAssets": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["assetId", "sha256"],
+        "properties": {
+          "assetId": { "type": "string", "pattern": "^ast_[a-z2-7]{10}$" },
+          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+        }
+      }
+    },
+    "adapterId": { "type": "string", "pattern": "^adp_[a-z2-7]{10}$" },
+    "model": { "type": "string", "minLength": 1 },
+    "createdAt": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T.*Z$" },
+    "coverage": { "$ref": "#/$defs/coverage" },
+    "constraints": { "$ref": "#/$defs/constraints" },
+    "settings": { "$ref": "#/$defs/settings" },
+    "chunks": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/chunk" }
+    },
+    "seams": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/seam" }
+    },
+    "estimatedCost": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["currency", "amount"],
+      "properties": {
+        "currency": { "const": "USD" },
+        "amount": { "type": "number", "minimum": 0 }
+      }
+    }
+  },
+  "$defs": {
+    "range": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["startFrame", "endFrame"],
+      "properties": {
+        "startFrame": { "type": "integer", "minimum": 0 },
+        "endFrame": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "ranges"],
+      "properties": {
+        "mode": { "enum": ["full", "ranges"] },
+        "ranges": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/range" } }
+      }
+    },
+    "constraints": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["maxSegmentSeconds", "maxResolution", "fpsSupport", "costPerSecond", "concurrency"],
+      "properties": {
+        "maxSegmentSeconds": { "type": "number", "exclusiveMinimum": 0 },
+        "maxResolution": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["width", "height"],
+          "properties": {
+            "width": { "type": "integer", "minimum": 1 },
+            "height": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "fpsSupport": {
+          "oneOf": [
+            { "const": "any" },
+            { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "^[0-9]+/[1-9][0-9]*$" } }
+          ]
+        },
+        "costPerSecond": { "type": "number", "minimum": 0 },
+        "concurrency": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "settings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["prompt", "providerSettings"],
+      "properties": {
+        "prompt": { "type": "string", "minLength": 1 },
+        "negativePrompt": { "type": "string" },
+        "seed": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+        "providerSettings": { "type": "object" }
+      }
+    },
+    "semanticAnchors": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["start", "end", "boundaryKind"],
+      "properties": {
+        "start": { "type": "string", "minLength": 1 },
+        "end": { "type": "string", "minLength": 1 },
+        "boundaryKind": { "enum": ["range-edge", "vad-silence", "word-gap", "beat", "low-motion", "hard-cap"] },
+        "evidence": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+      }
+    },
+    "stale": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reason", "markedAt", "transactionId"],
+      "properties": {
+        "reason": { "const": "source-range-overlap" },
+        "markedAt": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T.*Z$" },
+        "transactionId": { "type": "string", "pattern": "^txn_[a-z2-7]{10}$" }
+      }
+    },
+    "seamTreatment": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "templateId", "params", "durationFrames", "resumeExact"],
+          "properties": {
+            "kind": { "const": "interstitial" },
+            "templateId": { "type": "string", "pattern": "^tpl_[a-z2-7]{10}$" },
+            "params": { "type": "object" },
+            "durationFrames": { "type": "integer", "minimum": 1 },
+            "resumeExact": { "const": true }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": { "kind": { "const": "punch-in" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": { "kind": { "const": "none" } }
+        }
+      ]
+    },
+    "seam": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "frame", "boundary", "treatment", "status"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^restyle-seam-[A-Za-z0-9._-]+$" },
+        "frame": { "type": "integer", "minimum": 0 },
+        "boundary": { "enum": ["internal", "untouched-to-restyled", "restyled-to-untouched"] },
+        "beforeChunkId": { "type": "string", "pattern": "^restyle-chunk-[A-Za-z0-9._-]+$" },
+        "afterChunkId": { "type": "string", "pattern": "^restyle-chunk-[A-Za-z0-9._-]+$" },
+        "treatment": { "$ref": "#/$defs/seamTreatment" },
+        "status": { "enum": ["planned", "applied", "review"] },
+        "application": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["chunkId", "atFrame"],
+          "properties": {
+            "chunkId": { "type": "string", "pattern": "^restyle-chunk-[A-Za-z0-9._-]+$" },
+            "atFrame": { "type": "integer", "minimum": 0 },
+            "itemId": { "type": "string", "pattern": "^gfx_[a-z2-7]{10}$" }
+          }
+        },
+        "review": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["reason"],
+          "properties": {
+            "reason": { "enum": ["adjacent-chunk-stale", "treatment-changed"] },
+            "markedAt": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T.*Z$" },
+            "transactionId": { "type": "string", "pattern": "^txn_[a-z2-7]{10}$" }
+          }
+        }
+      }
+    },
+    "chunk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "index", "sourceRange", "semanticAnchors", "durationSeconds", "estimatedCostUsd", "status"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^restyle-chunk-[A-Za-z0-9._-]+$" },
+        "index": { "type": "integer", "minimum": 0 },
+        "sourceRange": { "$ref": "#/$defs/range" },
+        "semanticAnchors": { "$ref": "#/$defs/semanticAnchors" },
+        "durationSeconds": { "type": "number", "exclusiveMinimum": 0 },
+        "estimatedCostUsd": { "type": "number", "minimum": 0 },
+        "status": { "enum": ["planned", "queued", "generating", "generated", "approved", "failed", "stale"] },
+        "jobId": { "type": "string", "pattern": "^job_[a-z2-7]{10}$" },
+        "assetId": { "type": "string", "pattern": "^ast_[a-z2-7]{10}$" },
+        "providerJobId": { "type": "string", "minLength": 1 },
+        "error": { "type": "string" },
+        "stale": { "$ref": "#/$defs/stale" }
+      }
+    }
+  }
+}
