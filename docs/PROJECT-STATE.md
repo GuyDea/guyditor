@@ -7,10 +7,11 @@ To resume: open Claude Code in this directory and say "continue the Guyditor bui
 
 ## Where things stand
 
-- **`main`** contains milestones **M0, M1, M2, M3 complete** (automated gates green:
-  645 unit/property tests, 21 Playwright e2e, golden + contract suites,
-  AC-001..008 + 011 automated, AC-009 harness).
-  Gate reports: `docs/gates/`. Requirement coverage: `docs/traceability.md`.
+- **`main` contains ALL milestones M0–M4 complete** (automated gates green:
+  761 unit/property tests, 21 Playwright e2e, golden + contract suites,
+  AC-001..012 automated portions). The full BRD Priority A–D scope plus both
+  amendments is implemented. Gate reports: `docs/gates/`. Coverage:
+  `docs/traceability.md`.
 - **Amendment 001 (segmented AI restyle) is COMPLETE and merged** (a8953d5): adapter
   interface, Kling client (stub mode; live wire format PROVIDER-VERIFY-flagged in
   packages/agent/src/adapters/kling-api.ts), ≤10s segmentation planner with cost
@@ -20,9 +21,10 @@ To resume: open Claude Code in this directory and say "continue the Guyditor bui
 
 ## What Claude does on resume
 
-1. M4 campaign (Priority D): editorial skills + preference examples, take
-   comparison, B-roll adapters + provenance, specialist critic, archival/
-   migration/backup hardening, AC-009/010/012.
+1. Remaining engineering backlog (post-M4, no milestone owner): FR-202 script
+   reconciliation, FR-903 comparison preview imagery, NFR-001..003
+   formalization sweep, plus the 'partial' traceability rows — each carries an
+   explicit deferral note in docs/traceability.md.
 2. On credentials: verify the Kling wire format against live docs (one file:
    `packages/agent/src/adapters/kling-api.ts`).
 
