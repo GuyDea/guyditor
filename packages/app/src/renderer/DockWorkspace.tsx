@@ -27,6 +27,11 @@ const PANEL_LABELS: Record<DockPanelId, { icon: string; name: string }> = {
   agent: { icon: "A", name: "Agent" },
   timeline: { icon: "L", name: "Timeline" },
   status: { icon: "S", name: "Status" },
+  graphics: { icon: "G", name: "Graphics" },
+  publish: { icon: "U", name: "Publish" },
+  skills: { icon: "K", name: "Skills" },
+  broll: { icon: "B", name: "B-roll" },
+  storage: { icon: "D", name: "Storage" },
 };
 
 function isDockPanelId(value: string): value is DockPanelId {
@@ -304,16 +309,13 @@ function Splitter({ splitterId, orientation }: SplitterProps): React.JSX.Element
 
 interface DockWorkspaceProps {
   panels: Record<DockPanelId, ReactNode>;
-  leftUtilities: ReactNode;
-  rightUtilities: ReactNode;
 }
 
 export function DockWorkspace({
   panels,
-  leftUtilities,
-  rightUtilities,
 }: DockWorkspaceProps): React.JSX.Element {
   const layout = useWorkspaceStore((state) => state.layout);
+  const activePhase = useWorkspaceStore((state) => state.activePhase);
   const leftCollapsed = layout.regions.left.panelIds.every(
     (panelId) => layout.collapsed[panelId],
   );
@@ -330,6 +332,8 @@ export function DockWorkspace({
   const style = {
     "--left-width": `${String(leftCollapsed ? 46 : layout.splitters.left)}px`,
     "--right-width": `${String(rightCollapsed ? 46 : layout.splitters.right)}px`,
+    "--panel-left-width": `${String(layout.splitters.left)}px`,
+    "--panel-right-width": `${String(layout.splitters.right)}px`,
     "--center-top": `${String(layout.splitters["center-horizontal"])}fr`,
     "--center-bottom": `${String(1 - layout.splitters["center-horizontal"])}fr`,
     "--right-top": `${String(layout.splitters["right-horizontal"])}fr`,
@@ -339,12 +343,16 @@ export function DockWorkspace({
   } as CSSProperties;
 
   return (
-    <div className="workspace-layout" data-testid="workspace-layout" style={style}>
+    <div
+      className="workspace-layout"
+      id="workspace-layout"
+      data-testid="workspace-layout"
+      data-phase={activePhase}
+      style={style}
+    >
       <div className="left-dock-column">
         <DockRegion regionId="left" panels={panels} />
-        <div className="utility-panel-stack" data-testid="left-utility-panels">
-          {leftUtilities}
-        </div>
+        <div className="utility-panel-stack" data-testid="left-utility-panels" />
       </div>
       <Splitter splitterId="left" orientation="vertical" />
       <div className="center-dock-stack">
@@ -358,9 +366,7 @@ export function DockWorkspace({
         <Splitter splitterId="right-horizontal" orientation="horizontal" />
         <div className="right-bottom-dock">
           <DockRegion regionId="right-bottom" panels={panels} />
-          <div className="utility-panel-stack" data-testid="right-utility-panels">
-            {rightUtilities}
-          </div>
+          <div className="utility-panel-stack" data-testid="right-utility-panels" />
         </div>
       </div>
       <Splitter splitterId="timeline" orientation="horizontal" />

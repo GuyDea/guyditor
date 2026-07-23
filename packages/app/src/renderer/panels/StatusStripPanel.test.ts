@@ -4,10 +4,12 @@ import { describe, expect, it } from "vitest";
 
 import { projectFixture } from "../../../../core/src/project/test-fixtures.js";
 import type { ProjectSnapshot } from "../../shared/ipc.js";
+import { useWorkspaceStore } from "../state/view-state.js";
 import { StatusStripPanel } from "./StatusStripPanel.js";
 
 describe("AC-008 deliverable staleness UI", () => {
   it("renders the stale badge, affected source range, and refresh review action", () => {
+    useWorkspaceStore.getInitialState().collapsed.status = false;
     const project = projectFixture();
     project.deliverables.push({
       id: "dlv_bbbbbbbbbb",

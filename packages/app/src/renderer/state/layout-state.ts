@@ -1,5 +1,17 @@
-export const LAYOUT_SCHEMA = "layout/v1" as const;
-export const LAYOUT_STORAGE_KEY = "guyditor/layout/v1";
+export const LAYOUT_SCHEMA = "layout/v2" as const;
+export const LAYOUT_STORAGE_KEY = "guyditor/layout/v2";
+export const LEGACY_LAYOUT_SCHEMA = "layout/v1" as const;
+export const LEGACY_LAYOUT_STORAGE_KEY = "guyditor/layout/v1";
+
+export const WORKFLOW_PHASES = [
+  "ingest",
+  "cut",
+  "polish",
+  "review",
+  "publish",
+] as const;
+
+export type WorkflowPhase = typeof WORKFLOW_PHASES[number];
 
 export const DOCK_PANEL_IDS = [
   "media",
@@ -9,9 +21,26 @@ export const DOCK_PANEL_IDS = [
   "agent",
   "timeline",
   "status",
+  "graphics",
+  "publish",
+  "skills",
+  "broll",
+  "storage",
 ] as const;
 
 export type DockPanelId = typeof DOCK_PANEL_IDS[number];
+
+const LEGACY_DOCK_PANEL_IDS = [
+  "media",
+  "preview",
+  "transcript",
+  "inspector",
+  "agent",
+  "timeline",
+  "status",
+] as const;
+
+type LegacyDockPanelId = typeof LEGACY_DOCK_PANEL_IDS[number];
 
 export const DOCK_REGION_IDS = [
   "left",
@@ -57,9 +86,32 @@ export interface WorkspaceLayout {
   collapsed: Record<DockPanelId, boolean>;
 }
 
+export interface WorkflowLayouts {
+  schema: typeof LAYOUT_SCHEMA;
+  activePhase: WorkflowPhase;
+  layouts: Record<WorkflowPhase, WorkspaceLayout>;
+}
+
 interface PersistedLayoutDocument {
   schema: typeof LAYOUT_SCHEMA;
-  projects: Record<string, WorkspaceLayout>;
+  projects: Record<string, WorkflowLayouts>;
+}
+
+interface LegacyLayoutRegion {
+  panelIds: LegacyDockPanelId[];
+  activePanelId: LegacyDockPanelId | null;
+}
+
+interface LegacyWorkspaceLayout {
+  schema: typeof LEGACY_LAYOUT_SCHEMA;
+  regions: Record<DockRegionId, LegacyLayoutRegion>;
+  splitters: SplitterPositions;
+  collapsed: Record<LegacyDockPanelId, boolean>;
+}
+
+interface LegacyPersistedLayoutDocument {
+  schema: typeof LEGACY_LAYOUT_SCHEMA;
+  projects: Record<string, LegacyWorkspaceLayout>;
 }
 
 type LayoutStorage = Pick<Storage, "getItem" | "setItem">;
@@ -73,84 +125,171 @@ const SPLITTER_LIMITS: Record<SplitterId, readonly [number, number]> = {
   status: [112, 220],
 };
 
+const DEFAULT_SPLITTERS: Record<WorkflowPhase, SplitterPositions> = {
+  ingest: {
+    left: 330,
+    right: 300,
+    "center-horizontal": 0.62,
+    "right-horizontal": 0.56,
+    timeline: 132,
+    status: 180,
+  },
+  cut: {
+    left: 250,
+    right: 310,
+    "center-horizontal": 0.58,
+    "right-horizontal": 0.56,
+    timeline: 170,
+    status: 132,
+  },
+  polish: {
+    left: 320,
+    right: 340,
+    "center-horizontal": 0.62,
+    "right-horizontal": 0.52,
+    timeline: 150,
+    status: 112,
+  },
+  review: {
+    left: 300,
+    right: 380,
+    "center-horizontal": 0.64,
+    "right-horizontal": 0.62,
+    timeline: 130,
+    status: 112,
+  },
+  publish: {
+    left: 220,
+    right: 280,
+    "center-horizontal": 0.68,
+    "right-horizontal": 0.56,
+    timeline: 112,
+    status: 210,
+  },
+};
+
+const PANEL_PLACEMENTS: Record<
+  WorkflowPhase,
+  Record<DockRegionId, readonly DockPanelId[]>
+> = {
+  ingest: {
+    left: ["media", "broll"],
+    "center-top": ["storage", "preview"],
+    "center-bottom": ["transcript", "graphics"],
+    "right-top": ["agent", "skills"],
+    "right-bottom": ["inspector", "publish"],
+    "bottom-timeline": ["timeline"],
+    "bottom-status": ["status"],
+  },
+  cut: {
+    left: ["media", "broll", "storage"],
+    "center-top": ["preview", "graphics"],
+    "center-bottom": ["transcript", "skills"],
+    "right-top": ["agent", "publish"],
+    "right-bottom": ["inspector"],
+    "bottom-timeline": ["timeline"],
+    "bottom-status": ["status"],
+  },
+  polish: {
+    left: ["graphics", "media", "broll", "storage"],
+    "center-top": ["preview"],
+    "center-bottom": ["transcript", "skills"],
+    "right-top": ["agent", "publish"],
+    "right-bottom": ["inspector"],
+    "bottom-timeline": ["timeline"],
+    "bottom-status": ["status"],
+  },
+  review: {
+    left: ["media", "broll", "storage"],
+    "center-top": ["preview", "graphics"],
+    "center-bottom": ["transcript", "skills"],
+    "right-top": ["agent", "publish"],
+    "right-bottom": ["inspector"],
+    "bottom-timeline": ["timeline"],
+    "bottom-status": ["status"],
+  },
+  publish: {
+    left: ["media", "broll", "storage"],
+    "center-top": ["publish", "preview", "graphics"],
+    "center-bottom": ["transcript", "skills"],
+    "right-top": ["agent"],
+    "right-bottom": ["inspector"],
+    "bottom-timeline": ["timeline"],
+    "bottom-status": ["status"],
+  },
+};
+
+const CURATED_PANELS: Record<WorkflowPhase, readonly DockPanelId[]> = {
+  ingest: ["media", "status", "storage"],
+  cut: ["preview", "transcript", "agent", "timeline"],
+  polish: ["preview", "transcript", "inspector", "agent", "graphics"],
+  review: ["media", "preview", "agent"],
+  publish: ["status", "publish"],
+};
+
 export function splitterRange(splitter: SplitterId): readonly [number, number] {
   return SPLITTER_LIMITS[splitter];
 }
 
-function createCollapsedState(): Record<DockPanelId, boolean> {
+function createCollapsedState(phase: WorkflowPhase): Record<DockPanelId, boolean> {
+  const curated = new Set(CURATED_PANELS[phase]);
+  return Object.fromEntries(
+    DOCK_PANEL_IDS.map((panelId) => [panelId, !curated.has(panelId)]),
+  ) as Record<DockPanelId, boolean>;
+}
+
+export function createDefaultLayout(phase: WorkflowPhase = "cut"): WorkspaceLayout {
+  const placements = PANEL_PLACEMENTS[phase];
   return {
-    media: false,
-    preview: false,
-    transcript: false,
-    inspector: false,
-    agent: false,
-    timeline: false,
-    status: false,
+    schema: LAYOUT_SCHEMA,
+    regions: Object.fromEntries(DOCK_REGION_IDS.map((regionId) => {
+      const panelIds = [...placements[regionId]];
+      return [regionId, { panelIds, activePanelId: panelIds[0] ?? null }];
+    })) as Record<DockRegionId, LayoutRegion>,
+    splitters: { ...DEFAULT_SPLITTERS[phase] },
+    collapsed: createCollapsedState(phase),
   };
 }
 
-export function createDefaultLayout(): WorkspaceLayout {
+export function createDefaultLayouts(activePhase: WorkflowPhase = "cut"): WorkflowLayouts {
   return {
     schema: LAYOUT_SCHEMA,
-    regions: {
-      left: { panelIds: ["media"], activePanelId: "media" },
-      "center-top": { panelIds: ["preview"], activePanelId: "preview" },
-      "center-bottom": { panelIds: ["transcript"], activePanelId: "transcript" },
-      "right-top": { panelIds: ["agent"], activePanelId: "agent" },
-      "right-bottom": { panelIds: ["inspector"], activePanelId: "inspector" },
-      "bottom-timeline": { panelIds: ["timeline"], activePanelId: "timeline" },
-      "bottom-status": { panelIds: ["status"], activePanelId: "status" },
-    },
-    splitters: {
-      left: 250,
-      right: 310,
-      "center-horizontal": 0.58,
-      "right-horizontal": 0.56,
-      timeline: 170,
-      status: 132,
-    },
-    collapsed: createCollapsedState(),
+    activePhase,
+    layouts: Object.fromEntries(
+      WORKFLOW_PHASES.map((phase) => [phase, createDefaultLayout(phase)]),
+    ) as Record<WorkflowPhase, WorkspaceLayout>,
   };
 }
 
 export function clampSplitterValue(splitter: SplitterId, value: number): number {
   const [minimum, maximum] = SPLITTER_LIMITS[splitter];
-  if (!Number.isFinite(value)) return createDefaultLayout().splitters[splitter];
+  if (!Number.isFinite(value)) return DEFAULT_SPLITTERS.cut[splitter];
   return Math.min(maximum, Math.max(minimum, value));
 }
 
 function cloneLayout(layout: WorkspaceLayout): WorkspaceLayout {
   return {
     schema: LAYOUT_SCHEMA,
-    regions: {
-      left: { ...layout.regions.left, panelIds: [...layout.regions.left.panelIds] },
-      "center-top": {
-        ...layout.regions["center-top"],
-        panelIds: [...layout.regions["center-top"].panelIds],
+    regions: Object.fromEntries(DOCK_REGION_IDS.map((regionId) => [
+      regionId,
+      {
+        ...layout.regions[regionId],
+        panelIds: [...layout.regions[regionId].panelIds],
       },
-      "center-bottom": {
-        ...layout.regions["center-bottom"],
-        panelIds: [...layout.regions["center-bottom"].panelIds],
-      },
-      "right-top": {
-        ...layout.regions["right-top"],
-        panelIds: [...layout.regions["right-top"].panelIds],
-      },
-      "right-bottom": {
-        ...layout.regions["right-bottom"],
-        panelIds: [...layout.regions["right-bottom"].panelIds],
-      },
-      "bottom-timeline": {
-        ...layout.regions["bottom-timeline"],
-        panelIds: [...layout.regions["bottom-timeline"].panelIds],
-      },
-      "bottom-status": {
-        ...layout.regions["bottom-status"],
-        panelIds: [...layout.regions["bottom-status"].panelIds],
-      },
-    },
+    ])) as Record<DockRegionId, LayoutRegion>,
     splitters: { ...layout.splitters },
     collapsed: { ...layout.collapsed },
+  };
+}
+
+function cloneLayouts(layouts: WorkflowLayouts): WorkflowLayouts {
+  return {
+    schema: LAYOUT_SCHEMA,
+    activePhase: layouts.activePhase,
+    layouts: Object.fromEntries(WORKFLOW_PHASES.map((phase) => [
+      phase,
+      cloneLayout(layouts.layouts[phase]),
+    ])) as Record<WorkflowPhase, WorkspaceLayout>,
   };
 }
 
@@ -231,9 +370,19 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function isWorkflowPhase(value: unknown): value is WorkflowPhase {
+  return typeof value === "string" &&
+    (WORKFLOW_PHASES as readonly string[]).includes(value);
+}
+
 function isDockPanelId(value: unknown): value is DockPanelId {
   return typeof value === "string" &&
     (DOCK_PANEL_IDS as readonly string[]).includes(value);
+}
+
+function isLegacyDockPanelId(value: unknown): value is LegacyDockPanelId {
+  return typeof value === "string" &&
+    (LEGACY_DOCK_PANEL_IDS as readonly string[]).includes(value);
 }
 
 function isRegion(value: unknown): value is LayoutRegion {
@@ -241,6 +390,18 @@ function isRegion(value: unknown): value is LayoutRegion {
   if (!value.panelIds.every(isDockPanelId)) return false;
   return value.activePanelId === null ||
     isDockPanelId(value.activePanelId) && value.panelIds.includes(value.activePanelId);
+}
+
+function isLegacyRegion(value: unknown): value is LegacyLayoutRegion {
+  if (!isRecord(value) || !Array.isArray(value.panelIds)) return false;
+  if (!value.panelIds.every(isLegacyDockPanelId)) return false;
+  return value.activePanelId === null ||
+    isLegacyDockPanelId(value.activePanelId) && value.panelIds.includes(value.activePanelId);
+}
+
+function hasValidSplitters(value: Record<string, unknown>): boolean {
+  return SPLITTER_IDS.every((splitter) =>
+    typeof value[splitter] === "number" && Number.isFinite(value[splitter]));
 }
 
 function isWorkspaceLayout(value: unknown): value is WorkspaceLayout {
@@ -261,21 +422,65 @@ function isWorkspaceLayout(value: unknown): value is WorkspaceLayout {
     !DOCK_PANEL_IDS.every((panelId) => panels.includes(panelId))) {
     return false;
   }
-  if (!SPLITTER_IDS.every((splitter) =>
-    typeof splitters[splitter] === "number" &&
-    Number.isFinite(splitters[splitter]))) {
-    return false;
-  }
+  if (!hasValidSplitters(splitters)) return false;
   return DOCK_PANEL_IDS.every((panelId) => typeof collapsed[panelId] === "boolean");
 }
 
-export function parseLayout(value: unknown): WorkspaceLayout {
-  if (!isWorkspaceLayout(value)) return createDefaultLayout();
+function isLegacyWorkspaceLayout(value: unknown): value is LegacyWorkspaceLayout {
+  if (!isRecord(value) || value.schema !== LEGACY_LAYOUT_SCHEMA) return false;
+  if (!isRecord(value.regions) || !isRecord(value.splitters) || !isRecord(value.collapsed)) {
+    return false;
+  }
+  const regions = value.regions;
+  const splitters = value.splitters;
+  const collapsed = value.collapsed;
+  if (!DOCK_REGION_IDS.every((regionId) => isLegacyRegion(regions[regionId]))) {
+    return false;
+  }
+  const panels = DOCK_REGION_IDS.flatMap((regionId) => {
+    const region = regions[regionId];
+    return isLegacyRegion(region) ? region.panelIds : [];
+  });
+  if (panels.length !== LEGACY_DOCK_PANEL_IDS.length ||
+    new Set(panels).size !== LEGACY_DOCK_PANEL_IDS.length ||
+    !LEGACY_DOCK_PANEL_IDS.every((panelId) => panels.includes(panelId))) {
+    return false;
+  }
+  if (!hasValidSplitters(splitters)) return false;
+  return LEGACY_DOCK_PANEL_IDS.every(
+    (panelId) => typeof collapsed[panelId] === "boolean",
+  );
+}
+
+export function parseLayout(
+  value: unknown,
+  fallbackPhase: WorkflowPhase = "cut",
+): WorkspaceLayout {
+  if (!isWorkspaceLayout(value)) return createDefaultLayout(fallbackPhase);
   const next = cloneLayout(value);
   for (const splitter of SPLITTER_IDS) {
     next.splitters[splitter] = clampSplitterValue(splitter, next.splitters[splitter]);
   }
   return next;
+}
+
+function parseWorkflowLayouts(value: unknown): WorkflowLayouts | null {
+  if (!isRecord(value) || value.schema !== LAYOUT_SCHEMA ||
+    !isWorkflowPhase(value.activePhase) || !isRecord(value.layouts)) {
+    return null;
+  }
+  const layouts = value.layouts;
+  if (!WORKFLOW_PHASES.every((phase) => isWorkspaceLayout(layouts[phase]))) {
+    return null;
+  }
+  return {
+    schema: LAYOUT_SCHEMA,
+    activePhase: value.activePhase,
+    layouts: Object.fromEntries(WORKFLOW_PHASES.map((phase) => [
+      phase,
+      parseLayout(layouts[phase], phase),
+    ])) as Record<WorkflowPhase, WorkspaceLayout>,
+  };
 }
 
 function parseDocument(serialized: string | null): PersistedLayoutDocument | null {
@@ -285,9 +490,10 @@ function parseDocument(serialized: string | null): PersistedLayoutDocument | nul
     if (!isRecord(value) || value.schema !== LAYOUT_SCHEMA || !isRecord(value.projects)) {
       return null;
     }
-    const projects: Record<string, WorkspaceLayout> = {};
-    for (const [projectKey, projectLayout] of Object.entries(value.projects)) {
-      if (isWorkspaceLayout(projectLayout)) projects[projectKey] = parseLayout(projectLayout);
+    const projects: Record<string, WorkflowLayouts> = {};
+    for (const [projectKey, projectLayouts] of Object.entries(value.projects)) {
+      const parsed = parseWorkflowLayouts(projectLayouts);
+      if (parsed !== null) projects[projectKey] = parsed;
     }
     return { schema: LAYOUT_SCHEMA, projects };
   } catch {
@@ -295,25 +501,75 @@ function parseDocument(serialized: string | null): PersistedLayoutDocument | nul
   }
 }
 
-export function loadProjectLayout(
-  projectKey: string,
-  storage: LayoutStorage,
-): WorkspaceLayout {
-  const document = parseDocument(storage.getItem(LAYOUT_STORAGE_KEY));
-  return parseLayout(document?.projects[projectKey]);
+function parseLegacyDocument(
+  serialized: string | null,
+): LegacyPersistedLayoutDocument | null {
+  if (serialized === null) return null;
+  try {
+    const value: unknown = JSON.parse(serialized);
+    if (!isRecord(value) || value.schema !== LEGACY_LAYOUT_SCHEMA ||
+      !isRecord(value.projects)) {
+      return null;
+    }
+    const projects: Record<string, LegacyWorkspaceLayout> = {};
+    for (const [projectKey, projectLayout] of Object.entries(value.projects)) {
+      if (isLegacyWorkspaceLayout(projectLayout)) projects[projectKey] = projectLayout;
+    }
+    return { schema: LEGACY_LAYOUT_SCHEMA, projects };
+  } catch {
+    return null;
+  }
 }
 
-export function saveProjectLayout(
+function migrateLegacyLayout(legacy: LegacyWorkspaceLayout): WorkspaceLayout {
+  const migrated = createDefaultLayout("cut");
+  const legacyPanels = new Set<string>(LEGACY_DOCK_PANEL_IDS);
+  for (const regionId of DOCK_REGION_IDS) {
+    const utilityPanels = migrated.regions[regionId].panelIds.filter(
+      (panelId) => !legacyPanels.has(panelId),
+    );
+    migrated.regions[regionId] = {
+      panelIds: [...legacy.regions[regionId].panelIds, ...utilityPanels],
+      activePanelId: legacy.regions[regionId].activePanelId,
+    };
+  }
+  for (const splitter of SPLITTER_IDS) {
+    migrated.splitters[splitter] = clampSplitterValue(splitter, legacy.splitters[splitter]);
+  }
+  for (const panelId of LEGACY_DOCK_PANEL_IDS) {
+    migrated.collapsed[panelId] = legacy.collapsed[panelId];
+  }
+  return migrated;
+}
+
+export function loadProjectLayouts(
   projectKey: string,
-  layout: WorkspaceLayout,
+  storage: LayoutStorage,
+): WorkflowLayouts {
+  const document = parseDocument(storage.getItem(LAYOUT_STORAGE_KEY));
+  const persisted = document?.projects[projectKey];
+  if (persisted !== undefined) return cloneLayouts(persisted);
+
+  const legacyDocument = parseLegacyDocument(storage.getItem(LEGACY_LAYOUT_STORAGE_KEY));
+  const legacy = legacyDocument?.projects[projectKey];
+  if (legacy === undefined) return createDefaultLayouts();
+  const migrated = createDefaultLayouts();
+  migrated.layouts.cut = migrateLegacyLayout(legacy);
+  return migrated;
+}
+
+export function saveProjectLayouts(
+  projectKey: string,
+  layouts: WorkflowLayouts,
   storage: LayoutStorage,
 ): void {
   const current = parseDocument(storage.getItem(LAYOUT_STORAGE_KEY));
+  const parsed = parseWorkflowLayouts(layouts) ?? createDefaultLayouts();
   const document: PersistedLayoutDocument = {
     schema: LAYOUT_SCHEMA,
     projects: {
       ...(current?.projects ?? {}),
-      [projectKey]: parseLayout(layout),
+      [projectKey]: parsed,
     },
   };
   storage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(document));

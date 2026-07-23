@@ -22,6 +22,7 @@ test("persists splitter resize, collapse, and docked tabs across an app relaunch
     const resized = Number(await splitter.getAttribute("data-splitter-value"));
     expect(resized).toBeGreaterThan(before);
 
+    await first.page.getByTestId("panel-rail-media").click();
     await first.page.getByTestId("media-panel-toggle").click();
     await expect(first.page.getByTestId("panel-rail-media")).toBeVisible();
 
@@ -29,6 +30,7 @@ test("persists splitter resize, collapse, and docked tabs across an app relaunch
       .dragTo(first.page.getByTestId("dock-region-right-top"));
     await expect(first.page.getByTestId("dock-tabs-right-top")).toBeVisible();
     await expect(first.page.getByTestId("dock-tab-agent")).toBeVisible();
+    await expect(first.page.getByTestId("dock-tab-publish")).toBeVisible();
     await expect(first.page.getByTestId("dock-tab-transcript")).toHaveAttribute(
       "aria-selected",
       "true",
@@ -36,7 +38,7 @@ test("persists splitter resize, collapse, and docked tabs across an app relaunch
     await first.page.getByTestId("dock-tab-transcript")
       .dragTo(first.page.getByTestId("dock-tab-agent"));
     await expect(first.page.getByTestId("dock-tabs-right-top").getByRole("tab"))
-      .toHaveText(["TTranscript", "AAgent"]);
+      .toHaveText(["TTranscript", "AAgent", "UPublish"]);
 
     await first.electronApp.close();
     if (first.projectPath === undefined) throw new Error("Relaunch fixture path was missing.");
@@ -53,7 +55,7 @@ test("persists splitter resize, collapse, and docked tabs across an app relaunch
       "true",
     );
     await expect(second.page.getByTestId("dock-tabs-right-top").getByRole("tab"))
-      .toHaveText(["TTranscript", "AAgent"]);
+      .toHaveText(["TTranscript", "AAgent", "UPublish"]);
 
     await second.page.getByTestId("panel-rail-media").click();
     await expect(second.page.getByTestId("media-panel")).toBeVisible();
@@ -72,16 +74,21 @@ test("reset layout restores the section 10.1 regions and splitter defaults", asy
       .dragTo(launched.page.getByTestId("dock-region-right-top"));
     await launched.page.getByTestId("splitter-left").focus();
     await launched.page.keyboard.press("End");
-    await launched.page.getByTestId("media-panel-toggle").click();
+    await launched.page.getByTestId("panel-rail-media").click();
 
     await launched.page.getByTestId("reset-layout").click();
 
     await expect(launched.page.getByTestId("dock-region-center-bottom"))
       .toHaveAttribute("data-active-panel", "transcript");
-    await expect(launched.page.getByTestId("dock-tabs-right-top")).toHaveCount(0);
+    await expect(launched.page.getByTestId("dock-region-right-top")
+      .getByTestId("dock-tab-transcript")).toHaveCount(0);
+    await expect(launched.page.getByTestId("dock-tab-transcript"))
+      .toHaveAttribute("aria-selected", "true");
+    await expect(launched.page.getByTestId("dock-tab-agent"))
+      .toHaveAttribute("aria-selected", "true");
     await expect(launched.page.getByTestId("splitter-left"))
       .toHaveAttribute("data-splitter-value", "250");
-    await expect(launched.page.getByTestId("media-panel")).toBeVisible();
+    await expect(launched.page.getByTestId("panel-rail-media")).toBeVisible();
   } finally {
     await launched.electronApp.close();
     await rm(template, { recursive: true, force: true });
@@ -92,6 +99,7 @@ test("timeline and status collapse in place to slim restorable bars", async () =
   const template = await createWorkspaceProject();
   const launched = await launchApp({ projectTemplate: template });
   try {
+    await launched.page.getByTestId("collapsed-bar-status").click();
     await launched.page.getByTestId("timeline-panel-toggle").click();
     await launched.page.getByTestId("status-panel-toggle").click();
 
@@ -122,6 +130,7 @@ test("agent and inspector content scroll internally at their minimum layout size
   const template = await createWorkspaceProject({ proposal: true });
   const launched = await launchApp({ projectTemplate: template });
   try {
+    await launched.page.getByTestId("panel-rail-inspector").click();
     await launched.page.getByTestId("timeline-clip-clp_aaaaaaaaaa").click();
     for (const splitterId of ["splitter-timeline", "splitter-status"]) {
       await launched.page.getByTestId(splitterId).focus();
@@ -162,61 +171,65 @@ test("agent and inspector content scroll internally at their minimum layout size
   }
 });
 
-test("section 10.1 default layout fits a 1920x1080 viewport without outer clipping", async () => {
+test("every phase layout fits a 1920x1080 viewport without outer clipping", async () => {
   const template = await createWorkspaceProject({ proposal: true });
   const launched = await launchApp({ projectTemplate: template });
   try {
     await launched.page.setViewportSize({ width: 1920, height: 1080 });
-    await launched.page.getByTestId("reset-layout").click();
+    for (const phase of ["ingest", "cut", "polish", "review", "publish"]) {
+      await launched.page.getByTestId(`phase-tab-${phase}`).click();
+      await launched.page.getByTestId("reset-layout").click();
 
-    const measurements = await launched.page.getByTestId("workspace-layout")
-      .evaluate((workspace) => {
-        const bounds = workspace.getBoundingClientRect();
-        return {
-          documentHeight: document.documentElement.scrollHeight,
-          documentWidth: document.documentElement.scrollWidth,
-          viewportHeight: window.innerHeight,
-          viewportWidth: window.innerWidth,
-          workspaceHeight: workspace.clientHeight,
-          workspaceScrollHeight: workspace.scrollHeight,
-          workspaceScrollWidth: workspace.scrollWidth,
-          workspaceWidth: workspace.clientWidth,
-          workspaceBottom: bounds.bottom,
-          workspaceRight: bounds.right,
-        };
+      const measurements = await launched.page.getByTestId("workspace-layout")
+        .evaluate((workspace) => {
+          const bounds = workspace.getBoundingClientRect();
+          return {
+            documentHeight: document.documentElement.scrollHeight,
+            documentWidth: document.documentElement.scrollWidth,
+            viewportHeight: window.innerHeight,
+            viewportWidth: window.innerWidth,
+            workspaceHeight: workspace.clientHeight,
+            workspaceScrollHeight: workspace.scrollHeight,
+            workspaceScrollWidth: workspace.scrollWidth,
+            workspaceWidth: workspace.clientWidth,
+            workspaceBottom: bounds.bottom,
+            workspaceRight: bounds.right,
+            workspaceTop: bounds.top,
+          };
+        });
+
+      expect(measurements).toMatchObject({
+        documentHeight: 1080,
+        documentWidth: 1920,
+        viewportHeight: 1080,
+        viewportWidth: 1920,
+        workspaceScrollHeight: measurements.workspaceHeight,
+        workspaceScrollWidth: measurements.workspaceWidth,
+        workspaceBottom: 1054,
+        workspaceRight: 1920,
       });
 
-    expect(measurements).toMatchObject({
-      documentHeight: 1080,
-      documentWidth: 1920,
-      viewportHeight: 1080,
-      viewportWidth: 1920,
-      workspaceScrollHeight: measurements.workspaceHeight,
-      workspaceScrollWidth: measurements.workspaceWidth,
-      workspaceBottom: 1054,
-      workspaceRight: 1920,
-    });
-
-    const regionBounds = await launched.page.locator("[data-testid^='dock-region-']")
-      .evaluateAll((regions) => regions.map((region) => {
-        const bounds = region.getBoundingClientRect();
-        return {
-          bottom: bounds.bottom,
-          height: bounds.height,
-          left: bounds.left,
-          right: bounds.right,
-          top: bounds.top,
-          width: bounds.width,
-        };
-      }));
-    expect(regionBounds).not.toHaveLength(0);
-    for (const bounds of regionBounds) {
-      expect(bounds.left).toBeGreaterThanOrEqual(0);
-      expect(bounds.top).toBeGreaterThanOrEqual(52);
-      expect(bounds.right).toBeLessThanOrEqual(1920);
-      expect(bounds.bottom).toBeLessThanOrEqual(1054);
-      expect(bounds.width).toBeGreaterThan(0);
-      expect(bounds.height).toBeGreaterThan(0);
+      const regionBounds = await launched.page.locator("[data-testid^='dock-region-']")
+        .evaluateAll((regions) => regions.map((region) => {
+          const bounds = region.getBoundingClientRect();
+          return {
+            bottom: bounds.bottom,
+            height: bounds.height,
+            left: bounds.left,
+            right: bounds.right,
+            top: bounds.top,
+            width: bounds.width,
+          };
+        }));
+      expect(regionBounds).not.toHaveLength(0);
+      for (const bounds of regionBounds) {
+        expect(bounds.left).toBeGreaterThanOrEqual(0);
+        expect(bounds.top).toBeGreaterThanOrEqual(measurements.workspaceTop);
+        expect(bounds.right).toBeLessThanOrEqual(1920);
+        expect(bounds.bottom).toBeLessThanOrEqual(1054);
+        expect(bounds.width).toBeGreaterThan(0);
+        expect(bounds.height).toBeGreaterThan(0);
+      }
     }
   } finally {
     await launched.electronApp.close();

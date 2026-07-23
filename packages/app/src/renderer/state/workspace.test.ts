@@ -18,9 +18,65 @@ import {
   assignPanel,
   clampSplitterValue,
   createDefaultLayout,
+  createDefaultLayouts,
+  DOCK_PANEL_IDS,
+  LEGACY_LAYOUT_STORAGE_KEY,
+  loadProjectLayouts,
   parseLayout,
   reorderPanel,
+  WORKFLOW_PHASES,
 } from "./layout-state.js";
+import { phaseBadgeCounts } from "../workflow-phases.js";
+
+function memoryStorage(initial: Record<string, string> = {}): Storage {
+  const values = new Map(Object.entries(initial));
+  return {
+    get length() {
+      return values.size;
+    },
+    clear: () => values.clear(),
+    getItem: (key) => values.get(key) ?? null,
+    key: (index) => [...values.keys()][index] ?? null,
+    removeItem: (key) => {
+      values.delete(key);
+    },
+    setItem: (key, value) => {
+      values.set(key, value);
+    },
+  };
+}
+
+function legacyLayout(left = 250): Record<string, unknown> {
+  return {
+    schema: "layout/v1",
+    regions: {
+      left: { panelIds: ["media"], activePanelId: "media" },
+      "center-top": { panelIds: ["preview"], activePanelId: "preview" },
+      "center-bottom": { panelIds: ["transcript"], activePanelId: "transcript" },
+      "right-top": { panelIds: ["agent"], activePanelId: "agent" },
+      "right-bottom": { panelIds: ["inspector"], activePanelId: "inspector" },
+      "bottom-timeline": { panelIds: ["timeline"], activePanelId: "timeline" },
+      "bottom-status": { panelIds: ["status"], activePanelId: "status" },
+    },
+    splitters: {
+      left,
+      right: 310,
+      "center-horizontal": 0.58,
+      "right-horizontal": 0.56,
+      timeline: 170,
+      status: 132,
+    },
+    collapsed: {
+      media: false,
+      preview: false,
+      transcript: false,
+      inspector: false,
+      agent: false,
+      timeline: false,
+      status: false,
+    },
+  };
+}
 
 describe("workspace renderer state", () => {
   it("mirrors the global overview and derives active, waiting, and idle copy", () => {
@@ -87,6 +143,80 @@ describe("workspace renderer state", () => {
     })).toBe("1 job needs attention");
   });
 
+  it("maps only JobOverview data into phase badges", () => {
+    const overview: JobOverview = {
+      running: [{
+        jobId: "job_cccccccccc",
+        kind: "ingest",
+        state: "running",
+        progress: 0.4,
+        dependsOn: [],
+        title: "Ingest source",
+        cancellable: false,
+        createdAt: "2026-07-23T10:00:00.000Z",
+      }],
+      queued: [{
+        jobId: "job_dddddddddd",
+        kind: "proxy.generate",
+        state: "queued",
+        progress: 0,
+        dependsOn: ["job_cccccccccc"],
+        dependencyChain: [],
+        title: "Generate proxy",
+        cancellable: true,
+        createdAt: "2026-07-23T10:00:01.000Z",
+      }],
+      retryable: [{
+        jobId: "job_eeeeeeeeee",
+        kind: "render.export",
+        state: "failed",
+        progress: 0.6,
+        dependsOn: [],
+        title: "Export primary",
+        cancellable: true,
+        createdAt: "2026-07-23T10:00:02.000Z",
+      }],
+      waitingOnCreator: {
+        proposals: [
+          {
+            proposalId: "prp_ffffffffff",
+            title: "Review the selected pause and filler candidates",
+            createdAt: "2026-07-23T10:01:00.000Z",
+          },
+          {
+            proposalId: "prp_gggggggggg",
+            title: "Review color adjustments",
+            createdAt: "2026-07-23T10:02:00.000Z",
+          },
+        ],
+        annotations: [{
+          annotationId: "ann_hhhhhhhhhh",
+          code: "VAL-400",
+          message: "Resolve title placement",
+        }],
+        confirmations: [{
+          confirmToken: "confirm_budget",
+          taskId: "render-primary",
+          level: "task",
+          message: "Confirm export budget",
+          estimatedUsd: 2.5,
+          createdAt: "2026-07-23T10:03:00.000Z",
+        }],
+      },
+      waitingOnExternal: [],
+      aggregateFraction: 0.2,
+      idle: false,
+    };
+
+    expect(phaseBadgeCounts(overview)).toEqual({
+      ingest: 2,
+      cut: 1,
+      polish: 0,
+      review: 3,
+      publish: 2,
+    });
+  });
+
   it("replaces the read-only project mirror as a whole snapshot", () => {
     const master = projectFixture();
     useProjectMirror.getState().replace({
@@ -101,6 +231,7 @@ describe("workspace renderer state", () => {
   });
 
   it("keeps panel, selection, and preview choices in Zustand view state", () => {
+    useWorkspaceStore.getState().setPhase("ingest");
     useWorkspaceStore.getState().resetLayout();
     useWorkspaceStore.getState().togglePanel("media");
     useSelectionStore.getState().selectWord("w000042");
@@ -117,25 +248,63 @@ describe("workspace renderer state", () => {
   });
 
   it("assigns panels between regions and keeps every panel in exactly one region", () => {
-    const moved = assignPanel(createDefaultLayout(), "transcript", "right-top", 1);
+    const moved = assignPanel(createDefaultLayout("cut"), "transcript", "right-top", 1);
 
-    expect(moved.regions["center-bottom"].panelIds).toEqual([]);
-    expect(moved.regions["right-top"]).toEqual({
-      panelIds: ["agent", "transcript"],
-      activePanelId: "transcript",
-    });
+    expect(moved.regions["right-top"].panelIds).toContain("transcript");
+    expect(moved.regions["right-top"].activePanelId).toBe("transcript");
     expect(Object.values(moved.regions).flatMap(({ panelIds }) => panelIds)
       .filter((panelId) => panelId === "transcript")).toHaveLength(1);
   });
 
   it("reorders tabs within a region without duplicating a panel", () => {
-    const stacked = assignPanel(createDefaultLayout(), "transcript", "right-top", 1);
+    const stacked = assignPanel(createDefaultLayout("cut"), "transcript", "right-top", 1);
     const reordered = reorderPanel(stacked, "right-top", "transcript", 0);
 
-    expect(reordered.regions["right-top"]).toEqual({
-      panelIds: ["transcript", "agent"],
-      activePanelId: "transcript",
+    expect(reordered.regions["right-top"].panelIds[0]).toBe("transcript");
+    expect(reordered.regions["right-top"].activePanelId).toBe("transcript");
+  });
+
+  it("creates five curated defaults while keeping every panel available", () => {
+    const defaults = createDefaultLayouts();
+    const expandedByPhase = {
+      ingest: ["media", "status", "storage"],
+      cut: ["preview", "transcript", "agent", "timeline"],
+      polish: ["preview", "transcript", "inspector", "agent", "graphics"],
+      review: ["media", "preview", "agent"],
+      publish: ["status", "publish"],
+    };
+
+    expect(defaults.activePhase).toBe("cut");
+    for (const phase of WORKFLOW_PHASES) {
+      const layout = defaults.layouts[phase];
+      const panels = Object.values(layout.regions).flatMap(({ panelIds }) => panelIds);
+      expect(panels).toHaveLength(DOCK_PANEL_IDS.length);
+      expect(new Set(panels).size).toBe(DOCK_PANEL_IDS.length);
+      expect(DOCK_PANEL_IDS.every((panelId) => panels.includes(panelId))).toBe(true);
+      expect(DOCK_PANEL_IDS.filter((panelId) => !layout.collapsed[panelId]).sort())
+        .toEqual([...expandedByPhase[phase]].sort());
+    }
+  });
+
+  it("migrates layout/v1 into Cut while the other phases use v2 defaults", () => {
+    const storage = memoryStorage({
+      [LEGACY_LAYOUT_STORAGE_KEY]: JSON.stringify({
+        schema: "layout/v1",
+        projects: {
+          "/project": legacyLayout(377),
+        },
+      }),
     });
+
+    const migrated = loadProjectLayouts("/project", storage);
+
+    expect(migrated.schema).toBe("layout/v2");
+    expect(migrated.activePhase).toBe("cut");
+    expect(migrated.layouts.cut.splitters.left).toBe(377);
+    expect(migrated.layouts.cut.regions.left.panelIds[0]).toBe("media");
+    expect(migrated.layouts.cut.regions["center-bottom"].activePanelId).toBe("transcript");
+    expect(migrated.layouts.ingest).toEqual(createDefaultLayout("ingest"));
+    expect(migrated.layouts.review).toEqual(createDefaultLayout("review"));
   });
 
   it("clamps every splitter to its supported range", () => {
@@ -150,36 +319,48 @@ describe("workspace renderer state", () => {
   });
 
   it("resets the live workspace layout to a fresh default", () => {
+    useWorkspaceStore.getState().setPhase("cut");
     useWorkspaceStore.getState().assignPanel("transcript", "right-top", 1);
     useWorkspaceStore.getState().setSplitter("left", 410);
     useWorkspaceStore.getState().togglePanel("agent");
 
     useWorkspaceStore.getState().resetLayout();
 
-    expect(useWorkspaceStore.getState().layout).toEqual(createDefaultLayout());
+    expect(useWorkspaceStore.getState().layout).toEqual(createDefaultLayout("cut"));
   });
 
-  it("preserves auxiliary panel collapse state across dock layout mutations", () => {
-    useWorkspaceStore.getState().togglePanel("broll");
+  it("resets only the active phase and can reset all five phases", () => {
+    useWorkspaceStore.getState().resetAllLayouts();
+    useWorkspaceStore.getState().setPhase("cut");
+    useWorkspaceStore.getState().setSplitter("left", 333);
+    useWorkspaceStore.getState().setPhase("review");
+    useWorkspaceStore.getState().setSplitter("right", 444);
 
-    useWorkspaceStore.getState().setSplitter("left", 320);
+    useWorkspaceStore.getState().resetLayout();
 
-    expect(useWorkspaceStore.getState().collapsed.broll).toBe(true);
-    useWorkspaceStore.getState().togglePanel("broll");
+    expect(useWorkspaceStore.getState().layout).toEqual(createDefaultLayout("review"));
+    expect(useWorkspaceStore.getState().layouts.cut.splitters.left).toBe(333);
+
+    useWorkspaceStore.getState().resetAllLayouts();
+
+    expect(useWorkspaceStore.getState().activePhase).toBe("review");
+    for (const phase of WORKFLOW_PHASES) {
+      expect(useWorkspaceStore.getState().layouts[phase]).toEqual(createDefaultLayout(phase));
+    }
   });
 
   it("falls back to the default for absent, older, or malformed schemas", () => {
-    const fallback = createDefaultLayout();
+    const fallback = createDefaultLayout("cut");
 
-    expect(parseLayout(undefined)).toEqual(fallback);
-    expect(parseLayout({ schema: "layout/v0" })).toEqual(fallback);
+    expect(parseLayout(undefined, "cut")).toEqual(fallback);
+    expect(parseLayout({ schema: "layout/v0" }, "cut")).toEqual(fallback);
     expect(parseLayout({
       ...fallback,
       regions: {
         ...fallback.regions,
         left: { panelIds: ["media", "media"], activePanelId: "media" },
       },
-    })).toEqual(fallback);
+    }, "cut")).toEqual(fallback);
   });
 
   it("caps direct undo history at 200 and clears redo on a new action", () => {

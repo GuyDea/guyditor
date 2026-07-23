@@ -12,32 +12,13 @@ import {
   useJobsStore,
 } from "./state/jobs.js";
 import {
-  useAgentPanelStore,
-  usePreviewStore,
-  useSelectionStore,
-  useWorkspaceStore,
-} from "./state/view-state.js";
-import type { PanelId } from "./state/view-state.js";
+  jumpToAnnotation as jumpToAnnotationPanel,
+  jumpToProposal as jumpToProposalPanel,
+} from "./workspace-navigation.js";
 
 interface GlobalProgressProps {
   refreshOverview: () => Promise<void>;
   setNotice: (notice: string) => void;
-}
-
-function revealPanel(panel: PanelId): void {
-  const workspace = useWorkspaceStore.getState();
-  if (workspace.collapsed[panel]) workspace.togglePanel(panel);
-  if (panel === "media" || panel === "preview" || panel === "transcript" ||
-    panel === "inspector" || panel === "agent" || panel === "timeline" || panel === "status") {
-    for (const [regionId, region] of Object.entries(workspace.layout.regions)) {
-      if (region.panelIds.includes(panel)) {
-        workspace.activatePanel(regionId as keyof typeof workspace.layout.regions, panel);
-        break;
-      }
-    }
-  }
-  workspace.focusPanel(panel);
-  queueMicrotask(() => document.querySelector<HTMLElement>(`[data-panel="${panel}"]`)?.focus());
 }
 
 function etaLabel(etaSeconds: number | undefined): string {
@@ -83,25 +64,13 @@ export function GlobalProgress({
   }
 
   function jumpToProposal(proposalId: string): void {
-    useAgentPanelStore.getState().setExpandedProposal(proposalId);
-    revealPanel("agent");
+    jumpToProposalPanel(proposalId);
     setOpen(false);
   }
 
   async function jumpToAnnotation(annotationId: string): Promise<void> {
-    useSelectionStore.getState().selectAnnotation(annotationId);
-    revealPanel("preview");
     setOpen(false);
-    try {
-      const { frame } = await window.guyditor.call<{
-        frame: { frames: number; fps: string };
-      }>("OperationEngine", "resolveNavigation", {
-        target: { kind: "annotation", annotationId },
-      });
-      usePreviewStore.getState().setPlayhead(frame);
-    } catch (error: unknown) {
-      setNotice(errorMessage(error));
-    }
+    await jumpToAnnotationPanel(annotationId, setNotice);
   }
 
   const jobRow = (job: JobStatus): React.JSX.Element => (

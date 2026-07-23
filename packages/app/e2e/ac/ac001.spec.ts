@@ -78,6 +78,7 @@ test("AC-001 — builds and exports the M1 long-form composition", async ({}, te
     projectTemplate: join(REPOSITORY_ROOT, ".fixtures/projects/basic"),
   });
   try {
+    await launched.page.getByTestId("phase-tab-ingest").click();
     await expect(launched.page.getByTestId("revision-indicator")).toHaveText("rev_00001");
     await expect(launched.page.getByTestId("deliverable-dlv_aaaaaaaaaa"))
       .toContainText("approved");
@@ -98,6 +99,7 @@ test("AC-001 — builds and exports the M1 long-form composition", async ({}, te
       .toHaveText("proxy done", { timeout: 60_000 });
     await expect(launched.page.getByTestId("proxy-chip-ast_dddddddddd"))
       .toHaveText("proxy done", { timeout: 60_000 });
+    await launched.page.getByTestId("phase-tab-cut").click();
     await expect(launched.page.getByTestId("transcript-word-stream"))
       .toContainText("guide");
     const transcript = JSON.parse(await readFile(
@@ -146,6 +148,7 @@ test("AC-001 — builds and exports the M1 long-form composition", async ({}, te
     await expect(launched.page.getByTestId("layer-enable-lyr_bbbbbbbbbb")).toHaveText("Off");
     await expect(launched.page.getByTestId("layer-enable-lyr_cccccccccc")).toHaveText("Off");
 
+    await launched.page.getByTestId("phase-tab-publish").click();
     await launched.page.getByTestId("render-export-primary").click();
     await expect(launched.page.getByTestId("job-state-render-export"))
       .toHaveText("done", { timeout: 120_000 });
