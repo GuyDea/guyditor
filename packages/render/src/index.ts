@@ -6,6 +6,8 @@ export {
 } from "./template-registry.js";
 export type {
   LoadedTemplatePackage,
+  TemplateAssetDeclaration,
+  TemplateAssetLicense,
   TemplateCatalogEntry,
   TemplateFontDeclaration,
   TemplateManifest,
@@ -19,6 +21,18 @@ export {
   renderTemplatePng,
   resolveTemplateDuration,
 } from "./template-runtime.js";
+export {
+  PRIMITIVES_V1_VERSION,
+  primitivesV1,
+} from "./primitives/v1.js";
+export type {
+  PrimitiveEasing,
+  PrimitiveFrameTime,
+  PrimitiveWordTiming,
+  PrimitivesV1,
+  TextRevealOptions,
+  TextRevealResult,
+} from "./primitives/v1.js";
 export type { LoadedTemplateRuntime } from "./template-runtime.js";
 export {
   GRAPHIC_OVERLAY_RENDERER_VERSION,
@@ -150,6 +164,8 @@ export type {
   FunctionalEquivalenceSpec,
   RenderRequest,
   RenderServiceOptions,
+  TemplateFreezeRequest,
+  TemplateFreezeResult,
 } from "./service.js";
 export { validateOverlayLayout, validatePublishMetadataCheck } from "./validation.js";
 export { laplacianVariance } from "./cover-analysis.js";

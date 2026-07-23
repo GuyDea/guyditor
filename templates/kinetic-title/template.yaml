@@ -1,0 +1,43 @@
+schema: guyditor/template/v1
+id: tpl_e2f3g4h5j6
+name: Kinetic title
+kind: title
+version: 1.0.0
+engine: overlay/v1
+entry: render.ts
+min_guyditor: 1.0.0
+duration:
+  mode: fixed
+  default: { frames: 120, fps: "30/1" }
+params:
+  type: object
+  additionalProperties: false
+  required: [eyebrow, title, accent, background, fontFamily, logoSlot]
+  properties:
+    eyebrow: { type: string, minLength: 1, maxLength: 36, default: "EXPLAINED" }
+    title: { type: string, minLength: 1, maxLength: 72, default: "Why cities keep getting hotter" }
+    accent: { type: string, pattern: "^#[0-9A-Fa-f]{6}$", default: "#FFE45E" }
+    background: { type: string, pattern: "^#[0-9A-Fa-f]{6}$", default: "#102A43" }
+    fontFamily: { type: string, minLength: 1, default: "Inconsolata Guyditor" }
+    logoSlot: { type: string, enum: [none, brand], default: brand }
+preview:
+  file: preview.png
+  params:
+    eyebrow: EXPLAINED
+    title: Why cities keep getting hotter
+    accent: "#FFE45E"
+    background: "#102A43"
+    fontFamily: Inconsolata Guyditor
+    logoSlot: brand
+fonts:
+  - family: Inconsolata Guyditor
+    file: fonts/Inconsolata.otf
+    weight: 600
+    sha256: 1561e616c414a1b82d6e6dfbd18e5726fd65028913ade191e5fa38b6ec375a1a
+    license:
+      origin: licensed
+      licenseName: SIL Open Font License 1.1
+      licenseUrl: https://openfontlicense.org/
+      licensor: Raph Levien
+      restrictions: []
+safe_area_aware: true

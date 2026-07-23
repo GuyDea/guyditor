@@ -175,6 +175,11 @@ export type {
 } from "./generation-candidates.js";
 export * from "./skills/index.js";
 export {
+  parseBrandTemplateDefaults,
+  pinnedBrandTemplateDefaults,
+  resolveBrandTemplateParams,
+} from "./brand-template.js";
+export {
   buildTakeComparison,
   takePreferenceRubric,
 } from "./take-comparison.js";

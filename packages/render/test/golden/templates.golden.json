@@ -1,19 +1,39 @@
 {
   "builtins": {
+    "bar-chart-card": {
+      "contentHash": "08add97f677f45759c542028d361ee930c9667253d275c7afee2931b8c4949f8",
+      "frameSha256": "cd7092035b4c06d5d129523605f6536d0aa4b4232bce866c1a41fd967b8e18d8"
+    },
     "callout-box": {
-      "contentHash": "e57dee8ee1d2e2414e8f949f7cc9d1b1fb892c90dca304bba2d4fa1f9bd2f2ed",
+      "contentHash": "58d1b4546deaadf77a5c39fc4ad45d8e2041f92e20d9db0f98d316d4b1924dfb",
       "frameSha256": "669a3d97a76d4bae85c4ad893b1aa3ef43cc99c76ee7aaf74b6eee9e1ffe8928"
     },
+    "cutout-collage-card": {
+      "contentHash": "89d85f9e6fe6a08684633e4bf2366be82317c55dd4d4e63f44d8aea0afc166df",
+      "frameSha256": "3ff53798e181c5be3ce97ecea0e1f95a168a6f644c16100bebfc85894e42b87f"
+    },
     "full-frame-infographic": {
-      "contentHash": "ebaf26d6c3908d3b1598c098325afa4fb03317976db314f411ebbbac58b44c62",
+      "contentHash": "c66d745909efe4cbfab252f9ef08a54f5bd6a8ed482893c6a8163d6f9c604000",
       "frameSha256": "818bc11faeab020900695b22f836dcafe6a431aa475486557871b8528e968d6d"
     },
+    "highlight-underline": {
+      "contentHash": "08791d095cba058cc38185ed6bae452585299edd7b764430ea794f4abb15186d",
+      "frameSha256": "2145921c4a5065f331e27220eb5ad80cefbd8ebdf6b177d6627e9518810210ed"
+    },
+    "kinetic-title": {
+      "contentHash": "54ccb7b696b42d6d8d58dca4a6c9de539d78eeebc1c28cb8c28b117ceaddea2d",
+      "frameSha256": "4524fe5bc80cf3f6b8274e4cee6b52104c4440b416f5b2c0361fc832f20dddc6"
+    },
     "lower-third": {
-      "contentHash": "7462180887a517e0aa7dd6943694757f56fb4ee43c3275d6c04f123ce9ee6966",
+      "contentHash": "660da8a1c8f245bbfeeaed3415c1f1e20676e5af1932514f92219c47a9942301",
       "frameSha256": "4ce8ca152d59a6e955f897335f651ea7f8d1ac8dd55395c83beec3c671a7d50a"
     },
+    "stat-counter-card": {
+      "contentHash": "6758c14f6de18f52bf61b34a9315560a5fc1492a325e5fe10d604df4d9b4d99e",
+      "frameSha256": "590dd1564604e327339c1e6b53140461501b7e5dcae8390ebfb775bb66283241"
+    },
     "title-card": {
-      "contentHash": "eb797b7ba17f8ed4129b6379054439e8c709d43e826669ff22da7126f41549a7",
+      "contentHash": "e167cad70fc047f35e942fb0b752cbc90f741906d13be8ee56d8dea8d87cb67d",
       "frameSha256": "0621fcd798ff27463b0d8de094bab0b7e650a27c6a9376643cb092c2ba14c16b"
     }
   },

@@ -51,6 +51,8 @@ export async function loadRenderProfile(
   overrides?: Record<string, unknown>,
 ): Promise<LoadedRenderProfile> {
   const loaded = await loadPlatformProfile(pin, {
+    projectRoot: profilesRoot,
+    userRoot: profilesRoot,
     builtinsRoot: profilesRoot,
     ...(overrides === undefined ? {} : { overrides }),
   });

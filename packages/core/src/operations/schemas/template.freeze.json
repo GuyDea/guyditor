@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["asset", "provenance", "sidecar"],
+  "properties": {
+    "asset": { "type": "object" },
+    "provenance": { "type": "object" },
+    "sidecar": { "type": "object" },
+    "placement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sequenceId", "layerId", "clipId", "index"],
+      "properties": {
+        "sequenceId": { "type": "string", "pattern": "^seq_[a-z2-7]{10}$" },
+        "layerId": { "type": "string", "pattern": "^lyr_[a-z2-7]{10}$" },
+        "clipId": { "type": "string", "pattern": "^clp_[a-z2-7]{10}$" },
+        "index": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

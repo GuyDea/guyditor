@@ -9,6 +9,8 @@ import {
   convertTimeRounding,
   deriveTimeline,
   makeGuyditorError,
+  parseAnchor,
+  resolveBrandTemplateParams,
   resolveAnchor,
 } from "../../core/src/index.js";
 import type {
@@ -17,6 +19,8 @@ import type {
   PlacedItem,
 } from "../../core/src/index.js";
 import type { BrandContext } from "./template-contract.js";
+import type { PrimitiveWordTiming } from "./primitives/v1.js";
+import { PRIMITIVES_V1_VERSION } from "./primitives/v1.js";
 import {
   loadTemplateRuntime,
   renderTemplatePng,
@@ -70,6 +74,7 @@ interface ResolvedGraphic {
   startFrame: number;
   endFrame: number;
   runtime: LoadedTemplateRuntime;
+  wordTiming?: PrimitiveWordTiming;
 }
 
 function graphicError(
@@ -141,6 +146,40 @@ async function anchorFrame(
   const converted = convertTimeRounding(resolution.value.timeline, options.fps);
   if (!converted.ok) throw converted.error;
   return converted.value.time.frames;
+}
+
+async function anchoredWordTiming(
+  options: GraphicOverlayOptions,
+  item: PlacedItem,
+): Promise<PrimitiveWordTiming | undefined> {
+  const parsed = parseAnchor(item.at);
+  if (!parsed.ok || parsed.value.kind !== "word") return undefined;
+  const [start, end] = await Promise.all([
+    resolveAnchor(
+      options.project,
+      `word:${parsed.value.wordId}`,
+      options.sequenceId,
+      options.anchorDependencies,
+    ),
+    resolveAnchor(
+      options.project,
+      `word:${parsed.value.wordId}#end`,
+      options.sequenceId,
+      options.anchorDependencies,
+    ),
+  ]);
+  if (!start.ok) throw start.error;
+  if (!end.ok) throw end.error;
+  if (
+    start.value.status !== "resolved" || start.value.timeline === undefined ||
+    end.value.status !== "resolved" || end.value.timeline === undefined
+  ) return undefined;
+  return {
+    wordId: parsed.value.wordId,
+    start: structuredClone(start.value.timeline),
+    end: structuredClone(end.value.timeline),
+    approximate: start.value.approximate === true || end.value.approximate === true,
+  };
 }
 
 function convertedDuration(
@@ -273,6 +312,7 @@ async function resolvedGraphics(options: GraphicOverlayOptions): Promise<Resolve
       }
       const sourceStartFrame = await anchorFrame(options, item, item.at, "start");
       const sourceEndFrame = await endFrame(options, item, sourceStartFrame, runtime);
+      const wordTiming = await anchoredWordTiming(options, item);
       const seamInsertion = restyleTimelineInsertionForItem(item);
       const startFrame = sourceFrameToOutputFrame(
         sourceStartFrame,
@@ -292,6 +332,7 @@ async function resolvedGraphics(options: GraphicOverlayOptions): Promise<Resolve
         startFrame,
         endFrame: clampedEnd,
         runtime,
+        ...(wordTiming === undefined ? {} : { wordTiming }),
       });
     }
   }
@@ -312,7 +353,14 @@ async function paintFrame(
   for (const graphic of graphics) {
     if (frame < graphic.startFrame || frame >= graphic.endFrame) continue;
     const png = renderTemplatePng(graphic.runtime, {
-      params: graphic.item.params ?? {},
+      params: resolveBrandTemplateParams({
+        templateId: graphic.runtime.package.manifest.id,
+        schema: graphic.runtime.package.manifest.params,
+        explicit: graphic.item.params ?? {},
+        ...(options.brand.templateDefaults === undefined
+          ? {}
+          : { brand: options.brand.templateDefaults }),
+      }),
       seed: graphic.item.seed!,
       frame: frame - graphic.startFrame,
       totalFrames: graphic.endFrame - graphic.startFrame,
@@ -321,6 +369,10 @@ async function paintFrame(
       height: options.height,
       safeArea: safeArea(options),
       brand: options.brand,
+      timeline: { frames: frame, fps: options.fps },
+      ...(graphic.wordTiming === undefined
+        ? {}
+        : { wordTiming: graphic.wordTiming }),
     });
     if (!png.ok) throw png.error;
     painter.drawImage(await loadImage(png.value), 0, 0);
@@ -343,10 +395,22 @@ export async function renderGraphicOverlaySequence(
   const overlayKey = digest(canonical({
     renderer: GRAPHIC_OVERLAY_RENDERER_VERSION,
     templateRenderer: TEMPLATE_RENDERER_VERSION,
+    primitives: PRIMITIVES_V1_VERSION,
     canvas: TEMPLATE_CANVAS_VERSION,
     geometry: { width: options.width, height: options.height, fps: options.fps },
     safeArea: safeArea(options),
-    brand: { palette: options.brand.palette },
+    brand: {
+      palette: options.brand.palette,
+      ...(options.brand.fontSlots === undefined
+        ? {}
+        : { fontSlots: options.brand.fontSlots }),
+      ...(options.brand.logoSlotDefaults === undefined
+        ? {}
+        : { logoSlotDefaults: options.brand.logoSlotDefaults }),
+      ...(options.brand.templateDefaults === undefined
+        ? {}
+        : { templateDefaults: options.brand.templateDefaults }),
+    },
     graphics: graphics.map(({ item, layerId, layerOrder, itemOrder, startFrame, endFrame, runtime }) => ({
       layerId,
       layerOrder,
@@ -390,7 +454,7 @@ export async function renderGraphicOverlaySequence(
 
 export function graphicOverlayToolchain() {
   return {
-    version: GRAPHIC_OVERLAY_RENDERER_VERSION,
+    version: `${GRAPHIC_OVERLAY_RENDERER_VERSION}+${PRIMITIVES_V1_VERSION}`,
     canvasVersion: TEMPLATE_CANVAS_VERSION,
   };
 }

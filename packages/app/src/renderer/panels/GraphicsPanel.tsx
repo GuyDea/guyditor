@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 
 import type { PlacedItem } from "../../../../core/src/index.js";
-import type { TemplateCatalogEntry } from "../../../../render/src/index.js";
+import type {
+  TemplateCatalogEntry,
+  TemplateFreezeResult,
+} from "../../../../render/src/index.js";
 import { errorMessage, executeDirect } from "../ipc.js";
 import { usePreviewStore, useSelectionStore } from "../state/view-state.js";
 import { Panel } from "./Panel.js";
@@ -69,6 +72,7 @@ export function GraphicsPanel({
   const [anchorMode, setAnchorMode] = useState<"playhead" | "word">("playhead");
   const [durationMode, setDurationMode] = useState<"intrinsic" | "fixed" | "until">("intrinsic");
   const [durationFrames, setDurationFrames] = useState(90);
+  const [freezing, setFreezing] = useState(false);
   const playhead = usePreviewStore((state) => state.playhead);
   const selectedWordId = useSelectionStore((state) => state.selectedWordId);
   const selectLayer = useSelectionStore((state) => state.selectLayer);
@@ -199,6 +203,35 @@ export function GraphicsPanel({
     }
   }
 
+  async function freezeTemplate(): Promise<void> {
+    if (snapshot === null || selectedTemplate === undefined) return;
+    setFreezing(true);
+    try {
+      const result = await window.guyditor.call<TemplateFreezeResult>(
+        "RenderService",
+        "templateFreeze",
+        {
+          revision: snapshot.master.revision,
+          deliverableId: snapshot.master.settings.primaryDeliverable,
+          templateId: selectedTemplate.id,
+          params,
+          ...(durationMode === "intrinsic"
+            ? {}
+            : { durationFrames: Math.max(1, durationFrames) }),
+          placeAsClip: true,
+        },
+      );
+      await refreshProject();
+      setNotice(
+        `Froze ${selectedTemplate.name} to ${result.assetId} and placed ${result.clipId ?? "the clip"}.`,
+      );
+    } catch (error: unknown) {
+      setNotice(errorMessage(error));
+    } finally {
+      setFreezing(false);
+    }
+  }
+
   async function removeGraphic(): Promise<void> {
     if (selectedInstance === undefined) return;
     try {
@@ -232,6 +265,18 @@ export function GraphicsPanel({
 
   return (
     <Panel id="graphics" title="Graphics" eyebrow="Pinned template rack">
+      <div className="template-browser-actions">
+        <span>{selectedTemplate?.name ?? "No template selected"}</span>
+        <button
+          type="button"
+          className="freeze-action"
+          data-testid="template-browser-freeze"
+          disabled={snapshot === null || selectedTemplate === undefined || freezing}
+          onClick={() => void freezeTemplate()}
+        >
+          {freezing ? "Freezing…" : "Freeze selected to clip"}
+        </button>
+      </div>
       <div className="template-rack" data-testid="template-browser">
         {catalog.map((entry) => (
           <button
@@ -330,10 +375,18 @@ export function GraphicsPanel({
           </div>
           <div className="graphic-actions">
             {selectedInstance === undefined ? (
-              <button type="button" className="primary-action" data-testid="graphic-add" disabled={snapshot === null} onClick={() => void addGraphic()}>Place graphic</button>
+              <>
+                <button type="button" className="primary-action" data-testid="graphic-add" disabled={snapshot === null || freezing} onClick={() => void addGraphic()}>Place graphic</button>
+                <button type="button" className="freeze-action" data-testid="template-freeze" disabled={snapshot === null || freezing} onClick={() => void freezeTemplate()}>
+                  {freezing ? "Freezing…" : "Freeze to clip"}
+                </button>
+              </>
             ) : (
               <>
                 <button type="button" className="primary-action" data-testid="graphic-update" onClick={() => void updateGraphic()}>Apply params</button>
+                <button type="button" className="freeze-action" data-testid="template-freeze" disabled={freezing} onClick={() => void freezeTemplate()}>
+                  {freezing ? "Freezing…" : "Freeze to clip"}
+                </button>
                 <button type="button" data-testid="graphic-remove" onClick={() => void removeGraphic()}>Remove</button>
                 <button type="button" aria-label="Move graphics layer down" onClick={() => void moveLayer(-1)}>↓</button>
                 <button type="button" aria-label="Move graphics layer up" onClick={() => void moveLayer(1)}>↑</button>

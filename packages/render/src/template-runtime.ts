@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFile, readdir } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { createContext, Script } from "node:vm";
 import type { Context } from "node:vm";
@@ -20,6 +20,10 @@ import {
 } from "../../core/src/index.js";
 import type { Result } from "../../core/src/index.js";
 import { createSeededRng } from "./seeded-rng.js";
+import {
+  PRIMITIVES_V1_VERSION,
+  primitivesV1,
+} from "./primitives/v1.js";
 import type {
   DurationSpec,
   OverlayCanvas2D,
@@ -106,7 +110,18 @@ function sandbox(): { context: Context; module: ModuleContainer } {
     setImmediate: undefined,
     queueMicrotask: undefined,
     process: undefined,
-    require: undefined,
+    require: (specifier: unknown): unknown => {
+      if (specifier === "@guyditor/render/primitives/v1") {
+        return Object.freeze({
+          PRIMITIVES_V1_VERSION,
+          primitivesV1,
+          default: primitivesV1,
+        });
+      }
+      throw new TypeError(
+        `Module ${String(specifier)} is unavailable in deterministic templates.`,
+      );
+    },
     Intl: undefined,
   });
   return {
@@ -129,6 +144,13 @@ async function resolvedFonts(pkg: LoadedTemplatePackage): Promise<Result<Resolve
   for (const declaration of pkg.manifest.fonts) {
     try {
       const bytes = await readFile(resolve(pkg.root, declaration.file));
+      if (sha256(bytes) !== declaration.sha256) {
+        return runtimeFailure(
+          "E_TEMPLATE_ASSET_HASH",
+          `Template font ${declaration.file} no longer matches its declared SHA-256.`,
+          [pkg.manifest.id, declaration.file],
+        );
+      }
       const registered = GlobalFonts.register(bytes, declaration.family);
       if (registered === null && !GlobalFonts.has(declaration.family)) {
         return runtimeFailure(
@@ -155,20 +177,22 @@ async function resolvedFonts(pkg: LoadedTemplatePackage): Promise<Result<Resolve
 
 async function decodedAssets(pkg: LoadedTemplatePackage): Promise<Result<ReadonlyMap<string, Image>>> {
   const assets = new Map<string, Image>();
-  const root = resolve(pkg.root, "assets");
-  let names: string[];
-  try {
-    names = await readdir(root);
-  } catch {
-    return success(assets);
-  }
-  for (const name of names.sort()) {
+  for (const declaration of (pkg.manifest.assets ?? []).slice().sort((left, right) =>
+    left.name.localeCompare(right.name))) {
     try {
-      assets.set(name, await loadImage(resolve(root, name)));
+      const bytes = await readFile(resolve(pkg.root, declaration.file));
+      if (sha256(bytes) !== declaration.sha256) {
+        return runtimeFailure(
+          "E_TEMPLATE_ASSET_HASH",
+          `Template asset ${declaration.file} no longer matches its declared SHA-256.`,
+          [pkg.manifest.id, declaration.file],
+        );
+      }
+      assets.set(declaration.name, await loadImage(bytes));
     } catch (error: unknown) {
       return runtimeFailure(
         "E_TEMPLATE_ASSET_INVALID",
-        `Template asset ${name} could not be decoded: ${errorMessage(error)}.`,
+        `Template asset ${declaration.file} could not be decoded: ${errorMessage(error)}.`,
         [pkg.manifest.id],
       );
     }
@@ -308,6 +332,12 @@ export function renderTemplatePng(
     height: options.height,
     safeArea: Object.freeze(structuredClone(options.safeArea)),
     progress: options.totalFrames === 1 ? 0 : options.frame / (options.totalFrames - 1),
+    timeline: Object.freeze(structuredClone(
+      options.timeline ?? { frames: options.frame, fps: options.fps },
+    )),
+    ...(options.wordTiming === undefined
+      ? {}
+      : { wordTiming: Object.freeze(structuredClone(options.wordTiming)) }),
     fonts: runtime.fonts,
     brand: options.brand,
     rng: createSeededRng(options.seed),

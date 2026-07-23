@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { cp, lstat, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { Ajv2020 } from "ajv/dist/2020.js";
 import type { ErrorObject } from "ajv";
@@ -27,6 +27,24 @@ export interface TemplateFontDeclaration {
   family: string;
   file: string;
   weight: number;
+  sha256: string;
+  license: TemplateAssetLicense;
+}
+
+export interface TemplateAssetLicense {
+  origin: "licensed" | "stock" | "generated" | "programmatic" | "unknown";
+  licenseName: string;
+  licenseUrl?: string;
+  licensor: string;
+  restrictions: string[];
+}
+
+export interface TemplateAssetDeclaration {
+  name: string;
+  kind: "image" | "svg";
+  file: string;
+  sha256: string;
+  license: TemplateAssetLicense;
 }
 
 export interface TemplateManifest {
@@ -45,6 +63,7 @@ export interface TemplateManifest {
   params: Record<string, unknown>;
   preview: { file: string; params: Record<string, unknown> };
   fonts: TemplateFontDeclaration[];
+  assets?: TemplateAssetDeclaration[];
   safe_area_aware: boolean;
 }
 
@@ -73,6 +92,26 @@ export interface TemplateRegistryOptions {
 const SEMVER = "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$";
 const TEMPLATE_ID = "^tpl_[a-z2-7]{10}$";
 const RATIONAL = "^[0-9]+/[1-9][0-9]*$";
+const SHA256 = "^[0-9a-f]{64}$";
+
+const licenseSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["origin", "licenseName", "licensor", "restrictions"],
+  properties: {
+    origin: {
+      enum: ["licensed", "stock", "generated", "programmatic", "unknown"],
+    },
+    licenseName: { type: "string", minLength: 1 },
+    licenseUrl: { type: "string", minLength: 1 },
+    licensor: { type: "string", minLength: 1 },
+    restrictions: {
+      type: "array",
+      items: { type: "string", minLength: 1 },
+      uniqueItems: true,
+    },
+  },
+} as const;
 
 const manifestSchema = {
   $schema: "https://json-schema.org/draft/2020-12/schema",
@@ -129,11 +168,28 @@ const manifestSchema = {
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["family", "file", "weight"],
         properties: {
           family: { type: "string", minLength: 1 },
           file: { type: "string", minLength: 1 },
           weight: { type: "integer", minimum: 1, maximum: 1000 },
+          sha256: { type: "string", pattern: SHA256 },
+          license: licenseSchema,
+        },
+        required: ["family", "file", "weight", "sha256", "license"],
+      },
+    },
+    assets: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["name", "kind", "file", "sha256", "license"],
+        properties: {
+          name: { type: "string", pattern: "^[a-z][a-z0-9_-]*$" },
+          kind: { enum: ["image", "svg"] },
+          file: { type: "string", minLength: 1 },
+          sha256: { type: "string", pattern: SHA256 },
+          license: licenseSchema,
         },
       },
     },
@@ -260,6 +316,7 @@ export async function validateTemplatePackage(
     { name: value.entry, label: "entry" },
     { name: value.preview.file, label: "preview.file" },
     ...value.fonts.map(({ file }) => ({ name: file, label: "fonts[].file" })),
+    ...(value.assets ?? []).map(({ file }) => ({ name: file, label: "assets[].file" })),
   ];
   for (const declaration of declared) {
     const path = safePackagePath(absoluteRoot, declaration.name, declaration.label);
@@ -267,6 +324,36 @@ export async function validateTemplatePackage(
     const relativeName = relative(absoluteRoot, path.value).split(sep).join("/");
     if (!files.value.includes(relativeName)) {
       return packageFailure(`${declaration.label} ${declaration.name} does not exist.`);
+    }
+  }
+  if (new Set(value.fonts.map(({ family }) => family)).size !== value.fonts.length) {
+    return packageFailure("fonts contains duplicate family declarations.", [value.id]);
+  }
+  if (
+    value.assets !== undefined &&
+    new Set(value.assets.map(({ name }) => name)).size !== value.assets.length
+  ) {
+    return packageFailure("assets contains duplicate names.", [value.id]);
+  }
+  for (const declaration of [
+    ...value.fonts.map(({ file, sha256: expected }) => ({ file, expected, kind: "font" })),
+    ...(value.assets ?? []).map(({ file, sha256: expected, kind }) => ({
+      file,
+      expected,
+      kind,
+    })),
+  ]) {
+    if (declaration.kind === "svg" && extname(declaration.file).toLowerCase() !== ".svg") {
+      return packageFailure(`SVG asset ${declaration.file} must use the .svg extension.`, [value.id]);
+    }
+    const actual = createHash("sha256")
+      .update(await readFile(resolve(absoluteRoot, declaration.file)))
+      .digest("hex");
+    if (actual !== declaration.expected) {
+      return packageFailure(
+        `${declaration.file} does not match its declared SHA-256.`,
+        [value.id, declaration.file],
+      );
     }
   }
 

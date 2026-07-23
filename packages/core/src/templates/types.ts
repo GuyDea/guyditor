@@ -1,5 +1,6 @@
 import type { Result } from "../errors.js";
 import type { FrameTime } from "../time/index.js";
+import type { RightsMetadata } from "../restyle/types.js";
 
 export type TemplateKind =
   | "title"
@@ -28,6 +29,42 @@ export interface TemplateDescriptor {
 export interface TemplateInstallRequest {
   packagePath?: string;
   builtinName?: string;
+}
+
+export interface TemplateBrandDefaults {
+  schema: "guyditor-template-brand/v1";
+  palette: Record<string, string>;
+  fonts: Record<string, string>;
+  logoSlots: Record<string, string>;
+  params: Record<string, unknown>;
+  templates: Record<string, Record<string, unknown>>;
+}
+
+export interface ProgrammaticAnimationProvenance {
+  schema: "guyditor.programmatic-provenance/v1";
+  assetId: string;
+  template: {
+    id: string;
+    version: string;
+    contentHash: string;
+  };
+  params: Record<string, unknown>;
+  seed: number;
+  renderer: {
+    template: string;
+    primitives: string;
+    canvas: string;
+    toolchainHash: string;
+    fontHashes: Record<string, string>;
+  };
+  output: {
+    frames: number;
+    fps: string;
+    width: number;
+    height: number;
+  };
+  rights: RightsMetadata;
+  contentHash: string;
 }
 
 export interface TemplateProvider {

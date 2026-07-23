@@ -80,6 +80,7 @@ import {
   FileCredentialStore,
   GenerationExecutionService,
   KlingRestyleAdapter,
+  pinnedBrandTemplateDefaults,
   RestyleExecutionService,
   SkillRegistry,
 } from "../../../agent/src/index.js";
@@ -995,6 +996,7 @@ export class WindowServiceHost {
       jobQueue: jobs,
       profilesRoot: this.#app.profilesRoot,
       templateRegistry: templates,
+      brandDefaults: () => pinnedBrandTemplateDefaults(store, this.#app.skillRegistry),
     });
     const publish = new PublishService({
       projectRoot: store.root,
@@ -1862,6 +1864,8 @@ export class WindowServiceHost {
           templateCatalog: () => project.render.templateCatalog(),
           templateFrame: (params: Parameters<RenderService["templateFrame"]>[0]) =>
             project.render.templateFrame(params),
+          templateFreeze: (params: Parameters<RenderService["templateFreeze"]>[0]) =>
+            project.render.templateFreeze(params),
           renderExport: (params: Parameters<RenderService["renderExport"]>[0]) =>
             project.render.renderExport(params),
           renderDiagnostic: (params: Parameters<RenderService["renderDiagnostic"]>[0]) =>

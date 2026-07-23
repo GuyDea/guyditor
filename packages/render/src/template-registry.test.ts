@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -206,5 +207,50 @@ describe("FR-600 template package validation", () => {
         error: { code: "E_TEMPLATE_PACKAGE_INVALID" },
       });
     }
+  });
+
+  it("registers license-fielded SVG assets and fails closed on hash mismatch", async () => {
+    const validate = (render as unknown as RegistryExports).validateTemplatePackage;
+    if (validate === undefined) return;
+    const root = await packageFixture();
+    const svg = Buffer.from(
+      '<svg xmlns="http://www.w' + '3.org/2000/svg" width="20" height="10">' +
+      '<path fill="#77e7c4" d="M0 0h20v10H0z"/></svg>',
+    );
+    await writeFile(join(root, "assets", "map.svg"), svg);
+    const hash = createHash("sha256").update(svg).digest("hex");
+    await rewriteManifest(root, {
+      "fonts: []": `fonts: []
+assets:
+  - name: map
+    kind: svg
+    file: assets/map.svg
+    sha256: ${hash}
+    license:
+      origin: licensed
+      licenseName: CC BY 4.0
+      licenseUrl: https://creativecommons.org/licenses/by/4.0/
+      licensor: Fixture Maps
+      restrictions: []`,
+    });
+
+    const valid = await validate(root);
+    expect(valid.ok).toBe(true);
+    await writeFile(join(root, "assets", "map.svg"), Buffer.concat([svg, Buffer.from("\n")]));
+    await expect(validate(root)).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "E_TEMPLATE_PACKAGE_INVALID",
+        message: expect.stringMatching(/map\.svg.*SHA-256/iu),
+      },
+    });
+
+    await rewriteManifest(root, {
+      "      licensor: Fixture Maps\n": "",
+    });
+    await expect(validate(root)).resolves.toMatchObject({
+      ok: false,
+      error: { code: "E_TEMPLATE_PACKAGE_INVALID" },
+    });
   });
 });

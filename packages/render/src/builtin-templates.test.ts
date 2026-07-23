@@ -22,12 +22,22 @@ describe("FR-600 built-in graphics templates", () => {
       "title-card",
       "callout-box",
       "full-frame-infographic",
+      "kinetic-title",
+      "stat-counter-card",
+      "bar-chart-card",
+      "cutout-collage-card",
+      "highlight-underline",
     ]);
     expect(catalog.value.map(({ kind }) => kind)).toEqual([
       "lower_third",
       "title",
       "callout",
       "diagram",
+      "title",
+      "diagram",
+      "diagram",
+      "motion",
+      "highlight",
     ]);
     const infographic = catalog.value.find(
       ({ builtinName }) => builtinName === "full-frame-infographic",

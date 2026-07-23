@@ -1,0 +1,51 @@
+schema: guyditor/template/v1
+id: tpl_h2j3k4m5n6
+name: Cutout collage card
+kind: motion
+version: 1.0.0
+engine: overlay/v1
+entry: render.ts
+min_guyditor: 1.0.0
+duration:
+  mode: fixed
+  default: { frames: 120, fps: "30/1" }
+params:
+  type: object
+  additionalProperties: false
+  required: [eyebrow, title, accent, background, fontFamily]
+  properties:
+    eyebrow: { type: string, minLength: 1, maxLength: 32, default: "THE BIG IDEA" }
+    title: { type: string, minLength: 1, maxLength: 72, default: "Public space belongs to everyone" }
+    accent: { type: string, pattern: "^#[0-9A-Fa-f]{6}$", default: "#77E7C4" }
+    background: { type: string, pattern: "^#[0-9A-Fa-f]{6}$", default: "#F4EDE4" }
+    fontFamily: { type: string, minLength: 1, default: "Inconsolata Guyditor" }
+preview:
+  file: preview.png
+  params:
+    eyebrow: THE BIG IDEA
+    title: Public space belongs to everyone
+    accent: "#77E7C4"
+    background: "#F4EDE4"
+    fontFamily: Inconsolata Guyditor
+fonts:
+  - family: Inconsolata Guyditor
+    file: fonts/Inconsolata.otf
+    weight: 600
+    sha256: 1561e616c414a1b82d6e6dfbd18e5726fd65028913ade191e5fa38b6ec375a1a
+    license:
+      origin: licensed
+      licenseName: SIL Open Font License 1.1
+      licenseUrl: https://openfontlicense.org/
+      licensor: Raph Levien
+      restrictions: []
+assets:
+  - name: portrait-cutout
+    kind: svg
+    file: assets/portrait-cutout.svg
+    sha256: de7bccf13fcd698f62420882275b688c8018cc815108d5a5186039645dcd063b
+    license:
+      origin: programmatic
+      licenseName: Guyditor starter asset
+      licensor: Guyditor contributors
+      restrictions: []
+safe_area_aware: true

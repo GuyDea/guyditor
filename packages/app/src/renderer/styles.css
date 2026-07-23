@@ -325,6 +325,23 @@ small { color: var(--muted); }
 .template-rack span, .template-rack small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .template-rack span { align-self: end; font-size: 7px; }
 .template-rack small { font: 500 6px/1 ui-monospace, monospace; text-transform: uppercase; }
+.template-browser-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 5px 6px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font: 600 6px/1 ui-monospace, monospace;
+  text-transform: uppercase;
+}
+.freeze-action {
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--line));
+  background:
+    repeating-linear-gradient(90deg, transparent 0 8px, #0003 8px 10px),
+    color-mix(in srgb, var(--accent) 13%, var(--surface));
+}
 .graphic-compose { padding: 6px; border-bottom: 1px solid var(--line); }
 .template-live-preview { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border: 1px solid #3b474e; background: #020304; }
 .template-param-grid, .graphic-placement { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; margin-top: 6px; }

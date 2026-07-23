@@ -249,9 +249,17 @@ test("places a schema-driven lower third at a word and previews the journaled gr
       "title-card",
       "callout-box",
       "full-frame-infographic",
+      "kinetic-title",
+      "stat-counter-card",
+      "bar-chart-card",
+      "cutout-collage-card",
+      "highlight-underline",
     ]);
     await expect(launched.page.getByTestId("graphics-panel")).toContainText("Brand lower third");
     await launched.page.getByTestId("template-lower-third").click();
+    await expect(launched.page.getByTestId("template-browser-freeze"))
+      .toHaveText("Freeze selected to clip");
+    await expect(launched.page.getByTestId("template-freeze")).toHaveText("Freeze to clip");
     await launched.page.getByLabel("title *", { exact: true }).fill("Word anchored title");
     await launched.page.getByTestId("graphic-anchor").selectOption("word");
     await launched.page.getByTestId("graphic-add").click();

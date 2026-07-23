@@ -192,6 +192,11 @@ export type {
 } from "./proxy.js";
 export { runFfmpeg, runFfprobe } from "./run.js";
 export type { FfmpegRunResult, RunFfmpegOptions } from "./run.js";
+export { materializeProgrammaticAnimationArtifact } from "./programmatic-animation.js";
+export type {
+  MaterializeProgrammaticAnimationArtifactInput,
+  ProgrammaticAnimationArtifact,
+} from "./programmatic-animation.js";
 export {
   applyDeterministicRestyleFilter,
   materializeRestyleSegment,

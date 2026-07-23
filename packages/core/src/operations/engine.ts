@@ -97,6 +97,7 @@ import graphicRemoveSchema from "./schemas/graphic.remove.json" with { type: "js
 import templatePinSchema from "./schemas/template.pin.json" with { type: "json" };
 import templateInstallSchema from "./schemas/template.install.json" with { type: "json" };
 import templateUninstallSchema from "./schemas/template.uninstall.json" with { type: "json" };
+import templateFreezeSchema from "./schemas/template.freeze.json" with { type: "json" };
 import restylePlanCreateSchema from "./schemas/restyle.plan.create.json" with { type: "json" };
 import restyleSegmentApproveSchema from "./schemas/restyle.segment.approve.json" with { type: "json" };
 import generationAcceptSchema from "./schemas/generation.accept.json" with { type: "json" };
@@ -505,6 +506,12 @@ const catalog = new Map<string, CatalogEntry>([
     "low",
     "none",
     "Uninstall template {templateId}@{version}",
+  )],
+  ["template.freeze", catalogEntry(
+    templateFreezeSchema,
+    "normal",
+    "none",
+    "Freeze template asset {asset.id}",
   )],
   ["restyle.plan.create", catalogEntry(
     restylePlanCreateSchema,

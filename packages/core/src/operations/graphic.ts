@@ -4,6 +4,7 @@ import type { ErrorObject } from "ajv";
 import { failure, makeGuyditorError, success } from "../errors.js";
 import type { Result } from "../errors.js";
 import type { GuyditorProject, Layer, PlacedItem } from "../project/index.js";
+import { applyTemplateFreezeOperation } from "../templates/freeze.js";
 import type { TemplateDescriptor, TemplateProvider } from "../templates/index.js";
 import type { IdFactory } from "./engine.js";
 import type { ClipApplication, EntityMutation } from "./clip.js";
@@ -434,6 +435,9 @@ export async function applyTemplateOperation(
   provider: TemplateProvider,
   dryRun: boolean,
 ): Promise<Result<ClipApplication>> {
+  if (input.op === "template.freeze") {
+    return applyTemplateFreezeOperation(project, input, provider);
+  }
   if (input.op === "template.install") {
     if (provider.install === undefined) {
       return graphicFailure(
