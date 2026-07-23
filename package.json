@@ -4,6 +4,9 @@
   "packageManager": "pnpm@10.8.0",
   "type": "module",
   "scripts": {
+    "dev": "pnpm --filter @guyditor/app dev",
+    "start": "pnpm --filter @guyditor/app dev",
+    "build:app": "pnpm --filter @guyditor/app build",
     "fixtures": "node scripts/make-fixtures.mjs",
     "test": "pnpm -r typecheck && pnpm -r lint && vitest run",
     "test:golden": "vitest run --project golden",

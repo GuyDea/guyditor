@@ -53,8 +53,8 @@ Optional ML extras:
 ## Run the app
 
 ```bash
-pnpm --filter @guyditor/app dev     # launch the Electron workspace (dev)
-pnpm --filter @guyditor/app build   # production build to packages/app/dist
+pnpm dev          # launch the Electron workspace (alias: pnpm start)
+pnpm build:app    # production build to packages/app/dist
 ```
 
 First steps in the app: create a project (pick a platform profile), drop media into
