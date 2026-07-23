@@ -17,6 +17,7 @@ import {
 } from "./workspace-navigation.js";
 
 interface GlobalProgressProps {
+  forceOpen?: boolean;
   refreshOverview: () => Promise<void>;
   setNotice: (notice: string) => void;
 }
@@ -44,6 +45,7 @@ function DependencyTree({ nodes }: { nodes: JobDependencyNode[] }): React.JSX.El
 }
 
 export function GlobalProgress({
+  forceOpen = false,
   refreshOverview,
   setNotice,
 }: GlobalProgressProps): React.JSX.Element {
@@ -52,6 +54,7 @@ export function GlobalProgress({
   const waitingCount = overviewWaitingCount(overview);
   const activeCount = overview.running.length + overview.queued.length;
   const fill = Math.max(0, Math.min(100, overview.aggregateFraction * 100));
+  const visible = open || forceOpen;
 
   async function jobAction(job: JobStatus, action: "cancel" | "retry"): Promise<void> {
     try {
@@ -107,7 +110,7 @@ export function GlobalProgress({
         className="global-progress"
         data-testid="global-progress"
         aria-haspopup="dialog"
-        aria-expanded={open}
+        aria-expanded={visible}
         onClick={() => setOpen((current) => !current)}
       >
         <span className="global-progress-copy">
@@ -135,7 +138,7 @@ export function GlobalProgress({
         >{String(waitingCount)} waiting on you</span>
       </button>
 
-      {open ? (
+      {visible ? (
         <aside
           className="global-progress-popover"
           role="dialog"

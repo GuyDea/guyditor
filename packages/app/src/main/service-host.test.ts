@@ -802,6 +802,37 @@ describe("AppServiceHost", () => {
     await windowHost.close();
     await appHost.close();
   });
+
+  it("creates and opens a profile-backed project from the project chooser", async () => {
+    const sandbox = await mkdtemp(join(tmpdir(), "guyditor-host-create-"));
+    const userDirectory = await mkdtemp(join(tmpdir(), "guyditor-host-create-user-"));
+    const target = join(sandbox, "My first episode");
+    await mkdir(target);
+    const appHost = testAppHost(userDirectory);
+    const windowHost = appHost.createWindowHost({
+      publisher: new WindowEventPublisher(() => undefined),
+      chooseNewProject: async () => target,
+    });
+    const createDialog = windowHost.resolveService("ProjectStore")?.["createDialog"];
+    if (typeof createDialog !== "function") {
+      throw new Error("Project create dialog is unavailable.");
+    }
+
+    const snapshot = await Reflect.apply(createDialog, undefined, []);
+
+    expect(snapshot).toMatchObject({
+      revision: "rev_00001",
+      master: {
+        project: { name: "My first episode" },
+        settings: { timeline: { width: 3840, height: 2160 } },
+        deliverables: [expect.objectContaining({ profile: "youtube-longform@1.0.0" })],
+      },
+      projectPath: target,
+    });
+    await expect(access(join(target, "episode.guyditor.yaml"))).resolves.toBeUndefined();
+    await windowHost.close();
+    await appHost.close();
+  });
 });
 
 function testAppHost(userDirectory: string): AppServiceHost {

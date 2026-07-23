@@ -26,9 +26,27 @@ export const DOCK_PANEL_IDS = [
   "skills",
   "broll",
   "storage",
+  "help",
 ] as const;
 
 export type DockPanelId = typeof DOCK_PANEL_IDS[number];
+
+const PRE_ONBOARDING_DOCK_PANEL_IDS = [
+  "media",
+  "preview",
+  "transcript",
+  "inspector",
+  "agent",
+  "timeline",
+  "status",
+  "graphics",
+  "publish",
+  "skills",
+  "broll",
+  "storage",
+] as const;
+
+type PreOnboardingDockPanelId = typeof PRE_ONBOARDING_DOCK_PANEL_IDS[number];
 
 const LEGACY_DOCK_PANEL_IDS = [
   "media",
@@ -95,6 +113,18 @@ export interface WorkflowLayouts {
 interface PersistedLayoutDocument {
   schema: typeof LAYOUT_SCHEMA;
   projects: Record<string, WorkflowLayouts>;
+}
+
+interface PreOnboardingLayoutRegion {
+  panelIds: PreOnboardingDockPanelId[];
+  activePanelId: PreOnboardingDockPanelId | null;
+}
+
+interface PreOnboardingWorkspaceLayout {
+  schema: typeof LAYOUT_SCHEMA;
+  regions: Record<DockRegionId, PreOnboardingLayoutRegion>;
+  splitters: SplitterPositions;
+  collapsed: Record<PreOnboardingDockPanelId, boolean>;
 }
 
 interface LegacyLayoutRegion {
@@ -177,7 +207,7 @@ const PANEL_PLACEMENTS: Record<
     "center-top": ["storage", "preview"],
     "center-bottom": ["transcript", "graphics"],
     "right-top": ["agent", "skills"],
-    "right-bottom": ["inspector", "publish"],
+    "right-bottom": ["inspector", "publish", "help"],
     "bottom-timeline": ["timeline"],
     "bottom-status": ["status"],
   },
@@ -186,7 +216,7 @@ const PANEL_PLACEMENTS: Record<
     "center-top": ["preview", "graphics"],
     "center-bottom": ["transcript", "skills"],
     "right-top": ["agent", "publish"],
-    "right-bottom": ["inspector"],
+    "right-bottom": ["inspector", "help"],
     "bottom-timeline": ["timeline"],
     "bottom-status": ["status"],
   },
@@ -195,7 +225,7 @@ const PANEL_PLACEMENTS: Record<
     "center-top": ["preview"],
     "center-bottom": ["transcript", "skills"],
     "right-top": ["agent", "publish"],
-    "right-bottom": ["inspector"],
+    "right-bottom": ["inspector", "help"],
     "bottom-timeline": ["timeline"],
     "bottom-status": ["status"],
   },
@@ -204,7 +234,7 @@ const PANEL_PLACEMENTS: Record<
     "center-top": ["preview", "graphics"],
     "center-bottom": ["transcript", "skills"],
     "right-top": ["agent", "publish"],
-    "right-bottom": ["inspector"],
+    "right-bottom": ["inspector", "help"],
     "bottom-timeline": ["timeline"],
     "bottom-status": ["status"],
   },
@@ -213,7 +243,7 @@ const PANEL_PLACEMENTS: Record<
     "center-top": ["publish", "preview", "graphics"],
     "center-bottom": ["transcript", "skills"],
     "right-top": ["agent"],
-    "right-bottom": ["inspector"],
+    "right-bottom": ["inspector", "help"],
     "bottom-timeline": ["timeline"],
     "bottom-status": ["status"],
   },
@@ -380,6 +410,11 @@ function isDockPanelId(value: unknown): value is DockPanelId {
     (DOCK_PANEL_IDS as readonly string[]).includes(value);
 }
 
+function isPreOnboardingDockPanelId(value: unknown): value is PreOnboardingDockPanelId {
+  return typeof value === "string" &&
+    (PRE_ONBOARDING_DOCK_PANEL_IDS as readonly string[]).includes(value);
+}
+
 function isLegacyDockPanelId(value: unknown): value is LegacyDockPanelId {
   return typeof value === "string" &&
     (LEGACY_DOCK_PANEL_IDS as readonly string[]).includes(value);
@@ -390,6 +425,14 @@ function isRegion(value: unknown): value is LayoutRegion {
   if (!value.panelIds.every(isDockPanelId)) return false;
   return value.activePanelId === null ||
     isDockPanelId(value.activePanelId) && value.panelIds.includes(value.activePanelId);
+}
+
+function isPreOnboardingRegion(value: unknown): value is PreOnboardingLayoutRegion {
+  if (!isRecord(value) || !Array.isArray(value.panelIds)) return false;
+  if (!value.panelIds.every(isPreOnboardingDockPanelId)) return false;
+  return value.activePanelId === null ||
+    isPreOnboardingDockPanelId(value.activePanelId) &&
+      value.panelIds.includes(value.activePanelId);
 }
 
 function isLegacyRegion(value: unknown): value is LegacyLayoutRegion {
@@ -426,6 +469,34 @@ function isWorkspaceLayout(value: unknown): value is WorkspaceLayout {
   return DOCK_PANEL_IDS.every((panelId) => typeof collapsed[panelId] === "boolean");
 }
 
+function isPreOnboardingWorkspaceLayout(
+  value: unknown,
+): value is PreOnboardingWorkspaceLayout {
+  if (!isRecord(value) || value.schema !== LAYOUT_SCHEMA) return false;
+  if (!isRecord(value.regions) || !isRecord(value.splitters) || !isRecord(value.collapsed)) {
+    return false;
+  }
+  const regions = value.regions;
+  const splitters = value.splitters;
+  const collapsed = value.collapsed;
+  if (!DOCK_REGION_IDS.every((regionId) => isPreOnboardingRegion(regions[regionId]))) {
+    return false;
+  }
+  const panels = DOCK_REGION_IDS.flatMap((regionId) => {
+    const region = regions[regionId];
+    return isPreOnboardingRegion(region) ? region.panelIds : [];
+  });
+  if (panels.length !== PRE_ONBOARDING_DOCK_PANEL_IDS.length ||
+    new Set(panels).size !== PRE_ONBOARDING_DOCK_PANEL_IDS.length ||
+    !PRE_ONBOARDING_DOCK_PANEL_IDS.every((panelId) => panels.includes(panelId))) {
+    return false;
+  }
+  if (!hasValidSplitters(splitters)) return false;
+  return PRE_ONBOARDING_DOCK_PANEL_IDS.every(
+    (panelId) => typeof collapsed[panelId] === "boolean",
+  );
+}
+
 function isLegacyWorkspaceLayout(value: unknown): value is LegacyWorkspaceLayout {
   if (!isRecord(value) || value.schema !== LEGACY_LAYOUT_SCHEMA) return false;
   if (!isRecord(value.regions) || !isRecord(value.splitters) || !isRecord(value.collapsed)) {
@@ -456,6 +527,9 @@ export function parseLayout(
   value: unknown,
   fallbackPhase: WorkflowPhase = "cut",
 ): WorkspaceLayout {
+  if (isPreOnboardingWorkspaceLayout(value)) {
+    return migratePreOnboardingLayout(value, fallbackPhase);
+  }
   if (!isWorkspaceLayout(value)) return createDefaultLayout(fallbackPhase);
   const next = cloneLayout(value);
   for (const splitter of SPLITTER_IDS) {
@@ -470,7 +544,8 @@ function parseWorkflowLayouts(value: unknown): WorkflowLayouts | null {
     return null;
   }
   const layouts = value.layouts;
-  if (!WORKFLOW_PHASES.every((phase) => isWorkspaceLayout(layouts[phase]))) {
+  if (!WORKFLOW_PHASES.every((phase) =>
+    isWorkspaceLayout(layouts[phase]) || isPreOnboardingWorkspaceLayout(layouts[phase]))) {
     return null;
   }
   return {
@@ -481,6 +556,30 @@ function parseWorkflowLayouts(value: unknown): WorkflowLayouts | null {
       parseLayout(layouts[phase], phase),
     ])) as Record<WorkflowPhase, WorkspaceLayout>,
   };
+}
+
+function migratePreOnboardingLayout(
+  previous: PreOnboardingWorkspaceLayout,
+  phase: WorkflowPhase,
+): WorkspaceLayout {
+  const migrated = createDefaultLayout(phase);
+  for (const regionId of DOCK_REGION_IDS) {
+    migrated.regions[regionId] = {
+      panelIds: [
+        ...previous.regions[regionId].panelIds,
+        ...(regionId === "right-bottom" ? ["help" as const] : []),
+      ],
+      activePanelId: previous.regions[regionId].activePanelId,
+    };
+  }
+  for (const splitter of SPLITTER_IDS) {
+    migrated.splitters[splitter] = clampSplitterValue(splitter, previous.splitters[splitter]);
+  }
+  for (const panelId of PRE_ONBOARDING_DOCK_PANEL_IDS) {
+    migrated.collapsed[panelId] = previous.collapsed[panelId];
+  }
+  migrated.collapsed.help = true;
+  return migrated;
 }
 
 function parseDocument(serialized: string | null): PersistedLayoutDocument | null {

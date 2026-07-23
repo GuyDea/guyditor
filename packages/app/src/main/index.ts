@@ -256,6 +256,14 @@ async function createWindow(initialProjectPath?: string): Promise<BrowserWindow>
   });
   const windowHost = host.createWindowHost({
     publisher,
+    chooseNewProject: async () => {
+      const selected = await dialog.showOpenDialog(window, {
+        title: "Create Guyditor project",
+        buttonLabel: "Create project here",
+        properties: ["openDirectory", "createDirectory"],
+      });
+      return selected.canceled ? undefined : selected.filePaths[0];
+    },
     chooseProject: async () => {
       const selected = await dialog.showOpenDialog(window, {
         title: "Open Guyditor project",

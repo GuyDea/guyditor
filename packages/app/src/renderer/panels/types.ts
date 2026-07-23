@@ -24,5 +24,6 @@ export interface WorkspacePanelProps {
   refreshSkills: () => Promise<void>;
   refreshRestylePlan: () => Promise<void>;
   refreshExportReport: () => Promise<void>;
+  onProposalResolved?: (status: "accepted" | "rejected") => void;
   setNotice: (notice: string) => void;
 }

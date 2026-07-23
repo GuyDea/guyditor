@@ -21,6 +21,7 @@ import {
   createDefaultLayouts,
   DOCK_PANEL_IDS,
   LEGACY_LAYOUT_STORAGE_KEY,
+  LAYOUT_STORAGE_KEY,
   loadProjectLayouts,
   parseLayout,
   reorderPanel,
@@ -283,6 +284,53 @@ describe("workspace renderer state", () => {
       expect(DOCK_PANEL_IDS.every((panelId) => panels.includes(panelId))).toBe(true);
       expect(DOCK_PANEL_IDS.filter((panelId) => !layout.collapsed[panelId]).sort())
         .toEqual([...expandedByPhase[phase]].sort());
+    }
+  });
+
+  it("keeps Help available as P13 but collapsed by default on every phase", () => {
+    const defaults = createDefaultLayouts();
+
+    expect(DOCK_PANEL_IDS).toContain("help");
+    for (const phase of WORKFLOW_PHASES) {
+      expect(defaults.layouts[phase].collapsed.help).toBe(true);
+      expect(Object.values(defaults.layouts[phase].regions)
+        .flatMap(({ panelIds }) => panelIds)).toContain("help");
+    }
+  });
+
+  it("adds collapsed Help to layouts persisted before Amendment 006", () => {
+    const prior = structuredClone(createDefaultLayouts()) as unknown as {
+      activePhase: string;
+      layouts: Record<string, {
+        collapsed: Record<string, boolean>;
+        regions: Record<string, { activePanelId: string | null; panelIds: string[] }>;
+        schema: string;
+        splitters: Record<string, number>;
+      }>;
+      schema: string;
+    };
+    for (const phase of WORKFLOW_PHASES) {
+      const layout = prior.layouts[phase]!;
+      for (const region of Object.values(layout.regions)) {
+        region.panelIds = region.panelIds.filter((panelId) => panelId !== "help");
+        if (region.activePanelId === "help") region.activePanelId = region.panelIds[0] ?? null;
+      }
+      delete layout.collapsed["help"];
+    }
+    prior.layouts.cut!.splitters.left = 377;
+    const storage = memoryStorage({
+      [LAYOUT_STORAGE_KEY]: JSON.stringify({
+        schema: "layout/v2",
+        projects: { "/project": prior },
+      }),
+    });
+
+    const migrated = loadProjectLayouts("/project", storage);
+
+    expect(migrated.layouts.cut.splitters.left).toBe(377);
+    for (const phase of WORKFLOW_PHASES) {
+      expect(migrated.layouts[phase].collapsed.help).toBe(true);
+      expect(migrated.layouts[phase].regions["right-bottom"].panelIds).toContain("help");
     }
   });
 

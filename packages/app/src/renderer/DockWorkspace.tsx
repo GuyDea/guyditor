@@ -32,6 +32,7 @@ const PANEL_LABELS: Record<DockPanelId, { icon: string; name: string }> = {
   skills: { icon: "K", name: "Skills" },
   broll: { icon: "B", name: "B-roll" },
   storage: { icon: "D", name: "Storage" },
+  help: { icon: "?", name: "Help" },
 };
 
 function isDockPanelId(value: string): value is DockPanelId {

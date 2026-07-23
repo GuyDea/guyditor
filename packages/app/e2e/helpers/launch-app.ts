@@ -10,6 +10,7 @@ export interface LaunchAppOptions {
   projectPath?: string;
   userDataDirectory?: string;
   prepareUserData?: (userDataDirectory: string) => Promise<void>;
+  seedOnboarding?: boolean;
 }
 
 export interface LaunchedApp {
@@ -48,6 +49,25 @@ export async function launchApp(options: LaunchAppOptions = {}): Promise<Launche
     env: launchEnvironment,
   });
   const page = await electronApp.firstWindow();
+  if (options.seedOnboarding !== false) {
+    await page.evaluate(() => {
+      window.localStorage.setItem("guyditor/onboarding/v1", JSON.stringify({
+        schema: "onboarding/v1",
+        welcomeDismissed: true,
+        checklistDismissed: false,
+        seenFlowOnce: false,
+        checklist: {
+          projectOpened: false,
+          importedMedia: false,
+          transcriptReady: false,
+          acceptedEdit: false,
+          reviewedProposal: false,
+          exportedProject: false,
+        },
+      }));
+    });
+    await page.reload({ waitUntil: "domcontentloaded" });
+  }
   return {
     electronApp,
     page,
