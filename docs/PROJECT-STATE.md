@@ -18,6 +18,14 @@ To resume: open Claude Code in this directory and say "continue the Guyditor bui
   preflight, provenance freezing, staleness, and FR-609 seam concealment
   (interstitials + punch-in) with exact-frame resume proven by golden.
 - **Amendment 002** (global progress visibility) implemented as FR-907.
+- **Amendment 003 (motion design system) is COMPLETE and merged** (3e305f7):
+  primitives/v1 (word-timed text reveals, springs, charts, cutouts, textures),
+  SVG/font/Lottie brand assets (deterministic in-house Lottie subset interpreter
+  with named-feature rejection), first-class template.freeze (empty projects can
+  start from generated visuals — probe-verified), five Vox-style starter
+  templates, and agent-authored templates (FR-612: submit→sandbox-validate→
+  creator review→immutable publish; unreviewed drafts hard-blocked from
+  deliverables).
 
 ## What Claude does on resume
 
