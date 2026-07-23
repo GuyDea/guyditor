@@ -121,6 +121,20 @@ describe("deliverable lifecycle and derivative independence", () => {
     expect(applied.model.sequences[0]).toEqual(project.sequences[0]);
   });
 
+  it("omits derivative captions when the long-form project has no caption preset", async () => {
+    const project = projectFixture();
+    project.captions = [];
+    project.presets = [];
+    delete project.deliverables[0]!.captionsTrackId;
+
+    const applied = valueOf(await applyDeliverableOperation(project, deriveInput(), idFactory));
+    const short = applied.model.deliverables.find(({ id }) => id === DERIVED_IDS.deliverableId);
+
+    expect(short).not.toHaveProperty("captionsTrackId");
+    expect(applied.model.captions).toEqual([]);
+    expect(validateProject(applied.model)).toMatchObject({ ok: true });
+  });
+
   it("copies the complete long-form layer stack and remaps internal references", async () => {
     const project = projectFixture();
     project.layers.push({

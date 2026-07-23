@@ -3,12 +3,12 @@
   "project": "basic",
   "deliverable": "dlv_aaaaaaaaaa",
   "filteredFrames": [
-    { "at": 15, "sourceAt": 15, "rgbHash": "accf50cd25a7d526414b900a31cb9b0c9c6921121f6835906358bbff105bf0fa" },
+    { "at": 15, "sourceAt": 15, "rgbHash": "9acc734c4c91efa2d2b5213b8cccb455a6fac4623ee9e9c33b6cab1ba10e0919" },
     { "at": 75, "sourceAt": 45, "rgbHash": "3081c453c1b7ee1baa26e91d3fcafab82d1b2d93baf6215eca22cf9d6f188e72" }
   ],
   "interstitialFrame": {
     "at": 45,
-    "rgbHash": "7636c9f8da9a82f9a9fcd804a25795a9c900e1c7e19f7442a7b113c8ccd64eb2",
+    "rgbHash": "eb3e9f98461ba45654a630c07a9e1ec54391c6a050b57e44cd339771cde3dce5",
     "overlayPngSha256": "8d7cae97e92506f476f0b3e3b620c970d41941643cf1160cbaae60156802fab8"
   },
   "exactResume": {
@@ -20,7 +20,7 @@
     "at": 105,
     "sourceAt": 75,
     "level": 1.12,
-    "rgbHash": "4fee7b6c723ee1ca8083a5a7a14ae10ebf4295a69c2f13c11909ef2d1f5e49d1"
+    "rgbHash": "9fa398e2c07c1442c37554c42055e383f5194611d71932352390f7e95ae5305a"
   },
   "toolVersions": {
     "ffmpeg": "ffmpeg version 4.4.2-0ubuntu0.22.04.1 Copyright (c) 2000-2021 the FFmpeg developers",
