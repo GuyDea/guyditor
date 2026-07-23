@@ -65,12 +65,12 @@ interface PersistedLayoutDocument {
 type LayoutStorage = Pick<Storage, "getItem" | "setItem">;
 
 const SPLITTER_LIMITS: Record<SplitterId, readonly [number, number]> = {
-  left: [190, 420],
-  right: [250, 520],
+  left: [220, 420],
+  right: [280, 520],
   "center-horizontal": [0.25, 0.75],
   "right-horizontal": [0.25, 0.75],
-  timeline: [96, 360],
-  status: [96, 220],
+  timeline: [112, 360],
+  status: [112, 220],
 };
 
 export function splitterRange(splitter: SplitterId): readonly [number, number] {
