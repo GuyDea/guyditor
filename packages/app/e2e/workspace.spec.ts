@@ -14,6 +14,7 @@ test("imports media and surfaces completed proxy work", async () => {
   const template = await createWorkspaceProject();
   const launched = await launchApp({ projectTemplate: template });
   try {
+    await launched.page.getByTestId("phase-tab-ingest").click();
     await launched.page.getByTestId("ingest-path-input").fill(
       resolve(import.meta.dirname, "../../../.fixtures/disc-track-720p30-8s.mp4"),
     );
@@ -93,6 +94,7 @@ test("cancels queued work from the global progress popover", async () => {
   const template = await createWorkspaceProject({ queuedJob: true });
   const launched = await launchApp({ projectTemplate: template });
   try {
+    await launched.page.getByTestId("phase-tab-ingest").click();
     await expect(launched.page.getByTestId("global-progress-status")).toHaveText("1 active · 0%");
     await launched.page.getByTestId("global-progress").click();
     const queued = launched.page.getByTestId("global-progress-queued");
@@ -187,6 +189,7 @@ test("renders master metering and journals automatic and manual ducking", async 
     await launched.page.getByTestId("loudness-reset").click();
 
     await launched.page.getByTestId("layer-select-lyr_bbbbbbbbbb").click();
+    await launched.page.getByTestId("panel-rail-inspector").click();
     await expect(launched.page.getByTestId("audio-inspector")).toBeVisible();
     await launched.page.getByTestId("duck-db").fill("-15");
     await launched.page.getByTestId("duck-save").click();
@@ -226,6 +229,7 @@ test("removes a selected transcript range through the canonical sidecar operatio
   const template = await createWorkspaceProject({ transcript: true });
   const launched = await launchApp({ projectTemplate: template });
   try {
+    await launched.page.getByTestId("phase-tab-polish").click();
     await launched.page.getByTestId("transcript-word-w000002").click();
     await launched.page.getByTestId("transcript-range-remove").click();
     const journalPath = join(launched.projectPath!, "history/transactions.jsonl");
@@ -241,6 +245,7 @@ test("places a schema-driven lower third at a word and previews the journaled gr
   const template = await createWorkspaceProject({ transcript: true });
   const launched = await launchApp({ projectTemplate: template });
   try {
+    await launched.page.getByTestId("phase-tab-polish").click();
     await launched.page.getByTestId("transcript-word-w000002").click();
     const catalog = await launched.page.evaluate(() =>
       window.guyditor.call<Array<{ builtinName?: string }>>(
@@ -337,6 +342,7 @@ export default {
     },
   });
   try {
+    await launched.page.getByTestId("phase-tab-polish").click();
     await launched.page.getByTestId("template-tas_a2c3d4e5f6").click();
     await expect(launched.page.getByTestId("template-author-review"))
       .toContainText("Awaiting creator review");
@@ -429,6 +435,7 @@ test("configures a capture folder and shows stable session ingest and seeded tak
   await mkdir(sessionRoot, { recursive: true });
   const launched = await launchApp({ projectTemplate: template });
   try {
+    await launched.page.getByTestId("phase-tab-ingest").click();
     await launched.page.getByTestId("watch-folder-panel").click();
     await launched.page.getByTestId("watch-folder-path").fill(watchRoot);
     const panel = launched.page.getByTestId("watch-folder-panel");

@@ -3,10 +3,12 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { projectFixture } from "../../../../core/src/project/test-fixtures.js";
+import { useWorkspaceStore } from "../state/view-state.js";
 import { PublishPanel } from "./PublishPanel.js";
 
 describe("PublishPanel", () => {
   it("shows editable metadata limits, stale chapters, thumbnail candidates, and batch controls", () => {
+    useWorkspaceStore.getInitialState().collapsed.publish = false;
     const project = projectFixture();
     project.deliverables[0] = {
       ...project.deliverables[0]!,

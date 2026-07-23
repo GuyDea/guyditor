@@ -12,6 +12,7 @@ test("AC-006 — drags a constrained PiP and keyframes it at a word", async () =
   const launched = await launchApp({ projectTemplate: join(REPOSITORY_ROOT, ".fixtures/projects/ac006") });
   try {
     await launched.page.getByTestId("layer-select-lyr_bbbbbbbbbb").click();
+    await launched.page.getByTestId("phase-tab-polish").click();
     await expect(launched.page.getByTestId("pip-inspector")).toBeVisible();
     await launched.page.getByTestId("pip-anchor").selectOption("bottom_right");
     await launched.page.getByTestId("pip-width").fill("24%");

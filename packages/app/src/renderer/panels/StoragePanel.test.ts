@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import type { StorageReport } from "../../../../media/src/index.js";
+import { useWorkspaceStore } from "../state/view-state.js";
 import {
   StoragePanel,
   storageSafetyLabel,
@@ -36,6 +37,7 @@ describe("StoragePanel", () => {
   });
 
   it("renders per-class byte totals, safety labels, orphan count, and archived asset state", () => {
+    useWorkspaceStore.getInitialState().collapsed.storage = false;
     const html = renderToStaticMarkup(createElement(StoragePanel, {
       initialReport: report,
       initialArchivedStates: { ast_aaaaaaaaaa: "offline" },

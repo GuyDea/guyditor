@@ -9,6 +9,7 @@ const REPOSITORY_ROOT = resolve(import.meta.dirname, "../../../..");
 test("AC-011 — edits publish metadata and exposes kit, chapter, thumbnail, and batch controls", async () => {
   const launched = await launchApp({ projectTemplate: resolve(REPOSITORY_ROOT, ".fixtures/projects/basic") });
   try {
+    await launched.page.getByTestId("phase-tab-publish").click();
     const panel = launched.page.getByTestId("publish-panel");
     await expect(panel).toBeVisible();
     await panel.getByRole("button", { name: "Draft from transcript + beats" }).click();
