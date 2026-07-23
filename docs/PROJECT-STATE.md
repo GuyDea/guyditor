@@ -18,6 +18,8 @@ To resume: open Claude Code in this directory and say "continue the Guyditor bui
   preflight, provenance freezing, staleness, and FR-609 seam concealment
   (interstitials + punch-in) with exact-frame resume proven by golden.
 - **Amendment 002** (global progress visibility) implemented as FR-907.
+- **User reference:** [`docs/MANUAL.md`](MANUAL.md) is the single source for the
+  feature manual and is rendered verbatim in the app’s dockable Help panel.
 - **Amendment 003 (motion design system) is COMPLETE and merged** (3e305f7):
   primitives/v1 (word-timed text reveals, springs, charts, cutouts, textures),
   SVG/font/Lottie brand assets (deterministic in-house Lottie subset interpreter

@@ -28,7 +28,7 @@ import type {
   Asset, FaceTrackAvailability, JumpCutConcealmentConfig, JobFilter, JobOverview, JobRecord,
   OperationBatchResult, OperationCommitter, OperationInput, Proposal, ProjectStore, Result,
   RestyleFrameRange, RestylePlan, RestyleSeamTreatment, RightsPolicy, SidecarRef,
-  TakeMarkerSidecar, TransactionRecord, WatchFolderConfig,
+  TakeMarkerSidecar, WatchFolderConfig,
 } from "../../../core/src/index.js";
 import {
   buildCaptureGuidanceReport,
@@ -57,7 +57,6 @@ import {
   importJsonTakeMarkers,
   importTakeNotes,
   parseFillerDetectionResult,
-  parseTranscriptSidecar,
   planPickupSplice,
   registerFillerDetectionExecutor,
   TranscriptEngine,
@@ -134,6 +133,8 @@ import {
   recoveryService,
 } from "./recovery-service.js";
 import type { ProjectServices } from "./project-services.js";
+import { createProjectDialog } from "./project-creation.js";
+import { history, transcriptSidecars } from "./project-readers.js";
 import { MatteService } from "./matte-service.js";
 import { OtioService } from "./otio-service.js";
 import {
@@ -167,6 +168,7 @@ export interface AppServiceHostOptions {
 export interface WindowServiceHostOptions {
   publisher: WindowEventPublisher;
   chooseProject?: () => Promise<string | undefined>;
+  chooseNewProject?: () => Promise<string | undefined>;
   chooseMedia?: () => Promise<string[]>;
   chooseTemplate?: () => Promise<string | undefined>;
   revealPath?: (path: string) => void;
@@ -219,20 +221,6 @@ function emptyJobOverview(): JobOverview {
     aggregateFraction: 1,
     idle: true,
   };
-}
-
-async function history(store: ProjectStore): Promise<TransactionRecord[]> {
-  const contents = await readFile(join(store.root, "history/transactions.jsonl"), "utf8");
-  return contents.split("\n").filter((line) => line.length > 0)
-    .map((line) => JSON.parse(line) as TransactionRecord);
-}
-
-async function transcriptSidecars(store: ProjectStore) {
-  return Promise.all(store.currentProject.sidecars
-    .filter(({ schema }) => schema === "guyditor.transcript/v1")
-    .map(async ({ path }) => parseTranscriptSidecar(
-      await readFile(join(store.root, path), "utf8"),
-    )));
 }
 
 function deliverableTranscripts(
@@ -664,6 +652,7 @@ export class WindowServiceHost {
   public readonly publisher: WindowEventPublisher;
   readonly #app: AppServiceHost;
   readonly #chooseProject: (() => Promise<string | undefined>) | undefined;
+  readonly #chooseNewProject: (() => Promise<string | undefined>) | undefined;
   readonly #chooseMedia: (() => Promise<string[]>) | undefined;
   readonly #chooseTemplate: (() => Promise<string | undefined>) | undefined;
   readonly #revealPath: ((path: string) => void) | undefined;
@@ -675,6 +664,7 @@ export class WindowServiceHost {
     this.#app = app;
     this.publisher = options.publisher;
     this.#chooseProject = options.chooseProject;
+    this.#chooseNewProject = options.chooseNewProject;
     this.#chooseMedia = options.chooseMedia;
     this.#chooseTemplate = options.chooseTemplate;
     this.#revealPath = options.revealPath;
@@ -1192,6 +1182,7 @@ export class WindowServiceHost {
     switch (service) {
       case "ProjectStore":
         return {
+          createDialog: () => createProjectDialog(this.#chooseNewProject, (path) => this.openProject(path), this.#app.appVersion, this.#app.profilesRoot),
           openDialog: async () => {
             const selected = await this.#chooseProject?.();
             return selected === undefined ? null : this.openProject(selected);

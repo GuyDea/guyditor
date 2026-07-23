@@ -35,6 +35,7 @@ export function ProposalPanel({
   refreshSkills,
   restylePlan,
   refreshRestylePlan,
+  onProposalResolved,
   setNotice,
 }: WorkspacePanelProps): React.JSX.Element {
   const expandedProposalId = useAgentPanelStore((state) => state.expandedProposalId);
@@ -91,6 +92,7 @@ export function ProposalPanel({
       ]);
       setNotice(`${action === "acceptProposal" ? "Accepted" : action === "rejectProposal" ? "Rejected" : "Superseded"} ${proposal.id}.`);
       if (resolved.status === "accepted" || resolved.status === "rejected") {
+        onProposalResolved?.(resolved.status);
         setResolvedExamples((current) => [
           resolved,
           ...current.filter(({ id }) => id !== resolved.id),

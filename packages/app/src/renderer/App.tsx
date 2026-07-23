@@ -1,15 +1,23 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import type { Annotation, Proposal, RestylePlan } from "../../../core/src/index.js";
+import type {
+  Annotation,
+  Proposal,
+  RestylePlan,
+  TransactionRecord,
+} from "../../../core/src/index.js";
 import type { ExportReport } from "../../../render/src/index.js";
 import type { TranscriptSidecar } from "../../../transcript/src/index.js";
 import type { ResolvedSkill, SkillManifest } from "../../../agent/src/index.js";
 import type { JobOverview, JobStatus, ProjectSnapshot } from "../shared/ipc.js";
 import { DockWorkspace } from "./DockWorkspace.js";
 import { GlobalProgress } from "./GlobalProgress.js";
+import { GuidedTour } from "./GuidedTour.js";
+import { WelcomeSurface } from "./WelcomeSurface.js";
 import { WorkflowPhaseTabs } from "./WorkflowPhaseTabs.js";
 import { BrollPanel } from "./panels/BrollPanel.js";
 import { GraphicsPanel } from "./panels/GraphicsPanel.js";
+import { HelpPanel } from "./panels/HelpPanel.js";
 import { errorMessage, getSnapshot, redoLast, undoLast } from "./ipc.js";
 import { InspectorPanel } from "./panels/InspectorPanel.js";
 import { MediaBrowserPanel } from "./panels/MediaBrowserPanel.js";
@@ -25,6 +33,17 @@ import type { WorkspacePanelProps } from "./panels/types.js";
 import { useJobsStore } from "./state/jobs.js";
 import { useProjectMirror } from "./state/project-mirror.js";
 import { useUndoStore } from "./state/undo.js";
+import {
+  applyOnboardingSignal as reduceOnboardingSignal,
+  dismissWelcome,
+  loadOnboardingState,
+  saveOnboardingState,
+  shouldShowWelcome,
+} from "./state/onboarding.js";
+import type {
+  OnboardingSignal,
+  OnboardingState,
+} from "./state/onboarding.js";
 import {
   usePreviewStore,
   useSelectionStore,
@@ -46,6 +65,14 @@ const OVERVIEW_CONFIRMATION_POLL_MS = 2_000;
 export function App(): React.JSX.Element {
   const snapshot = useProjectMirror((state) => state.snapshot);
   const replaceSnapshot = useProjectMirror((state) => state.replace);
+  const [onboarding, setOnboarding] = useState<OnboardingState>(
+    () => loadOnboardingState(window.localStorage),
+  );
+  const [welcomeOpen, setWelcomeOpen] = useState(
+    () => shouldShowWelcome(window.localStorage),
+  );
+  const [tourOpen, setTourOpen] = useState(false);
+  const [tourStop, setTourStop] = useState<string | null>(null);
   const [transcripts, setTranscripts] = useState<TranscriptSidecar[]>([]);
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
   const [proposals, setProposals] = useState<Proposal[]>([]);
@@ -70,6 +97,42 @@ export function App(): React.JSX.Element {
   const selectAnnotation = useSelectionStore((state) => state.selectAnnotation);
   const undoCount = useUndoStore((state) => state.undo.length);
   const redoCount = useUndoStore((state) => state.redo.length);
+
+  const applyChecklistSignal = useCallback((signal: OnboardingSignal): void => {
+    setOnboarding((current) => {
+      const next = reduceOnboardingSignal(current, signal);
+      try {
+        saveOnboardingState(window.localStorage, next);
+      } catch {
+        // Persistence failure does not interrupt the live onboarding surface.
+      }
+      return next;
+    });
+  }, []);
+
+  const updateOnboarding = useCallback((
+    update: (current: OnboardingState) => OnboardingState,
+  ): void => {
+    setOnboarding((current) => {
+      const next = update(current);
+      try {
+        saveOnboardingState(window.localStorage, next);
+      } catch {
+        // Keep the renderer state usable if Chromium storage is unavailable.
+      }
+      return next;
+    });
+  }, []);
+
+  const rememberWelcomeDismissal = useCallback((): void => {
+    try {
+      dismissWelcome(window.localStorage);
+      setOnboarding(loadOnboardingState(window.localStorage));
+    } catch {
+      setOnboarding((current) => ({ ...current, welcomeDismissed: true }));
+    }
+    setWelcomeOpen(false);
+  }, []);
 
   const refreshAnnotations = useCallback(async (): Promise<void> => {
     const generation = ++annotationGeneration.current;
@@ -108,15 +171,17 @@ export function App(): React.JSX.Element {
 
   const refreshExportReport = useCallback(async (): Promise<void> => {
     try {
-      setExportReport(await window.guyditor.call<ExportReport | null>(
+      const report = await window.guyditor.call<ExportReport | null>(
         "RenderService",
         "exportReport",
         {},
-      ));
+      );
+      setExportReport(report);
+      applyChecklistSignal({ kind: "export.report", exists: report !== null });
     } catch {
       setExportReport(null);
     }
-  }, []);
+  }, [applyChecklistSignal]);
 
   const refreshRestylePlan = useCallback(async (): Promise<void> => {
     const deliverableId = useProjectMirror.getState().snapshot?.master.settings.primaryDeliverable;
@@ -149,14 +214,25 @@ export function App(): React.JSX.Element {
     const generation = ++overviewGeneration.current;
     useWorkspaceStore.getState().setProjectKey(next.projectPath);
     replaceSnapshot(next);
-    const [nextTranscripts, nextJobs, nextOverview] = await Promise.all([
+    const [nextTranscripts, nextJobs, nextOverview, nextHistory] = await Promise.all([
       window.guyditor.call<TranscriptSidecar[]>("ProjectStore", "readTranscript", {})
         .catch(() => []),
       window.guyditor.call<JobStatus[]>("JobQueue", "list", {}).catch(() => []),
       window.guyditor.call<JobOverview>("JobQueue", "overview", {}).catch(() => null),
+      window.guyditor.call<TransactionRecord[]>("ProjectStore", "listHistory", {})
+        .catch(() => []),
     ]);
     setTranscripts(nextTranscripts);
     replaceJobs(nextJobs);
+    applyChecklistSignal({ kind: "project.opened" });
+    applyChecklistSignal({
+      kind: "transcript.registered",
+      count: nextTranscripts.length,
+    });
+    applyChecklistSignal({
+      kind: "project.history",
+      transactions: nextHistory,
+    });
     if (nextOverview !== null && generation === overviewGeneration.current) {
       replaceOverview(nextOverview);
     }
@@ -167,7 +243,7 @@ export function App(): React.JSX.Element {
       refreshExportReport(),
       refreshRestylePlan(),
     ]);
-  }, [refreshAnnotations, refreshExportReport, refreshProposals, refreshRestylePlan, refreshSkills, replaceJobs, replaceOverview, replaceSnapshot]);
+  }, [applyChecklistSignal, refreshAnnotations, refreshExportReport, refreshProposals, refreshRestylePlan, refreshSkills, replaceJobs, replaceOverview, replaceSnapshot]);
 
   const refreshProject = useCallback(async (): Promise<void> => {
     const next = await getSnapshot();
@@ -187,6 +263,10 @@ export function App(): React.JSX.Element {
         void refreshExportReport();
       }
       if (event.job.state === "done" && event.job.kind === "ingest") {
+        applyChecklistSignal({ kind: "job.done", jobKind: event.job.kind });
+        void refreshProject();
+      }
+      if (event.job.state === "done" && event.job.kind === "transcribe") {
         void refreshProject();
       }
       if (event.job.kind === "restyle.generate") {
@@ -207,6 +287,10 @@ export function App(): React.JSX.Element {
       void Promise.all([refreshAnnotations(), refreshOverview()]);
     });
     const offWatcher = window.guyditor.on("watcher.ingested", (event) => {
+      applyChecklistSignal({
+        kind: "watcher.ingested",
+        assetCount: event.assetIds.length,
+      });
       void Promise.all([refreshProject(), refreshOverview()]).then(() => {
         setNotice(`Capture watcher ingested ${String(event.assetIds.length)} asset${event.assetIds.length === 1 ? "" : "s"}.`);
       });
@@ -220,7 +304,7 @@ export function App(): React.JSX.Element {
       offAnnotation();
       offWatcher();
     };
-  }, [applyJobEvent, hydrate, refreshAnnotations, refreshExportReport, refreshOverview, refreshProject, refreshProposals, refreshRestylePlan, replaceJobs]);
+  }, [applyChecklistSignal, applyJobEvent, hydrate, refreshAnnotations, refreshExportReport, refreshOverview, refreshProject, refreshProposals, refreshRestylePlan, replaceJobs]);
 
   useEffect(() => {
     if (snapshot === null) return undefined;
@@ -296,7 +380,7 @@ export function App(): React.JSX.Element {
     return () => window.removeEventListener("keydown", keydown);
   }, [annotations, playhead, playing, refreshProject, selectAnnotation, selectWord, setPlayhead, setPlaying, snapshot, transcripts]);
 
-  async function openProject(): Promise<void> {
+  async function openProject(): Promise<boolean> {
     setNotice("Waiting for a project directory…");
     try {
       const opened = await window.guyditor.call<ProjectSnapshot | null>(
@@ -306,15 +390,50 @@ export function App(): React.JSX.Element {
       );
       if (opened === null) {
         setNotice("Project open cancelled.");
-        return;
+        return false;
       }
       useUndoStore.getState().clear();
       await hydrate(opened);
       setPlayhead({ frames: 0, fps: opened.master.settings.timeline.fps });
       setNotice(`Opened ${opened.projectPath}`);
+      return true;
     } catch (error: unknown) {
       setNotice(errorMessage(error));
+      return false;
     }
+  }
+
+  async function createProject(): Promise<boolean> {
+    setNotice("Choose an empty directory for the new project…");
+    try {
+      const created = await window.guyditor.call<ProjectSnapshot | null>(
+        "ProjectStore",
+        "createDialog",
+        {},
+      );
+      if (created === null) {
+        setNotice("Project creation cancelled.");
+        return false;
+      }
+      useUndoStore.getState().clear();
+      await hydrate(created);
+      setPlayhead({ frames: 0, fps: created.master.settings.timeline.fps });
+      setNotice(`Created ${created.projectPath}`);
+      return true;
+    } catch (error: unknown) {
+      setNotice(errorMessage(error));
+      return false;
+    }
+  }
+
+  async function welcomeProjectAction(action: "create" | "open"): Promise<void> {
+    const completed = await (action === "create" ? createProject() : openProject());
+    if (completed) rememberWelcomeDismissal();
+  }
+
+  function beginTour(): void {
+    rememberWelcomeDismissal();
+    setTourOpen(true);
   }
 
   const panelProps: WorkspacePanelProps = {
@@ -333,6 +452,10 @@ export function App(): React.JSX.Element {
     refreshSkills,
     refreshRestylePlan,
     refreshExportReport,
+    onProposalResolved: (status) => applyChecklistSignal({
+      kind: "proposal.resolved",
+      status,
+    }),
     setNotice,
   };
   const dockPanels: Record<DockPanelId, React.ReactNode> = {
@@ -348,6 +471,16 @@ export function App(): React.JSX.Element {
     timeline: <TimelinePanel {...panelProps} />,
     status: <StatusStripPanel {...panelProps} />,
     publish: <PublishPanel {...panelProps} />,
+    help: (
+      <HelpPanel
+        onboarding={onboarding}
+        onChecklistDismissedChange={(checklistDismissed) => {
+          updateOnboarding((current) => ({ ...current, checklistDismissed }));
+        }}
+        onRestartTour={() => setTourOpen(true)}
+        onShowWelcome={() => setWelcomeOpen(true)}
+      />
+    ),
   };
 
   return (
@@ -362,17 +495,46 @@ export function App(): React.JSX.Element {
           <span data-testid="revision-indicator">{snapshot?.revision ?? "— no revision"}</span>
         </div>
         <div className="title-actions">
-          <GlobalProgress refreshOverview={refreshOverview} setNotice={setNotice} />
+          <GlobalProgress
+            forceOpen={tourStop === "global-progress"}
+            refreshOverview={refreshOverview}
+            setNotice={setNotice}
+          />
           <button type="button" data-testid="undo-action" disabled={undoCount === 0} onClick={() => void undoLast().then(() => refreshProject()).catch((error: unknown) => setNotice(errorMessage(error)))}>Undo</button>
           <button type="button" data-testid="redo-action" disabled={redoCount === 0} onClick={() => void redoLast().then(() => refreshProject()).catch((error: unknown) => setNotice(errorMessage(error)))}>Redo</button>
           <button type="button" data-testid="reset-layout" onClick={resetLayout}>Reset layout</button>
           <button type="button" data-testid="reset-all-layouts" onClick={resetAllLayouts}>Reset all tabs</button>
+          <button
+            type="button"
+            className="help-button"
+            aria-label="Open Help"
+            title="Help & manual"
+            data-testid="title-help"
+            onClick={() => revealPanel("help")}
+          >?</button>
           <button type="button" className="open-button" onClick={() => void openProject()} data-testid="open-project">Open project</button>
         </div>
       </header>
       <WorkflowPhaseTabs setNotice={setNotice} />
       <DockWorkspace panels={dockPanels} />
       <p className="global-notice" role="status" data-testid="shell-status">{notice}</p>
+      {welcomeOpen ? (
+        <WelcomeSurface
+          onCreateProject={() => welcomeProjectAction("create")}
+          onOpenProject={() => welcomeProjectAction("open")}
+          onSkip={rememberWelcomeDismissal}
+          onTakeTour={beginTour}
+        />
+      ) : null}
+      {tourOpen ? (
+        <GuidedTour
+          onFinish={() => {
+            setTourOpen(false);
+            setTourStop(null);
+          }}
+          onStopChange={setTourStop}
+        />
+      ) : null}
     </main>
   );
 }
