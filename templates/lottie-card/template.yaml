@@ -1,0 +1,37 @@
+schema: guyditor/template/v1
+id: tpl_k2m3n4p5q6
+name: Lottie brand card
+kind: motion
+version: 1.0.0
+engine: overlay/v1
+entry: render.ts
+min_guyditor: 1.0.0
+duration:
+  mode: fixed
+  default: { frames: 90, fps: "30/1" }
+params:
+  type: object
+  additionalProperties: false
+  required: [accent, surface, ink]
+  properties:
+    accent: { type: string, pattern: "^#[0-9A-Fa-f]{6}$", default: "#FF6B57" }
+    surface: { type: string, pattern: "^#[0-9A-Fa-f]{6}$", default: "#F4EDE4" }
+    ink: { type: string, pattern: "^#[0-9A-Fa-f]{6}$", default: "#102A43" }
+preview:
+  file: preview.png
+  params:
+    accent: "#FF6B57"
+    surface: "#F4EDE4"
+    ink: "#102A43"
+fonts: []
+assets:
+  - name: card-motion
+    kind: lottie
+    file: assets/card.json
+    sha256: 8367038489748f1724b1b5bd9aabe0e7981c3f25e00e68b44952bf3c2f50c065
+    license:
+      origin: programmatic
+      licenseName: Guyditor bundled motion asset
+      licensor: Guyditor
+      restrictions: []
+safe_area_aware: true

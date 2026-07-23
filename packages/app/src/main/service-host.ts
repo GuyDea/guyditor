@@ -166,6 +166,7 @@ export interface WindowServiceHostOptions {
   publisher: WindowEventPublisher;
   chooseProject?: () => Promise<string | undefined>;
   chooseMedia?: () => Promise<string[]>;
+  chooseTemplate?: () => Promise<string | undefined>;
   revealPath?: (path: string) => void;
   openPath?: (path: string) => Promise<string>;
 }
@@ -671,6 +672,7 @@ export class WindowServiceHost {
   readonly #app: AppServiceHost;
   readonly #chooseProject: (() => Promise<string | undefined>) | undefined;
   readonly #chooseMedia: (() => Promise<string[]>) | undefined;
+  readonly #chooseTemplate: (() => Promise<string | undefined>) | undefined;
   readonly #revealPath: ((path: string) => void) | undefined;
   readonly #openPath: ((path: string) => Promise<string>) | undefined;
   #project: ProjectServices | undefined;
@@ -681,6 +683,7 @@ export class WindowServiceHost {
     this.publisher = options.publisher;
     this.#chooseProject = options.chooseProject;
     this.#chooseMedia = options.chooseMedia;
+    this.#chooseTemplate = options.chooseTemplate;
     this.#revealPath = options.revealPath;
     this.#openPath = options.openPath;
   }
@@ -1200,6 +1203,7 @@ export class WindowServiceHost {
             const selected = await this.#chooseProject?.();
             return selected === undefined ? null : this.openProject(selected);
           },
+          pickTemplatePackage: async () => await this.#chooseTemplate?.() ?? null,
           open: ({ path }: { path: string }) => this.openProject(path),
           getSnapshot: () => this.snapshot(),
           listHistory: () => project === undefined ? [] : history(project.store),

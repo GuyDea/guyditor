@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { posix, resolve } from "node:path";
 import { createContext, Script } from "node:vm";
 import type { Context } from "node:vm";
 
@@ -14,12 +14,17 @@ import {
 import type { Image } from "@napi-rs/canvas";
 
 import {
+  analyzeLottieDocument,
   failure,
   makeGuyditorError,
   success,
 } from "../../core/src/index.js";
 import type { Result } from "../../core/src/index.js";
 import { createSeededRng } from "./seeded-rng.js";
+import {
+  createLottieAnimation,
+} from "./lottie.js";
+import type { LottieAnimation } from "./lottie.js";
 import {
   PRIMITIVES_V1_VERSION,
   primitivesV1,
@@ -45,6 +50,7 @@ export interface LoadedTemplateRuntime {
   durationScript?: Script;
   fonts: ResolvedFontMap;
   staticAssets: ReadonlyMap<string, Image>;
+  lottieAssets: ReadonlyMap<string, LottieAnimation>;
   validateParams: ValidateFunction<Record<string, unknown>>;
 }
 
@@ -179,6 +185,7 @@ async function decodedAssets(pkg: LoadedTemplatePackage): Promise<Result<Readonl
   const assets = new Map<string, Image>();
   for (const declaration of (pkg.manifest.assets ?? []).slice().sort((left, right) =>
     left.name.localeCompare(right.name))) {
+    if (declaration.kind === "lottie") continue;
     try {
       const bytes = await readFile(resolve(pkg.root, declaration.file));
       if (sha256(bytes) !== declaration.sha256) {
@@ -200,6 +207,95 @@ async function decodedAssets(pkg: LoadedTemplatePackage): Promise<Result<Readonl
   return success(assets);
 }
 
+function rasterPath(
+  lottieFile: string,
+  asset: Record<string, unknown>,
+): string | undefined {
+  if (typeof asset["p"] !== "string") return undefined;
+  const directory = typeof asset["u"] === "string" ? asset["u"] : "";
+  return posix.normalize(posix.join(posix.dirname(lottieFile), directory, asset["p"]));
+}
+
+async function decodedLottieAssets(
+  pkg: LoadedTemplatePackage,
+  staticAssets: ReadonlyMap<string, Image>,
+): Promise<Result<ReadonlyMap<string, LottieAnimation>>> {
+  const animations = new Map<string, LottieAnimation>();
+  const declarations = pkg.manifest.assets ?? [];
+  const registeredRasterPaths = declarations
+    .filter(({ kind }) => kind === "image")
+    .map(({ file }) => file);
+  for (const declaration of declarations
+    .filter(({ kind }) => kind === "lottie")
+    .sort((left, right) => left.name.localeCompare(right.name))) {
+    try {
+      const bytes = await readFile(resolve(pkg.root, declaration.file));
+      if (sha256(bytes) !== declaration.sha256) {
+        return runtimeFailure(
+          "E_TEMPLATE_ASSET_HASH",
+          `Template asset ${declaration.file} no longer matches its declared SHA-256.`,
+          [pkg.manifest.id, declaration.file],
+        );
+      }
+      const document = JSON.parse(bytes.toString("utf8")) as unknown;
+      const analysis = analyzeLottieDocument(document, {
+        documentPath: declaration.file,
+        registeredRasterPaths,
+      });
+      if (!analysis.ok) {
+        return runtimeFailure(
+          "E_TEMPLATE_ASSET_INVALID",
+          `Template Lottie ${declaration.file} no longer passes its feature gate: ${
+            analysis.unsupported.map(({ feature, layerPath }) =>
+              `${feature} at ${layerPath}`).join("; ")
+          }.`,
+          [pkg.manifest.id, declaration.file],
+        );
+      }
+      if (
+        declaration.featureProfile === undefined ||
+        JSON.stringify(declaration.featureProfile) !== JSON.stringify(analysis.profile)
+      ) {
+        return runtimeFailure(
+          "E_TEMPLATE_ASSET_INVALID",
+          `Template Lottie ${declaration.file} feature profile changed after registration.`,
+          [pkg.manifest.id, declaration.file],
+        );
+      }
+      const object = typeof document === "object" && document !== null
+        ? document as Record<string, unknown>
+        : {};
+      const rasterAssets = new Map<string, Image>();
+      for (const asset of Array.isArray(object["assets"]) ? object["assets"] : []) {
+        if (typeof asset !== "object" || asset === null || Array.isArray(asset)) continue;
+        const raster = asset as Record<string, unknown>;
+        if (typeof raster["id"] !== "string") continue;
+        const file = rasterPath(declaration.file, raster);
+        const registered = declarations.find((candidate) =>
+          candidate.kind === "image" && candidate.file === file);
+        const image = registered === undefined
+          ? undefined
+          : staticAssets.get(registered.name);
+        if (image !== undefined) rasterAssets.set(raster["id"], image);
+      }
+      animations.set(
+        declaration.name,
+        createLottieAnimation(document, rasterAssets, {
+          documentPath: declaration.file,
+          registeredRasterPaths,
+        }),
+      );
+    } catch (error: unknown) {
+      return runtimeFailure(
+        "E_TEMPLATE_ASSET_INVALID",
+        `Template Lottie ${declaration.file} could not be loaded: ${errorMessage(error)}.`,
+        [pkg.manifest.id, declaration.file],
+      );
+    }
+  }
+  return success(animations);
+}
+
 export async function loadTemplateRuntime(
   pkg: LoadedTemplatePackage,
 ): Promise<Result<LoadedTemplateRuntime>> {
@@ -207,6 +303,8 @@ export async function loadTemplateRuntime(
   if (!fonts.ok) return fonts;
   const assets = await decodedAssets(pkg);
   if (!assets.ok) return assets;
+  const lottieAssets = await decodedLottieAssets(pkg, assets.value);
+  if (!lottieAssets.ok) return lottieAssets;
   let validateParams: ValidateFunction<Record<string, unknown>>;
   try {
     validateParams = new Ajv2020({ allErrors: true, strict: true })
@@ -251,6 +349,7 @@ export async function loadTemplateRuntime(
       : { durationScript: new Script("__template.duration(__params, __media);") }),
     fonts: fonts.value,
     staticAssets: assets.value,
+    lottieAssets: lottieAssets.value,
     validateParams,
   });
 }
@@ -345,6 +444,13 @@ export function renderTemplatePng(
       const image = runtime.staticAssets.get(name);
       if (image === undefined) throw new TypeError(`Template static asset ${name} does not exist.`);
       return image;
+    },
+    lottie: (name: string): LottieAnimation => {
+      const animation = runtime.lottieAssets.get(name);
+      if (animation === undefined) {
+        throw new TypeError(`Template Lottie asset ${name} does not exist.`);
+      }
+      return animation;
     },
   });
   Reflect.set(runtime.context, "__context", renderContext);

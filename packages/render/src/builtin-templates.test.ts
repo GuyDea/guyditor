@@ -27,6 +27,7 @@ describe("FR-600 built-in graphics templates", () => {
       "bar-chart-card",
       "cutout-collage-card",
       "highlight-underline",
+      "lottie-card",
     ]);
     expect(catalog.value.map(({ kind }) => kind)).toEqual([
       "lower_third",
@@ -38,6 +39,7 @@ describe("FR-600 built-in graphics templates", () => {
       "diagram",
       "motion",
       "highlight",
+      "motion",
     ]);
     const infographic = catalog.value.find(
       ({ builtinName }) => builtinName === "full-frame-infographic",
@@ -56,5 +58,31 @@ describe("FR-600 built-in graphics templates", () => {
       mode: "fixed",
       default: { frames: 150, fps: "30/1" },
     });
+    const lottie = catalog.value.find(
+      ({ builtinName }) => builtinName === "lottie-card",
+    );
+    expect(lottie?.assets).toEqual([
+      expect.objectContaining({
+        name: "card-motion",
+        kind: "lottie",
+        featureProfile: expect.objectContaining({
+          renderer: "guyditor-lottie-subset/v1",
+          features: [
+            "ellipse",
+            "fill",
+            "group",
+            "keyframes",
+            "mask",
+            "precomposition",
+            "rectangle",
+            "shape-layer",
+            "stroke",
+            "transform",
+            "trim-path",
+          ],
+          colorSlots: ["accent", "ink", "surface"],
+        }),
+      }),
+    ]);
   });
 });

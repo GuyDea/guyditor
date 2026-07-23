@@ -3,6 +3,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  readdir,
   rm,
   stat,
   writeFile,
@@ -20,6 +21,8 @@ import {
 import {
   RenderService,
   TemplateRegistry,
+  loadTemplateRuntime,
+  renderTemplatePng,
 } from "./index.js";
 
 const temporaryDirectories: string[] = [];
@@ -88,12 +91,11 @@ describe("template freeze service", () => {
       const result = await service.templateFreeze({
         revision: store.currentProject.revision,
         deliverableId,
-        templateId: "tpl_d2e3f4g5h6",
+        templateId: "tpl_k2m3n4p5q6",
         params: {
-          title: "No Camera Needed",
-          body: "A complete edit can begin with deterministic motion graphics.",
-          accent: "#77E7C4",
-          logoSlot: "none",
+          accent: "#7C3AED",
+          surface: "#111827",
+          ink: "#F8FAFC",
         },
         seed: 20260723,
         durationFrames: 3,
@@ -126,6 +128,41 @@ describe("template freeze service", () => {
       expect(sidecarBytes.toString("utf8")).toContain(
         '"primitives": "primitives/v1@1"',
       );
+      const descriptor = await registry.latest("tpl_k2m3n4p5q6");
+      if (!descriptor.ok) throw descriptor.error;
+      const pkg = await registry.package(
+        descriptor.value.id,
+        descriptor.value.version,
+        descriptor.value.contentHash,
+      );
+      if (!pkg.ok) throw pkg.error;
+      const runtime = await loadTemplateRuntime(pkg.value);
+      if (!runtime.ok) throw runtime.error;
+      const expectedFrame = renderTemplatePng(runtime.value, {
+        params: {
+          accent: "#7C3AED",
+          surface: "#111827",
+          ink: "#F8FAFC",
+        },
+        seed: 20260723,
+        frame: 1,
+        totalFrames: 3,
+        fps: "30/1",
+        width: 64,
+        height: 36,
+        safeArea: { top: 2, right: 3, bottom: 2, left: 3 },
+        brand: { palette: {} },
+        timeline: { frames: 1, fps: "30/1" },
+      });
+      if (!expectedFrame.ok) throw expectedFrame.error;
+      const freezeRoot = join(
+        projectRoot,
+        ".guyditor/cache/render/template-freeze",
+      );
+      const freezeKeys = await readdir(freezeRoot);
+      expect(freezeKeys).toHaveLength(1);
+      expect(await readFile(join(freezeRoot, freezeKeys[0]!, "00000001.png")))
+        .toEqual(expectedFrame.value);
       const output = await stat(result.outputPath);
       expect(output.size).toBeGreaterThan(0);
       expect(output.mode & 0o222).toBe(0);

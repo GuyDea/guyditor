@@ -58,6 +58,14 @@ function parameterValue(
   return String(raw);
 }
 
+function templateCatalog(): Promise<TemplateCatalogEntry[]> {
+  return window.guyditor.call<TemplateCatalogEntry[]>(
+    "RenderService",
+    "templateCatalog",
+    {},
+  );
+}
+
 export function GraphicsPanel({
   snapshot,
   refreshProject,
@@ -90,7 +98,7 @@ export function GraphicsPanel({
 
   useEffect(() => {
     let current = true;
-    void window.guyditor.call<TemplateCatalogEntry[]>("RenderService", "templateCatalog", {})
+    void templateCatalog()
       .then((entries) => {
         if (!current) return;
         setCatalog(entries);
@@ -137,6 +145,44 @@ export function GraphicsPanel({
     setParams(structuredClone(instance.item.params ?? {}));
     setLayerId(instance.layerId);
     selectLayer(instance.layerId);
+  }
+
+  async function importTemplatePackage(): Promise<void> {
+    try {
+      const packagePath = await window.guyditor.call<string | null>(
+        "ProjectStore",
+        "pickTemplatePackage",
+        {},
+      );
+      if (packagePath === null) {
+        setNotice("Template import cancelled.");
+        return;
+      }
+      const previous = new Set(catalog.map(({ id, version }) => `${id}@${version}`));
+      await executeDirect([{
+        op: "template.install",
+        params: { packagePath },
+      }], "Import template package");
+      const entries = await templateCatalog();
+      setCatalog(entries);
+      const installed = entries.find(({ id, version }) =>
+        !previous.has(`${id}@${version}`));
+      if (installed !== undefined) chooseTemplate(installed);
+      const lottieAssets = installed?.assets.filter(({ kind }) => kind === "lottie") ?? [];
+      setNotice(
+        installed === undefined
+          ? "Template package validated; the immutable version was already installed."
+          : `Imported ${installed.name}${
+              lottieAssets.length === 0
+                ? ""
+                : ` with ${String(lottieAssets.length)} deterministic Lottie asset${
+                    lottieAssets.length === 1 ? "" : "s"
+                  }`
+            }.`,
+      );
+    } catch (error: unknown) {
+      setNotice(errorMessage(error));
+    }
   }
 
   function anchor(): string | undefined {
@@ -267,15 +313,25 @@ export function GraphicsPanel({
     <Panel id="graphics" title="Graphics" eyebrow="Pinned template rack">
       <div className="template-browser-actions">
         <span>{selectedTemplate?.name ?? "No template selected"}</span>
-        <button
-          type="button"
-          className="freeze-action"
-          data-testid="template-browser-freeze"
-          disabled={snapshot === null || selectedTemplate === undefined || freezing}
-          onClick={() => void freezeTemplate()}
-        >
-          {freezing ? "Freezing…" : "Freeze selected to clip"}
-        </button>
+        <div>
+          <button
+            type="button"
+            data-testid="template-import"
+            disabled={snapshot === null || freezing}
+            onClick={() => void importTemplatePackage()}
+          >
+            Import package
+          </button>
+          <button
+            type="button"
+            className="freeze-action"
+            data-testid="template-browser-freeze"
+            disabled={snapshot === null || selectedTemplate === undefined || freezing}
+            onClick={() => void freezeTemplate()}
+          >
+            {freezing ? "Freezing…" : "Freeze selected to clip"}
+          </button>
+        </div>
       </div>
       <div className="template-rack" data-testid="template-browser">
         {catalog.map((entry) => (
@@ -349,6 +405,13 @@ export function GraphicsPanel({
               );
             })}
           </div>
+          {selectedTemplate.assets.filter(({ kind }) => kind === "lottie").map((asset) => (
+            <p className="lottie-profile" key={asset.name} data-testid="lottie-feature-profile">
+              Lottie · {asset.name} · {
+                asset.featureProfile?.features.join(", ") ?? "profile unavailable"
+              }
+            </p>
+          ))}
           <div className="graphic-placement">
             <label>Anchor
               <select data-testid="graphic-anchor" value={anchorMode} onChange={(event) => setAnchorMode(event.currentTarget.value as "playhead" | "word")}>

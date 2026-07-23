@@ -25,6 +25,19 @@ export {
   PRIMITIVES_V1_VERSION,
   primitivesV1,
 } from "./primitives/v1.js";
+export {
+  LOTTIE_RENDERER_VERSION,
+  LOTTIE_SHIM_VERSION,
+  createLottieAnimation,
+  drawLottie,
+  lottieToolchainHash,
+  renderLottiePng,
+} from "./lottie.js";
+export type {
+  DrawLottieOptions,
+  LottieAnimation,
+  RenderLottiePngOptions,
+} from "./lottie.js";
 export type {
   PrimitiveEasing,
   PrimitiveFrameTime,

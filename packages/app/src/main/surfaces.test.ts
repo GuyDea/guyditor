@@ -12,6 +12,7 @@ describe("workspace IPC surfaces", () => {
     const expected: Readonly<Record<string, readonly string[]>> = {
       ProjectStore: [
         "getSnapshot",
+        "pickTemplatePackage",
         "listHistory",
         "listProposals",
         "readTranscript",

@@ -336,6 +336,7 @@ small { color: var(--muted); }
   font: 600 6px/1 ui-monospace, monospace;
   text-transform: uppercase;
 }
+.template-browser-actions > div { display: flex; gap: 4px; }
 .freeze-action {
   border-color: color-mix(in srgb, var(--accent) 48%, var(--line));
   background:
@@ -350,6 +351,14 @@ small { color: var(--muted); }
 .template-param-grid input[type="color"] { padding: 2px; }
 .template-param-grid .graphic-checkbox { display: flex; align-items: center; gap: 5px; }
 .template-param-grid .graphic-checkbox input { width: auto; min-height: auto; }
+.lottie-profile {
+  margin: 6px 0 0;
+  padding: 5px;
+  border: 1px solid #35464d;
+  color: #8fcbd3;
+  background: #0b1215;
+  font: 500 6px/1.35 ui-monospace, monospace;
+}
 .graphic-actions { display: flex; gap: 4px; margin-top: 6px; }
 .graphic-actions button { min-height: 22px; padding: 2px 6px; font-size: 7px; }
 .graphic-instance-list { display: grid; gap: 3px; padding: 6px; }

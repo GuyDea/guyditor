@@ -22,6 +22,11 @@ import type { BrandContext } from "./template-contract.js";
 import type { PrimitiveWordTiming } from "./primitives/v1.js";
 import { PRIMITIVES_V1_VERSION } from "./primitives/v1.js";
 import {
+  LOTTIE_RENDERER_VERSION,
+  LOTTIE_SHIM_VERSION,
+  lottieToolchainHash,
+} from "./lottie.js";
+import {
   loadTemplateRuntime,
   renderTemplatePng,
   resolveTemplateDuration,
@@ -396,6 +401,11 @@ export async function renderGraphicOverlaySequence(
     renderer: GRAPHIC_OVERLAY_RENDERER_VERSION,
     templateRenderer: TEMPLATE_RENDERER_VERSION,
     primitives: PRIMITIVES_V1_VERSION,
+    lottie: {
+      renderer: LOTTIE_RENDERER_VERSION,
+      shim: LOTTIE_SHIM_VERSION,
+      sha256: lottieToolchainHash(),
+    },
     canvas: TEMPLATE_CANVAS_VERSION,
     geometry: { width: options.width, height: options.height, fps: options.fps },
     safeArea: safeArea(options),
@@ -452,9 +462,14 @@ export async function renderGraphicOverlaySequence(
   return plan;
 }
 
-export function graphicOverlayToolchain() {
+export function graphicOverlayToolchain(
+  lottieShimVersion = LOTTIE_SHIM_VERSION,
+) {
   return {
-    version: `${GRAPHIC_OVERLAY_RENDERER_VERSION}+${PRIMITIVES_V1_VERSION}`,
+    version:
+      `${GRAPHIC_OVERLAY_RENDERER_VERSION}+${PRIMITIVES_V1_VERSION}+` +
+      `${LOTTIE_RENDERER_VERSION}+${lottieShimVersion}+` +
+      `${lottieToolchainHash(lottieShimVersion)}`,
     canvasVersion: TEMPLATE_CANVAS_VERSION,
   };
 }

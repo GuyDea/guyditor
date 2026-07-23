@@ -100,6 +100,11 @@ export const IPC_SURFACES: readonly IpcSurface[] = Object.freeze([
     service: "ProjectStore",
     methods: {
       openDialog: { paramsSchema: emptyParams, resultSchema: anyResult, budgetMs: 20 },
+      pickTemplatePackage: {
+        paramsSchema: emptyParams,
+        resultSchema: anyResult,
+        budgetMs: 20,
+      },
       open: {
         paramsSchema: {
           type: "object",

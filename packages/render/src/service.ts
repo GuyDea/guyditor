@@ -87,6 +87,11 @@ import {
 } from "./graphic-overlay.js";
 import { PRIMITIVES_V1_VERSION } from "./primitives/v1.js";
 import {
+  LOTTIE_RENDERER_VERSION,
+  LOTTIE_SHIM_VERSION,
+  lottieToolchainHash,
+} from "./lottie.js";
+import {
   loadTemplateRuntime,
   renderTemplatePng,
   resolveTemplateDuration,
@@ -516,7 +521,10 @@ async function toolchainManifest(): Promise<ToolchainManifest> {
     renderPackage: RENDER_PACKAGE_VERSION,
     overlayRenderer: {
       ...captionOverlayToolchain(),
-      version: `${captionOverlayToolchain().version}+${GRAPHIC_OVERLAY_RENDERER_VERSION}+${TEMPLATE_RENDERER_VERSION}+${PRIMITIVES_V1_VERSION}`,
+      version:
+        `${captionOverlayToolchain().version}+${GRAPHIC_OVERLAY_RENDERER_VERSION}+` +
+        `${TEMPLATE_RENDERER_VERSION}+${PRIMITIVES_V1_VERSION}+` +
+        `${LOTTIE_RENDERER_VERSION}+${LOTTIE_SHIM_VERSION}+${lottieToolchainHash()}`,
     },
     encoderThreads: 1,
     os: platform(),
@@ -961,6 +969,11 @@ export class RenderService {
       safeArea,
       renderer: TEMPLATE_RENDERER_VERSION,
       primitives: PRIMITIVES_V1_VERSION,
+      lottie: {
+        renderer: LOTTIE_RENDERER_VERSION,
+        shim: LOTTIE_SHIM_VERSION,
+        sha256: lottieToolchainHash(),
+      },
       canvas: TEMPLATE_CANVAS_VERSION,
       brand: brand.templateDefaults ?? null,
     })).digest("hex");

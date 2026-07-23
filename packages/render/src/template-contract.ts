@@ -5,6 +5,7 @@ import type {
   TemplateBrandDefaults,
 } from "../../core/src/index.js";
 import type { PrimitiveWordTiming } from "./primitives/v1.js";
+import type { LottieAnimation } from "./lottie.js";
 
 export type OverlayCanvas2D = SKRSContext2D;
 export type OverlayImage = Image;
@@ -46,6 +47,7 @@ export interface TemplateRenderContext {
   brand: BrandContext;
   rng: SeededRng;
   staticAssets(name: string): OverlayImage;
+  lottie(name: string): LottieAnimation;
 }
 
 export interface TemplateStaticContext {

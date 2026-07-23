@@ -1,6 +1,7 @@
 import type { Result } from "../errors.js";
 import type { FrameTime } from "../time/index.js";
 import type { RightsMetadata } from "../restyle/types.js";
+import type { LottieFeatureProfile } from "./lottie.js";
 
 export type TemplateKind =
   | "title"
@@ -10,6 +11,25 @@ export type TemplateKind =
   | "highlight"
   | "transition"
   | "motion";
+
+export type TemplateAssetKind = "image" | "svg" | "lottie";
+
+export interface TemplateAssetLicense {
+  origin: "licensed" | "stock" | "generated" | "programmatic" | "unknown";
+  licenseName: string;
+  licenseUrl?: string;
+  licensor: string;
+  restrictions: string[];
+}
+
+export interface TemplateAssetDeclaration {
+  name: string;
+  kind: TemplateAssetKind;
+  file: string;
+  sha256: string;
+  license: TemplateAssetLicense;
+  featureProfile?: LottieFeatureProfile;
+}
 
 export interface TemplateDescriptor {
   schema: "guyditor/template/v1";

@@ -24,6 +24,10 @@
       "contentHash": "54ccb7b696b42d6d8d58dca4a6c9de539d78eeebc1c28cb8c28b117ceaddea2d",
       "frameSha256": "4524fe5bc80cf3f6b8274e4cee6b52104c4440b416f5b2c0361fc832f20dddc6"
     },
+    "lottie-card": {
+      "contentHash": "21630a461c33efe1070edccbbf63a7cd531b0448fd1bceab167a4a73aff67b53",
+      "frameSha256": "5bc2680eaf3b41c87f0caa7e2130626b8bf07d8709aa02fdbb343f9b2bd51bdf"
+    },
     "lower-third": {
       "contentHash": "660da8a1c8f245bbfeeaed3415c1f1e20676e5af1932514f92219c47a9942301",
       "frameSha256": "4ce8ca152d59a6e955f897335f651ea7f8d1ac8dd55395c83beec3c671a7d50a"

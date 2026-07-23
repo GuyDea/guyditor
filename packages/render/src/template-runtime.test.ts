@@ -50,6 +50,72 @@ safe_area_aware: true
   return root;
 }
 
+async function attachLottie(root: string): Promise<Buffer> {
+  const document = {
+    v: "5.12.2",
+    fr: 30,
+    ip: 0,
+    op: 30,
+    w: 100,
+    h: 60,
+    assets: [],
+    layers: [{
+      ty: 4,
+      nm: "Animated badge",
+      ip: 0,
+      op: 30,
+      ks: {
+        a: { a: 0, k: [0, 0] },
+        p: { a: 0, k: [50, 30] },
+        s: { a: 0, k: [100, 100] },
+        r: { a: 0, k: 0 },
+        o: { a: 0, k: 100 },
+      },
+      shapes: [
+        {
+          ty: "rc",
+          nm: "Badge",
+          p: { a: 0, k: [0, 0] },
+          s: {
+            a: 1,
+            k: [{ t: 0, s: [20, 20], e: [80, 40] }, { t: 29, s: [80, 40] }],
+          },
+          r: { a: 0, k: 8 },
+        },
+        {
+          ty: "fl",
+          nm: "accent",
+          c: { a: 0, k: [0.46, 0.91, 0.77, 1] },
+          o: { a: 0, k: 100 },
+        },
+      ],
+    }],
+  };
+  const bytes = Buffer.from(`${JSON.stringify(document, null, 2)}\n`);
+  await writeFile(join(root, "assets", "badge.json"), bytes);
+  const hash = createHash("sha256").update(bytes).digest("hex");
+  const manifestPath = join(root, "template.yaml");
+  await writeFile(
+    manifestPath,
+    (await readFile(manifestPath, "utf8")).replace(
+      "fonts: []",
+      `fonts: []
+assets:
+  - name: badge-motion
+    kind: lottie
+    file: assets/badge.json
+    sha256: ${hash}
+    license:
+      origin: licensed
+      licenseName: Fixture License
+      licensor: Fixture Studio
+      restrictions: []`,
+    ),
+    "utf8",
+  );
+  return bytes;
+}
+
 describe("FR-600/602 deterministic template runtime", () => {
   it("renders byte-identical PNGs for the same seed and changes seeded pixels for another seed", async () => {
     const api = render as unknown as RuntimeExports;
@@ -261,6 +327,62 @@ describe("FR-600/602 deterministic template runtime", () => {
     expect(pkg.ok).toBe(true);
     if (!pkg.ok) return;
     await writeFile(join(root, "fonts", "Brand.otf"), Buffer.concat([font, Buffer.from([0])]));
+    await expect(api.loadTemplateRuntime(pkg.value)).resolves.toMatchObject({
+      ok: false,
+      error: { code: "E_TEMPLATE_ASSET_HASH" },
+    });
+  });
+
+  it("exposes hash-rechecked Lottie assets to the primitives/v1 explicit-frame painter", async () => {
+    const api = render as unknown as RuntimeExports;
+    if (
+      api.validateTemplatePackage === undefined ||
+      api.loadTemplateRuntime === undefined ||
+      api.renderTemplatePng === undefined
+    ) return;
+    const root = await runtimePackage(`
+      import { primitivesV1 } from "@guyditor/render/primitives/v1";
+      export default {
+        render(ctx, params) {
+          primitivesV1.lottie.draw(ctx.canvas, {
+            animation: ctx.lottie("badge-motion"),
+            frame: ctx.frame,
+            x: 0,
+            y: 0,
+            width: ctx.width,
+            height: ctx.height,
+            colorSlots: { accent: params.accent }
+          });
+        }
+      };\n`);
+    const original = await attachLottie(root);
+    const pkg = await api.validateTemplatePackage(root);
+    expect(pkg.ok).toBe(true);
+    const loaded = await api.loadTemplateRuntime(pkg.value);
+    expect(loaded.ok).toBe(true);
+    if (!loaded.ok) return;
+    const base = {
+      params: { accent: "#7C3AED" },
+      seed: 42,
+      frame: 7,
+      totalFrames: 30,
+      fps: "30/1",
+      width: 200,
+      height: 120,
+      safeArea: { top: 6, right: 10, bottom: 6, left: 10 },
+      brand: { palette: { accent: "#7C3AED" } },
+    };
+    const first = api.renderTemplatePng(loaded.value, base);
+    const second = api.renderTemplatePng(loaded.value, base);
+    const next = api.renderTemplatePng(loaded.value, { ...base, frame: 8 });
+    expect(first.ok).toBe(true);
+    expect(second.value).toEqual(first.value);
+    expect(next.value).not.toEqual(first.value);
+
+    await writeFile(
+      join(root, "assets", "badge.json"),
+      Buffer.concat([original, Buffer.from("\n")]),
+    );
     await expect(api.loadTemplateRuntime(pkg.value)).resolves.toMatchObject({
       ok: false,
       error: { code: "E_TEMPLATE_ASSET_HASH" },

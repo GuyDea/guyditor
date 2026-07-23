@@ -10,12 +10,15 @@ import { transform } from "esbuild";
 import { parse } from "yaml";
 
 import {
+  analyzeLottieDocument,
   failure,
   makeGuyditorError,
   success,
 } from "../../core/src/index.js";
 import type {
   FrameTime,
+  TemplateAssetDeclaration,
+  TemplateAssetLicense,
   Result,
   TemplateDescriptor,
   TemplateInstallRequest,
@@ -31,21 +34,10 @@ export interface TemplateFontDeclaration {
   license: TemplateAssetLicense;
 }
 
-export interface TemplateAssetLicense {
-  origin: "licensed" | "stock" | "generated" | "programmatic" | "unknown";
-  licenseName: string;
-  licenseUrl?: string;
-  licensor: string;
-  restrictions: string[];
-}
-
-export interface TemplateAssetDeclaration {
-  name: string;
-  kind: "image" | "svg";
-  file: string;
-  sha256: string;
-  license: TemplateAssetLicense;
-}
+export type {
+  TemplateAssetDeclaration,
+  TemplateAssetLicense,
+} from "../../core/src/index.js";
 
 export interface TemplateManifest {
   schema: "guyditor/template/v1";
@@ -79,6 +71,7 @@ export interface TemplateCatalogEntry extends TemplateDescriptor {
   previewPath: string;
   previewDataUrl?: string;
   previewParams: Record<string, unknown>;
+  assets: TemplateAssetDeclaration[];
   builtinName?: string;
 }
 
@@ -186,7 +179,7 @@ const manifestSchema = {
         required: ["name", "kind", "file", "sha256", "license"],
         properties: {
           name: { type: "string", pattern: "^[a-z][a-z0-9_-]*$" },
-          kind: { enum: ["image", "svg"] },
+          kind: { enum: ["image", "svg", "lottie"] },
           file: { type: "string", minLength: 1 },
           sha256: { type: "string", pattern: SHA256 },
           license: licenseSchema,
@@ -346,6 +339,12 @@ export async function validateTemplatePackage(
     if (declaration.kind === "svg" && extname(declaration.file).toLowerCase() !== ".svg") {
       return packageFailure(`SVG asset ${declaration.file} must use the .svg extension.`, [value.id]);
     }
+    if (declaration.kind === "lottie" && extname(declaration.file).toLowerCase() !== ".json") {
+      return packageFailure(
+        `Lottie asset ${declaration.file} must use the .json extension.`,
+        [value.id],
+      );
+    }
     const actual = createHash("sha256")
       .update(await readFile(resolve(absoluteRoot, declaration.file)))
       .digest("hex");
@@ -355,6 +354,38 @@ export async function validateTemplatePackage(
         [value.id, declaration.file],
       );
     }
+  }
+  const registeredAssets = structuredClone(value.assets ?? []);
+  const registeredRasterPaths = registeredAssets
+    .filter(({ kind }) => kind === "image")
+    .map(({ file }) => file);
+  for (const declaration of registeredAssets) {
+    if (declaration.kind !== "lottie") continue;
+    let document: unknown;
+    try {
+      document = JSON.parse(
+        await readFile(resolve(absoluteRoot, declaration.file), "utf8"),
+      ) as unknown;
+    } catch (error: unknown) {
+      return packageFailure(
+        `Lottie asset ${declaration.file} is not valid JSON: ${errorMessage(error)}.`,
+        [value.id, declaration.file],
+      );
+    }
+    const analysis = analyzeLottieDocument(document, {
+      documentPath: declaration.file,
+      registeredRasterPaths,
+    });
+    if (!analysis.ok) {
+      return packageFailure(
+        `Lottie asset ${declaration.file} uses unsupported features: ${
+          analysis.unsupported.map(({ feature, layerPath: path }) =>
+            `${feature} at ${path}`).join("; ")
+        }.`,
+        [value.id, declaration.file],
+      );
+    }
+    declaration.featureProfile = analysis.profile;
   }
 
   try {
@@ -402,7 +433,10 @@ export async function validateTemplatePackage(
 
   return success({
     root: absoluteRoot,
-    manifest: structuredClone(value),
+    manifest: {
+      ...structuredClone(value),
+      ...(registeredAssets.length === 0 ? {} : { assets: registeredAssets }),
+    },
     contentHash: await contentHash(absoluteRoot, files.value),
     compiledSource,
     files: files.value,
@@ -460,6 +494,7 @@ function catalogEntry(
     ...templateDescriptor(pkg),
     previewPath: resolve(pkg.root, pkg.manifest.preview.file),
     previewParams: structuredClone(pkg.manifest.preview.params),
+    assets: structuredClone(pkg.manifest.assets ?? []),
     ...(builtinName === undefined ? {} : { builtinName }),
   };
 }

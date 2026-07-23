@@ -272,6 +272,14 @@ async function createWindow(initialProjectPath?: string): Promise<BrowserWindow>
       });
       return selected.canceled ? [] : selected.filePaths;
     },
+    chooseTemplate: async () => {
+      const selected = await dialog.showOpenDialog(window, {
+        title: "Import template package",
+        buttonLabel: "Validate package",
+        properties: ["openDirectory"],
+      });
+      return selected.canceled ? undefined : selected.filePaths[0];
+    },
     revealPath: (path) => shell.showItemInFolder(path),
     openPath: (path) => shell.openPath(path),
   });

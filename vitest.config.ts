@@ -18,6 +18,8 @@ export default defineConfig({
         test: {
           name: "golden",
           include: ["packages/render/test/golden/*.golden.test.ts"],
+          maxWorkers: 4,
+          sequence: { groupOrder: 1 },
         },
       },
       {

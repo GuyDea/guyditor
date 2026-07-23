@@ -2,6 +2,7 @@ import type {
   Image,
   SKRSContext2D,
 } from "@napi-rs/canvas";
+import { drawLottie } from "../lottie.js";
 
 export const PRIMITIVES_V1_VERSION = "primitives/v1@1";
 
@@ -742,6 +743,9 @@ export const primitivesV1 = Object.freeze({
   }),
   texture: Object.freeze({
     fill: textureFill,
+  }),
+  lottie: Object.freeze({
+    draw: drawLottie,
   }),
 });
 

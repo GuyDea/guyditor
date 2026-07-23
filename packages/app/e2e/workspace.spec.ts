@@ -254,8 +254,13 @@ test("places a schema-driven lower third at a word and previews the journaled gr
       "bar-chart-card",
       "cutout-collage-card",
       "highlight-underline",
+      "lottie-card",
     ]);
     await expect(launched.page.getByTestId("graphics-panel")).toContainText("Brand lower third");
+    await expect(launched.page.getByTestId("template-import")).toHaveText("Import package");
+    await launched.page.getByTestId("template-lottie-card").click();
+    await expect(launched.page.getByTestId("lottie-feature-profile"))
+      .toContainText("precomposition");
     await launched.page.getByTestId("template-lower-third").click();
     await expect(launched.page.getByTestId("template-browser-freeze"))
       .toHaveText("Freeze selected to clip");
