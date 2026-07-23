@@ -1,0 +1,68 @@
+import type { BrollSourceDescriptor } from "./types.js";
+
+export const BROLL_SOURCE_TAXONOMY: readonly BrollSourceDescriptor[] = [
+  {
+    id: "local-footage",
+    label: "Local footage",
+    entryPath: "ingest",
+    origin: "captured",
+    createsAsset: true,
+    availability: "available",
+    rightsDefault: "creator-owned",
+  },
+  {
+    id: "licensed-asset",
+    label: "Licensed assets",
+    entryPath: "ingest",
+    origin: "licensed",
+    createsAsset: true,
+    availability: "available",
+    rightsDefault: "capture-required",
+  },
+  {
+    id: "still-image",
+    label: "Stills and illustrations",
+    entryPath: "ingest",
+    origin: "unknown",
+    createsAsset: true,
+    availability: "available",
+    rightsDefault: "capture-required",
+  },
+  {
+    id: "screen-capture",
+    label: "Screen captures",
+    entryPath: "capture",
+    origin: "captured",
+    createsAsset: true,
+    availability: "available",
+    rightsDefault: "creator-owned",
+  },
+  {
+    id: "programmatic-animation",
+    label: "Programmatic animations",
+    entryPath: "template",
+    origin: "programmatic",
+    createsAsset: false,
+    availability: "available",
+    rightsDefault: "creator-owned",
+  },
+  {
+    id: "external-generation",
+    label: "External generation",
+    entryPath: "generate",
+    origin: "generated",
+    createsAsset: true,
+    availability: "available",
+    rightsDefault: "provider-terms",
+  },
+  {
+    id: "local-generation",
+    label: "Local generation",
+    entryPath: "generate",
+    origin: "generated",
+    createsAsset: true,
+    availability: "declared-unavailable",
+    rightsDefault: "creator-owned",
+  },
+] as const;
+

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import type {
   Asset,
+  TakeComparison,
   TakeMarkerSidecar,
   TimeValue,
   WatchFolderConfig,
@@ -9,6 +10,7 @@ import type {
 import type { JobStatus } from "../../shared/ipc.js";
 import { errorMessage } from "../ipc.js";
 import { useJobsStore } from "../state/jobs.js";
+import { usePreviewStore, useSelectionStore } from "../state/view-state.js";
 import { Panel } from "./Panel.js";
 import type { WorkspacePanelProps } from "./types.js";
 
@@ -46,6 +48,8 @@ export function MediaBrowserPanel({
   const [kind, setKind] = useState<Asset["kind"] | "all">("all");
   const [path, setPath] = useState("");
   const [takeSidecars, setTakeSidecars] = useState<TakeMarkerSidecar[]>([]);
+  const [takeComparisons, setTakeComparisons] = useState<TakeComparison[]>([]);
+  const [selectedTakes, setSelectedTakes] = useState<string[]>([]);
   const [watchPath, setWatchPath] = useState("");
   const [watchConvention, setWatchConvention] = useState<"guyditor" | "flat">("guyditor");
   const [watchJobs, setWatchJobs] = useState({ proxy: true, analysis: true, transcription: true });
@@ -57,6 +61,9 @@ export function MediaBrowserPanel({
   const [pickupToWord, setPickupToWord] = useState("");
   const assets = useMemo(() => (snapshot?.master.assets ?? [])
     .filter((asset) => kind === "all" || asset.kind === kind), [kind, snapshot]);
+  const setPlayhead = usePreviewStore((state) => state.setPlayhead);
+  const selectWord = useSelectionStore((state) => state.selectWord);
+  const setWordRange = useSelectionStore((state) => state.setWordRange);
   const watchFolders = snapshot?.master.watchFolders ?? [];
   const pickupPrompt = useMemo(() => {
     const sidecar = transcripts.find(({ assetId }) => assetId === pickupTargetAsset);
@@ -75,18 +82,24 @@ export function MediaBrowserPanel({
 
   const refreshTakes = useCallback(async (): Promise<void> => {
     try {
-      setTakeSidecars(await window.guyditor.call<TakeMarkerSidecar[]>(
-        "CaptureWatcher",
-        "listTakes",
-        {},
-      ));
+      const [takes, comparisons] = await Promise.all([
+        window.guyditor.call<TakeMarkerSidecar[]>("CaptureWatcher", "listTakes", {}),
+        window.guyditor.call<TakeComparison[]>("CaptureWatcher", "listTakeComparisons", {}),
+      ]);
+      setTakeSidecars(takes);
+      setTakeComparisons(comparisons);
     } catch {
       setTakeSidecars([]);
+      setTakeComparisons([]);
     }
   }, []);
 
   useEffect(() => {
-    if (snapshot === null) setTakeSidecars([]);
+    if (snapshot === null) {
+      setTakeSidecars([]);
+      setTakeComparisons([]);
+      setSelectedTakes([]);
+    }
     else void refreshTakes();
   }, [refreshTakes, snapshot?.revision]);
 
@@ -174,16 +187,66 @@ export function MediaBrowserPanel({
     }
   }
 
+  async function compareSelectedTakes(): Promise<void> {
+    try {
+      const comparisons = await window.guyditor.call<TakeComparison[]>(
+        "CaptureWatcher",
+        "compareTakes",
+        { takeIds: selectedTakes },
+      );
+      setTakeComparisons((current) => [
+        ...comparisons,
+        ...current.filter(({ id }) => !comparisons.some((comparison) => comparison.id === id)),
+      ]);
+      setSelectedTakes([]);
+      await refreshProject();
+      setNotice(`Compared ${String(comparisons.reduce((sum, comparison) => sum + comparison.candidates.length, 0))} transcript-similar takes.`);
+    } catch (error: unknown) {
+      setNotice(errorMessage(error));
+    }
+  }
+
+  async function proposeTakeSelection(comparisonId: string, takeId: string): Promise<void> {
+    try {
+      const proposal = await window.guyditor.call<{ id: string }>(
+        "CaptureWatcher",
+        "selectTake",
+        { comparisonId, takeId },
+      );
+      await refreshProposals();
+      setNotice(`Prepared ${proposal.id} to select ${takeId}; every alternative remains accessible.`);
+    } catch (error: unknown) {
+      setNotice(errorMessage(error));
+    }
+  }
+
+  function jumpToCandidate(comparison: TakeComparison, takeId: string): void {
+    const candidate = comparison.candidates.find(({ takeId: id }) => id === takeId);
+    if (candidate === undefined) return;
+    setPlayhead(candidate.sourceRange.in);
+    if (comparison.slot.wordRange !== undefined) {
+      selectWord(comparison.slot.wordRange.fromWord);
+      setWordRange(comparison.slot.wordRange);
+    }
+  }
+
   return (
     <Panel
       id="media"
       title="Media"
       eyebrow="Assets / takes"
-      actions={(
+      actions={<>
+        <button
+          type="button"
+          className="primary-action"
+          data-testid="take-comparison-trigger"
+          disabled={selectedTakes.length < 2}
+          onClick={() => void compareSelectedTakes()}
+        >Compare {selectedTakes.length < 2 ? "takes" : String(selectedTakes.length)}</button>
         <button type="button" data-testid="media-refresh" onClick={() => void refreshProject()}>
           Refresh
         </button>
-      )}
+      </>}
     >
       <div
         className="ingest-drop"
@@ -323,6 +386,76 @@ export function MediaBrowserPanel({
         >Transcribe, align &amp; propose splice</button>
         <small>File import is supported here. In-app recording and synthetic voice are intentionally not available.</small>
       </details>
+      {takeComparisons.length === 0 ? null : (
+        <section className="take-comparison-list" data-testid="take-comparisons">
+          <header>
+            <strong>Take comparison</strong>
+            <span>Measured delivery + technical QC + creator rubric</span>
+          </header>
+          {takeComparisons.map((comparison) => (
+            <article key={comparison.id} data-testid={`take-comparison-${comparison.id}`}>
+              <div className="take-comparison-heading">
+                <span>
+                  <strong>{comparison.slot.scriptSection ?? comparison.id}</strong>
+                  <small>{comparison.id} · all {String(comparison.candidates.length)} takes retained</small>
+                </span>
+                {comparison.recommendation === undefined ? null : (
+                  <span className="state-chip" data-state="ready">
+                    recommend {comparison.recommendation.takeId}
+                  </span>
+                )}
+              </div>
+              <div className="comparison-table-scroll">
+                <table className="take-metric-table">
+                  <thead><tr>
+                    <th>Take</th><th>WPM</th><th>Silence</th><th>Fillers</th>
+                    <th>Loudness var.</th><th>Restarts</th><th>Clipping</th>
+                    <th>Noise floor</th><th>Preference</th><th>Review</th>
+                  </tr></thead>
+                  <tbody>
+                    {comparison.candidates.map((candidate) => (
+                      <tr
+                        key={candidate.takeId}
+                        data-recommended={comparison.recommendation?.takeId === candidate.takeId}
+                      >
+                        <th>{candidate.takeId}</th>
+                        <td>{candidate.delivery.wordsPerMinute.toFixed(1)}</td>
+                        <td>{(candidate.delivery.pauseRatio * 100).toFixed(1)}%</td>
+                        <td>{candidate.delivery.fillerCount}</td>
+                        <td>{candidate.delivery.energyVariance.toFixed(3)}</td>
+                        <td>{candidate.delivery.restartCount}</td>
+                        <td>{candidate.technical.audioClippingPct.toFixed(2)}%</td>
+                        <td>{candidate.technical.noiseFloorDb.toFixed(1)} dB</td>
+                        <td>{candidate.preference.score.toFixed(3)}</td>
+                        <td>
+                          <button type="button" onClick={() => jumpToCandidate(comparison, candidate.takeId)}>Jump</button>
+                          <button
+                            type="button"
+                            className="primary-action"
+                            disabled={comparison.selectedTakeId === candidate.takeId}
+                            onClick={() => void proposeTakeSelection(comparison.id, candidate.takeId)}
+                          >{comparison.selectedTakeId === candidate.takeId ? "Selected" : "Select"}</button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {comparison.recommendation === undefined ? null : (
+                <div className="take-recommendation">
+                  <strong>Reason · {comparison.recommendation.confidence} confidence</strong>
+                  <ul>{comparison.recommendation.reasons.map((reason) => (
+                    <li key={`${reason.criterion}-${reason.evidence}`}>
+                      <strong>{reason.criterion}</strong> {reason.detail}
+                      <small>{reason.evidence}</small>
+                    </li>
+                  ))}</ul>
+                </div>
+              )}
+            </article>
+          ))}
+        </section>
+      )}
       <ol className="asset-list" data-testid="asset-list">
         {assets.map((asset) => {
           const proxy = jobState(jobs, asset.id, "proxy.generate");
@@ -355,6 +488,14 @@ export function MediaBrowserPanel({
                     <ol>
                       {takes.takes.map((take) => (
                         <li key={take.id}>
+                          <input
+                            type="checkbox"
+                            aria-label={`Include ${take.id} in comparison`}
+                            checked={selectedTakes.includes(take.id)}
+                            onChange={() => setSelectedTakes((current) => current.includes(take.id)
+                              ? current.filter((id) => id !== take.id)
+                              : [...current, take.id])}
+                          />
                           <strong>T{String(take.index).padStart(2, "0")}</strong>
                           <span>{take.quality} · {String(take.range.start)}–{String(take.range.end)}f</span>
                           {take.notes.length === 0 ? null : <small>{take.notes.join(" · ")}</small>}

@@ -332,6 +332,7 @@ async function startApplication(): Promise<void> {
       auditRetentionDays: startup.settings.audit.retentionDays,
       budgets: startup.settings.budgets,
       maxConcurrentJobs: startup.settings.performance.maxConcurrentJobs,
+      rightsRequirementLevel: startup.settings.rights.requirementLevel,
       restyleAdapter: startup.settings.adapters.restyle.kling,
     },
   });

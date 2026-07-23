@@ -11,6 +11,11 @@ export {
   AC004_GATEWAY_TOOLS,
   M3_CANDIDATE_GATEWAY_TOOL,
   M3_METADATA_GATEWAY_TOOL,
+  M4_ACTIVE_SKILLS_GATEWAY_TOOL,
+  M4_ASSESSMENT_SUBMIT_TOOL,
+  M4_CRITIC_REQUEST_TOOL,
+  M4_CRITIC_RESULT_GET_TOOL,
+  M4_TAKES_COMPARE_TOOL,
 } from "./gateway.js";
 export type {
   AgentGatewayOptions,
@@ -53,6 +58,44 @@ export type {
 } from "./audit-types.js";
 export { AdapterRegistry } from "./adapters/registry.js";
 export {
+  DETERMINISTIC_GENERATION_ADAPTER_CANONICAL_NAME,
+  DETERMINISTIC_GENERATION_ADAPTER_ID,
+  DeterministicGenerationAdapter,
+} from "./adapters/deterministic-generation.js";
+export { validateTextFreeGenerationRequest } from "./adapters/generation-guard.js";
+export type { TextFreeGenerationValidation } from "./adapters/generation-guard.js";
+export {
+  HTTP_GENERATION_ADAPTER_CANONICAL_NAME,
+  HTTP_GENERATION_ADAPTER_ID,
+  HttpGenerationAdapter,
+} from "./adapters/http-generation.js";
+export type {
+  HttpGenerationAdapterConfig,
+  HttpGenerationAdapterOptions,
+} from "./adapters/http-generation.js";
+export { HttpHttpGenerationApi } from "./adapters/http-generation-api.js";
+export type {
+  HttpGenerationApi,
+  HttpGenerationPaths,
+  HttpHttpGenerationApiOptions,
+  HttpImageGenerationResponse,
+  HttpVideoGenerationStatus,
+} from "./adapters/http-generation-api.js";
+export {
+  COMFYUI_GENERATION_ADAPTER_CANONICAL_NAME,
+  COMFYUI_GENERATION_ADAPTER_ID,
+  ComfyUiGenerationAdapter,
+} from "./adapters/comfyui-generation.js";
+export type {
+  ComfyUiApi,
+  ComfyUiGenerationAdapterOptions,
+  ComfyUiGenerationConfig,
+  ComfyUiHistory,
+  ComfyUiWorkflowTemplate,
+} from "./adapters/comfyui-generation.js";
+export { StubCriticAdapter } from "./adapters/stub-critic.js";
+export type { StubCriticAdapterOptions } from "./adapters/stub-critic.js";
+export {
   EphemeralCredentialStore,
   FileCredentialStore,
   SafeStorageCredentialStore,
@@ -62,6 +105,8 @@ export type {
   SafeStorageCodec,
   SafeStorageCredentialStoreOptions,
 } from "./adapters/credentials.js";
+export { restoredAdapterCredentialStates } from "./adapters/restored-state.js";
+export type { RestoredAdapterCredentialState } from "./adapters/restored-state.js";
 export {
   KLING_ADAPTER_CANONICAL_NAME,
   KLING_ADAPTER_ID,
@@ -85,6 +130,11 @@ export type {
   AdapterJobStatus,
   AdapterUserConfig,
   BrollProviderAdapter,
+  CriticAdapter,
+  CriticFileRef,
+  CritiqueFinding,
+  CritiqueRequest,
+  CritiqueResult,
   GenerationRequest,
   GenerationResult,
   ProviderAdapter,
@@ -92,10 +142,45 @@ export type {
   RestyleAdapter,
   RestyleRequest,
   RestyleResult,
+  RegisteredAdapter,
 } from "./adapters/types.js";
+export { CriticExecutionService } from "./critic-execution.js";
+export type {
+  CriticExecutionInput,
+  CriticExecutionServiceOptions,
+  DataBoundaryPolicy,
+} from "./critic-execution.js";
+export { AssessmentStore } from "./assessment-store.js";
+export type { AssessmentStoreOptions } from "./assessment-store.js";
 export { RestyleExecutionService } from "./restyle-execution.js";
 export type {
   RestyleExecutionServiceOptions,
   RestyleStartResult,
   StartRestylePlanInput,
 } from "./restyle-execution.js";
+export { GenerationExecutionService } from "./generation-execution.js";
+export type {
+  GenerationAcceptancePlacement,
+  GenerationExecutionServiceOptions,
+  GenerationRequestInput,
+  GenerationStartResult,
+} from "./generation-execution.js";
+export {
+  GenerationCandidateStore,
+  normalizedGenerationRights,
+} from "./generation-candidates.js";
+export type {
+  GenerationCandidate,
+  GenerationCandidateStoreOptions,
+} from "./generation-candidates.js";
+export * from "./skills/index.js";
+export {
+  buildTakeComparison,
+  takePreferenceRubric,
+} from "./take-comparison.js";
+export type {
+  TakeComparisonCandidateInput,
+  TakeComparisonInput,
+  TakePreferenceRubric,
+  TakePreferenceWeights,
+} from "./take-comparison.js";

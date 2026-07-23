@@ -120,6 +120,45 @@ export const M3_AC_COMMANDS = Object.freeze([
   }),
 ]);
 
+export const M4_AC_COMMANDS = Object.freeze([
+  Object.freeze({
+    command: "pnpm",
+    args: [
+      "exec", "vitest", "run", "--project", "unit",
+      "packages/agent/src/ac010.integration.test.ts",
+      "packages/agent/src/skills/registry.test.ts",
+      "packages/agent/src/skills/project-registry.test.ts",
+      "packages/agent/src/skills/preference-pack.test.ts",
+      "packages/agent/src/gateway.test.ts",
+      "packages/core/src/operations/skill-operation.test.ts",
+      "packages/app/src/main/service-host.test.ts",
+      "packages/app/src/main/surfaces.test.ts",
+      "packages/app/src/renderer/panels/SkillsPanel.test.ts",
+      "packages/media/src/ac012.integration.test.ts",
+      "packages/media/src/storage.test.ts",
+      "packages/media/src/backup.test.ts",
+      "packages/media/src/archive.test.ts",
+      "packages/core/src/jobs/preflight.test.ts",
+      "packages/core/src/migration/migration.test.ts",
+      "packages/app/src/renderer/panels/StoragePanel.test.ts",
+      "packages/deliver/src/otio.test.ts",
+      "packages/compositor/src/index.test.ts",
+      "packages/media/src/key-qc.test.ts",
+      "packages/media/src/mlworker/executors.test.ts",
+      "packages/render/src/filtergraph.test.ts",
+    ],
+  }),
+  Object.freeze({
+    command: "pnpm",
+    args: [
+      "exec", "vitest", "run", "--project", "golden",
+      "packages/render/test/golden/ac009.golden.test.ts",
+    ],
+  }),
+  Object.freeze({ command: "pnpm", args: ["exec", "vitest", "run", "--project", "contract", "-t", "schema-valid FFV1 matte"] }),
+  Object.freeze({ command: "pnpm", args: ["--filter", "@guyditor/app", "build"] }),
+]);
+
 function run(command, args) {
   const executable = process.platform === "win32" && command === "pnpm"
     ? `${command}.cmd`
@@ -133,14 +172,15 @@ function run(command, args) {
 
 export function main(args = process.argv.slice(2)) {
   const normalized = args.filter((argument) => argument !== "--");
-  if (normalized.length !== 1 || !["m1", "m2", "m3"].includes(normalized[0])) {
-    console.error(`test:ac: expected milestone m1, m2, or m3, received ${normalized.join(" ") || "<missing>"}`);
+  if (normalized.length !== 1 || !["m1", "m2", "m3", "m4"].includes(normalized[0])) {
+    console.error(`test:ac: expected milestone m1, m2, m3, or m4, received ${normalized.join(" ") || "<missing>"}`);
     return 1;
   }
   const milestone = normalized[0];
   const commands = milestone === "m1"
     ? M1_AC_COMMANDS
-    : milestone === "m2" ? M2_AC_COMMANDS : M3_AC_COMMANDS;
+    : milestone === "m2" ? M2_AC_COMMANDS
+    : milestone === "m3" ? M3_AC_COMMANDS : M4_AC_COMMANDS;
   for (const { command, args: commandArgs } of commands) {
     const status = run(command, commandArgs);
     if (status !== 0) return status;
@@ -149,7 +189,9 @@ export function main(args = process.argv.slice(2)) {
     ? "test:ac m1: AC-001, AC-002, AC-004, and AC-009 passed"
     : milestone === "m2"
       ? "test:ac m2: AC-003 captions, AC-005 keyed presenter diagnostics, and AC-006 semantic PiP passed"
-      : "test:ac m3: AC-007 output sets, AC-008 lifecycle, and AC-011 upload packaging passed");
+      : milestone === "m3"
+        ? "test:ac m3: AC-007 output sets, AC-008 lifecycle, and AC-011 upload packaging passed"
+        : "test:ac m4: AC-009 restore/rebuild, AC-010 preference reuse, and AC-012 verified clean-machine restore passed");
   return 0;
 }
 

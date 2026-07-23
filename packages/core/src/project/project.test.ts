@@ -170,6 +170,7 @@ describe("project IDs", () => {
     expect(ID_PREFIXES).toContain("gfx");
     expect(ID_PREFIXES).toContain("txn");
     expect(ID_PREFIXES).toContain("prp");
+    expect(ID_PREFIXES).toEqual(expect.arrayContaining(["asm", "crt", "tkc"]));
 
     for (const prefix of ID_PREFIXES) {
       const id = makeId(prefix);

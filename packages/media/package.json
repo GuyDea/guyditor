@@ -8,6 +8,7 @@
   },
   "dependencies": {
     "@guyditor/core": "workspace:*",
-    "chokidar": "4.0.3"
+    "chokidar": "4.0.3",
+    "yaml": "^2.9.0"
   }
 }

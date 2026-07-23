@@ -41,6 +41,59 @@ const deliverableIdParams: JsonSchema = {
   properties: { deliverableId: { type: "string", pattern: "^dlv_[a-z2-7]{10}$" } },
   additionalProperties: false,
 };
+const candidateIdParams: JsonSchema = {
+  type: "object",
+  required: ["candidateId"],
+  properties: { candidateId: { type: "string", minLength: 1 } },
+  additionalProperties: false,
+};
+const generationRequestProperties = {
+  adapterId: { type: "string", minLength: 1 },
+  request: {
+    type: "object",
+    required: [
+      "requestId", "mode", "model", "prompt", "width", "height", "count",
+      "providerSettings",
+    ],
+    properties: {
+      requestId: { type: "string", minLength: 1 },
+      mode: { enum: ["image", "video"] },
+      model: { type: "string", minLength: 1 },
+      prompt: { type: "string", minLength: 1 },
+      negativePrompt: { type: "string" },
+      referenceAssetIds: {
+        type: "array",
+        uniqueItems: true,
+        items: { type: "string", pattern: "^ast_[a-z2-7]{10}$" },
+      },
+      width: { type: "integer", minimum: 16, maximum: 4096 },
+      height: { type: "integer", minimum: 16, maximum: 4096 },
+      durationFrames: { type: "integer", minimum: 1 },
+      fps: { type: "string", pattern: "^[1-9][0-9]*/[1-9][0-9]*$" },
+      seed: { type: "integer", minimum: 0, maximum: 4294967295 },
+      count: { type: "integer", minimum: 1, maximum: 4 },
+      providerSettings: { type: "object" },
+    },
+    additionalProperties: false,
+  },
+};
+const generationRequestParams: JsonSchema = {
+  type: "object",
+  required: ["adapterId", "request"],
+  properties: generationRequestProperties,
+  additionalProperties: false,
+};
+const skillIdProperty: JsonSchema = { type: "string", pattern: "^skl_[a-z2-7]{10}$" };
+const skillVersionProperty: JsonSchema = {
+  type: "string",
+  pattern: "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$",
+};
+const skillIdVersionParams: JsonSchema = {
+  type: "object",
+  required: ["skillId", "version"],
+  properties: { skillId: skillIdProperty, version: skillVersionProperty },
+  additionalProperties: false,
+};
 
 export const IPC_SURFACES: readonly IpcSurface[] = Object.freeze([
   {
@@ -63,6 +116,128 @@ export const IPC_SURFACES: readonly IpcSurface[] = Object.freeze([
       readTranscript: { paramsSchema: emptyParams, resultSchema: { type: "array" }, budgetMs: 50 },
       revealProject: { paramsSchema: emptyParams, resultSchema: anyResult, budgetMs: 20 },
       openMaster: { paramsSchema: emptyParams, resultSchema: anyResult, budgetMs: 20 },
+    },
+  },
+  {
+    service: "SkillRegistry",
+    methods: {
+      list: {
+        paramsSchema: {
+          type: "object",
+          required: ["scope"],
+          properties: { scope: { enum: ["global", "project", "all"] } },
+          additionalProperties: false,
+        },
+        resultSchema: { type: "array" },
+        budgetMs: 50,
+      },
+      versions: {
+        paramsSchema: {
+          type: "object",
+          required: ["skillId"],
+          properties: { skillId: skillIdProperty },
+          additionalProperties: false,
+        },
+        resultSchema: { type: "array" },
+        budgetMs: 50,
+      },
+      get: {
+        paramsSchema: {
+          type: "object",
+          required: ["skillId"],
+          properties: { skillId: skillIdProperty, version: skillVersionProperty },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 50,
+      },
+      publish: {
+        paramsSchema: {
+          type: "object",
+          required: ["directory"],
+          properties: { directory: { type: "string", minLength: 1 } },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 100,
+      },
+      verify: { paramsSchema: skillIdVersionParams, resultSchema: anyResult, budgetMs: 50 },
+      drafts: {
+        paramsSchema: {
+          type: "object",
+          properties: { skillId: skillIdProperty },
+          additionalProperties: false,
+        },
+        resultSchema: { type: "array" },
+        budgetMs: 50,
+      },
+      createDraft: {
+        paramsSchema: {
+          type: "object",
+          required: ["skillId", "baseVersion", "version"],
+          properties: {
+            skillId: skillIdProperty,
+            baseVersion: skillVersionProperty,
+            version: skillVersionProperty,
+          },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 100,
+      },
+      updateDraft: {
+        paramsSchema: {
+          type: "object",
+          required: ["skillId", "version"],
+          properties: {
+            skillId: skillIdProperty,
+            version: skillVersionProperty,
+            title: { type: "string", minLength: 1 },
+            summary: { type: "string", minLength: 1 },
+            categories: { type: "array", items: { type: "string" } },
+            rules: { type: "array", items: { type: "object" } },
+            examples: { type: "object" },
+            body: { type: "string" },
+          },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 100,
+      },
+      deleteDraft: { paramsSchema: skillIdVersionParams, resultSchema: anyResult, budgetMs: 100 },
+      publishDraft: { paramsSchema: skillIdVersionParams, resultSchema: anyResult, budgetMs: 100 },
+      diff: {
+        paramsSchema: {
+          type: "object",
+          required: ["skillId", "fromVersion", "toVersion"],
+          properties: {
+            skillId: skillIdProperty,
+            fromVersion: skillVersionProperty,
+            toVersion: skillVersionProperty,
+          },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 50,
+      },
+      pinned: { paramsSchema: emptyParams, resultSchema: { type: "array" }, budgetMs: 50 },
+      associate: { paramsSchema: skillIdVersionParams, resultSchema: anyResult, budgetMs: 150 },
+      upgrade: { paramsSchema: skillIdVersionParams, resultSchema: anyResult, budgetMs: 150 },
+      captureExample: {
+        paramsSchema: {
+          type: "object",
+          required: ["proposalId", "skillId", "decision", "description"],
+          properties: {
+            proposalId: { type: "string", pattern: "^prp_[a-z2-7]{10}$" },
+            skillId: skillIdProperty,
+            decision: { enum: ["approved", "rejected"] },
+            description: { type: "string", minLength: 1 },
+          },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 150,
+      },
     },
   },
   {
@@ -217,6 +392,29 @@ export const IPC_SURFACES: readonly IpcSurface[] = Object.freeze([
         resultSchema: anyResult,
         budgetMs: 20,
       },
+      matteCandidates: {
+        paramsSchema: {
+          type: "object",
+          required: ["clipId"],
+          properties: { clipId: { type: "string", pattern: "^clp_[a-z2-7]{10}$" } },
+          additionalProperties: false,
+        },
+        resultSchema: { type: "array" },
+        budgetMs: 20,
+      },
+      acceptMatteCandidate: {
+        paramsSchema: {
+          type: "object",
+          required: ["clipId", "jobId"],
+          properties: {
+            clipId: { type: "string", pattern: "^clp_[a-z2-7]{10}$" },
+            jobId: { type: "string", pattern: "^job_[a-z2-7]{10}$" }
+          },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 150,
+      },
       captureGuidance: {
         paramsSchema: assetIdParams,
         resultSchema: anyResult,
@@ -293,6 +491,38 @@ export const IPC_SURFACES: readonly IpcSurface[] = Object.freeze([
     service: "CaptureWatcher",
     methods: {
       list: { paramsSchema: emptyParams, resultSchema: { type: "array" }, budgetMs: 20 },
+      listTakes: { paramsSchema: emptyParams, resultSchema: { type: "array" }, budgetMs: 50 },
+      listTakeComparisons: { paramsSchema: emptyParams, resultSchema: { type: "array" }, budgetMs: 50 },
+      compareTakes: {
+        paramsSchema: {
+          type: "object",
+          required: ["takeIds"],
+          properties: {
+            takeIds: {
+              type: "array",
+              minItems: 2,
+              uniqueItems: true,
+              items: { type: "string", pattern: "^tak_[a-z2-7]{10}$" },
+            },
+          },
+          additionalProperties: false,
+        },
+        resultSchema: { type: "array" },
+        budgetMs: 500,
+      },
+      selectTake: {
+        paramsSchema: {
+          type: "object",
+          required: ["comparisonId", "takeId"],
+          properties: {
+            comparisonId: { type: "string", pattern: "^tkc_[a-z2-7]{10}$" },
+            takeId: { type: "string", pattern: "^tak_[a-z2-7]{10}$" },
+          },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 150,
+      },
       configure: {
         paramsSchema: {
           type: "object",
@@ -329,7 +559,6 @@ export const IPC_SURFACES: readonly IpcSurface[] = Object.freeze([
         budgetMs: 200,
       },
       reconcile: { paramsSchema: emptyParams, resultSchema: anyResult, budgetMs: 200 },
-      listTakes: { paramsSchema: emptyParams, resultSchema: { type: "array" }, budgetMs: 50 },
     },
   },
   {
@@ -348,6 +577,83 @@ export const IPC_SURFACES: readonly IpcSurface[] = Object.freeze([
     service: "AdapterRegistry",
     methods: {
       list: { paramsSchema: emptyParams, resultSchema: { type: "array" }, budgetMs: 20 },
+    },
+  },
+  {
+    service: "GenerationService",
+    methods: {
+      taxonomy: { paramsSchema: emptyParams, resultSchema: { type: "array" }, budgetMs: 20 },
+      adapters: { paramsSchema: emptyParams, resultSchema: { type: "array" }, budgetMs: 20 },
+      rightsPolicy: { paramsSchema: emptyParams, resultSchema: anyResult, budgetMs: 20 },
+      estimate: {
+        paramsSchema: generationRequestParams,
+        resultSchema: anyResult,
+        budgetMs: 50,
+      },
+      request: {
+        paramsSchema: {
+          type: "object",
+          required: ["adapterId", "request"],
+          properties: {
+            ...generationRequestProperties,
+            confirmToken: { type: "string", minLength: 1 },
+          },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 50,
+      },
+      reviewQueue: { paramsSchema: emptyParams, resultSchema: { type: "array" }, budgetMs: 50 },
+      recordCreatorJudgment: {
+        paramsSchema: {
+          type: "object",
+          required: ["candidateId", "itemId", "state", "note"],
+          properties: {
+            candidateId: { type: "string", minLength: 1 },
+            itemId: { type: "string", minLength: 1 },
+            state: { enum: ["pass", "fail", "not_applicable"] },
+            note: { type: "string", minLength: 1 },
+          },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 50,
+      },
+      resolveReview: { paramsSchema: candidateIdParams, resultSchema: anyResult, budgetMs: 50 },
+      rejectCandidate: { paramsSchema: candidateIdParams, resultSchema: anyResult, budgetMs: 50 },
+      acceptCandidate: {
+        paramsSchema: {
+          type: "object",
+          required: ["candidateId", "sequenceId", "atFrame", "durationFrames"],
+          properties: {
+            candidateId: { type: "string", minLength: 1 },
+            sequenceId: { type: "string", pattern: "^seq_[a-z2-7]{10}$" },
+            atFrame: { type: "integer", minimum: 0 },
+            durationFrames: { type: "integer", minimum: 1 },
+          },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 150,
+      },
+      regenerate: { paramsSchema: candidateIdParams, resultSchema: anyResult, budgetMs: 50 },
+      ingestSource: {
+        paramsSchema: {
+          type: "object",
+          required: ["sourceClass", "path"],
+          properties: {
+            sourceClass: {
+              enum: ["local-footage", "licensed-asset", "still-image", "screen-capture"],
+            },
+            path: { type: "string", minLength: 1 },
+            origin: { enum: ["captured", "licensed"] },
+            rights: { type: "object" },
+          },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 50,
+      },
     },
   },
   {
@@ -416,6 +722,36 @@ export const IPC_SURFACES: readonly IpcSurface[] = Object.freeze([
           additionalProperties: false,
         },
         resultSchema: { type: "array" },
+        budgetMs: 150,
+      },
+      previewOtioExport: {
+        paramsSchema: {
+          type: "object",
+          required: ["deliverableId", "mediaPaths", "includeBeatsAsMarkers", "includeAnnotationsAsMarkers"],
+          properties: {
+            deliverableId: { type: "string", pattern: "^dlv_[a-z2-7]{10}$" },
+            mediaPaths: { enum: ["absolute", "relative"] },
+            includeBeatsAsMarkers: { type: "boolean" },
+            includeAnnotationsAsMarkers: { type: "boolean" },
+          },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 150,
+      },
+      exportOtio: {
+        paramsSchema: {
+          type: "object",
+          required: ["deliverableId", "mediaPaths", "includeBeatsAsMarkers", "includeAnnotationsAsMarkers"],
+          properties: {
+            deliverableId: { type: "string", pattern: "^dlv_[a-z2-7]{10}$" },
+            mediaPaths: { enum: ["absolute", "relative"] },
+            includeBeatsAsMarkers: { type: "boolean" },
+            includeAnnotationsAsMarkers: { type: "boolean" },
+          },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
         budgetMs: 150,
       },
       renderOutputSet: { paramsSchema: deliverableIdParams, resultSchema: anyResult, budgetMs: 150 },
@@ -689,6 +1025,45 @@ export const IPC_SURFACES: readonly IpcSurface[] = Object.freeze([
     service: "CostMeter",
     methods: {
       status: { paramsSchema: emptyParams, resultSchema: anyResult, budgetMs: 20 },
+    },
+  },
+  {
+    service: "BackupService",
+    methods: {
+      scan: { paramsSchema: emptyParams, resultSchema: anyResult, budgetMs: 20 },
+      planCleanup: {
+        paramsSchema: {
+          type: "object",
+          required: ["categories"],
+          properties: {
+            categories: {
+              type: "array",
+              items: { enum: ["sources", "generated", "project-state", "proxies", "caches", "renders", "archives", "jobs-db", "audit"] },
+              uniqueItems: true,
+            },
+          },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 20,
+      },
+      executeCleanup: {
+        paramsSchema: {
+          type: "object",
+          required: ["plan"],
+          properties: { plan: { type: "object" } },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 20,
+      },
+      run: { paramsSchema: { type: "object" }, resultSchema: anyResult, budgetMs: 20 },
+      verify: { paramsSchema: { type: "object" }, resultSchema: anyResult, budgetMs: 20 },
+      restoreTest: { paramsSchema: { type: "object" }, resultSchema: anyResult, budgetMs: 20 },
+      archiveStates: { paramsSchema: emptyParams, resultSchema: anyResult, budgetMs: 20 },
+      planArchive: { paramsSchema: { type: "object" }, resultSchema: anyResult, budgetMs: 20 },
+      offline: { paramsSchema: { type: "object" }, resultSchema: anyResult, budgetMs: 20 },
+      archiveRestore: { paramsSchema: { type: "object" }, resultSchema: anyResult, budgetMs: 20 },
     },
   },
 ]);

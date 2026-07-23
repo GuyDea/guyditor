@@ -20,6 +20,14 @@ export {
   importTakeNotes,
 } from "./take-markers.js";
 export {
+  extractTakeTranscript,
+  groupTakeTranscripts,
+} from "./take-comparison.js";
+export type {
+  TakeTranscriptCandidate,
+  TakeTranscriptGroup,
+} from "./take-comparison.js";
+export {
   PICKUP_ALIGNMENT_CONFIDENCE_THRESHOLD,
   planPickupSplice,
 } from "./pickup.js";

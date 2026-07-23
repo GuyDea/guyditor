@@ -1,4 +1,5 @@
 import type {
+  CriterionRef,
   RestyleAdapterConstraints,
   RestyleFrameRange,
   RightsMetadata,
@@ -13,14 +14,16 @@ export interface AdapterDescriptor {
   displayName: string;
   provider: string;
   local: boolean;
-  capabilities: Array<"generate" | "restyle">;
+  availability?: "available" | "declared-unavailable";
+  unavailableReason?: string;
+  capabilities: Array<"critic" | "generate" | "restyle">;
   modes: Array<"image" | "video">;
   models: Array<{
     id: string;
-    mode: "video";
+    mode: "image" | "video";
     maxWidth: number;
     maxHeight: number;
-    maxDurationSec: number;
+    maxDurationSec?: number;
     supportsSeed: boolean;
   }>;
   requestSchema: object;
@@ -134,6 +137,50 @@ export interface BrollProviderAdapter {
 }
 
 export type ProviderAdapter = BrollProviderAdapter | RestyleAdapter;
+
+export interface CriticFileRef {
+  path: string;
+  sha256?: string;
+}
+
+export interface CritiqueRequest {
+  critiqueId: string;
+  subject: {
+    deliverableId?: string;
+    proxyFile: CriticFileRef;
+    range: Record<string, unknown>;
+  };
+  rubric: CriterionRef[];
+  questions: string[];
+}
+
+export interface CritiqueFinding {
+  id: string;
+  range: Record<string, unknown>;
+  observation: string;
+  suggestion: string;
+  severity: "note" | "minor" | "major";
+}
+
+export interface CritiqueResult {
+  critiqueId: string;
+  adapterId: string;
+  model: string;
+  findings: CritiqueFinding[];
+  rawCostUnits: Record<string, unknown>;
+}
+
+/** An advisory-only capability. Its result contains findings, never timeline operations. */
+export interface CriticAdapter {
+  readonly id: string;
+  readonly kind: "critic";
+  readonly provider: string;
+  readonly accepts: { dataClasses: DataClass[]; maxVideoSeconds: number };
+  estimate(request: CritiqueRequest): CostEstimate;
+  critique(request: CritiqueRequest): Promise<CritiqueResult>;
+}
+
+export type RegisteredAdapter = CriticAdapter | ProviderAdapter;
 
 export interface AdapterUserConfig {
   enabled: boolean;

@@ -21,6 +21,7 @@ import type {
   JobDependencyNode,
   JobOverview,
   JobOverviewSources,
+  JobPreflight,
   JobQueueOptions,
   JobRecord,
   JobState,
@@ -249,6 +250,7 @@ export class JobQueue {
   readonly #database: DatabaseSync;
   readonly #concurrency: number;
   readonly #overviewSources: JobOverviewSources;
+  readonly #preflight: JobPreflight | undefined;
   readonly #executors = new Map<string, JobExecutor>();
   readonly #listeners = new Set<JobChangeListener>();
   readonly #active = new Map<string, ActiveJob>();
@@ -258,10 +260,12 @@ export class JobQueue {
     database: DatabaseSync,
     concurrency: number,
     overviewSources: JobOverviewSources,
+    preflight: JobPreflight | undefined,
   ) {
     this.#database = database;
     this.#concurrency = concurrency;
     this.#overviewSources = overviewSources;
+    this.#preflight = preflight;
   }
 
   public static open(
@@ -301,7 +305,12 @@ export class JobQueue {
       }
 
       return {
-        queue: new JobQueue(database, concurrency, options.overviewSources ?? {}),
+        queue: new JobQueue(
+          database,
+          concurrency,
+          options.overviewSources ?? {},
+          options.preflight,
+        ),
         recoveryNeeded: running.length > 0,
       };
     } catch (error: unknown) {
@@ -374,6 +383,29 @@ export class JobQueue {
     this.#ensureOpen();
     const row = this.#database.prepare("SELECT * FROM jobs WHERE id = ?").get(jobId);
     return row === undefined ? undefined : rowToJob(row);
+  }
+
+  /** Persist an executor checkpoint (for example a resumable provider handle). */
+  public checkpoint(jobId: string, payload: JsonValue): Result<JobRecord> {
+    this.#ensureOpen();
+    const job = this.get(jobId);
+    if (job === undefined) {
+      return jobFailure("E_JOB_NOT_FOUND", `Job ${jobId} does not exist.`, jobId);
+    }
+    if (job.state !== "running") {
+      return jobFailure(
+        "E_JOB_NOT_RUNNING",
+        `Job ${jobId} in state ${job.state} cannot record a checkpoint.`,
+        jobId,
+      );
+    }
+    this.#database.prepare("UPDATE jobs SET payload = ? WHERE id = ? AND state = 'running'")
+      .run(jsonText(payload), jobId);
+    const updated = this.get(jobId);
+    if (updated === undefined) {
+      return jobFailure("E_JOB_NOT_FOUND", `Job ${jobId} does not exist.`, jobId);
+    }
+    return success(updated);
   }
 
   public registerExecutor(kind: string, executor: JobExecutor): void {
@@ -706,6 +738,7 @@ export class JobQueue {
     active: ActiveJob,
   ): Promise<void> {
     try {
+      await this.#preflight?.(job);
       const result = await executor(job, {
         signal: active.controller.signal,
         reportProgress: (progress, etaSeconds) => {

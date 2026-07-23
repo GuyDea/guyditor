@@ -17,6 +17,7 @@ describe("loadSettings", () => {
     expect(loaded.settings.schema).toBe(1);
     expect(loaded.settings.general.reopenLastProject).toBe(true);
     expect(loaded.settings.network.externalCalls).toBe("ask");
+    expect(loaded.settings.rights.requirementLevel).toBe("warn");
     expect(loaded.settings.adapters.restyle.kling).toEqual({
       enabled: true,
       apiKeyRef: "apiKey",

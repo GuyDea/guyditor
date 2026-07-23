@@ -9,6 +9,7 @@ import type {
   GuyditorProject,
   SidecarRef,
 } from "../project/index.js";
+import type { RightsMetadata } from "../restyle/index.js";
 import type { ClipApplication } from "./clip.js";
 import type { OperationInput } from "./types.js";
 
@@ -130,6 +131,46 @@ function applyRemove(
   });
 }
 
+function applyRightsSet(
+  project: GuyditorProject,
+  input: OperationInput,
+): Result<ClipApplication> {
+  const assetId = input.params["assetId"] as string;
+  const index = project.assets.findIndex(({ id }) => id === assetId);
+  const current = project.assets[index];
+  if (current === undefined) {
+    return assetFailure("E_OP_NOT_FOUND", `Asset ${assetId} does not exist.`, [assetId]);
+  }
+  const incoming = input.params["rights"] as RightsMetadata | null;
+  const replacement = structuredClone(current);
+  if (incoming === null) delete replacement.rights;
+  else replacement.rights = structuredClone(incoming);
+  const assets = project.assets.slice();
+  assets[index] = replacement;
+  return success({
+    model: { ...project, assets },
+    inverse: [{
+      op: "asset.rights.set",
+      params: {
+        assetId,
+        rights: current.rights === undefined ? null : structuredClone(current.rights),
+      },
+    }],
+    affected: [assetId],
+    summary: `Set rights for ${assetId}`,
+    mutations: [{
+      entityId: assetId,
+      entityType: "asset",
+      change: "modified",
+      fields: [{
+        field: "rights",
+        ...(current.rights === undefined ? {} : { before: current.rights }),
+        ...(replacement.rights === undefined ? {} : { after: replacement.rights }),
+      }],
+    }],
+  });
+}
+
 interface TakeSidecarParam {
   path: string;
   sha256: string;
@@ -205,5 +246,6 @@ export function applyAssetOperation(
 ): Result<ClipApplication> {
   if (input.op === "asset.ingest") return applyIngest(project, input);
   if (input.op === "asset.remove") return applyRemove(project, input);
+  if (input.op === "asset.rights.set") return applyRightsSet(project, input);
   return applyTakeMetadata(project, input);
 }

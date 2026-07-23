@@ -10,6 +10,7 @@ import type {
   OperationInput,
   Proposal,
 } from "../../../core/src/index.js";
+import type { CritiqueRequest, CritiqueResult } from "../../src/adapters/types.js";
 
 interface GatewayStateFile {
   endpoint: string;
@@ -28,6 +29,8 @@ export interface StubDirectorOptions {
     maxCandidates?: number;
   };
   metadataDraft?: { deliverableId: string };
+  activeSkills?: boolean;
+  critic?: { adapterId: string; request: CritiqueRequest };
 }
 
 export interface StubDirectorResult {
@@ -38,6 +41,9 @@ export interface StubDirectorResult {
   status: Proposal;
   candidateResult?: unknown;
   metadataResult?: unknown;
+  activeSkillsResult?: unknown;
+  critiqueRequestResult?: CritiqueResult;
+  critiqueFetchedResult?: CritiqueResult | null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -104,6 +110,24 @@ export async function runStubDirector(
           name: "deliverable_metadata_draft",
           arguments: options.metadataDraft,
         }));
+    const activeSkillsResult = options.activeSkills !== true
+      ? undefined
+      : toolValue<unknown>(await client.callTool({
+          name: "active_skills_get",
+          arguments: {},
+        }));
+    const critiqueRequestResult = options.critic === undefined
+      ? undefined
+      : toolValue<CritiqueResult>(await client.callTool({
+          name: "critic_request",
+          arguments: options.critic,
+        }));
+    const critiqueFetchedResult = options.critic === undefined
+      ? undefined
+      : toolValue<CritiqueResult | null>(await client.callTool({
+          name: "critic_result_get",
+          arguments: { critiqueId: options.critic.request.critiqueId },
+        }));
     const context = toolValue<AnnotationContextPackage>(await client.callTool({
       name: "context_package",
       arguments: { annotationId: options.annotationId },
@@ -139,6 +163,9 @@ export async function runStubDirector(
       status,
       ...(candidateResult === undefined ? {} : { candidateResult }),
       ...(metadataResult === undefined ? {} : { metadataResult }),
+      ...(activeSkillsResult === undefined ? {} : { activeSkillsResult }),
+      ...(critiqueRequestResult === undefined ? {} : { critiqueRequestResult }),
+      ...(critiqueFetchedResult === undefined ? {} : { critiqueFetchedResult }),
     };
   } finally {
     await client.close();

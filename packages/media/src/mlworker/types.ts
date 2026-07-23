@@ -4,7 +4,7 @@ import type {
   Result,
 } from "../../../core/src/index.js";
 
-export type MlworkerTaskMethod = "align" | "track" | "transcribe" | "vad";
+export type MlworkerTaskMethod = "align" | "matte" | "track" | "transcribe" | "vad";
 
 export interface MlworkerCapability {
   task: string;
@@ -141,6 +141,35 @@ export interface MlworkerTrackResult {
   sampleEvery: number;
   samples: MlworkerTrackSample[];
   engine: { name: "mediapipe"; version: string };
+}
+
+export interface MlworkerMatteResult {
+  schema: "guyditor.matte/v1";
+  path: string;
+  format: "ffv1-gray-mkv";
+  sha256: string;
+  cacheKey: string;
+  source: {
+    path: string;
+    sha256: string;
+    frames: { from: number; to: number };
+  };
+  width: number;
+  height: number;
+  frameCount: number;
+  fps: string;
+  alpha: { minimum: number; maximum: number; nonZeroFrames: number };
+  engine: { name: "rvm"; version: string; model: "rvm_mobilenetv3" | "rvm_resnet50" };
+  params: {
+    model: "rvm_mobilenetv3" | "rvm_resnet50";
+    downsampleRatio: number;
+    stabilization: {
+      enabled: boolean;
+      alphaMin: number;
+      motionGain: number;
+      minSpeckleArea: number;
+    };
+  };
 }
 
 export type MlworkerError = GuyditorError;

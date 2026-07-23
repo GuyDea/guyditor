@@ -153,4 +153,38 @@ describe("asset operation catalog", () => {
       },
     });
   });
+
+  it("changes rights only through the journaled asset.rights.set operation", async () => {
+    const project = projectFixture();
+    const engine = new OperationEngine(project);
+    const rights = {
+      origin: "licensed" as const,
+      licenseName: "Envato Standard",
+      licensor: "Example contributor",
+      purchaseRef: "invoice-1001",
+      restrictions: ["single-project"],
+      confirmedBy: "creator" as const,
+      confirmedAt: "2026-07-23T10:00:00.000Z",
+    };
+
+    const result = await engine.execute([{
+      op: "asset.rights.set",
+      params: { assetId: "ast_aaaaaaaaaa", rights },
+    }], systemContext(project.revision));
+
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        riskClass: "normal",
+        applied: [{
+          op: "asset.rights.set",
+          inverse: [{
+            op: "asset.rights.set",
+            params: { assetId: "ast_aaaaaaaaaa", rights: null },
+          }],
+        }],
+      },
+    });
+    expect(engine.currentProject.assets[0]?.rights).toEqual(rights);
+  });
 });

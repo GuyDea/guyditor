@@ -444,4 +444,51 @@ describe("compileFiltergraph", () => {
     expect(command.filterComplex).toContain("blend=all_mode=screen");
     expect(command.filterComplex).toMatch(/overlay=.*\[vout\]/u);
   });
+
+  it("applies an accepted frozen neural matte with alphamerge and never invokes inference", () => {
+    const command = compileFiltergraph(graph(
+      "/tmp/source.mp4",
+      undefined,
+      false,
+      (project) => {
+        project.assets.push({
+          id: "ast_bbbbbbbbbb",
+          kind: "generated",
+          path: "/tmp/frozen-matte.mkv",
+          sha256: "b".repeat(64),
+          container: "matroska",
+          probe: { duration: { frames: 150, fps: "30/1" }, width: 1920, height: 1080, fps: "30/1" },
+          video: { codec: "ffv1", width: 1920, height: 1080, fps: "30/1", pixFmt: "gray", hasAlpha: false, rotation: 0 },
+          analyses: { matte: { sourceFrames: { from: 0, to: 149 } } },
+          provenance: { sidecar: "provenance-ast_bbbbbbbbbb" },
+        });
+        project.sequences[0]!.clips[0]!.effects = [{
+          id: "fx_bbbbbbbbbb",
+          kind: "key",
+          params: {
+            schema: "guyditor/key@1",
+            mode: "neural",
+            neural: {
+              model: "rvm_mobilenetv3",
+              matteAssetId: "ast_bbbbbbbbbb",
+              downsampleRatio: 0.5,
+              stabilization: { enabled: true, alphaMin: 0.35, motionGain: 4, minSpeckleArea: 0.00001 },
+            },
+            chroma: {
+              keyColor: "#00B140", tolerance: 0.35, softness: 0.12, preBlur: 1.5,
+              edge: { erodePx: 1, featherPx: 2 },
+              spill: { mode: "despill", strength: 0.6 },
+            },
+            masks: [],
+          },
+        }];
+      },
+    ), "/tmp/neural.mp4");
+
+    expect(command.args).toEqual(expect.arrayContaining(["-i", "/tmp/frozen-matte.mkv"]));
+    expect(command.filterComplex).toContain("format=gray");
+    expect(command.filterComplex).toContain("alphamerge");
+    expect(command.filterComplex).toContain("despill=type=green:mix=0.6:expand=0.3");
+    expect(command.filterComplex).not.toMatch(/rvm|matte\.generate|mlworker/iu);
+  });
 });

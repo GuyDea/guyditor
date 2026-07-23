@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
@@ -7,6 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { MlworkerSupervisor } from "./supervisor.js";
 import type {
   MlworkerAlignResult,
+  MlworkerMatteResult,
   MlworkerTranscribeResult,
   MlworkerTrackResult,
   MlworkerVadResult,
@@ -18,13 +20,15 @@ const WORKER_ROOT = path.join(REPOSITORY_ROOT, "workers/mlworker");
 const PYTHON = path.join(WORKER_ROOT, ".venv/bin/python");
 const FIXTURE = path.join(REPOSITORY_ROOT, ".fixtures/speech-48k-20s.wav");
 const TRACK_FIXTURE = path.join(REPOSITORY_ROOT, ".fixtures/disc-track-720p30-8s.mp4");
+const MATTE_FIXTURE = path.join(REPOSITORY_ROOT, ".fixtures/greenscreen-720p30-6s.mp4");
 const MANIFEST = path.join(REPOSITORY_ROOT, ".fixtures/manifest.json");
 const TRANSCRIPT_FIXTURE = path.join(
   REPOSITORY_ROOT,
   ".fixtures/transcripts/short-exact.json",
 );
 const AVAILABLE = existsSync(PYTHON) && existsSync(FIXTURE) &&
-  existsSync(TRACK_FIXTURE) && existsSync(MANIFEST) && existsSync(TRANSCRIPT_FIXTURE);
+  existsSync(TRACK_FIXTURE) && existsSync(MATTE_FIXTURE) &&
+  existsSync(MANIFEST) && existsSync(TRANSCRIPT_FIXTURE);
 const suiteName = AVAILABLE
   ? "mlworker real-process contract"
   : "mlworker real-process contract (skipped: run workers/mlworker/setup.sh and pnpm fixtures)";
@@ -34,11 +38,12 @@ afterEach(async () => {
   await Promise.all(supervisors.splice(0).map(async (supervisor) => supervisor.stop()));
 });
 
-function realSupervisor(disable?: string): MlworkerSupervisor {
+function realSupervisor(disable?: string, extraEnv: NodeJS.ProcessEnv = {}): MlworkerSupervisor {
   const supervisor = new MlworkerSupervisor({
     env: {
       GUYDITOR_ML_MODEL_DIR: path.join(REPOSITORY_ROOT, ".guyditor/ml-models"),
       ...(disable === undefined ? {} : { GUYDITOR_ML_DISABLE: disable }),
+      ...extraEnv,
     },
   });
   supervisors.push(supervisor);
@@ -149,6 +154,55 @@ describe.skipIf(!AVAILABLE)(suiteName, () => {
     if (!hello.ok) throw new Error(hello.error.message);
     expect(hello.value.capabilities.some(({ task }) => task === "track")).toBe(false);
   });
+
+  it("produces a schema-valid FFV1 matte with alpha presence on the greenscreen fixture", async () => {
+    const outputDirectory = await mkdtemp(path.join(tmpdir(), "guyditor-matte-contract-"));
+    try {
+      const supervisor = realSupervisor(undefined, { GUYDITOR_RVM_TEST_STUB: "1" });
+      const hello = await supervisor.start();
+      expect(hello.ok).toBe(true);
+      if (!hello.ok) throw new Error(hello.error.message);
+      expect(hello.value.capabilities).toContainEqual({
+        task: "matte",
+        engine: "rvm",
+        engineVersion: "contract-stub-1",
+        models: ["rvm_mobilenetv3", "rvm_resnet50"],
+      });
+      const progress: number[] = [];
+      const response = await supervisor.runTask("matte", {
+        taskId: "job_mattecase2",
+        input: {
+          path: MATTE_FIXTURE,
+          frames: { from: 0, to: 5 },
+          fps: "30/1",
+          shotBoundaries: [3],
+        },
+        params: {
+          model: "rvm_mobilenetv3",
+          downsampleRatio: 0.5,
+          stabilization: { enabled: true, alphaMin: 0.35, motionGain: 4, minSpeckleArea: 0.00001 },
+        },
+        output: { dir: outputDirectory, format: "ffv1-gray-mkv" },
+      }, { onProgress: ({ progress: value }) => progress.push(value) });
+      expect(response.ok).toBe(true);
+      if (!response.ok) throw new Error(response.error.message);
+      const result = response.value as unknown as MlworkerMatteResult;
+      expect(result).toMatchObject({
+        schema: "guyditor.matte/v1",
+        format: "ffv1-gray-mkv",
+        frameCount: 6,
+        fps: "30/1",
+        engine: { name: "rvm", model: "rvm_mobilenetv3", version: "contract-stub-1" },
+        alpha: { nonZeroFrames: 6 },
+      });
+      expect(result.alpha.minimum).toBeLessThan(result.alpha.maximum);
+      expect(result.sha256).toMatch(/^[0-9a-f]{64}$/u);
+      expect((await stat(result.path)).size).toBeGreaterThan(0);
+      expect(progress.at(-1)).toBe(1);
+    } finally {
+      await rm(outputDirectory, { recursive: true, force: true });
+    }
+  }, 60_000);
 
   it("detects manifest silence boundaries within 150 ms", async () => {
     const manifest = JSON.parse(await readFile(MANIFEST, "utf8")) as {

@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   analyzeKeyQcFrame,
+  applyFrozenMatteAlpha,
   buildKeyQcReport,
   keyQcSampleFrames,
   type RgbaFrame,
@@ -27,6 +28,16 @@ describe("key QC", () => {
   it("samples every twelfth frame plus five frames after shot boundaries", () => {
     expect(keyQcSampleFrames(31, [10, 29])).toEqual([
       0, 10, 11, 12, 13, 14, 24, 29, 30,
+    ]);
+  });
+
+  it("uses frozen grayscale matte samples as the keyed alpha for neural QC", () => {
+    const source = frame(2, 1, () => [120, 100, 80, 255]);
+    const matte = frame(2, 1, (x) => x === 0 ? [0, 0, 0, 255] : [193, 193, 193, 255]);
+    const keyed = applyFrozenMatteAlpha(source, matte);
+    expect([...keyed.data]).toEqual([
+      120, 100, 80, 0,
+      120, 100, 80, 193,
     ]);
   });
 

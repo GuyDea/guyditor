@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -20,6 +20,8 @@ import { projectFixture } from "../../core/src/project/test-fixtures.js";
 import { runStubDirector } from "../test/stub-director/index.js";
 import { AuditLog } from "./audit-log.js";
 import { AgentGateway } from "./gateway.js";
+import { SkillRegistry } from "./skills/index.js";
+import type { ResolvedSkill } from "./skills/index.js";
 
 const EMPTY_ANNOTATIONS = "format: guyditor.annotations/v1\nannotations: []\n";
 const temporaryDirectories: string[] = [];
@@ -50,6 +52,7 @@ async function annotatedProject(): Promise<ProjectStore> {
   const root = await mkdtemp(join(tmpdir(), "guyditor-gateway-project-"));
   temporaryDirectories.push(root);
   const model = projectFixture();
+  model.skills = [];
   model.sidecars[0]!.inputs = [];
   model.sidecars[0]!.sha256 = createHash("sha256")
     .update(EMPTY_ANNOTATIONS)
@@ -369,5 +372,189 @@ describe("AgentGateway", () => {
       expect.objectContaining({ type: "tool.call", tool: "deliverable_metadata_draft" }),
       expect.objectContaining({ type: "tool.result", tool: "deliverable_metadata_draft", ok: true }),
     ]));
+  });
+
+  it("lets the director request and fetch advisory critic findings before translating them into a proposal", async () => {
+    const store = await annotatedProject();
+    const userDirectory = await mkdtemp(join(tmpdir(), "guyditor-critic-gateway-user-"));
+    temporaryDirectories.push(userDirectory);
+    const audit = new AuditLog({ userDir: userDirectory });
+    const { queue: jobs } = JobQueue.open(":memory:");
+    const critique = {
+      critiqueId: "crt_aaaaaaaaaa",
+      adapterId: "adp_4444444444",
+      model: "stub-critic-v1",
+      findings: [{
+        id: "cut-density",
+        severity: "minor" as const,
+        range: { durationSeconds: 10 },
+        observation: "Measured cut density is 0.7 cuts/second.",
+        suggestion: "Review whether each cut preserves legibility.",
+      }],
+      rawCostUnits: { seconds: 10 },
+    };
+    let calls = 0;
+    const gateway = new AgentGateway({
+      auditLog: audit,
+      jobQueue: jobs,
+      project: store,
+      stateDirectory: join(userDirectory, "state"),
+      sessionIdFactory: () => "ses_bbbbbbbbbb",
+      criticExecution: {
+        request: () => {
+          calls += 1;
+          return Promise.resolve({ ok: true, value: critique });
+        },
+        get: (critiqueId) => Promise.resolve(critiqueId === critique.critiqueId ? critique : undefined),
+      },
+    });
+    const started = await gateway.start();
+    try {
+      const result = await runStubDirector({
+        annotationId: "ann_bbbbbbbbbb",
+        clipId: "clp_aaaaaaaaaa",
+        gatewayStateFile: started.stateFile,
+        critic: {
+          adapterId: "adp_4444444444",
+          request: {
+            critiqueId: "crt_aaaaaaaaaa",
+            subject: {
+              deliverableId: "dlv_aaaaaaaaaa",
+              proxyFile: { path: ".guyditor/cache/proxies/ast_aaaaaaaaaa.mp4" },
+              range: { durationSeconds: 10 },
+            },
+            rubric: [{ id: "pacing", source: "inline", text: "Keep the opening legible." }],
+            questions: ["Is the promise legible?"],
+          },
+        },
+      });
+      expect(result.tools).toEqual(expect.arrayContaining(["critic_request", "critic_result_get"]));
+      expect(result.critiqueRequestResult).toEqual(critique);
+      expect(result.critiqueFetchedResult).toEqual(critique);
+      expect(calls).toBe(1);
+      expect(result.proposal.status).toBe("ready");
+    } finally {
+      await gateway.close();
+      jobs.close();
+    }
+    expect(audit.readSession("ses_bbbbbbbbbb").records).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "tool.call", tool: "critic_request" }),
+      expect.objectContaining({ type: "tool.call", tool: "critic_result_get" }),
+    ]));
+  });
+
+  it("returns verified pinned skill content and resolves skill automation rules for a director session", async () => {
+    const store = await annotatedProject();
+    const userDirectory = await mkdtemp(join(tmpdir(), "guyditor-skills-gateway-user-"));
+    temporaryDirectories.push(userDirectory);
+    const audit = new AuditLog({ userDir: userDirectory });
+    const { queue: jobs } = JobQueue.open(":memory:");
+    const skills: ResolvedSkill[] = [{
+      manifest: {
+        id: "skl_aaaaaaaaaa",
+        name: "quiet-cuts",
+        version: "1.0.0",
+        title: "Quiet cuts",
+        categories: ["framing_cuts"],
+        summary: "Keep creator-approved cut behavior explicit.",
+        rules: [{
+          id: "rule_aaaaaaaaaa",
+          category: "framing_cuts",
+          strength: "must",
+          text: "Allow transcript.word.correct but avoid clip.trim.",
+        }],
+        examples: { approved: [], rejected: [] },
+        contentHash: "a".repeat(64),
+      },
+      body: "# Quiet cuts\n\nUse only creator-approved corrections.",
+      presetReferences: [],
+    }];
+    const gateway = new AgentGateway({
+      auditLog: audit,
+      jobQueue: jobs,
+      project: store,
+      stateDirectory: join(userDirectory, "state"),
+      policySnapshot: {
+        automation: {
+          enabled: true,
+          maxRisk: "low",
+          allowedOperations: ["clip.trim"],
+          maxOpsPerProposal: 2,
+          maxAutoAcceptsPerSession: 3,
+          notify: "toast",
+        },
+      },
+      sessionIdFactory: () => "ses_bbbbbbbbbb",
+      skillRegistry: {
+        pinned: () => Promise.resolve(skills),
+        resolveAutomationPolicy: (policy) => ({
+          ...policy,
+          allowedOperations: ["transcript.word.correct"],
+        }),
+      },
+    });
+    const started = await gateway.start();
+    try {
+      const result = await runStubDirector({
+        annotationId: "ann_bbbbbbbbbb",
+        clipId: "clp_aaaaaaaaaa",
+        gatewayStateFile: started.stateFile,
+        activeSkills: true,
+      });
+      expect(result.tools).toContain("active_skills_get");
+      expect(result.activeSkillsResult).toEqual(skills);
+    } finally {
+      await gateway.close();
+      jobs.close();
+    }
+    const start = audit.readSession("ses_bbbbbbbbbb").records.find(
+      ({ type }) => type === "session.start",
+    );
+    expect(start).toMatchObject({
+      policySnapshot: {
+        automation: { allowedOperations: ["transcript.word.correct"] },
+      },
+    });
+  });
+
+  it("rejects a corrupted skill pin before opening the gateway", async () => {
+    const store = await annotatedProject();
+    const userDirectory = await mkdtemp(join(tmpdir(), "guyditor-corrupt-skill-user-"));
+    const source = await mkdtemp(join(tmpdir(), "guyditor-corrupt-skill-source-"));
+    temporaryDirectories.push(userDirectory);
+    temporaryDirectories.push(source);
+    await mkdir(join(source, "examples"));
+    await writeFile(join(source, "SKILL.md"), "# Verified context\n", "utf8");
+    await writeFile(join(source, "skill.yaml"), [
+      "format: guyditor-skill/v1",
+      "id: skl_aaaaaaaaaa",
+      "name: verified-context",
+      "version: 1.0.0",
+      "title: Verified context",
+      "categories: [pacing]",
+      "summary: Verify before every director session.",
+      "rules: []",
+      "examples: { approved: [], rejected: [] }",
+      "body: SKILL.md",
+      "",
+    ].join("\n"), "utf8");
+    const registry = new SkillRegistry({ globalRoot: join(userDirectory, "skills") });
+    await registry.publish(source);
+    await registry.associateProject(store, "skl_aaaaaaaaaa", "1.0.0");
+    await writeFile(
+      join(store.root, "skills/verified-context/1.0.0/SKILL.md"),
+      "# Corrupted context\n",
+      "utf8",
+    );
+    const audit = new AuditLog({ userDir: userDirectory });
+    const { queue: jobs } = JobQueue.open(":memory:");
+    const gateway = new AgentGateway({
+      auditLog: audit,
+      jobQueue: jobs,
+      project: store,
+      stateDirectory: join(userDirectory, "state"),
+    });
+    await expect(gateway.start()).rejects.toMatchObject({ code: "E_SKILL_HASH" });
+    jobs.close();
   });
 });

@@ -1319,6 +1319,24 @@ function applyKeySet(
   if (settings !== null) {
     const supported = validateDespill(settings, clipId);
     if (!supported.ok) return supported;
+    if (settings.mode === "neural") {
+      const matteAssetId = settings.neural?.matteAssetId;
+      const matte = project.assets.find(({ id }) => id === matteAssetId);
+      const provenance = project.sidecars.find(({ name }) => name === matte?.provenance?.sidecar);
+      if (
+        matteAssetId === undefined || matte === undefined || matte.kind !== "generated" ||
+        matte.provenance === undefined || provenance?.schema !== "guyditor.provenance/v1"
+      ) {
+        return failure(makeGuyditorError(
+          "E_MATTE_UNFROZEN",
+          `Neural key on ${clipId} requires an accepted frozen matte asset with provenance.`,
+          {
+            affected: [clipId, ...(matteAssetId === undefined ? [] : [matteAssetId])],
+            suggestion: "Generate a matte candidate and accept it before applying the neural key.",
+          },
+        ));
+      }
+    }
   }
   const prior = keyEffect(located.clip);
   const effects = [...(located.clip.effects ?? [])];

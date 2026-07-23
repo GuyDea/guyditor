@@ -1,6 +1,9 @@
 import type {
   AdapterUserConfig,
+  BrollProviderAdapter,
+  CriticAdapter,
   ProviderAdapter,
+  RegisteredAdapter,
   RestyleAdapter,
 } from "./types.js";
 
@@ -22,26 +25,47 @@ function assertNonSecret(value: unknown, path = "config"): void {
 }
 
 export class AdapterRegistry {
-  readonly #byId = new Map<string, ProviderAdapter>();
+  readonly #byId = new Map<string, RegisteredAdapter>();
   readonly #byName = new Map<string, ProviderAdapter>();
   readonly #configuration = new Map<string, AdapterUserConfig>();
 
-  public register(adapter: ProviderAdapter): void {
-    const { adapterId, canonicalName } = adapter.descriptor;
-    if (this.#byId.has(adapterId) || this.#byName.has(canonicalName)) {
-      throw new Error(`Adapter ${adapterId}/${canonicalName} is already registered.`);
+  public register(adapter: RegisteredAdapter): void {
+    const adapterId = "descriptor" in adapter ? adapter.descriptor.adapterId : adapter.id;
+    const canonicalName = "descriptor" in adapter
+      ? adapter.descriptor.canonicalName
+      : undefined;
+    if (this.#byId.has(adapterId) || (canonicalName !== undefined && this.#byName.has(canonicalName))) {
+      throw new Error(`Adapter ${adapterId}${canonicalName === undefined ? "" : `/${canonicalName}`} is already registered.`);
     }
     this.#byId.set(adapterId, adapter);
-    this.#byName.set(canonicalName, adapter);
+    if (canonicalName !== undefined && "descriptor" in adapter) {
+      this.#byName.set(canonicalName, adapter);
+    }
   }
 
-  public resolve(idOrCanonicalName: string): ProviderAdapter | undefined {
+  public resolve(idOrCanonicalName: string): RegisteredAdapter | undefined {
     return this.#byId.get(idOrCanonicalName) ?? this.#byName.get(idOrCanonicalName);
   }
 
   public resolveRestyle(idOrCanonicalName: string): RestyleAdapter | undefined {
     const adapter = this.resolve(idOrCanonicalName);
-    return adapter !== undefined && "restyle" in adapter ? adapter : undefined;
+    return adapter !== undefined && "descriptor" in adapter && "restyle" in adapter
+      ? adapter
+      : undefined;
+  }
+
+  public resolveGeneration(idOrCanonicalName: string): BrollProviderAdapter | undefined {
+    const adapter = this.resolve(idOrCanonicalName);
+    return adapter !== undefined && "descriptor" in adapter && "submit" in adapter
+      ? adapter
+      : undefined;
+  }
+
+  public resolveCritic(adapterId: string): CriticAdapter | undefined {
+    const adapter = this.#byId.get(adapterId);
+    return adapter !== undefined && "kind" in adapter && adapter.kind === "critic"
+      ? adapter
+      : undefined;
   }
 
   public configure(adapterId: string, config: AdapterUserConfig): void {
@@ -57,8 +81,44 @@ export class AdapterRegistry {
 
   public restyleAdapters(): RestyleAdapter[] {
     return [...this.#byId.values()]
-      .filter((adapter): adapter is RestyleAdapter => "restyle" in adapter)
+      .filter((adapter): adapter is RestyleAdapter =>
+        "descriptor" in adapter && "restyle" in adapter)
       .sort((left, right) =>
         left.descriptor.canonicalName.localeCompare(right.descriptor.canonicalName));
+  }
+
+  public generationAdapters(): BrollProviderAdapter[] {
+    return [...this.#byId.values()]
+      .filter((adapter): adapter is BrollProviderAdapter =>
+        "descriptor" in adapter && "submit" in adapter)
+      .sort((left, right) =>
+        left.descriptor.canonicalName.localeCompare(right.descriptor.canonicalName));
+  }
+
+  public generationAvailability(idOrCanonicalName: string): {
+    available: boolean;
+    reason?: string;
+  } {
+    const adapter = this.resolveGeneration(idOrCanonicalName);
+    if (adapter === undefined) {
+      return {
+        available: false,
+        reason: `Generation adapter ${idOrCanonicalName} is not installed.`,
+      };
+    }
+    if (adapter.descriptor.availability === "declared-unavailable") {
+      return {
+        available: false,
+        reason: adapter.descriptor.unavailableReason ??
+          `Generation adapter ${adapter.descriptor.adapterId} is unavailable.`,
+      };
+    }
+    return { available: true };
+  }
+
+  public criticAdapters(): CriticAdapter[] {
+    return [...this.#byId.values()]
+      .filter((adapter): adapter is CriticAdapter => "kind" in adapter && adapter.kind === "critic")
+      .sort((left, right) => left.id.localeCompare(right.id));
   }
 }

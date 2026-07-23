@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import type { Deliverable, PublishMetadataDocument } from "../../../../core/src/index.js";
-import type { PlatformProfile } from "../../../../deliver/src/index.js";
+import type { OtioLoss, PlatformProfile } from "../../../../deliver/src/index.js";
 import { errorMessage } from "../ipc.js";
 import { useSelectionStore } from "../state/view-state.js";
 import { Panel } from "./Panel.js";
@@ -37,6 +37,9 @@ export function PublishPanel({ snapshot, refreshProject, refreshExportReport, se
     .filter(({ status }) => status === "approved")
     .map(({ id }) => id));
   const [buildKits, setBuildKits] = useState(true);
+  const [otioLosses, setOtioLosses] = useState<OtioLoss[] | null>(null);
+  const [otioMediaPaths, setOtioMediaPaths] = useState<"absolute" | "relative">("relative");
+  const [otioAnnotations, setOtioAnnotations] = useState(false);
   const profile = profiles.find(({ id, version }) => `${id}@${version}` === deliverable?.profile);
 
   useEffect(() => {
@@ -66,6 +69,13 @@ export function PublishPanel({ snapshot, refreshProject, refreshExportReport, se
       setNotice(errorMessage(error));
     }
   }
+
+  const otioParams = {
+    deliverableId: deliverable?.id ?? "",
+    mediaPaths: otioMediaPaths,
+    includeBeatsAsMarkers: true,
+    includeAnnotationsAsMarkers: otioAnnotations,
+  };
 
   function edit<Key extends keyof PublishMetadataDocument>(key: Key, value: PublishMetadataDocument[Key]): void {
     setMetadata((current) => current === null ? current : { ...current, [key]: value });
@@ -160,6 +170,23 @@ export function PublishPanel({ snapshot, refreshProject, refreshExportReport, se
             <button type="button" className="primary-action" onClick={() => void run("Export output set", () => window.guyditor.call("DeliverableService", "renderOutputSet", { deliverableId: deliverable.id }))}>Export output set</button>
             <button type="button" onClick={() => void run("Build upload kit", () => window.guyditor.call("DeliverableService", "buildKit", { deliverableId: deliverable.id }))}>Build upload kit</button>
             <button type="button" onClick={() => void run("Write text exports", () => window.guyditor.call("DeliverableService", "writeTextExports", { deliverableId: deliverable.id, targets: deliverable.kind === "longform" ? ["transcript", "chapters", "metadata"] : ["transcript", "metadata"] }))}>Text exports</button>
+          </div>
+        </section>
+
+        <section className="publish-section" aria-label="OpenTimelineIO interchange">
+          <header><strong>OpenTimelineIO interchange</strong><span>one-way · derived</span></header>
+          <p>Review the canonical-only losses before writing the non-canonical .otio timeline.</p>
+          <div className="publish-actions">
+            <label>Media paths<select value={otioMediaPaths} onChange={(event) => setOtioMediaPaths(event.target.value === "absolute" ? "absolute" : "relative")}><option value="relative">Relative</option><option value="absolute">Absolute file URLs</option></select></label>
+            <label><input type="checkbox" checked={otioAnnotations} onChange={(event) => setOtioAnnotations(event.target.checked)} />Include private review annotations as markers</label>
+          </div>
+          {otioLosses === null ? null : <ul className="output-contents">{otioLosses.map((loss) => <li key={loss.construct}><strong>{loss.construct}</strong> · {loss.disposition} ({loss.ids.length})</li>)}</ul>}
+          <div className="publish-actions">
+            <button type="button" onClick={() => void run("Review OTIO losses", async () => {
+              const preview = await window.guyditor.call<{ losses: OtioLoss[] }>("DeliverableService", "previewOtioExport", otioParams);
+              setOtioLosses(preview.losses);
+            })}>Review OTIO losses</button>
+            <button type="button" className="primary-action" disabled={otioLosses === null} onClick={() => void run("Export .otio", () => window.guyditor.call("DeliverableService", "exportOtio", otioParams))}>Export .otio</button>
           </div>
         </section>
 

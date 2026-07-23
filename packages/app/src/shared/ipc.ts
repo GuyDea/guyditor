@@ -15,7 +15,8 @@ export type ServiceName =
   | "ProjectStore" | "OperationEngine" | "MediaEngine" | "TranscriptEngine"
   | "CompositorModel" | "RenderService" | "JobQueue" | "AgentGateway"
   | "AuditLog" | "CostMeter" | "BackupService" | "DeliverableService"
-  | "AnnotationService" | "SkillRegistry" | "AdapterRegistry" | "CaptureWatcher";
+  | "AnnotationService" | "SkillRegistry" | "AdapterRegistry" | "CaptureWatcher"
+  | "GenerationService";
 
 export interface IpcRequest {
   v: 1;

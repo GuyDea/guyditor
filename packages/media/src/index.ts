@@ -1,6 +1,19 @@
 export { resolveFfmpeg, resolveFfprobe } from "./binaries.js";
 export { subjectTrackAvoidRegions } from "./subject-avoidance.js";
 export {
+  derivePromptSynthesis,
+  isBrollSourceClass,
+  resolveBrollSourcePath,
+  synthesizePromptClip,
+} from "./broll.js";
+export type {
+  BrollSourcePathRequest,
+  PromptSynthesisParameters,
+  ResolvedBrollSourcePath,
+  SynthesizedPromptClip,
+  SynthesizePromptClipInput,
+} from "./broll.js";
+export {
   CAPTURE_STABILITY_POLICY,
   CaptureWatcher,
   parseCaptureFilename,
@@ -17,6 +30,46 @@ export type {
   CacheUseEstimate,
   ProjectedProxySize,
 } from "./cache.js";
+export {
+  StorageAccountant,
+  createStoragePreflight,
+} from "./storage.js";
+export {
+  BackupService,
+  BackupScheduler,
+  DEFAULT_BACKUP_CONFIG_YAML,
+} from "./backup.js";
+export { ArchiveService } from "./archive.js";
+export type {
+  ArchiveEntry,
+  ArchiveManifest,
+  ArchivePlan,
+  ArchivePlanEntry,
+} from "./archive.js";
+export type {
+  BackupConfig,
+  BackupListEntry,
+  BackupManifest,
+  BackupManifestEntry,
+  BackupManifestRole,
+  BackupTarget,
+  BackupTargetKind,
+  EnvironmentBundleManifest,
+  EnvironmentImportReport,
+  RestoreTestReport,
+  VerificationReport,
+} from "./backup.js";
+export type {
+  CleanupPlan,
+  EstimatableOperation,
+  GlobalStorageReport,
+  JobRef as StorageJobRef,
+  RenderResolution,
+  StorageCategory,
+  StorageEstimate,
+  StoragePreflightRequest,
+  StorageReport,
+} from "./storage.js";
 export {
   buildCaptureGuidanceReport,
   writeCaptureGuidanceReport,
@@ -170,6 +223,7 @@ export type {
   MlworkerDevice,
   MlworkerError,
   MlworkerHello,
+  MlworkerMatteResult,
   MlworkerProgress,
   MlworkerRunOptions,
   MlworkerSegment,
@@ -186,3 +240,9 @@ export type {
   MlworkerVadResult,
   MlworkerWord,
 } from "./mlworker/types.js";
+export { deriveTakeMetrics } from "./take-metrics.js";
+export type {
+  TakeDeliveryMetrics,
+  TakeMetricSignals,
+  TakeTechnicalMetrics,
+} from "./take-metrics.js";

@@ -1,0 +1,35 @@
+{
+  "$id": "guyditor:op/key.matte.generate",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["clipId", "neural"],
+  "additionalProperties": false,
+  "properties": {
+    "clipId": { "type": "string", "pattern": "^clp_[a-z2-7]{10}$" },
+    "neural": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model", "downsampleRatio", "stabilization"],
+      "properties": {
+        "model": { "enum": ["rvm_mobilenetv3", "rvm_resnet50"] },
+        "downsampleRatio": { "type": "number", "minimum": 0.1, "maximum": 1 },
+        "stabilization": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["enabled", "alphaMin", "motionGain", "minSpeckleArea"],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "alphaMin": { "type": "number", "minimum": 0, "maximum": 1 },
+            "motionGain": { "type": "number", "minimum": 0 },
+            "minSpeckleArea": { "type": "number", "minimum": 0, "maximum": 1 }
+          }
+        }
+      }
+    },
+    "shotBoundaries": {
+      "type": "array",
+      "items": { "type": "integer", "minimum": 0 },
+      "uniqueItems": true
+    }
+  }
+}

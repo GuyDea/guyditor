@@ -1,12 +1,13 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { AnnotationService, createProject, OperationEngine } from "../../../core/src/index.js";
+import { AnnotationService, createProject, JobQueue, OperationEngine } from "../../../core/src/index.js";
 import type { JobOverview, Proposal, Result } from "../../../core/src/index.js";
 import { projectFixture } from "../../../core/src/project/test-fixtures.js";
 import { TranscriptEngine } from "../../../transcript/src/index.js";
+import { SkillRegistry } from "../../../agent/src/index.js";
 import { describe, expect, it } from "vitest";
 
 import type { GdEvent } from "../shared/ipc.js";
@@ -14,6 +15,229 @@ import { WindowEventPublisher } from "./events.js";
 import { AppServiceHost } from "./service-host.js";
 
 describe("AppServiceHost", () => {
+  it("freezes an accepted matte candidate as a read-only generated asset with provenance", async () => {
+    const root = await mkdtemp(join(tmpdir(), "guyditor-host-matte-"));
+    const userDirectory = await mkdtemp(join(tmpdir(), "guyditor-host-matte-user-"));
+    const model = projectFixture();
+    const created = await createProject(root, model);
+    if (!created.ok) throw created.error;
+    const candidatePath = join(root, ".guyditor", "cache", "mattes", "candidate.mkv");
+    await mkdir(join(root, ".guyditor", "cache", "mattes"), { recursive: true });
+    const candidateBytes = Buffer.from("deterministic frozen matte fixture");
+    await writeFile(candidatePath, candidateBytes);
+    const candidateSha = createHash("sha256").update(candidateBytes).digest("hex");
+    const { queue } = JobQueue.open(join(root, ".guyditor", "jobs.sqlite"));
+    queue.registerExecutor("matte", async (job) => ({
+      clipId: "clp_aaaaaaaaaa",
+      sourceAssetId: "ast_aaaaaaaaaa",
+      jobId: job.jobId,
+      schema: "guyditor.matte/v1",
+      path: candidatePath,
+      format: "ffv1-gray-mkv",
+      sha256: candidateSha,
+      cacheKey: "c".repeat(64),
+      source: {
+        path: join(root, "media", "a.mov"),
+        sha256: model.assets[0]!.sha256,
+        frames: { from: 0, to: 23 },
+      },
+      width: 1920,
+      height: 1080,
+      frameCount: 24,
+      fps: "24/1",
+      alpha: { minimum: 0, maximum: 255, nonZeroFrames: 24 },
+      engine: { name: "rvm", version: "torchscript-fixture", model: "rvm_mobilenetv3" },
+      params: {
+        model: "rvm_mobilenetv3",
+        downsampleRatio: 0.5,
+        stabilization: { enabled: true, alphaMin: 0.35, motionGain: 4, minSpeckleArea: 0.00001 },
+      },
+    }));
+    const queued = queue.enqueue({
+      kind: "matte",
+      title: "Generate neural matte for clp_aaaaaaaaaa",
+      cancellable: true,
+      payload: { clipId: "clp_aaaaaaaaaa" },
+    });
+    const deadline = Date.now() + 2_000;
+    while (queue.get(queued.jobId)?.state !== "done") {
+      if (Date.now() > deadline) throw new Error("Matte fixture job did not finish.");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    queue.close();
+
+    const appHost = testAppHost(userDirectory);
+    const windowHost = appHost.createWindowHost({
+      publisher: new WindowEventPublisher(() => undefined),
+    });
+    await windowHost.openProject(root);
+    const execute = windowHost.resolveService("OperationEngine")?.["execute"];
+    if (typeof execute !== "function") throw new Error("Operation engine is unavailable.");
+    await expect(Reflect.apply(execute, undefined, [{
+      operations: [{
+        op: "key.matte.generate",
+        params: {
+          clipId: "clp_aaaaaaaaaa",
+          neural: {
+            model: "rvm_mobilenetv3",
+            downsampleRatio: 0.5,
+            stabilization: { enabled: true, alphaMin: 0.35, motionGain: 4, minSpeckleArea: 0.00001 },
+          },
+        },
+      }],
+      intent: "direct",
+      label: "Generate unavailable matte",
+    }])).rejects.toMatchObject({ code: "E_MATTE_CAPABILITY_MISSING" });
+    const service = windowHost.resolveService("CompositorModel");
+    const candidates = service?.["matteCandidates"];
+    const accept = service?.["acceptMatteCandidate"];
+    if (typeof candidates !== "function" || typeof accept !== "function") {
+      throw new Error("Matte candidate service is unavailable.");
+    }
+    expect(Reflect.apply(candidates, service, [{ clipId: "clp_aaaaaaaaaa" }]))
+      .toMatchObject([{ jobId: queued.jobId, alpha: { maximum: 255 } }]);
+    const accepted = await Reflect.apply(accept, service, [{
+      clipId: "clp_aaaaaaaaaa",
+      jobId: queued.jobId,
+    }]) as { assetId: string; path: string };
+    const snapshot = windowHost.snapshot().master;
+    const asset = snapshot.assets.find(({ id }) => id === accepted.assetId);
+    expect(asset).toMatchObject({
+      kind: "generated",
+      sha256: candidateSha,
+      provenance: { sidecar: `provenance-${accepted.assetId}` },
+      analyses: { matte: { sourceFrames: { from: 0, to: 23 } } },
+    });
+    expect(snapshot.sequences[0]!.clips[0]!.effects).toContainEqual(expect.objectContaining({
+      kind: "key",
+      params: expect.objectContaining({
+        mode: "neural",
+        neural: expect.objectContaining({ matteAssetId: accepted.assetId }),
+      }),
+    }));
+    expect(await readFile(join(root, accepted.path))).toEqual(candidateBytes);
+    expect((await stat(join(root, accepted.path))).mode & 0o222).toBe(0);
+    expect(await readFile(join(root, `sidecars/provenance/${accepted.assetId}.provenance.json`), "utf8"))
+      .toContain('"sourceAssetId": "ast_aaaaaaaaaa"');
+    const historyText = await readFile(join(root, "history/transactions.jsonl"), "utf8");
+    expect(historyText).toContain('"op":"sidecar.register"');
+    expect(historyText).toContain('"op":"asset.ingest"');
+    expect(historyText).toContain('"op":"clip.key.set"');
+
+    await windowHost.close();
+    await appHost.close();
+  });
+
+  it("exposes storage scan and plan-then-execute cleanup through BackupService", async () => {
+    const root = await mkdtemp(join(tmpdir(), "guyditor-host-storage-"));
+    const userDirectory = await mkdtemp(join(tmpdir(), "guyditor-host-storage-user-"));
+    const created = await createProject(root, projectFixture());
+    if (!created.ok) throw created.error;
+    const cacheFile = join(root, ".guyditor/cache/analysis/disposable.bin");
+    await mkdir(join(root, ".guyditor/cache/analysis"), { recursive: true });
+    await writeFile(cacheFile, "disposable");
+    const appHost = testAppHost(userDirectory);
+    const windowHost = appHost.createWindowHost({
+      publisher: new WindowEventPublisher(() => undefined),
+    });
+    await windowHost.openProject(root);
+
+    const service = windowHost.resolveService("BackupService");
+    const scan = service?.["scan"];
+    const planCleanup = service?.["planCleanup"];
+    const executeCleanup = service?.["executeCleanup"];
+    if (typeof scan !== "function" || typeof planCleanup !== "function" ||
+        typeof executeCleanup !== "function") throw new Error("BackupService storage IPC is unavailable.");
+    await expect(Reflect.apply(scan, service, [{}])).resolves.toMatchObject({
+      categories: { caches: { bytes: 10, reclaimable: true } },
+    });
+    const plan = await Reflect.apply(planCleanup, service, [{ categories: ["caches"] }]);
+    await Reflect.apply(executeCleanup, service, [{ plan }]);
+    await expect(access(cacheFile)).rejects.toMatchObject({ code: "ENOENT" });
+
+    await windowHost.close();
+    await appHost.close();
+  });
+
+  it("routes take comparison through the persistent project job queue", async () => {
+    const source = await readFile(new URL("./take-comparison-service.ts", import.meta.url), "utf8");
+    expect(source).toContain('registerExecutor("assist.takes.compare"');
+    expect(source).toContain('kind: "assist.takes.compare"');
+  });
+
+  it("exposes the skill library, project pin, immutable upgrade, and version diff over IPC", async () => {
+    const root = await mkdtemp(join(tmpdir(), "guyditor-host-skills-"));
+    const userDirectory = await mkdtemp(join(tmpdir(), "guyditor-host-skills-user-"));
+    const model = projectFixture();
+    model.skills = [];
+    const created = await createProject(root, model);
+    if (!created.ok) throw created.error;
+    const registry = new SkillRegistry({ globalRoot: join(userDirectory, "skills") });
+    const source = await mkdtemp(join(tmpdir(), "guyditor-host-skill-source-"));
+    await mkdir(join(source, "examples"));
+    const manifest = (version: string, summary: string) => [
+      "format: guyditor-skill/v1",
+      "id: skl_aaaaaaaaaa",
+      "name: exact-pacing",
+      `version: ${version}`,
+      "title: Exact pacing",
+      "categories: [pacing]",
+      `summary: ${summary}`,
+      "rules:",
+      "  - id: rule_pacing",
+      "    category: pacing",
+      "    strength: prefer",
+      "    text: Keep deliberate pauses.",
+      "examples:",
+      "  approved: []",
+      "  rejected: []",
+      "body: SKILL.md",
+      "",
+    ].join("\n");
+    await writeFile(join(source, "skill.yaml"), manifest("1.0.0", "Original cadence."), "utf8");
+    await writeFile(join(source, "SKILL.md"), "# Exact pacing\n", "utf8");
+    await registry.publish(source);
+    await writeFile(join(source, "skill.yaml"), manifest("2.0.0", "Refined cadence."), "utf8");
+    await registry.publish(source);
+
+    const events: GdEvent[] = [];
+    const appHost = testAppHost(userDirectory);
+    const windowHost = appHost.createWindowHost({
+      publisher: new WindowEventPublisher((_channel, event) => events.push(event)),
+    });
+    await windowHost.openProject(root);
+    const service = windowHost.resolveService("SkillRegistry");
+    const list = service?.["list"];
+    const associate = service?.["associate"];
+    const pinned = service?.["pinned"];
+    const diff = service?.["diff"];
+    const upgrade = service?.["upgrade"];
+    if (
+      typeof list !== "function" || typeof associate !== "function" ||
+      typeof pinned !== "function" || typeof diff !== "function" ||
+      typeof upgrade !== "function"
+    ) throw new Error("SkillRegistry IPC is unavailable.");
+    expect(await Reflect.apply(list, service, [{ scope: "global" }])).toHaveLength(2);
+    await Reflect.apply(associate, service, [{ skillId: "skl_aaaaaaaaaa", version: "1.0.0" }]);
+    expect(await Reflect.apply(pinned, service, [{}])).toMatchObject([
+      { manifest: { version: "1.0.0" }, body: "# Exact pacing\n" },
+    ]);
+    expect(await Reflect.apply(diff, service, [{
+      skillId: "skl_aaaaaaaaaa",
+      fromVersion: "1.0.0",
+      toVersion: "2.0.0",
+    }])).toMatchObject({
+      metadata: { summary: { before: "Original cadence.", after: "Refined cadence." } },
+    });
+    await Reflect.apply(upgrade, service, [{ skillId: "skl_aaaaaaaaaa", version: "2.0.0" }]);
+    expect(windowHost.snapshot().master.skills).toMatchObject([{ version: "2.0.0" }]);
+    expect(events.filter(({ kind }) => kind === "project.revision")).toHaveLength(2);
+    expect(await readFile(join(root, "history/transactions.jsonl"), "utf8"))
+      .toContain('"op":"skill.pin.set"');
+    await windowHost.close();
+    await appHost.close();
+  });
+
   it("exposes a non-secret Kling registry entry and review-gates restyle plans", async () => {
     const root = await mkdtemp(join(tmpdir(), "guyditor-host-restyle-"));
     const userDirectory = await mkdtemp(join(tmpdir(), "guyditor-host-user-"));
@@ -71,6 +295,34 @@ describe("AppServiceHost", () => {
       deliverableId: "dlv_aaaaaaaaaa",
     }])).resolves.toMatchObject({ schema: "guyditor.restyle/v1" });
     expect(windowHost.snapshot().revision).toBe("rev_00002");
+
+    await windowHost.close();
+    await appHost.close();
+  });
+
+  it("exposes the complete B-roll taxonomy and generation adapter availability", async () => {
+    const root = await mkdtemp(join(tmpdir(), "guyditor-host-generation-"));
+    const userDirectory = await mkdtemp(join(tmpdir(), "guyditor-host-generation-user-"));
+    const created = await createProject(root, projectFixture());
+    if (!created.ok) throw created.error;
+    const appHost = testAppHost(userDirectory);
+    const windowHost = appHost.createWindowHost({
+      publisher: new WindowEventPublisher(() => undefined),
+    });
+    await windowHost.openProject(root);
+
+    const generation = windowHost.resolveService("GenerationService");
+    const taxonomy = generation?.["taxonomy"];
+    const adapters = generation?.["adapters"];
+    if (typeof taxonomy !== "function" || typeof adapters !== "function") {
+      throw new Error("Generation service is unavailable.");
+    }
+    expect(await Reflect.apply(taxonomy, generation, [])).toHaveLength(7);
+    expect(await Reflect.apply(adapters, generation, [])).toMatchObject([
+      { descriptor: { canonicalName: ["adp", "comfyui"].join("_"), availability: "declared-unavailable" } },
+      { descriptor: { canonicalName: ["adp", "httpgen"].join("_"), availability: "declared-unavailable" } },
+      { descriptor: { canonicalName: ["adp", "stubgen"].join("_"), availability: "available" } },
+    ]);
 
     await windowHost.close();
     await appHost.close();
@@ -341,7 +593,10 @@ describe("AppServiceHost", () => {
       }],
       instruction: { kind: "ui-direct" },
       actor: { kind: "human", id: "fixture" },
-      reason: { text: "Tighten the ending", sources: [] },
+      reason: {
+        text: "Tighten the ending",
+        sources: [{ kind: "annotation", ref: "ann_bbbbbbbbbb" }],
+      },
       addresses: ["ann_bbbbbbbbbb"],
     }));
     const events: GdEvent[] = [];

@@ -16,14 +16,8 @@ test("imports media and surfaces completed proxy work", async () => {
     await launched.page.getByTestId("ingest-path-submit").click();
     await launched.page.getByTestId("global-progress").click();
     await expect(launched.page.getByTestId("global-progress-queued")).toContainText(
-      "Generate proxy for",
+      /Generate proxy for[\s\S]*Blocked on[\s\S]*Ingest 1 assets/u,
       { timeout: 10_000 },
-    );
-    await expect(launched.page.getByTestId("global-progress-queued")).toContainText(
-      "Blocked on",
-    );
-    await expect(launched.page.getByTestId("global-progress-queued")).toContainText(
-      "Ingest 1 assets",
     );
     await launched.page.getByTestId("global-progress").click();
     await expect(launched.page.getByTestId("job-state-ingest")).toHaveText("done", {

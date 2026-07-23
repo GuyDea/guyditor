@@ -48,10 +48,12 @@ import setClipPunchInSchema from "./schemas/clip.punchin.set.json" with { type: 
 import switchClipSourceSchema from "./schemas/clip.source.switch.json" with { type: "json" };
 import arrangeCompositionSchema from "./schemas/composition.arrange.json" with { type: "json" };
 import runKeyQcSchema from "./schemas/key.qc.run.json" with { type: "json" };
+import generateKeyMatteSchema from "./schemas/key.matte.generate.json" with { type: "json" };
 import setTransitionSchema from "./schemas/transition.set.json" with { type: "json" };
 import removeTransitionSchema from "./schemas/transition.remove.json" with { type: "json" };
 import assetIngestSchema from "./schemas/asset.ingest.json" with { type: "json" };
 import assetRemoveSchema from "./schemas/asset.remove.json" with { type: "json" };
+import assetRightsSetSchema from "./schemas/asset.rights.set.json" with { type: "json" };
 import assetMarkersAttachSchema from "./schemas/asset.markers.attach.json" with { type: "json" };
 import assetTakesSetSchema from "./schemas/asset.takes.set.json" with { type: "json" };
 import transcriptCreateSchema from "./schemas/transcript.create.json" with { type: "json" };
@@ -97,6 +99,7 @@ import templateInstallSchema from "./schemas/template.install.json" with { type:
 import templateUninstallSchema from "./schemas/template.uninstall.json" with { type: "json" };
 import restylePlanCreateSchema from "./schemas/restyle.plan.create.json" with { type: "json" };
 import restyleSegmentApproveSchema from "./schemas/restyle.segment.approve.json" with { type: "json" };
+import generationAcceptSchema from "./schemas/generation.accept.json" with { type: "json" };
 import seamTreatmentSetSchema from "./schemas/seam.treatment.set.json" with { type: "json" };
 import deliverableDeriveSchema from "./schemas/deliverable.derive.json" with { type: "json" };
 import deliverableStatusSetSchema from "./schemas/deliverable.status.set.json" with { type: "json" };
@@ -110,6 +113,8 @@ import deliverablePublishApproveSchema from "./schemas/deliverable.publish.appro
 import deliverableThumbnailSelectSchema from "./schemas/deliverable.thumbnail.select.json" with { type: "json" };
 import deliverablePublishFilesSetSchema from "./schemas/deliverable.publish.files.set.json" with { type: "json" };
 import sidecarRegisterSchema from "./schemas/sidecar.register.json" with { type: "json" };
+import takeSelectSchema from "./schemas/take.select.json" with { type: "json" };
+import skillPinSetSchema from "./schemas/skill.pin.set.json" with { type: "json" };
 import {
   AnchorResolverRegistry,
   computeAnchorTransitions,
@@ -129,6 +134,7 @@ import {
   success,
 } from "../errors.js";
 import type { Result } from "../errors.js";
+import { validateSubjectiveAssessment } from "../assessments/index.js";
 import {
   formatRevision,
   makeId,
@@ -152,10 +158,13 @@ import { applyTransitionOperation } from "./transition.js";
 import { applyAssetOperation } from "./asset.js";
 import { applyProjectOperation } from "./project.js";
 import { applySidecarOperation } from "./sidecar.js";
+import { applySkillOperation } from "./skill.js";
 import { applyAnchorOperation } from "./anchor.js";
 import { assessBatchRisk, buildSemanticDiff } from "./diff.js";
 import { applyGraphicOperation, applyTemplateOperation } from "./graphic.js";
 import { applyRestyleOperation } from "../restyle/operations.js";
+import { applyGenerationOperation } from "../generation/operations.js";
+import { applyTakeOperation } from "../takes/operations.js";
 import { applyDeliverableOperation } from "../deliverables/operations.js";
 import {
   markAcceptedDeliverableStaleness,
@@ -253,9 +262,11 @@ function catalogEntry(
 const catalog = new Map<string, CatalogEntry>([
   ["asset.ingest", catalogEntry(assetIngestSchema, "normal", "none", "Ingest {n} assets")],
   ["asset.remove", catalogEntry(assetRemoveSchema, "normal", "none", "Remove {n} assets")],
+  ["asset.rights.set", catalogEntry(assetRightsSetSchema, "normal", "none", "Set rights for {assetId}")],
   ["asset.markers.attach", catalogEntry(assetMarkersAttachSchema, "low", "none", "Attach {n} markers to {asset}")],
   ["asset.takes.set", catalogEntry(assetTakesSetSchema, "low", "none", "Set take metadata for {asset}")],
   ["project.watchFolders.set", catalogEntry(projectWatchFoldersSetSchema, "low", "none", "Configure {n} capture watch folders")],
+  ["skill.pin.set", catalogEntry(skillPinSetSchema, "normal", "none", "Set skill {skillId} pin")],
   ["clip.trim", catalogEntry(trimSchema, "normal", "none", "Trim {clip}")],
   ["clip.split", catalogEntry(splitSchema, "normal", "none", "Split {clip}")],
   ["clip.join", catalogEntry(joinSchema, "normal", "none", "Join {clips}")],
@@ -290,6 +301,7 @@ const catalog = new Map<string, CatalogEntry>([
   ["clip.source.switch", catalogEntry(switchClipSourceSchema, "normal", "none", "Switch {clip} to synchronized source {assetId}")],
   ["composition.arrange", catalogEntry(arrangeCompositionSchema, "normal", "none", "Arrange {sequence}")],
   ["key.qc.run", catalogEntry(runKeyQcSchema, "low", "none", "Analyze key quality for {clip}")],
+  ["key.matte.generate", catalogEntry(generateKeyMatteSchema, "low", "none", "Generate neural matte for {clip}")],
   ["clip.audio.gain.set", catalogEntry(setClipAudioGainSchema, "low", "none", "Set {clip} gain to {gainDb} dB")],
   ["clip.audio.fade.set", catalogEntry(setClipAudioFadeSchema, "low", "none", "Set audio fades on {clip}")],
   ["clip.audio.offset.set", catalogEntry(setClipAudioOffsetSchema, "normal", "none", "Shift {clip} audio by {offset}")],
@@ -506,6 +518,12 @@ const catalog = new Map<string, CatalogEntry>([
     "none",
     "Approve restyle segment {chunkId}",
   )],
+  ["generation.accept", catalogEntry(
+    generationAcceptSchema,
+    "consequential",
+    "none",
+    "Accept generated B-roll {asset.id}",
+  )],
   ["seam.treatment.set", catalogEntry(
     seamTreatmentSetSchema,
     "consequential",
@@ -583,6 +601,12 @@ const catalog = new Map<string, CatalogEntry>([
     "low",
     "none",
     "Register sidecar {name}",
+  )],
+  ["take.select", catalogEntry(
+    takeSelectSchema,
+    "normal",
+    "none",
+    "Select take from comparison",
   )],
 ]);
 
@@ -912,6 +936,7 @@ export class OperationEngine {
       !context.dryRun && !allowProposalCommit &&
       batch.some(({ op }) =>
         op === "restyle.plan.create" || op === "restyle.segment.approve" ||
+        op === "generation.accept" ||
         op === "seam.treatment.set" || op === "deliverable.derive" ||
         op === "deliverable.refresh")
     ) {
@@ -959,6 +984,8 @@ export class OperationEngine {
       let application: Result<ClipApplication>;
       if (isAudioColorOperation(requested.op)) {
         application = applyAudioColorOperation(working, normalized, this.#idFactory);
+      } else if (requested.op.startsWith("skill.")) {
+        application = applySkillOperation(working, normalized);
       } else if (requested.op.startsWith("project.")) {
         application = applyProjectOperation(working, normalized);
       } else if (requested.op.startsWith("sidecar.")) {
@@ -1002,6 +1029,10 @@ export class OperationEngine {
           );
       } else if (requested.op.startsWith("restyle.") || requested.op.startsWith("seam.")) {
         application = await applyRestyleOperation(working, normalized, this.#templateProvider);
+      } else if (requested.op.startsWith("generation.")) {
+        application = applyGenerationOperation(working, normalized);
+      } else if (requested.op === "take.select") {
+        application = applyTakeOperation(working, normalized);
       } else if (requested.op.startsWith("deliverable.")) {
         application = await applyDeliverableOperation(working, normalized, this.#idFactory);
       } else if (this.#operationDispatcher === undefined) {
@@ -1342,11 +1373,33 @@ export class OperationEngine {
   public async createProposal(
     request: CreateProposalRequest,
   ): Promise<Result<Proposal>> {
+    if (
+      request.operations.length > 0 &&
+      (request.reason.text.trim() === "" || request.reason.text.length > 280 ||
+        request.reason.sources.length === 0 ||
+        request.reason.sources.some(({ ref }) => ref.trim() === ""))
+    ) {
+      return operationFailure(
+        "E_OP_REASON_REQUIRED",
+        "Every proposal operation requires a concise, inspectable Reason.",
+      );
+    }
     const store = this.#proposalStore;
     if (store === undefined) {
       return operationFailure(
         "E_PROPOSAL_STORE_UNAVAILABLE",
         "Proposal persistence is not configured for this operation engine.",
+      );
+    }
+    let attachedAssessment;
+    try {
+      attachedAssessment = request.assessment === undefined
+        ? undefined
+        : validateSubjectiveAssessment(request.assessment);
+    } catch (error: unknown) {
+      return operationFailure(
+        "E_ASSESSMENT_SCHEMA",
+        error instanceof Error ? error.message : String(error),
       );
     }
     const id = this.#idFactory("prp");
@@ -1366,6 +1419,10 @@ export class OperationEngine {
       ...(request.sessionId === undefined ? {} : { sessionId: request.sessionId }),
       ...(request.divergence === undefined ? {} : { divergence: request.divergence }),
       reason: structuredClone(request.reason),
+      ...(attachedAssessment === undefined ? {} : {
+        assessmentId: attachedAssessment.assessmentId,
+        assessment: attachedAssessment,
+      }),
       riskClass: "normal",
       addresses: [...request.addresses],
       ...(request.warnings === undefined
@@ -1395,16 +1452,6 @@ export class OperationEngine {
       },
     );
     if (!dryRun.ok) return dryRun;
-    if (
-      request.actor.kind === "agent" &&
-      dryRun.value.riskClass !== "low" &&
-      request.reason.text.trim() === ""
-    ) {
-      return operationFailure(
-        "E_OP_REASON_REQUIRED",
-        "Normal and consequential agent proposals require a concise reason.",
-      );
-    }
     const proposed = capturedProject;
     if (proposed === undefined) {
       return operationFailure(
@@ -1437,6 +1484,10 @@ export class OperationEngine {
       ...(request.sessionId === undefined ? {} : { sessionId: request.sessionId }),
       ...(request.divergence === undefined ? {} : { divergence: request.divergence }),
       reason: structuredClone(request.reason),
+      ...(attachedAssessment === undefined ? {} : {
+        assessmentId: attachedAssessment.assessmentId,
+        assessment: attachedAssessment,
+      }),
       riskClass: dryRun.value.riskClass,
       addresses: [...request.addresses],
       applied: dryRun.value.applied,

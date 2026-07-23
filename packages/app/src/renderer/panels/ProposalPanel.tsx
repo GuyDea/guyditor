@@ -1,8 +1,16 @@
 import { useState } from "react";
 
-import type { Proposal, SemanticDiffEntry } from "../../../../core/src/index.js";
+import type {
+  EvidenceRef,
+  Proposal,
+  SemanticDiffEntry,
+} from "../../../../core/src/index.js";
 import { errorMessage } from "../ipc.js";
-import { useAgentPanelStore } from "../state/view-state.js";
+import {
+  useAgentPanelStore,
+  usePreviewStore,
+  useSelectionStore,
+} from "../state/view-state.js";
 import { Panel } from "./Panel.js";
 import { RestylePlanReview } from "./RestylePlan.js";
 import type { WorkspacePanelProps } from "./types.js";
@@ -20,9 +28,11 @@ function grouped(entries: SemanticDiffEntry[]): Array<[string, SemanticDiffEntry
 export function ProposalPanel({
   snapshot,
   proposals,
+  pinnedSkills,
   refreshProject,
   refreshAnnotations,
   refreshProposals,
+  refreshSkills,
   restylePlan,
   refreshRestylePlan,
   setNotice,
@@ -30,13 +40,44 @@ export function ProposalPanel({
   const expandedProposalId = useAgentPanelStore((state) => state.expandedProposalId);
   const setExpandedProposal = useAgentPanelStore((state) => state.setExpandedProposal);
   const [revisionInstruction, setRevisionInstruction] = useState("");
+  const [captureSkillId, setCaptureSkillId] = useState("");
+  const [exampleDescription, setExampleDescription] = useState("");
+  const [resolvedExamples, setResolvedExamples] = useState<Proposal[]>([]);
+  const setPlayhead = usePreviewStore((state) => state.setPlayhead);
+  const selectWord = useSelectionStore((state) => state.selectWord);
+  const setWordRange = useSelectionStore((state) => state.setWordRange);
+  const selectAnnotation = useSelectionStore((state) => state.selectAnnotation);
+  const selectDeliverable = useSelectionStore((state) => state.selectDeliverable);
+
+  function jumpToEvidence(evidence: EvidenceRef): void {
+    if (evidence.sourceRange !== undefined) setPlayhead(evidence.sourceRange.start);
+    if (evidence.wordRange !== undefined) {
+      selectWord(evidence.wordRange.from);
+      setWordRange({
+        fromWord: evidence.wordRange.from,
+        toWord: evidence.wordRange.to,
+      });
+    }
+    if (evidence.annotationId !== undefined) selectAnnotation(evidence.annotationId);
+    if (evidence.deliverableId !== undefined) selectDeliverable(evidence.deliverableId);
+  }
+
+  function evidenceLabel(evidence: EvidenceRef): string {
+    if (evidence.wordRange !== undefined) {
+      return `${evidence.wordRange.from}–${evidence.wordRange.to}`;
+    }
+    if (evidence.sourceRange !== undefined) {
+      return `${evidence.assetId ?? "source"} @ ${String(evidence.sourceRange.start.frames)}f`;
+    }
+    return evidence.annotationId ?? evidence.deliverableId ?? evidence.assetId ?? "evidence";
+  }
 
   async function act(
     proposal: Proposal,
     action: "acceptProposal" | "rejectProposal" | "supersedeProposal",
   ): Promise<void> {
     try {
-      await window.guyditor.call("OperationEngine", action, {
+      const resolved = await window.guyditor.call<Proposal>("OperationEngine", action, {
         proposalId: proposal.id,
         ...(action === "supersedeProposal"
           ? { instruction: revisionInstruction.trim() || "Revise this proposal with the latest feedback" }
@@ -49,11 +90,76 @@ export function ProposalPanel({
         refreshRestylePlan(),
       ]);
       setNotice(`${action === "acceptProposal" ? "Accepted" : action === "rejectProposal" ? "Rejected" : "Superseded"} ${proposal.id}.`);
+      if (resolved.status === "accepted" || resolved.status === "rejected") {
+        setResolvedExamples((current) => [
+          resolved,
+          ...current.filter(({ id }) => id !== resolved.id),
+        ]);
+      }
       setRevisionInstruction("");
     } catch (error: unknown) {
       setNotice(errorMessage(error));
       await refreshProposals();
     }
+  }
+
+  async function saveExample(proposal: Proposal): Promise<void> {
+    const skillId = captureSkillId || pinnedSkills[0]?.manifest.id;
+    if (skillId === undefined) {
+      setNotice("Pin an editorial skill before saving a preference example.");
+      return;
+    }
+    if (proposal.status !== "accepted" && proposal.status !== "rejected") return;
+    try {
+      const draft = await window.guyditor.call<{ manifest: { version: string } }>(
+        "SkillRegistry",
+        "captureExample",
+        {
+          proposalId: proposal.id,
+          skillId,
+          decision: proposal.status === "accepted" ? "approved" : "rejected",
+          description: exampleDescription.trim() || proposal.reason.text,
+        },
+      );
+      await refreshSkills();
+      setExampleDescription("");
+      setNotice(`Saved ${proposal.status === "accepted" ? "approved" : "rejected"} example to inactive draft v${draft.manifest.version}. Publish and upgrade explicitly to activate it.`);
+    } catch (error: unknown) {
+      setNotice(errorMessage(error));
+    }
+  }
+
+  function exampleCapture(proposal: Proposal): React.JSX.Element | null {
+    if (proposal.status !== "accepted" && proposal.status !== "rejected") return null;
+    return (
+      <div className="preference-capture" data-testid={`proposal-example-${proposal.id}`}>
+        <strong>Save as {proposal.status === "accepted" ? "approved" : "rejected"} example</strong>
+        <select
+          aria-label="Editorial skill"
+          value={captureSkillId || pinnedSkills[0]?.manifest.id || ""}
+          disabled={pinnedSkills.length === 0}
+          onChange={(event) => setCaptureSkillId(event.target.value)}
+        >
+          {pinnedSkills.map(({ manifest }) => (
+            <option key={manifest.id} value={manifest.id}>{manifest.title} · v{manifest.version}</option>
+          ))}
+        </select>
+        <input
+          type="text"
+          aria-label="Example description"
+          placeholder="Why this edit matches—or misses—the preference"
+          value={exampleDescription}
+          onChange={(event) => setExampleDescription(event.target.value)}
+        />
+        <button
+          type="button"
+          className="primary-action"
+          disabled={pinnedSkills.length === 0}
+          data-testid={`proposal-save-example-${proposal.id}`}
+          onClick={() => void saveExample(proposal)}
+        >Save to new draft version</button>
+      </div>
+    );
   }
 
   return (
@@ -72,7 +178,8 @@ export function ProposalPanel({
       />
       <ol className="proposal-list" data-testid="proposal-list">
         {proposals.map((proposal) => {
-          const stale = proposal.staleBase === true || proposal.baseRevision !== snapshot?.revision;
+          const stale = proposal.status === "ready" &&
+            (proposal.staleBase === true || proposal.baseRevision !== snapshot?.revision);
           const rebasableRestyle = proposal.operations.length > 0 &&
             proposal.operations.every(({ op }) =>
               op === "restyle.segment.approve" || op === "clip.split" || op === "clip.punchin.set");
@@ -100,6 +207,73 @@ export function ProposalPanel({
                   <div className="chip-row">
                     {proposal.addresses.map((id) => <span key={id} className="entity-chip">{id}</span>)}
                   </div>
+                  {proposal.assessment === undefined ? null : (
+                    <section
+                      className="assessment-review"
+                      data-testid={`proposal-assessment-${proposal.id}`}
+                    >
+                      <header>
+                        <span className="state-chip" data-state="ready">Recommendation</span>
+                        <strong>{proposal.assessment.question}</strong>
+                      </header>
+                      <dl className="assessment-criteria">
+                        {proposal.assessment.criteria.map((criterion) => (
+                          <div key={criterion.id}>
+                            <dt>{criterion.id}</dt>
+                            <dd>
+                              {criterion.text}
+                              <small>{criterion.source === "skill_rule"
+                                ? `${criterion.skillId} · ${criterion.ruleId}`
+                                : "inline disclosed criterion"}</small>
+                            </dd>
+                          </div>
+                        ))}
+                      </dl>
+                      {proposal.assessment.subjects.map((subject, subjectIndex) => (
+                        <article key={`${proposal.assessmentId}-${String(subjectIndex)}`}>
+                          <button
+                            type="button"
+                            className="evidence-jump"
+                            onClick={() => jumpToEvidence(subject.ref)}
+                          >Jump to {evidenceLabel(subject.ref)}</button>
+                          <h4>Observed</h4>
+                          {subject.observations.map((observation) => (
+                            <div className="assessment-observation" key={observation.id}>
+                              <p>{observation.text}</p>
+                              <div className="chip-row">
+                                {observation.evidence.map((evidence, evidenceIndex) => (
+                                  <button
+                                    type="button"
+                                    className="entity-chip evidence-jump"
+                                    key={`${observation.id}-${String(evidenceIndex)}`}
+                                    onClick={() => jumpToEvidence(evidence)}
+                                  >{evidenceLabel(evidence)}</button>
+                                ))}
+                              </div>
+                            </div>
+                          ))}
+                          <h4>Inferred</h4>
+                          {subject.inferences.map((inference, inferenceIndex) => (
+                            <p className="assessment-inference" key={`${inference.text}-${String(inferenceIndex)}`}>
+                              {inference.text}
+                              <small>{inference.confidence} confidence · based on {inference.basedOn.join(", ")}</small>
+                            </p>
+                          ))}
+                          {subject.scores === undefined ? null : (
+                            <div className="score-ledger">
+                              {subject.scores.map((score) => (
+                                <span key={score.criterionId}>{score.criterionId} {String(score.value)}/5</span>
+                              ))}
+                            </div>
+                          )}
+                        </article>
+                      ))}
+                      {proposal.assessment.comparison === undefined ? null : (
+                        <p><strong>Ranking:</strong> {proposal.assessment.comparison.rankedRefs.join(" → ")} · {proposal.assessment.comparison.rationale}</p>
+                      )}
+                      <small className="assessment-limitations">Limitations: {proposal.assessment.limitations}</small>
+                    </section>
+                  )}
                   <div className="semantic-diff" data-testid={`proposal-diff-${proposal.id}`}>
                     {proposal.diff === undefined ? (
                       <ul>{proposal.operations.map((operation, index) => <li key={`${operation.op}-${String(index)}`}>{operation.summary}</li>)}</ul>
@@ -132,7 +306,7 @@ export function ProposalPanel({
                       </dl>
                     )}
                   </div>
-                  <div className="proposal-controls">
+                  {proposal.status === "ready" ? <div className="proposal-controls">
                     <button
                       type="button"
                       className="primary-action"
@@ -142,8 +316,8 @@ export function ProposalPanel({
                     >{stale && rebasableRestyle ? "Rebase + accept" : "Accept"}</button>
                     <button type="button" data-testid={`proposal-reject-${proposal.id}`} onClick={() => void act(proposal, "rejectProposal")}>Reject</button>
                     <button type="button" data-testid={`proposal-preview-${proposal.id}`} disabled title="Comparison rendering is M2">Compare summary</button>
-                  </div>
-                  <div className="revision-box">
+                  </div> : null}
+                  {proposal.status === "ready" ? <div className="revision-box">
                     <input
                       type="text"
                       value={revisionInstruction}
@@ -153,7 +327,8 @@ export function ProposalPanel({
                       onChange={(event) => setRevisionInstruction(event.target.value)}
                     />
                     <button type="button" data-testid={`proposal-supersede-${proposal.id}`} onClick={() => void act(proposal, "supersedeProposal")}>Supersede</button>
-                  </div>
+                  </div> : null}
+                  {exampleCapture(proposal)}
                 </div>
               ) : null}
             </li>
@@ -161,6 +336,17 @@ export function ProposalPanel({
         })}
         {proposals.length === 0 ? <li className="empty-copy">No open proposals.</li> : null}
       </ol>
+      {resolvedExamples.length === 0 ? null : (
+        <section className="resolved-example-tray" data-testid="resolved-example-tray">
+          <header><strong>Preference examples</strong><span>Resolved this session</span></header>
+          {resolvedExamples.map((proposal) => (
+            <article key={proposal.id}>
+              <p>{proposal.reason.text}</p>
+              {exampleCapture(proposal)}
+            </article>
+          ))}
+        </section>
+      )}
       <small className="m2-note">The M1 proposal panel renders semantic comparison summaries. Generated comparison frames and director conversation are M2/later surfaces.</small>
     </Panel>
   );

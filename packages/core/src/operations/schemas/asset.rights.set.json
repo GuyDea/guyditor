@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["assetId", "rights"],
+  "properties": {
+    "assetId": { "type": "string", "pattern": "^ast_[a-z2-7]{10}$" },
+    "rights": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["origin", "restrictions"],
+          "properties": {
+            "origin": { "enum": ["captured", "licensed", "stock", "generated", "programmatic", "unknown"] },
+            "licenseName": { "type": "string" },
+            "licenseUrl": { "type": "string" },
+            "licensor": { "type": "string" },
+            "purchaseRef": { "type": "string" },
+            "restrictions": { "type": "array", "items": { "type": "string" } },
+            "attributionText": { "type": "string" },
+            "providerTermsUrl": { "type": "string" },
+            "confirmedBy": { "enum": ["creator", "provider"] },
+            "confirmedAt": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T" }
+          }
+        }
+      ]
+    }
+  }
+}

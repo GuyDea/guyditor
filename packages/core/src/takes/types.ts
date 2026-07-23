@@ -37,3 +37,47 @@ export interface TakeMarkerSidecar {
   markers: MarkerRecord[];
   takes: TakeRecord[];
 }
+
+export interface TakeComparison {
+  id: string;
+  slot: {
+    beatId?: string;
+    scriptSection?: string;
+    wordRange?: { fromWord: string; toWord: string };
+  };
+  candidates: TakeCandidate[];
+  recommendation?: {
+    takeId: string;
+    reasons: Array<{ criterion: string; detail: string; evidence: string }>;
+    confidence: "low" | "medium" | "high";
+  };
+  selectedTakeId?: string;
+  createdAt: string;
+}
+
+export interface TakeCandidate {
+  takeId: string;
+  assetId: string;
+  sourceRange: {
+    in: { frames: number; fps: string };
+    out: { frames: number; fps: string };
+  };
+  transcriptText: string;
+  scriptMatch?: { score: number; deviations: string[] };
+  delivery: {
+    wordsPerMinute: number;
+    fillerCount: number;
+    pauseRatio: number;
+    energyVariance: number;
+    restartCount: number;
+  };
+  technical: {
+    audioClippingPct: number;
+    noiseFloorDb: number;
+    focusScore?: number;
+    exposureScore?: number;
+    framingScore?: number;
+  };
+  preference: { score: number; rubricId: string; rubricVersion: string };
+  markers: { qualityFlags: string[]; notes: string[] };
+}

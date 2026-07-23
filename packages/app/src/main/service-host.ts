@@ -26,48 +26,29 @@ import {
   serializeTakeMarkerSidecar,
 } from "../../../core/src/index.js";
 import type {
-  Asset,
-  FaceTrackAvailability,
-  JumpCutConcealmentConfig,
-  JobFilter,
-  JobOverview,
-  JobRecord,
-  OperationBatchResult,
-  OperationCommitter,
-  OperationInput,
-  Proposal,
-  ProjectStore,
-  Result,
-  RestyleFrameRange,
-  RestylePlan,
-  RestyleSeamTreatment,
-  SidecarRef,
-  TakeMarkerSidecar,
-  TransactionRecord,
-  WatchFolderConfig,
+  Asset, FaceTrackAvailability, JumpCutConcealmentConfig, JobFilter, JobOverview, JobRecord,
+  OperationBatchResult, OperationCommitter, OperationInput, Proposal, ProjectStore, Result,
+  RestyleFrameRange, RestylePlan, RestyleSeamTreatment, RightsPolicy, SidecarRef,
+  TakeMarkerSidecar, TransactionRecord, WatchFolderConfig,
 } from "../../../core/src/index.js";
 import {
   buildCaptureGuidanceReport,
   CaptureWatcher,
   createSubjectTrackAnalysis,
-  enqueueKeyQc,
   loadPeaks,
   MediaEngine,
   MlworkerSupervisor,
   probeMedia,
   proxyCachePaths,
   registerKeyQcExecutor,
+  createStoragePreflight,
   parseSubjectTrackAnalysis,
   subjectTrackSidecarPath,
   writeSubjectTrackAnalysis,
   writeCaptureGuidanceReport,
+  StorageAccountant,
 } from "../../../media/src/index.js";
-import type {
-  KeyQcJobPayload,
-  KeyQcReport,
-  MlworkerTrackResult,
-  SubjectTrackAnalysis,
-} from "../../../media/src/index.js";
+import type { KeyQcJobPayload, KeyQcReport, MlworkerTrackResult, SubjectTrackAnalysis } from "../../../media/src/index.js";
 import {
   compileFillerProposal,
   createAnnotationTranscriptSource,
@@ -97,8 +78,10 @@ import {
   AuditLog,
   CostMeter,
   FileCredentialStore,
+  GenerationExecutionService,
   KlingRestyleAdapter,
   RestyleExecutionService,
+  SkillRegistry,
 } from "../../../agent/src/index.js";
 import type {
   BudgetConfig,
@@ -125,6 +108,7 @@ import {
 import type {
   DeliverableTranscript,
   DerivationSelection,
+  OtioExportOptions,
   PublishMetadata,
   PublishFileResult,
   RestylePlanningSignals,
@@ -139,11 +123,26 @@ import type {
 } from "../shared/ipc.js";
 import type { IpcService } from "./rpc.js";
 import type { WindowEventPublisher } from "./events.js";
+import { validateExportWithRights } from "./export-validation.js";
+import {
+  generationService,
+  registerBuiltInGenerationAdapters,
+} from "./generation-service.js";
+import { skillRegistryService } from "./skill-service.js";
+import { TakeComparisonService } from "./take-comparison-service.js";
+import {
+  createRecoveryServices,
+  recoveryService,
+} from "./recovery-service.js";
+import type { ProjectServices } from "./project-services.js";
+import { MatteService } from "./matte-service.js";
+import { OtioService } from "./otio-service.js";
 
 interface AppHostSettings {
   auditRetentionDays: number;
   budgets: BudgetConfig;
   maxConcurrentJobs: number | "auto";
+  rightsRequirementLevel?: RightsPolicy["requirementLevel"];
   restyleAdapter?: KlingAdapterConfig & { enabled: boolean };
 }
 
@@ -168,23 +167,6 @@ export interface WindowServiceHostOptions {
   chooseMedia?: () => Promise<string[]>;
   revealPath?: (path: string) => void;
   openPath?: (path: string) => Promise<string>;
-}
-
-interface ProjectServices {
-  store: ProjectStore;
-  jobs: JobQueue;
-  media: MediaEngine;
-  capture: CaptureWatcher;
-  transcript: TranscriptEngine;
-  annotations: AnnotationService;
-  compositor: CompositorModel;
-  render: RenderService;
-  publish: PublishService;
-  batch: BatchExportService;
-  templates: TemplateRegistry;
-  adapters: AdapterRegistry;
-  restyle: RestyleExecutionService;
-  unsubscribeJobs: () => void;
 }
 
 function resultValue<Value>(result: Result<Value>): Value {
@@ -583,6 +565,7 @@ export class AppServiceHost {
   public readonly costMeter: CostMeter;
   public readonly mlworker: MlworkerSupervisor;
   public readonly credentials: CredentialStore;
+  public readonly skillRegistry: SkillRegistry;
   readonly #options: AppServiceHostOptions;
   readonly #windows = new Set<WindowServiceHost>();
 
@@ -595,6 +578,9 @@ export class AppServiceHost {
       userDir: options.userDirectory,
       retention: { retentionDays: options.settings.auditRetentionDays },
       credentialValues: () => this.credentials.knownValues(),
+    });
+    this.skillRegistry = new SkillRegistry({
+      globalRoot: join(options.userDirectory, "skills"),
     });
     this.auditLog.prune();
     this.costMeter = CostMeter.open({
@@ -650,6 +636,12 @@ export class AppServiceHost {
     return this.#options.userDirectory;
   }
 
+  public get rightsPolicy(): RightsPolicy {
+    return {
+      requirementLevel: this.#options.settings.rightsRequirementLevel ?? "warn",
+    };
+  }
+
   public get restyleAdapter(): KlingAdapterConfig & {
     enabled: boolean;
     costPerSecond: number;
@@ -698,9 +690,12 @@ export class WindowServiceHost {
     const store = resultValue(opened);
     this.#closeProject();
     const annotations = new AnnotationService({ appVersion: this.#app.appVersion });
+    const otio = new OtioService({ store, annotations });
     const restyleRuntime: { service?: RestyleExecutionService } = {};
+    const storage = new StorageAccountant({ userDirectory: this.#app.userDirectory });
     const { queue: jobs } = JobQueue.open(join(store.root, ".guyditor/jobs.sqlite"), {
       concurrency: this.#app.maxConcurrentJobs,
+      preflight: createStoragePreflight(storage, { projectDir: store.root }),
       overviewSources: {
         proposals: async () => (await activeProposals(store))
           .filter(({ status }) => status === "ready")
@@ -731,6 +726,10 @@ export class WindowServiceHost {
         external: () => restyleRuntime.service?.externalWaits() ?? [],
       },
     });
+    const recovery = await createRecoveryServices(
+      store, jobs, storage, this.#app.appVersion, this.#app.userDirectory,
+      () => this.#app.credentials.values(),
+    );
     jobs.registerExecutor("candidates", async (job, context) => {
       const payload = jsonRecord(job.payload);
       const profilePin = payload?.["profile"];
@@ -963,28 +962,15 @@ export class WindowServiceHost {
     });
     const media = new MediaEngine({ jobQueue: jobs, mlworker: this.#app.mlworker });
     registerKeyQcExecutor(jobs);
+    const matte = new MatteService({
+      store,
+      jobs,
+      mlworker: this.#app.mlworker,
+      execute: (request) => this.#execute(request),
+    });
     const compositor = new CompositorModel({
-      onKeyQcRun: ({ project, clipId, shotBoundaries }) => {
-        const clip = project.sequences.flatMap(({ clips }) => clips).find(({ id }) => id === clipId);
-        if (clip === undefined) throw new Error(`Clip ${clipId} does not exist.`);
-        const asset = project.assets.find(({ id }) => id === clip.asset);
-        const key = clip.effects?.find(({ kind }) => kind === "key");
-        if (asset === undefined || key === undefined) {
-          throw new Error(`Clip ${clipId} has no keyed source asset.`);
-        }
-        enqueueKeyQc(jobs, {
-          projectRoot: store.root,
-          sourcePath: isAbsolute(asset.path) ? asset.path : resolve(store.root, asset.path),
-          clipId,
-          assetId: asset.id,
-          width: asset.video?.width ?? asset.image?.width ?? project.settings.timeline.width,
-          height: asset.video?.height ?? asset.image?.height ?? project.settings.timeline.height,
-          frameCount: Math.max(1, clip.source.out.frames - clip.source.in.frames),
-          fps: clip.source.in.fps,
-          keySettings: key.params as unknown as KeyQcJobPayload["keySettings"],
-          shotBoundaries,
-        });
-      },
+      onKeyQcRun: matte.onKeyQcRun,
+      onMatteGenerate: matte.onMatteGenerate,
     });
     const transcript = new TranscriptEngine({
       appVersion: this.#app.appVersion,
@@ -1046,7 +1032,13 @@ export class WindowServiceHost {
             }],
           });
         }
-        return render.validateExport(deliverableId, revision);
+        return validateExportWithRights({
+          render,
+          store,
+          deliverableId,
+          revision,
+          rightsPolicy: this.#app.rightsPolicy,
+        });
       },
       exportOutputSet: (deliverableId, revision) => render.renderOutputSet({
         deliverableId,
@@ -1062,6 +1054,7 @@ export class WindowServiceHost {
       })),
     });
     const adapters = new AdapterRegistry();
+    registerBuiltInGenerationAdapters(adapters, this.#app.credentials);
     const kling = this.#app.restyleAdapter;
     if (kling.enabled) {
       const adapter = new KlingRestyleAdapter({
@@ -1085,6 +1078,15 @@ export class WindowServiceHost {
       });
     }
     const restyle = new RestyleExecutionService({
+      projectStore: store,
+      operationEngine: {
+        createProposal: (input) => this.#coreEngine(this.#requireProject()).createProposal(input),
+      },
+      adapters,
+      jobs,
+      costMeter: this.#app.costMeter,
+    });
+    const generation = new GenerationExecutionService({
       projectStore: store,
       operationEngine: {
         createProposal: (input) => this.#coreEngine(this.#requireProject()).createProposal(input),
@@ -1154,6 +1156,14 @@ export class WindowServiceHost {
         });
       },
     });
+    const takeComparisons = new TakeComparisonService({
+      project: store,
+      jobs,
+      skillRegistry: this.#app.skillRegistry,
+      operationEngine: () => this.#coreEngine(this.#requireProject()),
+      onRevision: (revision) => this.publisher.publish({ kind: "project.revision", revision }),
+      onProposal: (proposalId) => this.publisher.publish({ kind: "proposal.updated", proposalId }),
+    });
     this.#project = {
       store,
       jobs,
@@ -1162,12 +1172,17 @@ export class WindowServiceHost {
       transcript,
       annotations,
       compositor,
+      matte,
+      otio,
       render,
       publish,
       batch,
       templates,
       adapters,
+      generation,
       restyle,
+      takeComparisons,
+      ...recovery,
       unsubscribeJobs,
     };
     await capture.start(store.currentProject.watchFolders ?? []);
@@ -1200,6 +1215,14 @@ export class WindowServiceHost {
             return { path };
           },
         };
+      case "SkillRegistry":
+        return skillRegistryService({
+          appVersion: this.#app.appVersion,
+          ...(project === undefined ? {} : { project: project.store }),
+          registry: this.#app.skillRegistry,
+          requireProject: () => this.#requireProject().store,
+          publishRevision: (revision) => this.publisher.publish({ kind: "project.revision", revision }),
+        });
       case "OperationEngine":
         return project === undefined ? undefined : {
           execute: (request: ExecuteRequest) => this.#execute(request),
@@ -1336,10 +1359,18 @@ export class WindowServiceHost {
             return { watching: project.capture.configs.length };
           },
           listTakes: () => this.#takeSidecars(),
+          listTakeComparisons: () => project.takeComparisons.list(),
+          compareTakes: ({ takeIds }: { takeIds: string[] }) =>
+            project.takeComparisons.compare(takeIds),
+          selectTake: ({ comparisonId, takeId }: { comparisonId: string; takeId: string }) =>
+            project.takeComparisons.proposeSelection(comparisonId, takeId),
         };
       case "CompositorModel":
         return project === undefined ? undefined : {
           arrangements: () => project.compositor.arrangements(),
+          matteCandidates: ({ clipId }: { clipId: string }) => project.matte.candidates(clipId),
+          acceptMatteCandidate: ({ clipId, jobId }: { clipId: string; jobId: string }) =>
+            project.matte.accept(clipId, jobId),
           keyQcReport: ({ clipId }: { clipId: string }) => this.#readAnalysis<KeyQcReport>(
             `${clipId}.keyqc.json`,
           ),
@@ -1368,6 +1399,15 @@ export class WindowServiceHost {
             configuration: project.adapters.configuration(adapter.descriptor.adapterId),
           })),
         };
+      case "GenerationService":
+        return project === undefined ? undefined : generationService({
+          store: project.store,
+          media: project.media,
+          adapters: project.adapters,
+          generation: project.generation,
+          rightsPolicy: this.#app.rightsPolicy,
+          acceptProposal: (proposalId) => this.#acceptProposal(proposalId),
+        });
       case "DeliverableService":
         return project === undefined ? undefined : {
           publishState: ({ deliverableId }: { deliverableId: string }) => {
@@ -1584,6 +1624,8 @@ export class WindowServiceHost {
             });
             return files;
           },
+          previewOtioExport: (params: OtioExportOptions) => project.otio.preview(params),
+          exportOtio: (params: OtioExportOptions) => project.otio.export(params),
           renderOutputSet: async ({ deliverableId }: { deliverableId: string }) => {
             const result = await project.render.renderOutputSet({
               deliverableId,
@@ -1824,8 +1866,16 @@ export class WindowServiceHost {
             project.render.renderExport(params),
           renderDiagnostic: (params: Parameters<RenderService["renderDiagnostic"]>[0]) =>
             project.render.renderDiagnostic(params),
-          validateExport: ({ deliverableId, revision }: { deliverableId: string; revision: string }) =>
-            project.render.validateExport(deliverableId, revision),
+          validateExport: ({ deliverableId, revision }: {
+            deliverableId: string;
+            revision: string;
+          }) => validateExportWithRights({
+            render: project.render,
+            store: project.store,
+            deliverableId,
+            revision,
+            rightsPolicy: this.#app.rightsPolicy,
+          }),
           exportReport: () => latestExportReport(project.store),
         };
       case "AuditLog":
@@ -1836,6 +1886,8 @@ export class WindowServiceHost {
         return {
           status: () => this.#app.costMeter.status(project?.store.currentProject.project.id ?? "unopened"),
         };
+      case "BackupService":
+        return project === undefined ? undefined : recoveryService(project);
       default:
         return undefined;
     }
@@ -1859,6 +1911,7 @@ export class WindowServiceHost {
   public async close(): Promise<void> {
     if (this.#closed) return;
     this.#closed = true;
+    await this.#project?.backupScheduler?.quit().catch(() => undefined);
     this.#closeProject();
     this.publisher.dispose();
     this.#app.forgetWindow(this);
@@ -1912,6 +1965,7 @@ export class WindowServiceHost {
     if (txnId === undefined) throw new Error("Accepted operation did not produce a transaction ID.");
     const revision = project.store.currentProject.revision;
     this.publisher.publish({ kind: "project.revision", revision });
+    project.backupScheduler?.acceptedRevision();
     return { txnId, revision, inverse: inverseOperations(result) };
   }
 
@@ -2390,6 +2444,7 @@ export class WindowServiceHost {
     const project = this.#project;
     this.#project = undefined;
     if (project === undefined) return;
+    project.backupScheduler?.close();
     project.unsubscribeJobs();
     void project.capture.close();
     project.jobs.close();
