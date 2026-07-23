@@ -5,6 +5,7 @@ import {
   ebur128MeasureCommand,
   loudnormMeasureCommand,
   loudnormNormalizeCommand,
+  loudnormOutputIsSilent,
   parseEbur128Summary,
   parseLoudnormMeasurement,
   runFfmpeg,
@@ -33,8 +34,9 @@ export interface NormalizeMasterLoudnessInput {
 }
 
 export interface NormalizeMasterLoudnessResult {
-  measurement: LoudnormMeasurement;
+  measurement: LoudnormMeasurement | null;
   limiterApplied: boolean;
+  silent: boolean;
 }
 
 export async function normalizeMasterLoudness(
@@ -42,8 +44,13 @@ export async function normalizeMasterLoudness(
 ): Promise<NormalizeMasterLoudnessResult> {
   const run = input.run ?? defaultRunner;
   const passOne = await run(loudnormMeasureCommand(input.inputPath, input.target));
-  const measurement = parseLoudnormMeasurement(passOne.stderrLines.join("\n"));
+  const passOneOutput = passOne.stderrLines.join("\n");
   await mkdir(dirname(input.measurementPath), { recursive: true });
+  if (loudnormOutputIsSilent(passOneOutput)) {
+    await writeFile(input.measurementPath, `${JSON.stringify({ silent: true }, undefined, 2)}\n`, "utf8");
+    return { limiterApplied: false, measurement: null, silent: true };
+  }
+  const measurement = parseLoudnormMeasurement(passOneOutput);
   await writeFile(
     input.measurementPath,
     `${JSON.stringify(measurement, undefined, 2)}\n`,
@@ -61,7 +68,7 @@ export async function normalizeMasterLoudness(
     limiterApplied,
     input.sampleRate,
   ));
-  return { limiterApplied, measurement };
+  return { limiterApplied, measurement, silent: false };
 }
 
 export async function measureDeliveredLoudness(

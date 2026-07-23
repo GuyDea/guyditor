@@ -1753,6 +1753,21 @@ export class RenderService {
       sampleRate: loudness.sampleRate,
       run,
     });
+    if (normalization.silent) {
+      prepared.validation.checks.push({
+        id: "VAL-500",
+        status: "pass",
+        message: "Program audio is silent; the integrated loudness target is not applicable.",
+        affected: [prepared.request.deliverableId],
+      });
+      prepared.validation.checks.push({
+        id: "VAL-501",
+        status: "pass",
+        message: "Program audio is silent and has no true-peak excursion.",
+        affected: [prepared.request.deliverableId],
+      });
+      return;
+    }
 
     const temporaryPath = `${prepared.outputPath}.${jobId}.loudness.${prepared.profile.profile.container}`;
     try {

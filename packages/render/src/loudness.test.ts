@@ -65,6 +65,34 @@ describe("master loudness pipeline", () => {
     expect(result.limiterApplied).toBe(true);
   });
 
+  it("treats a fully silent program track as having no loudness target", async () => {
+    const calls: string[][] = [];
+    const silentMeasurement = `{
+      "input_i": "-inf", "input_tp": "-inf", "input_lra": "0.0",
+      "input_thresh": "-70.0", "target_offset": "inf"
+    }`;
+    const result = await normalizeMasterLoudness({
+      inputPath: join(scratch, "silent", "mix.wav"),
+      outputPath: join(scratch, "silent", "final.wav"),
+      measurementPath: join(scratch, "silent", "measure.json"),
+      target: { integratedLufs: -14, truePeakDbtp: -1, loudnessRangeLu: 11 },
+      sampleRate: 48_000,
+      run: async (args) => {
+        calls.push([...args]);
+        return { stderrLines: [silentMeasurement] };
+      },
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(result).toEqual({
+      limiterApplied: false,
+      measurement: null,
+      silent: true,
+    });
+    expect(JSON.parse(await readFile(join(scratch, "silent", "measure.json"), "utf8")))
+      .toEqual({ silent: true });
+  });
+
   it("measures the delivered result with ebur128", async () => {
     const measurement = await measureDeliveredLoudness("/tmp/final.mp4", async (args) => {
       expect(args.join(" ")).toContain("ebur128=peak=true");

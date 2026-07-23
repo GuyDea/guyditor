@@ -18,6 +18,27 @@ export interface Ebur128Measurement {
   truePeakDbtp: number;
 }
 
+function loudnormOutput(stderr: string): Record<string, unknown> {
+  const matches = [...stderr.matchAll(/\{[^{}]*"input_i"[^{}]*\}/gu)];
+  const json = matches.at(-1)?.[0];
+  if (json === undefined) {
+    throw new Error("FFmpeg loudnorm output did not contain a measurement object.");
+  }
+  const parsed: unknown = JSON.parse(json);
+  if (!isUnknownRecord(parsed)) {
+    throw new Error("FFmpeg loudnorm measurement was not an object.");
+  }
+  return parsed;
+}
+
+export function loudnormOutputIsSilent(stderr: string): boolean {
+  const measurement = loudnormOutput(stderr);
+  const negativeInfinity = (value: unknown): boolean =>
+    typeof value === "string" && /^-inf(?:inity)?$/iu.test(value.trim());
+  return negativeInfinity(measurement["input_i"]) &&
+    negativeInfinity(measurement["input_tp"]);
+}
+
 export function loudnormMeasureCommand(
   inputPath: string,
   target: LoudnessTarget,
@@ -36,15 +57,7 @@ export function loudnormMeasureCommand(
 }
 
 export function parseLoudnormMeasurement(stderr: string): LoudnormMeasurement {
-  const matches = [...stderr.matchAll(/\{[^{}]*"input_i"[^{}]*\}/gu)];
-  const json = matches.at(-1)?.[0];
-  if (json === undefined) {
-    throw new Error("FFmpeg loudnorm output did not contain a measurement object.");
-  }
-  const parsed: unknown = JSON.parse(json);
-  if (!isUnknownRecord(parsed)) {
-    throw new Error("FFmpeg loudnorm measurement was not an object.");
-  }
+  const parsed = loudnormOutput(stderr);
   return {
     inputI: numericField(parsed, "input_i"),
     inputTp: numericField(parsed, "input_tp"),

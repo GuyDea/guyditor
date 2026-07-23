@@ -123,6 +123,7 @@ export {
   ebur128MeasureCommand,
   loudnormMeasureCommand,
   loudnormNormalizeCommand,
+  loudnormOutputIsSilent,
   parseEbur128Summary,
   parseLoudnormMeasurement,
 } from "./loudness.js";
