@@ -27,6 +27,15 @@ interface GlobalProgressProps {
 function revealPanel(panel: PanelId): void {
   const workspace = useWorkspaceStore.getState();
   if (workspace.collapsed[panel]) workspace.togglePanel(panel);
+  if (panel === "media" || panel === "preview" || panel === "transcript" ||
+    panel === "inspector" || panel === "agent" || panel === "timeline" || panel === "status") {
+    for (const [regionId, region] of Object.entries(workspace.layout.regions)) {
+      if (region.panelIds.includes(panel)) {
+        workspace.activatePanel(regionId as keyof typeof workspace.layout.regions, panel);
+        break;
+      }
+    }
+  }
   workspace.focusPanel(panel);
   queueMicrotask(() => document.querySelector<HTMLElement>(`[data-panel="${panel}"]`)?.focus());
 }
