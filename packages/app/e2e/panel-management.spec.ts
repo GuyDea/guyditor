@@ -161,3 +161,65 @@ test("agent and inspector content scroll internally at their minimum layout size
     await rm(template, { recursive: true, force: true });
   }
 });
+
+test("section 10.1 default layout fits a 1920x1080 viewport without outer clipping", async () => {
+  const template = await createWorkspaceProject({ proposal: true });
+  const launched = await launchApp({ projectTemplate: template });
+  try {
+    await launched.page.setViewportSize({ width: 1920, height: 1080 });
+    await launched.page.getByTestId("reset-layout").click();
+
+    const measurements = await launched.page.getByTestId("workspace-layout")
+      .evaluate((workspace) => {
+        const bounds = workspace.getBoundingClientRect();
+        return {
+          documentHeight: document.documentElement.scrollHeight,
+          documentWidth: document.documentElement.scrollWidth,
+          viewportHeight: window.innerHeight,
+          viewportWidth: window.innerWidth,
+          workspaceHeight: workspace.clientHeight,
+          workspaceScrollHeight: workspace.scrollHeight,
+          workspaceScrollWidth: workspace.scrollWidth,
+          workspaceWidth: workspace.clientWidth,
+          workspaceBottom: bounds.bottom,
+          workspaceRight: bounds.right,
+        };
+      });
+
+    expect(measurements).toMatchObject({
+      documentHeight: 1080,
+      documentWidth: 1920,
+      viewportHeight: 1080,
+      viewportWidth: 1920,
+      workspaceScrollHeight: measurements.workspaceHeight,
+      workspaceScrollWidth: measurements.workspaceWidth,
+      workspaceBottom: 1054,
+      workspaceRight: 1920,
+    });
+
+    const regionBounds = await launched.page.locator("[data-testid^='dock-region-']")
+      .evaluateAll((regions) => regions.map((region) => {
+        const bounds = region.getBoundingClientRect();
+        return {
+          bottom: bounds.bottom,
+          height: bounds.height,
+          left: bounds.left,
+          right: bounds.right,
+          top: bounds.top,
+          width: bounds.width,
+        };
+      }));
+    expect(regionBounds).not.toHaveLength(0);
+    for (const bounds of regionBounds) {
+      expect(bounds.left).toBeGreaterThanOrEqual(0);
+      expect(bounds.top).toBeGreaterThanOrEqual(52);
+      expect(bounds.right).toBeLessThanOrEqual(1920);
+      expect(bounds.bottom).toBeLessThanOrEqual(1054);
+      expect(bounds.width).toBeGreaterThan(0);
+      expect(bounds.height).toBeGreaterThan(0);
+    }
+  } finally {
+    await launched.electronApp.close();
+    await rm(template, { recursive: true, force: true });
+  }
+});

@@ -139,12 +139,13 @@ describe("workspace renderer state", () => {
   });
 
   it("clamps every splitter to its supported range", () => {
-    expect(clampSplitterValue("left", -100)).toBe(190);
+    expect(clampSplitterValue("left", -100)).toBe(220);
     expect(clampSplitterValue("right", 9_999)).toBe(520);
+    expect(clampSplitterValue("right", -100)).toBe(280);
     expect(clampSplitterValue("center-horizontal", 0.01)).toBe(0.25);
     expect(clampSplitterValue("right-horizontal", 0.99)).toBe(0.75);
-    expect(clampSplitterValue("timeline", 10)).toBe(96);
-    expect(clampSplitterValue("status", -1_000)).toBe(96);
+    expect(clampSplitterValue("timeline", 10)).toBe(112);
+    expect(clampSplitterValue("status", -1_000)).toBe(112);
     expect(clampSplitterValue("status", 1_000)).toBe(220);
   });
 
