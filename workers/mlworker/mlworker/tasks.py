@@ -8,6 +8,7 @@ from typing import Any, Callable
 
 from .alignment import align
 from .tracking import track
+from .matting import matte
 
 
 ProgressCallback = Callable[[float, str], None]
@@ -237,6 +238,7 @@ def vad(params: dict[str, Any], progress: ProgressCallback) -> dict[str, Any]:
 
 TASKS: dict[str, Callable[[dict[str, Any], ProgressCallback], dict[str, Any]]] = {
     "align": align,
+    "matte": matte,
     "transcribe": transcribe,
     "track": track,
     "vad": vad,

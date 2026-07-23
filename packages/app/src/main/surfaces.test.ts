@@ -35,6 +35,7 @@ describe("workspace IPC surfaces", () => {
         "compareTakes", "selectTake",
       ],
       AnnotationService: ["list", "get", "contextPackage"],
+      CompositorModel: ["matteCandidates", "acceptMatteCandidate"],
       SkillRegistry: [
         "list",
         "versions",
@@ -53,7 +54,10 @@ describe("workspace IPC surfaces", () => {
         "captureExample",
       ],
       AdapterRegistry: ["list"],
-      DeliverableService: ["restylePlan", "createRestylePlan", "startRestyle", "setRestyleSeamTreatment"],
+      DeliverableService: [
+        "restylePlan", "createRestylePlan", "startRestyle", "setRestyleSeamTreatment",
+        "previewOtioExport", "exportOtio",
+      ],
       RenderService: [
         "renderExport",
         "exportReport",

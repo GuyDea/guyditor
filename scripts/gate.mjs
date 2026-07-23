@@ -61,13 +61,16 @@ export const M3_COMMANDS = Object.freeze([
   Object.freeze({ args: ["test:ac", "--", "m3"], command: "pnpm" }),
 ]);
 
-export const M4_PARTIAL_COMMANDS = Object.freeze([
+export const M4_COMMANDS = Object.freeze([
   Object.freeze({ args: ["fixtures"], command: "pnpm" }),
   Object.freeze({ args: ["check:conventions"], command: "pnpm" }),
-  Object.freeze({ args: ["-r", "typecheck"], command: "pnpm" }),
-  Object.freeze({ args: ["-r", "lint"], command: "pnpm" }),
-  Object.freeze({ args: ["exec", "vitest", "run", "--project", "unit"], command: "pnpm" }),
+  Object.freeze({ args: ["test"], command: "pnpm" }),
+  Object.freeze({ args: ["test:contract"], command: "pnpm" }),
   Object.freeze({ args: ["test:golden"], command: "pnpm" }),
+  Object.freeze({ args: ["test:e2e"], command: "pnpm" }),
+  Object.freeze({ args: ["test:ac", "--", "m1"], command: "pnpm" }),
+  Object.freeze({ args: ["test:ac", "--", "m2"], command: "pnpm" }),
+  Object.freeze({ args: ["test:ac", "--", "m3"], command: "pnpm" }),
   Object.freeze({ args: ["test:ac", "--", "m4"], command: "pnpm" }),
 ]);
 
@@ -140,16 +143,18 @@ export const M3_IDS = Object.freeze([
   "AC-011",
 ]);
 
-export const M4_PARTIAL_IDS = Object.freeze([
-  "FR-700",
-  "FR-701",
-  "FR-705",
-  "AC-010",
+export const M4_IDS = Object.freeze([
+  "FR-304",
+  "FR-503",
+  ...identifiers("FR", 603, 606, 3),
+  ...identifiers("FR", 700, 705, 3),
   "NFR-102",
-  "NFR-106",
   "NFR-107",
   "NFR-108",
   "NFR-109",
+  "FR-1102",
+  "AC-009",
+  "AC-010",
   "AC-012",
 ]);
 
@@ -254,17 +259,17 @@ export function validateM3Traceability(markdown) {
   return errors;
 }
 
-export function validateM4PartialTraceability(markdown) {
+export function validateM4Traceability(markdown) {
   const rows = traceabilityRows(markdown);
   const errors = [];
-  for (const id of M4_PARTIAL_IDS) {
+  for (const id of M4_IDS) {
     const row = rows.get(id);
     if (row === undefined) {
       errors.push(`${id}: traceability row is missing`);
       continue;
     }
     if (row.status !== "implemented") {
-      errors.push(`${id}: M4 partial gate requires status implemented (received ${row.status})`);
+      errors.push(`${id}: M4 gate requires status implemented (received ${row.status})`);
     }
     if (row.evidence.length === 0) errors.push(`${id}: test evidence is required`);
   }
@@ -292,7 +297,7 @@ function emitGateReport({ date, dogfoodSkipped, milestone, traceabilityCount }) 
     ? "skipped by coordinator (`--skip-dogfood`); TODO before creator sign-off"
     : "complete";
   const commandRows = (milestone === "m4"
-    ? M4_PARTIAL_COMMANDS
+    ? M4_COMMANDS
     : milestone === "m3" ? M3_COMMANDS
     : milestone === "m2" ? M2_PARTIAL_COMMANDS
     : milestone === "m1" ? M1_COMMANDS : M0_COMMANDS)
@@ -338,7 +343,7 @@ export function runGate(
     ? M0_COMMANDS
     : milestone === "m1" ? M1_COMMANDS
     : milestone === "m2" ? M2_PARTIAL_COMMANDS
-    : milestone === "m3" ? M3_COMMANDS : M4_PARTIAL_COMMANDS;
+    : milestone === "m3" ? M3_COMMANDS : M4_COMMANDS;
   for (const { command, args } of commands) {
     const display = commandText(command, args);
     const executable = platform === "win32" && command === "pnpm" ? `${command}.cmd` : command;
@@ -398,7 +403,7 @@ export function runGate(
       ? validateM2PartialTraceability(traceability)
       : milestone === "m3"
         ? validateM3Traceability(traceability)
-        : validateM4PartialTraceability(traceability);
+        : validateM4Traceability(traceability);
   if (traceabilityErrors.length > 0) {
     error(`gate ${milestone}: traceability failed: ${traceabilityErrors.join("; ")}`);
     return 1;
@@ -406,7 +411,7 @@ export function runGate(
   const traceabilityCount = milestone === "m1"
     ? M1_SHIP_IDS.length + M1_AC_IDS.length
     : milestone === "m2" ? M2_PARTIAL_IDS.length
-    : milestone === "m3" ? M3_IDS.length : M4_PARTIAL_IDS.length;
+    : milestone === "m3" ? M3_IDS.length : M4_IDS.length;
   log(`gate ${milestone}: traceability passed for ${String(traceabilityCount)} rows`);
 
   if (milestone === "m2") {
@@ -415,7 +420,41 @@ export function runGate(
   }
 
   if (milestone === "m4") {
-    log("gate m4: automated scope passed (editorial skills, storage, backup, archival, restore, migration, AC-010, AC-012); physical-machine restore remains dogfood-gated");
+    if (skipDogfood) {
+      log("!!! M4 DOGFOOD WAS SKIPPED — MANUAL SIGN-OFF STILL REQUIRES:");
+      log("- real-episode reuse test");
+      log("- cross-machine restore");
+      log("- real critic/director judgments");
+    } else {
+      let dogfood;
+      try {
+        dogfood = readDogfoodReport("m4");
+      } catch (dogfoodError) {
+        error(`gate m4: missing docs/dogfood/M4-episode.md: ${dogfoodError.message}`);
+        return 1;
+      }
+      const missing = [
+        [/real[- ]episode.*reuse/iu, "real-episode reuse test"],
+        [/cross[- ]machine.*restore/iu, "cross-machine restore"],
+        [/critic.*director|director.*critic/iu, "real critic/director judgments"],
+      ].flatMap(([pattern, label]) => pattern.test(dogfood) ? [] : [label]);
+      if (missing.length > 0) {
+        error(`gate m4: dogfood report is incomplete; missing ${missing.join(", ")}`);
+        return 1;
+      }
+      log("gate m4: real-episode reuse, cross-machine restore, and critic/director judgments are recorded");
+    }
+    let reportPath;
+    try {
+      reportPath = writeGateReport({
+        date: currentDate(), dogfoodSkipped: skipDogfood, milestone, traceabilityCount,
+      });
+    } catch (reportError) {
+      error(`gate m4: could not emit gate report: ${reportError.message}`);
+      return 1;
+    }
+    log(`gate m4: wrote ${path.relative(process.cwd(), reportPath)}`);
+    log("gate m4: full M4 milestone scope passed, including AC-009, AC-010, AC-012, and every earlier gate");
     return 0;
   }
 

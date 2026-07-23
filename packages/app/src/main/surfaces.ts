@@ -392,6 +392,29 @@ export const IPC_SURFACES: readonly IpcSurface[] = Object.freeze([
         resultSchema: anyResult,
         budgetMs: 20,
       },
+      matteCandidates: {
+        paramsSchema: {
+          type: "object",
+          required: ["clipId"],
+          properties: { clipId: { type: "string", pattern: "^clp_[a-z2-7]{10}$" } },
+          additionalProperties: false,
+        },
+        resultSchema: { type: "array" },
+        budgetMs: 20,
+      },
+      acceptMatteCandidate: {
+        paramsSchema: {
+          type: "object",
+          required: ["clipId", "jobId"],
+          properties: {
+            clipId: { type: "string", pattern: "^clp_[a-z2-7]{10}$" },
+            jobId: { type: "string", pattern: "^job_[a-z2-7]{10}$" }
+          },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 150,
+      },
       captureGuidance: {
         paramsSchema: assetIdParams,
         resultSchema: anyResult,
@@ -699,6 +722,36 @@ export const IPC_SURFACES: readonly IpcSurface[] = Object.freeze([
           additionalProperties: false,
         },
         resultSchema: { type: "array" },
+        budgetMs: 150,
+      },
+      previewOtioExport: {
+        paramsSchema: {
+          type: "object",
+          required: ["deliverableId", "mediaPaths", "includeBeatsAsMarkers", "includeAnnotationsAsMarkers"],
+          properties: {
+            deliverableId: { type: "string", pattern: "^dlv_[a-z2-7]{10}$" },
+            mediaPaths: { enum: ["absolute", "relative"] },
+            includeBeatsAsMarkers: { type: "boolean" },
+            includeAnnotationsAsMarkers: { type: "boolean" },
+          },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 150,
+      },
+      exportOtio: {
+        paramsSchema: {
+          type: "object",
+          required: ["deliverableId", "mediaPaths", "includeBeatsAsMarkers", "includeAnnotationsAsMarkers"],
+          properties: {
+            deliverableId: { type: "string", pattern: "^dlv_[a-z2-7]{10}$" },
+            mediaPaths: { enum: ["absolute", "relative"] },
+            includeBeatsAsMarkers: { type: "boolean" },
+            includeAnnotationsAsMarkers: { type: "boolean" },
+          },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
         budgetMs: 150,
       },
       renderOutputSet: { paramsSchema: deliverableIdParams, resultSchema: anyResult, budgetMs: 150 },

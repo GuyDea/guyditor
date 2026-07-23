@@ -5,6 +5,7 @@ import os
 from typing import Any
 
 from . import __version__
+from .matting import available_models, engine_version
 
 
 def disabled_tasks() -> set[str]:
@@ -79,6 +80,16 @@ def advertised_capabilities() -> list[dict[str, Any]]:
                 "task": "track",
                 "engine": "mediapipe",
                 "engineVersion": _package_version("mediapipe"),
+            }
+        )
+    matte_models = available_models()
+    if util.find_spec("torch") is not None and matte_models and "matte" not in disabled:
+        capabilities.append(
+            {
+                "task": "matte",
+                "engine": "rvm",
+                "engineVersion": engine_version(),
+                "models": matte_models,
             }
         )
     return capabilities

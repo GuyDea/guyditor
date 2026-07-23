@@ -120,7 +120,7 @@ export const M3_AC_COMMANDS = Object.freeze([
   }),
 ]);
 
-export const M4_PARTIAL_AC_COMMANDS = Object.freeze([
+export const M4_AC_COMMANDS = Object.freeze([
   Object.freeze({
     command: "pnpm",
     args: [
@@ -141,8 +141,21 @@ export const M4_PARTIAL_AC_COMMANDS = Object.freeze([
       "packages/core/src/jobs/preflight.test.ts",
       "packages/core/src/migration/migration.test.ts",
       "packages/app/src/renderer/panels/StoragePanel.test.ts",
+      "packages/deliver/src/otio.test.ts",
+      "packages/compositor/src/index.test.ts",
+      "packages/media/src/key-qc.test.ts",
+      "packages/media/src/mlworker/executors.test.ts",
+      "packages/render/src/filtergraph.test.ts",
     ],
   }),
+  Object.freeze({
+    command: "pnpm",
+    args: [
+      "exec", "vitest", "run", "--project", "golden",
+      "packages/render/test/golden/ac009.golden.test.ts",
+    ],
+  }),
+  Object.freeze({ command: "pnpm", args: ["exec", "vitest", "run", "--project", "contract", "-t", "schema-valid FFV1 matte"] }),
   Object.freeze({ command: "pnpm", args: ["--filter", "@guyditor/app", "build"] }),
 ]);
 
@@ -167,7 +180,7 @@ export function main(args = process.argv.slice(2)) {
   const commands = milestone === "m1"
     ? M1_AC_COMMANDS
     : milestone === "m2" ? M2_AC_COMMANDS
-    : milestone === "m3" ? M3_AC_COMMANDS : M4_PARTIAL_AC_COMMANDS;
+    : milestone === "m3" ? M3_AC_COMMANDS : M4_AC_COMMANDS;
   for (const { command, args: commandArgs } of commands) {
     const status = run(command, commandArgs);
     if (status !== 0) return status;
@@ -178,7 +191,7 @@ export function main(args = process.argv.slice(2)) {
       ? "test:ac m2: AC-003 captions, AC-005 keyed presenter diagnostics, and AC-006 semantic PiP passed"
       : milestone === "m3"
         ? "test:ac m3: AC-007 output sets, AC-008 lifecycle, and AC-011 upload packaging passed"
-        : "test:ac m4: AC-010 preference reuse and AC-012 verified clean-machine restore passed");
+        : "test:ac m4: AC-009 restore/rebuild, AC-010 preference reuse, and AC-012 verified clean-machine restore passed");
   return 0;
 }
 

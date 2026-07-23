@@ -290,11 +290,42 @@ function dominantChannel(color: string): "green" | "blue" | undefined {
 function keyParams(
   settings: KeySettings,
   clipId: string,
+  project: GuyditorProject,
   options: CompileRenderGraphOptions,
 ): KeyNodeParams | undefined {
   if (settings.mode === "off") return undefined;
+  const masks = settings.masks.map((mask) => {
+    const supplied = options.maskAssets?.[mask.id];
+    const hash = createHash("sha256").update(JSON.stringify(mask)).digest("hex");
+    return {
+      id: mask.id,
+      role: mask.role,
+      path: supplied?.path ?? `.guyditor/cache/masks/${hash}.png`,
+      sha256: supplied?.sha256 ?? hash,
+      animated: supplied?.animated ?? mask.frames !== undefined,
+    };
+  });
   if (settings.mode === "neural") {
-    unsupported(`neural matte on ${clipId}`, "Part 6 §6.5 (deferred)", [clipId]);
+    const neural = settings.neural;
+    if (neural?.matteAssetId === undefined) {
+      graphInvalid(`Neural key on ${clipId} has no accepted frozen matte asset.`, [clipId]);
+    }
+    const matte = project.assets.find(({ id }) => id === neural.matteAssetId);
+    if (matte === undefined || matte.kind !== "generated" || matte.provenance === undefined) {
+      graphInvalid(`Neural key on ${clipId} references a non-frozen matte asset.`, [clipId, neural.matteAssetId]);
+    }
+    const chroma = settings.chroma;
+    const channel = chroma?.spill.mode === "despill" ? dominantChannel(chroma.keyColor) : undefined;
+    return {
+      method: "neuralMatte",
+      matteAssetId: matte.id,
+      masks,
+      ...(chroma === undefined ? {} : {
+        keyColor: chroma.keyColor,
+        spill: { ...structuredClone(chroma.spill), ...(channel === undefined ? {} : { channel }) },
+      }),
+      ...(settings.postColor === undefined ? {} : { postColor: structuredClone(settings.postColor) }),
+    };
   }
   const chroma = settings.chroma;
   if (chroma === undefined) graphInvalid(`Chroma key on ${clipId} has no parameters.`, [clipId]);
@@ -314,17 +345,7 @@ function keyParams(
     preBlur: chroma.preBlur,
     edge: structuredClone(chroma.edge),
     spill: { ...structuredClone(chroma.spill), ...(channel === undefined ? {} : { channel }) },
-    masks: settings.masks.map((mask) => {
-      const supplied = options.maskAssets?.[mask.id];
-      const hash = createHash("sha256").update(JSON.stringify(mask)).digest("hex");
-      return {
-        id: mask.id,
-        role: mask.role,
-        path: supplied?.path ?? `.guyditor/cache/masks/${hash}.png`,
-        sha256: supplied?.sha256 ?? hash,
-        animated: supplied?.animated ?? mask.frames !== undefined,
-      };
-    }),
+    masks,
     ...(settings.postColor === undefined ? {} : { postColor: structuredClone(settings.postColor) }),
   };
 }
@@ -758,8 +779,43 @@ export function compileRenderGraph(options: CompileRenderGraphOptions): RenderGr
     const trim = pushNode(nodes, nextId, "trim", [sourceNode.id], trimParams);
     let root = trim;
     if (keyEffect !== undefined) {
-      const key = keyParams(keyEffect.params as unknown as KeySettings, owner.id, options);
-      if (key !== undefined) root = pushNode(nodes, nextId, "key", [root.id], key);
+      const key = keyParams(keyEffect.params as unknown as KeySettings, owner.id, project, options);
+      if (key !== undefined) {
+        const inputs = [root.id];
+        if (key.method === "neuralMatte") {
+          const matte = project.assets.find(({ id }) => id === key.matteAssetId);
+          if (matte === undefined || matte.probe.duration === undefined || !("frames" in matte.probe.duration)) {
+            graphInvalid(`Frozen matte for ${owner.id} has no frame duration.`, [owner.id, String(key.matteAssetId)]);
+          }
+          const matteAnalysis = matte.analyses?.["matte"] as {
+            sourceFrames?: { from?: unknown; to?: unknown };
+          } | undefined;
+          const generatedFrom = matteAnalysis?.sourceFrames?.from;
+          const generatedTo = matteAnalysis?.sourceFrames?.to;
+          if (typeof generatedFrom !== "number" || typeof generatedTo !== "number") {
+            graphInvalid(`Frozen matte for ${owner.id} has no source-frame mapping.`, [owner.id, matte.id]);
+          }
+          const matteIn = source.in.frames - generatedFrom;
+          const matteOut = source.out.frames - generatedFrom;
+          if (matteIn < 0 || matteOut > generatedTo - generatedFrom + 1 || matteOut <= matteIn) {
+            graphInvalid(`Frozen matte for ${owner.id} does not cover the current source range.`, [owner.id, matte.id]);
+          }
+          const matteSource = pushNode(nodes, nextId, "source", [], {
+            assetId: matte.id,
+            assetSha256: matte.sha256,
+            stream: "video",
+            path: matte.path,
+            useProxy: false,
+          } satisfies SourceNodeParams);
+          const matteTrim: TrimNodeParams = {
+            in: { frames: matteIn, fps: matte.probe.duration.fps },
+            out: { frames: matteOut, fps: matte.probe.duration.fps },
+          };
+          if (speed !== undefined) matteTrim.speed = speed;
+          inputs.push(pushNode(nodes, nextId, "trim", [matteSource.id], matteTrim).id);
+        }
+        root = pushNode(nodes, nextId, "key", inputs, key);
+      }
     }
     for (const effect of owner.effects?.filter(({ kind }) => kind === "color" || kind === "look") ?? []) {
       root = pushNode(nodes, nextId, "color", [root.id], {

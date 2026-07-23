@@ -72,5 +72,8 @@ describe("PublishPanel", () => {
     expect(html).toContain("Keyed cutout");
     expect(html).toContain("Batch export");
     expect(html).toContain("Build upload kit");
+    expect(html).toContain("OpenTimelineIO interchange");
+    expect(html).toContain("Review OTIO losses");
+    expect(html).toContain("Export .otio");
   });
 });

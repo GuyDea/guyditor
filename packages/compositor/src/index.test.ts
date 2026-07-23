@@ -116,4 +116,30 @@ describe("@guyditor/compositor", () => {
     });
     expect(requests).toEqual(["clp_aaaaaaaaaa"]);
   });
+
+  it("dispatches capability-gated neural matte generation without mutating the project", async () => {
+    const requests: string[] = [];
+    const compositor = new CompositorModel({
+      onMatteGenerate: ({ clipId, neural }) => { requests.push(`${clipId}:${neural.model}`); },
+    });
+    const project = projectFixture();
+    const engine = new OperationEngine(project, { operationDispatcher: compositor.dispatchOperation });
+    const queued = await engine.execute([{
+      op: "key.matte.generate",
+      params: {
+        clipId: "clp_aaaaaaaaaa",
+        neural: {
+          model: "rvm_mobilenetv3",
+          downsampleRatio: 0.5,
+          stabilization: { enabled: true, alphaMin: 0.35, motionGain: 4, minSpeckleArea: 0.00001 },
+        },
+      },
+    }], { baseRevision: project.revision, origin: "ui", dryRun: false });
+    expect(queued).toMatchObject({
+      ok: true,
+      value: { riskClass: "low", applied: [{ affected: ["clp_aaaaaaaaaa"], inverse: [] }] },
+    });
+    expect(requests).toEqual(["clp_aaaaaaaaaa:rvm_mobilenetv3"]);
+    expect(engine.currentProject.assets).toEqual(project.assets);
+  });
 });

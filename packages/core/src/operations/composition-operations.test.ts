@@ -292,6 +292,27 @@ describe("FR-502 key settings operations", () => {
       expect(result).toMatchObject({ ok: false, error: { code: testCase.code } });
     }
   });
+
+  it("rejects an accepted neural key until its matte is a frozen generated asset", async () => {
+    const project = projectFixture();
+    const result = await new OperationEngine(project).execute([{
+      op: "clip.key.set",
+      params: {
+        clipId: "clp_aaaaaaaaaa",
+        settings: {
+          schema: "guyditor/key@1",
+          mode: "neural",
+          neural: {
+            model: "rvm_mobilenetv3",
+            downsampleRatio: 0.5,
+            stabilization: { enabled: true, alphaMin: 0.35, motionGain: 4, minSpeckleArea: 0.00001 },
+          },
+          masks: [],
+        },
+      },
+    }], { baseRevision: project.revision, origin: "ui", dryRun: false });
+    expect(result).toMatchObject({ ok: false, error: { code: "E_MATTE_UNFROZEN" } });
+  });
 });
 
 describe("FR-306 static clip transforms", () => {

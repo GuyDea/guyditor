@@ -25,6 +25,7 @@ class WorkerProcess:
         env = os.environ.copy()
         env.update(extra_env or {})
         env["PYTHONNOUSERSITE"] = "1"
+        env.setdefault("GUYDITOR_RVM_TEST_STUB", "1")
         env.setdefault(
             "GUYDITOR_ML_MODEL_DIR",
             str(WORKER_ROOT / ".uv-cache" / "models"),
@@ -124,6 +125,7 @@ def test_hello_advertises_importable_capabilities(worker: WorkerProcess) -> None
     assert isinstance(capabilities, list)
     assert {capability["task"] for capability in capabilities} == {
         "align",
+        "matte",
         "track",
         "transcribe",
         "vad",
@@ -140,10 +142,19 @@ def test_hello_advertises_importable_capabilities(worker: WorkerProcess) -> None
         "engineVersion": pytest.importorskip("torchaudio").__version__,
         "models": ["wav2vec2-base-960h"],
     }
+    matte_capability = next(
+        capability for capability in capabilities if capability["task"] == "matte"
+    )
+    assert matte_capability == {
+        "task": "matte",
+        "engine": "rvm",
+        "engineVersion": "contract-stub-1",
+        "models": ["rvm_mobilenetv3", "rvm_resnet50"],
+    }
 
 
 def test_disable_env_omits_capabilities_without_preventing_startup() -> None:
-    worker = WorkerProcess({"GUYDITOR_ML_DISABLE": "align,track,transcribe,vad"})
+    worker = WorkerProcess({"GUYDITOR_ML_DISABLE": "align,matte,track,transcribe,vad"})
     try:
         hello = worker.read()
         params = hello["params"]
@@ -234,6 +245,88 @@ def test_track_disable_flag_is_honest_and_worker_stays_available() -> None:
         assert "track" not in {capability["task"] for capability in capabilities}
         worker.send({"jsonrpc": "2.0", "id": 1, "method": "ping", "params": {}})
         assert worker.response(1)["result"] == {"pong": True}
+    finally:
+        worker.close()
+
+
+def test_matte_greenscreen_contract_has_ffv1_alpha(
+    tmp_path: Path,
+) -> None:
+    greenscreen = REPOSITORY_ROOT / ".fixtures" / "greenscreen-720p30-6s.mp4"
+    if not greenscreen.is_file():
+        pytest.skip("run pnpm fixtures first")
+    worker = WorkerProcess()
+    try:
+        hello = worker.read()
+        capabilities = hello["params"]["capabilities"]
+        assert "matte" in {capability["task"] for capability in capabilities}
+        worker.send(
+            {
+                "jsonrpc": "2.0",
+                "id": 41,
+                "method": "matte",
+                "params": {
+                    "taskId": "job_mattecase2",
+                    "input": {
+                        "path": str(greenscreen),
+                        "frames": {"from": 0, "to": 5},
+                        "fps": "30/1",
+                        "shotBoundaries": [3],
+                    },
+                    "params": {
+                        "model": "rvm_mobilenetv3",
+                        "downsampleRatio": 0.5,
+                        "stabilization": {
+                            "enabled": True,
+                            "alphaMin": 0.35,
+                            "motionGain": 4.0,
+                            "minSpeckleArea": 1e-5,
+                        },
+                    },
+                    "output": {
+                        "dir": str(tmp_path / "mattes"),
+                        "format": "ffv1-gray-mkv",
+                    },
+                },
+            }
+        )
+        progress: list[float] = []
+        response: dict[str, object] | None = None
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            message = worker.read(max(0.01, deadline - time.monotonic()))
+            if message.get("method") == "$/progress":
+                progress.append(float(message["params"]["progress"]))
+            if message.get("id") == 41:
+                response = message
+                break
+        assert response is not None
+        assert "error" not in response, worker.stderr
+        assert progress and progress[-1] == 1
+        result = response["result"]
+        assert result["schema"] == "guyditor.matte/v1"
+        assert result["format"] == "ffv1-gray-mkv"
+        assert result["frameCount"] == 6
+        assert result["fps"] == "30/1"
+        assert result["alpha"]["minimum"] < result["alpha"]["maximum"]
+        assert result["alpha"]["nonZeroFrames"] == 6
+        assert len(result["sha256"]) == 64
+        matte_path = Path(result["path"])
+        assert matte_path.is_file()
+        probe = subprocess.run(
+            [
+                "ffprobe", "-v", "error", "-select_streams", "v:0", "-count_frames",
+                "-show_entries", "stream=codec_name,pix_fmt,nb_read_frames",
+                "-of", "json", str(matte_path),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        stream = json.loads(probe.stdout)["streams"][0]
+        assert stream["codec_name"] == "ffv1"
+        assert stream["pix_fmt"] in {"gray", "gray8"}
+        assert stream["nb_read_frames"] == "6"
     finally:
         worker.close()
 

@@ -35,7 +35,6 @@ import {
   buildCaptureGuidanceReport,
   CaptureWatcher,
   createSubjectTrackAnalysis,
-  enqueueKeyQc,
   loadPeaks,
   MediaEngine,
   MlworkerSupervisor,
@@ -49,9 +48,7 @@ import {
   writeCaptureGuidanceReport,
   StorageAccountant,
 } from "../../../media/src/index.js";
-import type {
-  KeyQcJobPayload, KeyQcReport, MlworkerTrackResult, SubjectTrackAnalysis,
-} from "../../../media/src/index.js";
+import type { KeyQcJobPayload, KeyQcReport, MlworkerTrackResult, SubjectTrackAnalysis } from "../../../media/src/index.js";
 import {
   compileFillerProposal,
   createAnnotationTranscriptSource,
@@ -111,6 +108,7 @@ import {
 import type {
   DeliverableTranscript,
   DerivationSelection,
+  OtioExportOptions,
   PublishMetadata,
   PublishFileResult,
   RestylePlanningSignals,
@@ -137,6 +135,8 @@ import {
   recoveryService,
 } from "./recovery-service.js";
 import type { ProjectServices } from "./project-services.js";
+import { MatteService } from "./matte-service.js";
+import { OtioService } from "./otio-service.js";
 
 interface AppHostSettings {
   auditRetentionDays: number;
@@ -690,6 +690,7 @@ export class WindowServiceHost {
     const store = resultValue(opened);
     this.#closeProject();
     const annotations = new AnnotationService({ appVersion: this.#app.appVersion });
+    const otio = new OtioService({ store, annotations });
     const restyleRuntime: { service?: RestyleExecutionService } = {};
     const storage = new StorageAccountant({ userDirectory: this.#app.userDirectory });
     const { queue: jobs } = JobQueue.open(join(store.root, ".guyditor/jobs.sqlite"), {
@@ -961,28 +962,15 @@ export class WindowServiceHost {
     });
     const media = new MediaEngine({ jobQueue: jobs, mlworker: this.#app.mlworker });
     registerKeyQcExecutor(jobs);
+    const matte = new MatteService({
+      store,
+      jobs,
+      mlworker: this.#app.mlworker,
+      execute: (request) => this.#execute(request),
+    });
     const compositor = new CompositorModel({
-      onKeyQcRun: ({ project, clipId, shotBoundaries }) => {
-        const clip = project.sequences.flatMap(({ clips }) => clips).find(({ id }) => id === clipId);
-        if (clip === undefined) throw new Error(`Clip ${clipId} does not exist.`);
-        const asset = project.assets.find(({ id }) => id === clip.asset);
-        const key = clip.effects?.find(({ kind }) => kind === "key");
-        if (asset === undefined || key === undefined) {
-          throw new Error(`Clip ${clipId} has no keyed source asset.`);
-        }
-        enqueueKeyQc(jobs, {
-          projectRoot: store.root,
-          sourcePath: isAbsolute(asset.path) ? asset.path : resolve(store.root, asset.path),
-          clipId,
-          assetId: asset.id,
-          width: asset.video?.width ?? asset.image?.width ?? project.settings.timeline.width,
-          height: asset.video?.height ?? asset.image?.height ?? project.settings.timeline.height,
-          frameCount: Math.max(1, clip.source.out.frames - clip.source.in.frames),
-          fps: clip.source.in.fps,
-          keySettings: key.params as unknown as KeyQcJobPayload["keySettings"],
-          shotBoundaries,
-        });
-      },
+      onKeyQcRun: matte.onKeyQcRun,
+      onMatteGenerate: matte.onMatteGenerate,
     });
     const transcript = new TranscriptEngine({
       appVersion: this.#app.appVersion,
@@ -1184,6 +1172,8 @@ export class WindowServiceHost {
       transcript,
       annotations,
       compositor,
+      matte,
+      otio,
       render,
       publish,
       batch,
@@ -1378,6 +1368,9 @@ export class WindowServiceHost {
       case "CompositorModel":
         return project === undefined ? undefined : {
           arrangements: () => project.compositor.arrangements(),
+          matteCandidates: ({ clipId }: { clipId: string }) => project.matte.candidates(clipId),
+          acceptMatteCandidate: ({ clipId, jobId }: { clipId: string; jobId: string }) =>
+            project.matte.accept(clipId, jobId),
           keyQcReport: ({ clipId }: { clipId: string }) => this.#readAnalysis<KeyQcReport>(
             `${clipId}.keyqc.json`,
           ),
@@ -1631,6 +1624,8 @@ export class WindowServiceHost {
             });
             return files;
           },
+          previewOtioExport: (params: OtioExportOptions) => project.otio.preview(params),
+          exportOtio: (params: OtioExportOptions) => project.otio.export(params),
           renderOutputSet: async ({ deliverableId }: { deliverableId: string }) => {
             const result = await project.render.renderOutputSet({
               deliverableId,

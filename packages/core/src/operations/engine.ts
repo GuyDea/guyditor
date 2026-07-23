@@ -48,6 +48,7 @@ import setClipPunchInSchema from "./schemas/clip.punchin.set.json" with { type: 
 import switchClipSourceSchema from "./schemas/clip.source.switch.json" with { type: "json" };
 import arrangeCompositionSchema from "./schemas/composition.arrange.json" with { type: "json" };
 import runKeyQcSchema from "./schemas/key.qc.run.json" with { type: "json" };
+import generateKeyMatteSchema from "./schemas/key.matte.generate.json" with { type: "json" };
 import setTransitionSchema from "./schemas/transition.set.json" with { type: "json" };
 import removeTransitionSchema from "./schemas/transition.remove.json" with { type: "json" };
 import assetIngestSchema from "./schemas/asset.ingest.json" with { type: "json" };
@@ -300,6 +301,7 @@ const catalog = new Map<string, CatalogEntry>([
   ["clip.source.switch", catalogEntry(switchClipSourceSchema, "normal", "none", "Switch {clip} to synchronized source {assetId}")],
   ["composition.arrange", catalogEntry(arrangeCompositionSchema, "normal", "none", "Arrange {sequence}")],
   ["key.qc.run", catalogEntry(runKeyQcSchema, "low", "none", "Analyze key quality for {clip}")],
+  ["key.matte.generate", catalogEntry(generateKeyMatteSchema, "low", "none", "Generate neural matte for {clip}")],
   ["clip.audio.gain.set", catalogEntry(setClipAudioGainSchema, "low", "none", "Set {clip} gain to {gainDb} dB")],
   ["clip.audio.fade.set", catalogEntry(setClipAudioFadeSchema, "low", "none", "Set audio fades on {clip}")],
   ["clip.audio.offset.set", catalogEntry(setClipAudioOffsetSchema, "normal", "none", "Shift {clip} audio by {offset}")],

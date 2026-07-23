@@ -13,6 +13,7 @@ import type {
   OperationDispatcher,
   OperationContext,
   OperationInput,
+  NeuralMatteParams,
   PipConfig,
   PipKeyframe,
   PipStyle,
@@ -107,6 +108,12 @@ export interface ArrangeCompositionParams {
 export interface CompositorModelOptions {
   idFactory?: (prefix: IdPrefix) => string;
   onKeyQcRun?: (request: { project: GuyditorProject; clipId: string; shotBoundaries: number[] }) => void;
+  onMatteGenerate?: (request: {
+    project: GuyditorProject;
+    clipId: string;
+    neural: NeuralMatteParams;
+    shotBoundaries: number[];
+  }) => void;
 }
 
 interface PipOperationParams {
@@ -213,10 +220,12 @@ function assetItem(
 export class CompositorModel {
   readonly #idFactory: (prefix: IdPrefix) => string;
   readonly #onKeyQcRun: CompositorModelOptions["onKeyQcRun"];
+  readonly #onMatteGenerate: CompositorModelOptions["onMatteGenerate"];
 
   public constructor(options: CompositorModelOptions = {}) {
     this.#idFactory = options.idFactory ?? makeId;
     this.#onKeyQcRun = options.onKeyQcRun;
+    this.#onMatteGenerate = options.onMatteGenerate;
   }
 
   public arrangements(): PresenterArrangement[] {
@@ -443,6 +452,25 @@ export class CompositorModel {
         inverse: [],
         affected: [clipId],
         summary: `Queued key quality analysis for ${clipId}`,
+      });
+    }
+    if (input.op === "key.matte.generate") {
+      const clipId = input.params["clipId"] as string;
+      const exists = project.sequences.some(({ clips }) => clips.some(({ id }) => id === clipId));
+      if (!exists) return compositorFailure("E_OP_NOT_FOUND", `Clip ${clipId} does not exist.`, [clipId]);
+      if (!context.dryRun) {
+        this.#onMatteGenerate?.({
+          project: structuredClone(project),
+          clipId,
+          neural: structuredClone(input.params["neural"] as unknown as NeuralMatteParams),
+          shotBoundaries: structuredClone((input.params["shotBoundaries"] as number[] | undefined) ?? []),
+        });
+      }
+      return success({
+        model: project,
+        inverse: [],
+        affected: [clipId],
+        summary: `Queued neural matte generation for ${clipId}`,
       });
     }
     if (input.op !== "composition.arrange") {

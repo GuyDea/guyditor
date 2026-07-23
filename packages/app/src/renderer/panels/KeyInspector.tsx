@@ -28,6 +28,33 @@ const DEFAULT_KEY: KeySettings = {
   masks: [],
 };
 
+const DEFAULT_NEURAL_KEY: KeySettings = {
+  schema: "guyditor/key@1",
+  mode: "neural",
+  neural: {
+    model: "rvm_mobilenetv3",
+    downsampleRatio: 0.5,
+    stabilization: {
+      enabled: true,
+      alphaMin: 0.35,
+      motionGain: 4,
+      minSpeckleArea: 0.00001,
+    },
+  },
+  chroma: structuredClone(DEFAULT_KEY.chroma!),
+  masks: [],
+};
+
+interface MatteCandidate {
+  jobId: string;
+  clipId: string;
+  path: string;
+  sha256: string;
+  frameCount: number;
+  alpha: { minimum: number; maximum: number; nonZeroFrames: number };
+  engine: { model: "rvm_mobilenetv3" | "rvm_resnet50"; version: string };
+}
+
 function persistedKey(clip: NonNullable<WorkspacePanelProps["snapshot"]>["master"]["sequences"][number]["clips"][number]): KeySettings | null {
   const effect = clip.effects?.find(({ kind }) => kind === "key");
   return effect === undefined ? null : effect.params as unknown as KeySettings;
@@ -56,8 +83,12 @@ export function KeyInspector({
   const [arrangements, setArrangements] = useState<PresenterArrangement[]>([]);
   const [arrangementId, setArrangementId] = useState("presenter_sandwich");
   const [assignments, setAssignments] = useState<Record<string, string>>({});
+  const [matteCandidates, setMatteCandidates] = useState<MatteCandidate[]>([]);
   const qcJobSignature = useMemo(() => jobs.filter(({ kind, title }) =>
     kind === "keyqc.analyze" && (selectedClipId === null || title.includes(selectedClipId)))
+    .map(({ jobId, state }) => `${jobId}:${state}`).join("|"), [jobs, selectedClipId]);
+  const matteJobSignature = useMemo(() => jobs.filter(({ kind, title }) =>
+    kind === "matte" && (selectedClipId === null || title.includes(selectedClipId)))
     .map(({ jobId, state }) => `${jobId}:${state}`).join("|"), [jobs, selectedClipId]);
 
   useEffect(() => {
@@ -93,6 +124,15 @@ export function KeyInspector({
   }, [asset?.id, clip?.id, qcJobSignature]);
 
   useEffect(() => {
+    if (clip === undefined) {
+      setMatteCandidates([]);
+      return;
+    }
+    void window.guyditor.call<MatteCandidate[]>("CompositorModel", "matteCandidates", { clipId: clip.id })
+      .then(setMatteCandidates).catch(() => setMatteCandidates([]));
+  }, [clip?.id, matteJobSignature]);
+
+  useEffect(() => {
     const arrangement = arrangements.find(({ id, name }) =>
       arrangementId === id || arrangementId === name);
     if (arrangement === undefined || snapshot === null) return;
@@ -115,6 +155,7 @@ export function KeyInspector({
   const selectedClip = clip;
   const projectSnapshot = snapshot;
   const chroma = settings?.mode === "chroma" ? settings.chroma : undefined;
+  const neural = settings?.mode === "neural" ? settings.neural : undefined;
 
   async function commit(next: KeySettings | null, label: string): Promise<void> {
     if (clip === undefined) return;
@@ -164,6 +205,34 @@ export function KeyInspector({
     }
   }
 
+  async function generateMatte(): Promise<void> {
+    if (neural === undefined) return;
+    const candidateParams = structuredClone(neural);
+    delete candidateParams.matteAssetId;
+    try {
+      await executeDirect([{
+        op: "key.matte.generate",
+        params: { clipId: selectedClip.id, neural: candidateParams },
+      }], `Generate neural matte for ${selectedClip.id}`);
+      setNotice(`Queued neural matte generation for ${selectedClip.id}.`);
+    } catch (error: unknown) {
+      setNotice(errorMessage(error));
+    }
+  }
+
+  async function acceptMatte(candidate: MatteCandidate): Promise<void> {
+    try {
+      await window.guyditor.call("CompositorModel", "acceptMatteCandidate", {
+        clipId: selectedClip.id,
+        jobId: candidate.jobId,
+      });
+      await refreshProject();
+      setNotice(`Accepted and froze neural matte ${candidate.jobId}.`);
+    } catch (error: unknown) {
+      setNotice(errorMessage(error));
+    }
+  }
+
   async function renderDiagnostic(): Promise<void> {
     if (diagnosticBackground === "none") return;
     const deliverable = projectSnapshot.master.deliverables.find(
@@ -208,12 +277,47 @@ export function KeyInspector({
   return (
     <section className="key-inspector" data-testid="key-inspector">
       <header><span className="panel-eyebrow">FR-502 · presenter key</span><strong>{clip.id}</strong></header>
-      {chroma === undefined ? (
-        <button type="button" data-testid="key-enable" onClick={() => {
+      <label>Key method<select data-testid="key-method" value={settings?.mode ?? "off"} onChange={(event) => {
+        if (event.currentTarget.value === "off") {
+          setSettings(null);
+          void commit(null, `Disable key on ${clip.id}`);
+        } else if (event.currentTarget.value === "chroma") {
           const next = structuredClone(DEFAULT_KEY);
           setSettings(next);
           void commit(next, `Enable chroma key on ${clip.id}`);
-        }}>Enable chroma key</button>
+        } else {
+          setSettings(structuredClone(DEFAULT_NEURAL_KEY));
+          setNotice("Neural matte selected for audition. Generate and accept a frozen matte to commit it.");
+        }
+      }}><option value="off">Off</option><option value="chroma">Chroma key</option><option value="neural">Neural matte (RVM)</option></select></label>
+      {chroma === undefined ? (
+        neural === undefined ? <div className="publish-actions"><button type="button" data-testid="key-enable" onClick={() => {
+            const next = structuredClone(DEFAULT_KEY);
+            setSettings(next);
+            void commit(next, `Enable chroma key on ${clip.id}`);
+          }}>Enable chroma key</button><button type="button" data-testid="matte-enable" onClick={() => {
+            setSettings(structuredClone(DEFAULT_NEURAL_KEY));
+            setNotice("Neural matte selected for audition. Generate and accept a frozen matte to commit it.");
+          }}>Use neural matte</button></div> : <div className="neural-matte-controls" data-testid="neural-matte-controls">
+          <label>RVM model<select value={neural.model} onChange={(event) => setSettings((current) => current?.neural === undefined ? current : {
+            ...current,
+            neural: { ...current.neural, model: event.currentTarget.value === "rvm_resnet50" ? "rvm_resnet50" : "rvm_mobilenetv3" },
+          })}><option value="rvm_mobilenetv3">MobileNetV3 · faster</option><option value="rvm_resnet50">ResNet50 · higher detail</option></select></label>
+          <label>Inference scale <output>{metricText(neural.downsampleRatio)}</output><input type="range" min="0.1" max="1" step="0.05" value={neural.downsampleRatio} onChange={(event) => setSettings((current) => current?.neural === undefined ? current : {
+            ...current,
+            neural: { ...current.neural, downsampleRatio: event.currentTarget.valueAsNumber },
+          })} /></label>
+          <label><input type="checkbox" checked={neural.stabilization.enabled} onChange={(event) => setSettings((current) => current?.neural === undefined ? current : {
+            ...current,
+            neural: { ...current.neural, stabilization: { ...current.neural.stabilization, enabled: event.currentTarget.checked } },
+          })} />Temporal stabilization</label>
+          {neural.matteAssetId === undefined ? <button type="button" data-testid="matte-generate" onClick={() => void generateMatte()}>Generate matte candidate</button> : <p className="state-chip" data-state="accepted">Frozen matte · {neural.matteAssetId}</p>}
+          {matteCandidates.map((candidate) => <div key={candidate.jobId} className="key-qc-report" data-testid="matte-candidate"><strong>{candidate.engine.model}</strong><p>{candidate.frameCount} frames · alpha {candidate.alpha.minimum}–{candidate.alpha.maximum} · {candidate.engine.version}</p><button type="button" data-testid="matte-accept" onClick={() => void acceptMatte(candidate)}>Accept + freeze matte</button></div>)}
+          <button type="button" data-testid="key-disable" onClick={() => {
+            setSettings(null);
+            void commit(null, `Disable neural matte on ${clip.id}`);
+          }}>Remove key</button>
+        </div>
       ) : (
         <>
           <div className="key-color-row">
@@ -240,7 +344,7 @@ export function KeyInspector({
         </select></label>
         <button type="button" data-testid="key-diagnostic-hq" disabled={diagnosticBackground === "none"} onClick={() => void renderDiagnostic()}>Render HQ diagnostic</button>
       </div>
-      <div className="key-qc-actions"><button type="button" data-testid="key-qc-run" disabled={chroma === undefined} onClick={() => void runQc()}>Run key QC</button></div>
+      <div className="key-qc-actions"><button type="button" data-testid="key-qc-run" disabled={chroma === undefined && neural?.matteAssetId === undefined} onClick={() => void runQc()}>Run key QC</button></div>
       {report === null ? <p className="empty-copy">No QC report for this key.</p> : (
         <div className="key-qc-report" data-testid="key-qc-report">
           <strong>{report.warnings.length === 0 ? "QC clear" : `${String(report.warnings.length)} QC warnings`}</strong>

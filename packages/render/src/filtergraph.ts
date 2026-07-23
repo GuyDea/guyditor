@@ -685,11 +685,64 @@ export function compileFiltergraph(graph: RenderGraph, outputPath?: string): Com
     labels.set(node.id, label);
   }
 
+  function compileNeuralMatte(node: RenderNode, key: KeyNodeParams): void {
+    const visual = compiledInput(node);
+    const matte = compiledInput(node, 1);
+    const label = compiledNodeLabel(node);
+    let alpha = `${label}a0`;
+    filters.push(`${inputLabel(matte)}format=gray[${alpha}]`);
+    for (const [index, mask] of (key.masks ?? []).entries()) {
+      const inputIndex = keyMaskInput.get(`${node.id}:${mask.id}`);
+      if (inputIndex === undefined) graphInvalid(`Mask input ${mask.id} is missing.`, [node.id, mask.id]);
+      const maskLabel = `${label}m${String(index)}`;
+      const nextAlpha = `${label}am${String(index)}`;
+      filters.push(`[${String(inputIndex)}:v]format=gray[${maskLabel}]`);
+      filters.push(
+        `[${alpha}][${maskLabel}]blend=all_mode=${mask.role === "garbage" ? "multiply" : "lighten"}` +
+        `[${nextAlpha}]`,
+      );
+      alpha = nextAlpha;
+    }
+    filters.push(`${inputLabel(visual)}format=yuva444p[${label}s0]`);
+    let current = `${label}f0`;
+    filters.push(`[${label}s0][${alpha}]alphamerge[${current}]`);
+    const spill = key.spill;
+    if (spill !== undefined && spill.mode === "despill") {
+      const next = `${label}f1`;
+      filters.push(
+        `[${current}]despill=type=${spill.channel ?? "green"}:mix=${numberText(spill.strength)}:` +
+        `expand=${numberText(0.5 * spill.strength)}[${next}]`,
+      );
+      current = next;
+    } else if (spill !== undefined && spill.mode === "average") {
+      const next = `${label}f1`;
+      filters.push(
+        `[${current}]${averageGeq(dominantGeqChannel(key.keyColor ?? "#00FF00"), numberText(spill.strength))}[${next}]`,
+      );
+      current = next;
+    }
+    if (key.postColor !== undefined) {
+      const next = `${label}color`;
+      const brightness = Math.max(-1, Math.min(1, 2 ** key.postColor.exposure - 1));
+      const stages = [
+        `eq=contrast=${numberText(key.postColor.contrast)}:` +
+        `brightness=${numberText(brightness)}:saturation=${numberText(key.postColor.saturation)}`,
+      ];
+      if (key.postColor.temperatureK !== undefined) {
+        stages.push(`colortemperature=temperature=${numberText(key.postColor.temperatureK)}`);
+      }
+      filters.push(`[${current}]${stages.join(",")}[${next}]`);
+      current = next;
+    }
+    if (current !== label) filters.push(`[${current}]null[${label}]`);
+    labels.set(node.id, label);
+  }
+
   function compileKey(node: RenderNode): void {
     const key = params<KeyNodeParams>(node, "key");
     if (key.method === "alphaMatte") compileAlphaMatte(node, key);
     else if (key.method === "chroma") compileChromaKey(node, key);
-    else unsupported(`neural matte node ${node.id}`, [node.id]);
+    else compileNeuralMatte(node, key);
   }
 
   function compileSequential(node: RenderNode, composite: CompositeNodeParams): void {

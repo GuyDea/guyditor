@@ -223,6 +223,7 @@ export type {
   MlworkerDevice,
   MlworkerError,
   MlworkerHello,
+  MlworkerMatteResult,
   MlworkerProgress,
   MlworkerRunOptions,
   MlworkerSegment,

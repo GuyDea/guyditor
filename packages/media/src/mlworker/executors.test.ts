@@ -47,7 +47,7 @@ class RecordingRunner implements MlworkerTaskRunner {
 }
 
 describe("registerMlworkerJobExecutors", () => {
-  it("maps transcribe, align, and vad jobs to one task runner with queue progress", async () => {
+  it("maps transcribe, align, vad, and matte jobs to one task runner with queue progress", async () => {
     const { queue } = JobQueue.open(":memory:", { concurrency: 2 });
     queues.push(queue);
     const runner = new RecordingRunner();
@@ -81,6 +81,20 @@ describe("registerMlworkerJobExecutors", () => {
         segments: [],
       },
     });
+    const matte = queue.enqueue({
+      kind: "matte",
+      title: "Generate presenter matte",
+      cancellable: true,
+      payload: {
+        input: { path: "/tmp/green.mov", frames: { from: 0, to: 23 }, fps: "24/1" },
+        params: {
+          model: "rvm_mobilenetv3",
+          downsampleRatio: 0.5,
+          stabilization: { enabled: true, alphaMin: 0.35, motionGain: 4, minSpeckleArea: 0.00001 },
+        },
+        output: { dir: "/tmp/mattes", format: "ffv1-gray-mkv" },
+      },
+    });
 
     expect(await waitForTerminal(queue, transcribe.jobId)).toMatchObject({
       state: "done",
@@ -93,6 +107,10 @@ describe("registerMlworkerJobExecutors", () => {
     expect(await waitForTerminal(queue, align.jobId)).toMatchObject({
       state: "done",
       payload: { method: "align", accepted: true },
+    });
+    expect(await waitForTerminal(queue, matte.jobId)).toMatchObject({
+      state: "done",
+      payload: { method: "matte", accepted: true },
     });
     expect(runner.calls).toEqual([
       {
@@ -117,6 +135,19 @@ describe("registerMlworkerJobExecutors", () => {
           language: "en",
           model: "wav2vec2-base-960h",
           segments: [],
+        },
+      },
+      {
+        method: "matte",
+        params: {
+          taskId: matte.jobId,
+          input: { path: "/tmp/green.mov", frames: { from: 0, to: 23 }, fps: "24/1" },
+          params: {
+            model: "rvm_mobilenetv3",
+            downsampleRatio: 0.5,
+            stabilization: { enabled: true, alphaMin: 0.35, motionGain: 4, minSpeckleArea: 0.00001 },
+          },
+          output: { dir: "/tmp/mattes", format: "ffv1-gray-mkv" },
         },
       },
     ]);

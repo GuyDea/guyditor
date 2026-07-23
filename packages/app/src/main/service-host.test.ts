@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
-import { access, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { AnnotationService, createProject, OperationEngine } from "../../../core/src/index.js";
+import { AnnotationService, createProject, JobQueue, OperationEngine } from "../../../core/src/index.js";
 import type { JobOverview, Proposal, Result } from "../../../core/src/index.js";
 import { projectFixture } from "../../../core/src/project/test-fixtures.js";
 import { TranscriptEngine } from "../../../transcript/src/index.js";
@@ -15,6 +15,119 @@ import { WindowEventPublisher } from "./events.js";
 import { AppServiceHost } from "./service-host.js";
 
 describe("AppServiceHost", () => {
+  it("freezes an accepted matte candidate as a read-only generated asset with provenance", async () => {
+    const root = await mkdtemp(join(tmpdir(), "guyditor-host-matte-"));
+    const userDirectory = await mkdtemp(join(tmpdir(), "guyditor-host-matte-user-"));
+    const model = projectFixture();
+    const created = await createProject(root, model);
+    if (!created.ok) throw created.error;
+    const candidatePath = join(root, ".guyditor", "cache", "mattes", "candidate.mkv");
+    await mkdir(join(root, ".guyditor", "cache", "mattes"), { recursive: true });
+    const candidateBytes = Buffer.from("deterministic frozen matte fixture");
+    await writeFile(candidatePath, candidateBytes);
+    const candidateSha = createHash("sha256").update(candidateBytes).digest("hex");
+    const { queue } = JobQueue.open(join(root, ".guyditor", "jobs.sqlite"));
+    queue.registerExecutor("matte", async (job) => ({
+      clipId: "clp_aaaaaaaaaa",
+      sourceAssetId: "ast_aaaaaaaaaa",
+      jobId: job.jobId,
+      schema: "guyditor.matte/v1",
+      path: candidatePath,
+      format: "ffv1-gray-mkv",
+      sha256: candidateSha,
+      cacheKey: "c".repeat(64),
+      source: {
+        path: join(root, "media", "a.mov"),
+        sha256: model.assets[0]!.sha256,
+        frames: { from: 0, to: 23 },
+      },
+      width: 1920,
+      height: 1080,
+      frameCount: 24,
+      fps: "24/1",
+      alpha: { minimum: 0, maximum: 255, nonZeroFrames: 24 },
+      engine: { name: "rvm", version: "torchscript-fixture", model: "rvm_mobilenetv3" },
+      params: {
+        model: "rvm_mobilenetv3",
+        downsampleRatio: 0.5,
+        stabilization: { enabled: true, alphaMin: 0.35, motionGain: 4, minSpeckleArea: 0.00001 },
+      },
+    }));
+    const queued = queue.enqueue({
+      kind: "matte",
+      title: "Generate neural matte for clp_aaaaaaaaaa",
+      cancellable: true,
+      payload: { clipId: "clp_aaaaaaaaaa" },
+    });
+    const deadline = Date.now() + 2_000;
+    while (queue.get(queued.jobId)?.state !== "done") {
+      if (Date.now() > deadline) throw new Error("Matte fixture job did not finish.");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    queue.close();
+
+    const appHost = testAppHost(userDirectory);
+    const windowHost = appHost.createWindowHost({
+      publisher: new WindowEventPublisher(() => undefined),
+    });
+    await windowHost.openProject(root);
+    const execute = windowHost.resolveService("OperationEngine")?.["execute"];
+    if (typeof execute !== "function") throw new Error("Operation engine is unavailable.");
+    await expect(Reflect.apply(execute, undefined, [{
+      operations: [{
+        op: "key.matte.generate",
+        params: {
+          clipId: "clp_aaaaaaaaaa",
+          neural: {
+            model: "rvm_mobilenetv3",
+            downsampleRatio: 0.5,
+            stabilization: { enabled: true, alphaMin: 0.35, motionGain: 4, minSpeckleArea: 0.00001 },
+          },
+        },
+      }],
+      intent: "direct",
+      label: "Generate unavailable matte",
+    }])).rejects.toMatchObject({ code: "E_MATTE_CAPABILITY_MISSING" });
+    const service = windowHost.resolveService("CompositorModel");
+    const candidates = service?.["matteCandidates"];
+    const accept = service?.["acceptMatteCandidate"];
+    if (typeof candidates !== "function" || typeof accept !== "function") {
+      throw new Error("Matte candidate service is unavailable.");
+    }
+    expect(Reflect.apply(candidates, service, [{ clipId: "clp_aaaaaaaaaa" }]))
+      .toMatchObject([{ jobId: queued.jobId, alpha: { maximum: 255 } }]);
+    const accepted = await Reflect.apply(accept, service, [{
+      clipId: "clp_aaaaaaaaaa",
+      jobId: queued.jobId,
+    }]) as { assetId: string; path: string };
+    const snapshot = windowHost.snapshot().master;
+    const asset = snapshot.assets.find(({ id }) => id === accepted.assetId);
+    expect(asset).toMatchObject({
+      kind: "generated",
+      sha256: candidateSha,
+      provenance: { sidecar: `provenance-${accepted.assetId}` },
+      analyses: { matte: { sourceFrames: { from: 0, to: 23 } } },
+    });
+    expect(snapshot.sequences[0]!.clips[0]!.effects).toContainEqual(expect.objectContaining({
+      kind: "key",
+      params: expect.objectContaining({
+        mode: "neural",
+        neural: expect.objectContaining({ matteAssetId: accepted.assetId }),
+      }),
+    }));
+    expect(await readFile(join(root, accepted.path))).toEqual(candidateBytes);
+    expect((await stat(join(root, accepted.path))).mode & 0o222).toBe(0);
+    expect(await readFile(join(root, `sidecars/provenance/${accepted.assetId}.provenance.json`), "utf8"))
+      .toContain('"sourceAssetId": "ast_aaaaaaaaaa"');
+    const historyText = await readFile(join(root, "history/transactions.jsonl"), "utf8");
+    expect(historyText).toContain('"op":"sidecar.register"');
+    expect(historyText).toContain('"op":"asset.ingest"');
+    expect(historyText).toContain('"op":"clip.key.set"');
+
+    await windowHost.close();
+    await appHost.close();
+  });
+
   it("exposes storage scan and plan-then-execute cleanup through BackupService", async () => {
     const root = await mkdtemp(join(tmpdir(), "guyditor-host-storage-"));
     const userDirectory = await mkdtemp(join(tmpdir(), "guyditor-host-storage-user-"));

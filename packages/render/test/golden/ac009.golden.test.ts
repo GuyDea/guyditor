@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { cp, mkdtemp, readFile, rm } from "node:fs/promises";
+import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -9,6 +9,7 @@ import {
   JobQueue,
   OperationEngine,
   canonicalizeYaml,
+  createProject,
   openProject,
   parseProjectYaml,
 } from "../../../core/src/index.js";
@@ -27,8 +28,8 @@ afterEach(async () => {
 
 async function valueOf<Value>(result: Promise<Result<Value>>): Promise<Value> {
   const settled = await result;
-  expect(settled.ok).toBe(true);
   if (!settled.ok) throw settled.error;
+  expect(settled.ok).toBe(true);
   return settled.value;
 }
 
@@ -60,11 +61,76 @@ function sha256(bytes: Buffer): string {
 }
 
 describe("AC-009 — reproduce a revision", () => {
-  it("restores rev_00008 and re-exports it with distance-0 frames and no generation job", async () => {
+  it("restores a captioned, graphic, keyed revision and rebuilds it with locked tools", async () => {
     const root = await mkdtemp(join(tmpdir(), "guyditor-ac009-"));
     temporaryDirectories.push(root);
-    const projectRoot = join(root, "basic");
-    await cp(resolve(".fixtures/projects/basic"), projectRoot, { recursive: true });
+    const projectRoot = join(root, "expanded");
+    const keyedText = await readFile(resolve(".fixtures/projects/ac005/episode.guyditor.yaml"), "utf8");
+    const basicText = await readFile(resolve(".fixtures/projects/basic/episode.guyditor.yaml"), "utf8");
+    const captionText = await readFile(resolve(".fixtures/projects/ac003/episode.guyditor.yaml"), "utf8");
+    const keyed = parseProjectYaml(keyedText);
+    const basic = parseProjectYaml(basicText);
+    const captioned = parseProjectYaml(captionText);
+    if (!keyed.ok) throw keyed.error;
+    if (!basic.ok) throw basic.error;
+    if (!captioned.ok) throw captioned.error;
+    const model = structuredClone(keyed.value);
+    const generatedAsset = basic.value.assets.find(({ id }) => id === "ast_jjjjjjjjjj");
+    const generatedSourceAsset = basic.value.assets.find(({ id }) => id === "ast_hhhhhhhhhh");
+    const generatedSidecar = basic.value.sidecars.find(({ name }) => name === "generation-frozen");
+    const captionTrack = captioned.value.captions[0];
+    const captionPreset = captioned.value.presets[0];
+    const transcriptReference = basic.value.sidecars.find(({ name }) => name === "transcript-speech");
+    if (
+      generatedAsset === undefined || generatedSourceAsset === undefined || generatedSidecar === undefined || captionTrack === undefined ||
+      captionPreset === undefined || transcriptReference === undefined
+    ) throw new Error("Expanded AC-009 fixture inputs are incomplete.");
+    model.assets.push(structuredClone(generatedSourceAsset), structuredClone(generatedAsset));
+    model.layers.push({
+      id: "lyr_dddddddddd",
+      kind: "image",
+      name: "Frozen generated graphic",
+      order: 30,
+      enabled: true,
+      locked: false,
+      items: [{
+        id: "clp_dddddddddd",
+        asset: generatedAsset.id,
+        at: "timeline:seq_aaaaaaaaaa@0",
+        duration: { frames: 180, fps: "30/1" },
+      }],
+    });
+    model.captions = [{ ...structuredClone(captionTrack), sourceLayerIds: ["lyr_bbbbbbbbbb"] }];
+    model.presets.push(structuredClone(captionPreset));
+    model.deliverables[0]!.captionsTrackId = captionTrack.id;
+    model.transcript.nextWordOrdinal = basic.value.transcript.nextWordOrdinal;
+    const transcript = JSON.parse(await readFile(
+      resolve(".fixtures/projects/basic/sidecars/transcript-speech.json"), "utf8",
+    )) as Record<string, unknown>;
+    transcript["assetId"] = "ast_cccccccccc";
+    const serializedTranscript = `${JSON.stringify(transcript, null, 2)}\n`;
+    model.sidecars.push(
+      structuredClone(generatedSidecar),
+      {
+        ...structuredClone(transcriptReference),
+        sha256: sha256(Buffer.from(serializedTranscript)),
+        inputs: [{
+          asset: "ast_cccccccccc",
+          sha256: model.assets.find(({ id }) => id === "ast_cccccccccc")!.sha256,
+        }],
+      },
+    );
+    await valueOf(createProject(projectRoot, model, {
+      appVersion: "0.0.0-ac009",
+      now: () => new Date("2026-07-19T09:00:00.000Z"),
+    }));
+    await Promise.all([
+      cp(resolve(".fixtures/projects/ac005/sidecars/annotations.yaml"), join(projectRoot, "sidecars/annotations.yaml")),
+      cp(resolve(".fixtures/projects/ac005/presets/pre_dddddddddd@1.json"), join(projectRoot, "presets/pre_dddddddddd@1.json")),
+      cp(resolve(".fixtures/projects/ac003/presets/pre_aaaaaaaaaa@1.yaml"), join(projectRoot, "presets/pre_aaaaaaaaaa@1.yaml")),
+      cp(resolve(".fixtures/projects/basic/sidecars/generated-frozen.json"), join(projectRoot, "sidecars/generated-frozen.json")),
+      writeFile(join(projectRoot, "sidecars/transcript-speech.json"), serializedTranscript, "utf8"),
+    ]);
     const store = await valueOf(openProject(projectRoot, { appVersion: "0.0.0-ac009" }));
     const engine = new OperationEngine(store.currentProject, {
       appVersion: "0.0.0-ac009",
@@ -74,15 +140,15 @@ describe("AC-009 — reproduce a revision", () => {
 
     const edits = [
       ["clp_aaaaaaaaaa", "tail"],
-      ["clp_bbbbbbbbbb", "head"],
-      ["clp_cccccccccc", "tail"],
-      ["clp_dddddddddd", "head"],
       ["clp_aaaaaaaaaa", "head"],
-      ["clp_bbbbbbbbbb", "tail"],
-      ["clp_cccccccccc", "head"],
-      ["clp_dddddddddd", "tail"],
       ["clp_aaaaaaaaaa", "tail"],
-      ["clp_bbbbbbbbbb", "head"],
+      ["clp_aaaaaaaaaa", "head"],
+      ["clp_aaaaaaaaaa", "tail"],
+      ["clp_aaaaaaaaaa", "head"],
+      ["clp_aaaaaaaaaa", "tail"],
+      ["clp_aaaaaaaaaa", "head"],
+      ["clp_aaaaaaaaaa", "tail"],
+      ["clp_aaaaaaaaaa", "head"],
     ] as const;
     for (const [clipId, edge] of edits.slice(0, 7)) {
       await valueOf(engine.execute([{
@@ -126,11 +192,12 @@ describe("AC-009 — reproduce a revision", () => {
       const first = await render.renderExport({
         revision: "rev_00008",
         deliverableId: "dlv_aaaaaaaaaa",
-        variants: ["clean"],
+        variants: ["burnin"],
         outputDir: firstDir,
+        skipValidationWarnings: true,
       });
       expect(await terminal(queue, first.jobId)).toMatchObject({ state: "done" });
-      const firstOutput = exportOutputPath(firstDir, "dlv_aaaaaaaaaa", "clean", "mp4");
+      const firstOutput = exportOutputPath(firstDir, "dlv_aaaaaaaaaa", "burnin", "mp4");
       const firstReport = JSON.parse(await readFile(
         exportReportPath(firstOutput),
         "utf8",
@@ -166,24 +233,34 @@ describe("AC-009 — reproduce a revision", () => {
       const second = await render.renderExport({
         revision: "rev_00012",
         deliverableId: "dlv_aaaaaaaaaa",
-        variants: ["clean"],
+        variants: ["burnin"],
         outputDir: secondDir,
+        skipValidationWarnings: true,
       });
       expect(await terminal(queue, second.jobId)).toMatchObject({ state: "done" });
-      const secondOutput = exportOutputPath(secondDir, "dlv_aaaaaaaaaa", "clean", "mp4");
+      const secondOutput = exportOutputPath(secondDir, "dlv_aaaaaaaaaa", "burnin", "mp4");
       const secondReport = JSON.parse(await readFile(
         exportReportPath(secondOutput),
         "utf8",
       )) as { revision: string; output: { sha256: string } };
       expect(secondReport.revision).toBe("rev_00012");
 
-      for (const frame of [30, 150, 270, 360]) {
+      for (const frame of [10, 45, 90, 140]) {
         expect(hammingDistance(dhashFrame(firstOutput, frame), dhashFrame(secondOutput, frame)))
           .toBe(0);
       }
       expect(sha256(await readFile(secondOutput))).toBe(sha256(await readFile(firstOutput)));
       expect(secondReport.output.sha256).toBe(firstReport.output.sha256);
       expect(sha256(await readFile(frozenAssetPath))).toBe(frozenHash);
+      const revisionEightLock = JSON.parse(await readFile(
+        join(projectRoot, "history/revisions/rev_00008.lock.json"), "utf8",
+      )) as Record<string, unknown>;
+      const restoredLock = JSON.parse(await readFile(
+        join(projectRoot, "history/revisions/rev_00012.lock.json"), "utf8",
+      )) as Record<string, unknown>;
+      for (const key of ["assets", "presets", "profiles", "sidecars", "tools"] as const) {
+        expect(restoredLock[key]).toEqual(revisionEightLock[key]);
+      }
       expect(queue.list().filter(({ kind }) => kind.includes("generation"))).toEqual([]);
       expect(queue.list({ kind: "render.export" })).toHaveLength(2);
     } finally {

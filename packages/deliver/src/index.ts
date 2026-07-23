@@ -85,3 +85,12 @@ export type {
   PublishMetadata,
   PublishTranscriptWord,
 } from "./publish.js";
+export { buildOtioExport, writeOtioExport } from "./otio.js";
+export type {
+  OtioExportContext,
+  OtioExportOptions,
+  OtioExportPlan,
+  OtioExportResult,
+  OtioLoss,
+  OtioTimeline,
+} from "./otio.js";

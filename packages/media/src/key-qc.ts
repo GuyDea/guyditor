@@ -80,6 +80,9 @@ export interface RunKeyQcInput {
   frameCount: number;
   fps: string;
   keySettings: KeySettings;
+  sourceFrameOffset?: number;
+  mattePath?: string;
+  matteFrameOffset?: number;
   shotBoundaries?: readonly number[];
 }
 
@@ -409,6 +412,15 @@ export function applyChromaKeyAlpha(source: RgbaFrame, chromaParams: ChromaKeyPa
   return { data, height: source.height, width: source.width };
 }
 
+export function applyFrozenMatteAlpha(source: RgbaFrame, matte: RgbaFrame): RgbaFrame {
+  assertMatchingFrames(source, matte);
+  const data = new Uint8Array(source.data);
+  for (let pixel = 0; pixel < source.width * source.height; pixel += 1) {
+    data[pixel * 4 + 3] = matte.data[pixel * 4]!;
+  }
+  return { data, height: source.height, width: source.width };
+}
+
 function fpsDecimal(fps: string): number {
   const match = /^(\d+)\/(\d+)$/u.exec(fps);
   if (match === null || Number(match[2]) === 0) throw new TypeError(`Invalid frame rate ${fps}.`);
@@ -452,30 +464,48 @@ export async function runKeyQc(
   options: { signal?: AbortSignal; reportProgress?: (progress: number) => void } = {},
 ): Promise<KeyQcReport> {
   const chromaParams = input.keySettings.chroma;
-  if (input.keySettings.mode !== "chroma" || chromaParams === undefined) {
-    throw new TypeError("TS key QC currently requires chroma key settings; neural matting remains deferred.");
+  const neural = input.keySettings.mode === "neural";
+  if (input.keySettings.mode !== "chroma" && !neural) {
+    throw new TypeError("Key QC requires chroma or accepted neural key settings.");
+  }
+  if ((!neural && chromaParams === undefined) || (neural && input.mattePath === undefined)) {
+    throw new TypeError("Key QC is missing chroma parameters or the accepted frozen matte path.");
   }
   const frames = keyQcSampleFrames(input.frameCount, input.shotBoundaries);
   const metrics: KeyQcMetrics[] = [];
   for (let index = 0; index < frames.length; index += 1) {
     const frameNumber = frames[index]!;
+    const sourceFrame = frameNumber + (input.sourceFrameOffset ?? 0);
     const source = await extractRgbaFrame(
-      input.sourcePath, frameNumber, input.width, input.height, input.fps, options.signal,
+      input.sourcePath, sourceFrame, input.width, input.height, input.fps, options.signal,
     );
     const previousSource = frameNumber === 0 ? undefined : await extractRgbaFrame(
-      input.sourcePath, frameNumber - 1, input.width, input.height, input.fps, options.signal,
+      input.sourcePath, sourceFrame - 1, input.width, input.height, input.fps, options.signal,
     );
+    const matte = neural ? await extractRgbaFrame(
+      input.mattePath!, frameNumber + (input.matteFrameOffset ?? 0),
+      input.width, input.height, input.fps, options.signal,
+    ) : undefined;
+    const previousMatte = neural && frameNumber > 0 ? await extractRgbaFrame(
+      input.mattePath!, frameNumber - 1 + (input.matteFrameOffset ?? 0),
+      input.width, input.height, input.fps, options.signal,
+    ) : undefined;
+    const keyed = neural
+      ? applyFrozenMatteAlpha(source, matte!)
+      : applyChromaKeyAlpha(source, chromaParams!);
     metrics.push(analyzeKeyQcFrame({
       frame: frameNumber,
       source,
-      keyed: applyChromaKeyAlpha(source, chromaParams),
+      keyed,
       ...(previousSource === undefined ? {} : {
         previousSource,
-        previousKeyed: applyChromaKeyAlpha(previousSource, chromaParams),
+        previousKeyed: neural
+          ? applyFrozenMatteAlpha(previousSource, previousMatte!)
+          : applyChromaKeyAlpha(previousSource, chromaParams!),
       }),
-      keyColor: chromaParams.keyColor,
-      similarity: 0.01 + 0.39 * chromaParams.tolerance,
-      blendW: 0.4 * chromaParams.softness,
+      keyColor: chromaParams?.keyColor ?? "#00B140",
+      similarity: 0.01 + 0.39 * (chromaParams?.tolerance ?? 0.35),
+      blendW: 0.4 * (chromaParams?.softness ?? 0.12),
     }));
     options.reportProgress?.((index + 1) / frames.length);
   }

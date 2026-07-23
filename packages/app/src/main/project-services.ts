@@ -25,6 +25,8 @@ import type {
 
 import type { RecoveryServices } from "./recovery-service.js";
 import type { TakeComparisonService } from "./take-comparison-service.js";
+import type { MatteService } from "./matte-service.js";
+import type { OtioService } from "./otio-service.js";
 
 export interface ProjectServices extends RecoveryServices {
   store: ProjectStore;
@@ -34,6 +36,8 @@ export interface ProjectServices extends RecoveryServices {
   transcript: TranscriptEngine;
   annotations: AnnotationService;
   compositor: CompositorModel;
+  matte: MatteService;
+  otio: OtioService;
   render: RenderService;
   publish: PublishService;
   batch: BatchExportService;
