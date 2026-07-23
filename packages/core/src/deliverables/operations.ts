@@ -61,14 +61,16 @@ function copiedCaptionTrack(
   id: string,
   layerIds: ReadonlyMap<string, string>,
   fallbackLayerId: string,
-): CaptionTrack {
+): CaptionTrack | undefined {
   const source = project.captions.find(({ id: candidateId }) => candidateId === primary.captionsTrackId);
+  const preset = project.presets.find(({ kind }) => kind === "caption");
+  if (source === undefined && preset === undefined) return undefined;
   return source === undefined
     ? {
         id,
         name: "Derivative captions",
         sourceLayerIds: [fallbackLayerId],
-        preset: { presetId: project.presets.find(({ kind }) => kind === "caption")?.id ?? "pre_aaaaaaaaaa", version: project.presets.find(({ kind }) => kind === "caption")?.version ?? 1 },
+        preset: { presetId: preset!.id, version: preset!.version },
         styleOverrides: {},
         breakOverrides: [],
         emphasisOverrides: [],
@@ -226,7 +228,7 @@ function applyDerive(
       ? {}
       : { profileOverrides: structuredClone(input.params["profileOverrides"] as Record<string, unknown>) }),
     sequenceId: sequence.id,
-    captionsTrackId: caption.id,
+    ...(caption === undefined ? {} : { captionsTrackId: caption.id }),
     status: "draft",
     dependencies,
   };
@@ -234,20 +236,26 @@ function applyDerive(
     ...project,
     sequences: [...project.sequences, sequence],
     layers: [...project.layers, ...layers],
-    captions: [...project.captions, caption],
+    captions: [...project.captions, ...(caption === undefined ? [] : [caption])],
     deliverables: [...project.deliverables, deliverable],
   };
   return success({
     model,
     inverse: [{ op: "deliverable.remove", params: { deliverableId: deliverable.id } }],
     redo: { op: input.op, params: { ...input.params, created } },
-    affected: [deliverable.id, sequence.id, ...layers.map(({ id }) => id), caption.id, ...clips.map(({ id }) => id)],
+    affected: [
+      deliverable.id,
+      sequence.id,
+      ...layers.map(({ id }) => id),
+      ...(caption === undefined ? [] : [caption.id]),
+      ...clips.map(({ id }) => id),
+    ],
     summary: `Derive short '${deliverable.name}' from ${String(sources.length)} source range${sources.length === 1 ? "" : "s"}`,
     mutations: [
       added(deliverable.id, "deliverable", deliverable),
       added(sequence.id, "sequence", sequence),
       ...layers.map((layer) => added(layer.id, "layer", layer)),
-      added(caption.id, "caption", caption),
+      ...(caption === undefined ? [] : [added(caption.id, "caption", caption)]),
       ...clips.map((clip) => added(clip.id, "clip", clip)),
     ],
   });

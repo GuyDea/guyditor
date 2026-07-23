@@ -146,7 +146,7 @@ function graph(
 }
 
 describe("compileFiltergraph", () => {
-  it("lowers piecewise-linear transform keyframes to FFmpeg frame expressions", () => {
+  it("lowers piecewise-linear transform keyframes while preserving placed alpha", () => {
     const rendered = graph();
     const sourceComposite = rendered.nodes.find(({ kind }) => kind === "composite");
     if (sourceComposite === undefined) throw new Error("missing visual composite");
@@ -173,6 +173,11 @@ describe("compileFiltergraph", () => {
     expect(command.filterComplex).toContain("eval=frame");
     expect(command.filterComplex).toContain("if(lt(n,30)");
     expect(command.filterComplex).toContain("if(lt(n,60)");
+    expect(command.filterComplex).toMatch(
+      /\[n[a-z0-9]+body\]split\[n[a-z0-9]+visual\]\[n[a-z0-9]+alphasource\]/u,
+    );
+    expect(command.filterComplex).toMatch(/alphaextract\[n[a-z0-9]+alpha\]/u);
+    expect(command.filterComplex).toMatch(/alphamerge\[n[a-z0-9]+\]/u);
     expect(command.filterComplex).not.toContain("keyframed transform");
   });
 
@@ -333,7 +338,7 @@ describe("compileFiltergraph", () => {
     expect(command.args.at(-1)).toBe(`${deliverableId}-clean.mp4`);
   });
 
-  it("adds an exact-fps image2 input and frame-enabled alpha overlay", () => {
+  it("adds an exact-fps image2 input shifted to its first output frame", () => {
     const command = compileFiltergraph(graph("/tmp/source.mp4", undefined, true), "/tmp/burnin.mp4");
     expect(command.args).toEqual(expect.arrayContaining([
       "-framerate",
@@ -343,7 +348,8 @@ describe("compileFiltergraph", () => {
       "-i",
       "/tmp/caption-frames/%08d.png",
     ]));
-    expect(command.filterComplex).toContain("overlay=enable='between(n,12,56)'");
+    expect(command.filterComplex).toContain("setpts=PTS-STARTPTS+12");
+    expect(command.filterComplex).not.toContain("overlay=enable=");
     expect(command.filterComplex).toContain("format=rgba");
   });
 

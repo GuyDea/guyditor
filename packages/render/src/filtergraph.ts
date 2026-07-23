@@ -431,33 +431,27 @@ export function compileFiltergraph(graph: RenderGraph, outputPath?: string): Com
     );
     const x = `${positionX}*main_w-${anchorX}*overlay_w`;
     const y = `${positionY}*main_h-${anchorY}*overlay_h`;
-    if (transform.framingDecisionId === undefined) {
-      filters.push(
-        `[${base}][${body}]overlay=x='${x}':y='${y}':eof_action=pass:shortest=0[${label}]`,
-      );
-    } else {
-      const visual = `${label}visual`;
-      const alphaSource = `${label}alphasource`;
-      const alpha = `${label}alpha`;
-      const placedVisual = `${label}placedvisual`;
-      const alphaBase = `${label}alphabase`;
-      const placedAlpha = `${label}placedalpha`;
-      filters.push(`[${body}]split[${visual}][${alphaSource}]`);
-      filters.push(`[${alphaSource}]alphaextract[${alpha}]`);
-      filters.push(
-        `[${base}][${visual}]overlay=x='${x}':y='${y}':` +
-        `eof_action=pass:shortest=0:format=auto[${placedVisual}]`,
-      );
-      filters.push(
-        `color=c=black:s=${String(graph.outputSize.w)}x${String(graph.outputSize.h)}` +
-        `:r=${graph.outputFps}:d=${decimal(duration)},format=gray[${alphaBase}]`,
-      );
-      filters.push(
-        `[${alphaBase}][${alpha}]overlay=x='${x}':y='${y}':` +
-        `eof_action=pass:shortest=0:format=auto,format=gray[${placedAlpha}]`,
-      );
-      filters.push(`[${placedVisual}][${placedAlpha}]alphamerge[${label}]`);
-    }
+    const visual = `${label}visual`;
+    const alphaSource = `${label}alphasource`;
+    const alpha = `${label}alpha`;
+    const placedVisual = `${label}placedvisual`;
+    const alphaBase = `${label}alphabase`;
+    const placedAlpha = `${label}placedalpha`;
+    filters.push(`[${body}]split[${visual}][${alphaSource}]`);
+    filters.push(`[${alphaSource}]alphaextract[${alpha}]`);
+    filters.push(
+      `[${base}][${visual}]overlay=x='${x}':y='${y}':` +
+      `eof_action=pass:shortest=0:format=auto[${placedVisual}]`,
+    );
+    filters.push(
+      `color=c=black:s=${String(graph.outputSize.w)}x${String(graph.outputSize.h)}` +
+      `:r=${graph.outputFps}:d=${decimal(duration)},format=gray[${alphaBase}]`,
+    );
+    filters.push(
+      `[${alphaBase}][${alpha}]overlay=x='${x}':y='${y}':` +
+      `eof_action=pass:shortest=0:format=auto,format=gray[${placedAlpha}]`,
+    );
+    filters.push(`[${placedVisual}][${placedAlpha}]alphamerge[${label}]`);
     labels.set(node.id, label);
   }
 
@@ -892,12 +886,13 @@ export function compileFiltergraph(graph: RenderGraph, outputPath?: string): Com
     if (inputIndex === undefined) graphInvalid(`Overlay input for ${node.id} is missing.`, [node.id]);
     const label = compiledNodeLabel(node);
     const overlayLabel = `${label}asset`;
-    const offset = secondsForFrames(overlay.atOutputFrame, graph.outputFps);
-    filters.push(`[${String(inputIndex)}:v]format=rgba,setpts=PTS-STARTPTS+${decimal(offset)}/TB[${overlayLabel}]`);
     filters.push(
-      `${inputLabel(compiledInput(node))}[${overlayLabel}]overlay=enable='between(n,` +
-      `${String(overlay.atOutputFrame)},${String(overlay.atOutputFrame + overlay.durationFrames - 1)})':` +
-      `eof_action=pass:shortest=0[${label}]`,
+      `[${String(inputIndex)}:v]format=rgba,` +
+      `setpts=PTS-STARTPTS+${String(overlay.atOutputFrame)}[${overlayLabel}]`,
+    );
+    filters.push(
+      `${inputLabel(compiledInput(node))}[${overlayLabel}]` +
+      `overlay=eof_action=pass:shortest=0[${label}]`,
     );
     labels.set(node.id, label);
   }
