@@ -5,6 +5,7 @@ import type { ExportReport } from "../../../render/src/index.js";
 import type { TranscriptSidecar } from "../../../transcript/src/index.js";
 import type { ResolvedSkill, SkillManifest } from "../../../agent/src/index.js";
 import type { JobOverview, JobStatus, ProjectSnapshot } from "../shared/ipc.js";
+import { DockWorkspace } from "./DockWorkspace.js";
 import { GlobalProgress } from "./GlobalProgress.js";
 import { BrollPanel } from "./panels/BrollPanel.js";
 import { GraphicsPanel } from "./panels/GraphicsPanel.js";
@@ -29,6 +30,7 @@ import {
   useWorkspaceStore,
 } from "./state/view-state.js";
 import type { PanelId } from "./state/view-state.js";
+import type { DockPanelId } from "./state/layout-state.js";
 
 function isTypingTarget(target: EventTarget | null): boolean {
   return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement ||
@@ -55,9 +57,8 @@ export function App(): React.JSX.Element {
   const replaceJobs = useJobsStore((state) => state.replace);
   const replaceOverview = useJobsStore((state) => state.replaceOverview);
   const applyJobEvent = useJobsStore((state) => state.applyEvent);
-  const leftWidth = useWorkspaceStore((state) => state.leftWidth);
-  const rightWidth = useWorkspaceStore((state) => state.rightWidth);
   const focusPanel = useWorkspaceStore((state) => state.focusPanel);
+  const resetLayout = useWorkspaceStore((state) => state.resetLayout);
   const playhead = usePreviewStore((state) => state.playhead);
   const playing = usePreviewStore((state) => state.playing);
   const setPlayhead = usePreviewStore((state) => state.setPlayhead);
@@ -143,6 +144,7 @@ export function App(): React.JSX.Element {
 
   const hydrate = useCallback(async (next: ProjectSnapshot): Promise<void> => {
     const generation = ++overviewGeneration.current;
+    useWorkspaceStore.getState().setProjectKey(next.projectPath);
     replaceSnapshot(next);
     const [nextTranscripts, nextJobs, nextOverview] = await Promise.all([
       window.guyditor.call<TranscriptSidecar[]>("ProjectStore", "readTranscript", {})
@@ -274,8 +276,23 @@ export function App(): React.JSX.Element {
       } else if (/^[1-9]$/u.test(event.key)) {
         const id = (["media", "preview", "transcript", "inspector", "agent", "timeline", "status", "graphics", "publish"] as PanelId[])[Number(event.key) - 1];
         if (id !== undefined) {
+          const workspace = useWorkspaceStore.getState();
+          if (workspace.collapsed[id]) workspace.togglePanel(id);
+          if (id === "media" || id === "preview" || id === "transcript" ||
+            id === "inspector" || id === "agent" || id === "timeline" || id === "status") {
+            for (const [regionId, region] of Object.entries(workspace.layout.regions)) {
+              if (region.panelIds.includes(id)) {
+                workspace.activatePanel(
+                  regionId as keyof typeof workspace.layout.regions,
+                  id,
+                );
+                break;
+              }
+            }
+          }
           focusPanel(id);
-          document.querySelector<HTMLElement>(`[data-panel="${id}"]`)?.focus();
+          queueMicrotask(() =>
+            document.querySelector<HTMLElement>(`[data-panel="${id}"]`)?.focus());
         }
       } else if (event.key.toLowerCase() === "q") {
         setNotice("HQ preview is an M2 mode; M1 remains on the proxy leg.");
@@ -324,15 +341,18 @@ export function App(): React.JSX.Element {
     refreshExportReport,
     setNotice,
   };
+  const dockPanels: Record<DockPanelId, React.ReactNode> = {
+    media: <MediaBrowserPanel {...panelProps} />,
+    preview: <PreviewPanel {...panelProps} />,
+    transcript: <TranscriptPanel {...panelProps} />,
+    inspector: <InspectorPanel {...panelProps} />,
+    agent: <ProposalPanel {...panelProps} />,
+    timeline: <TimelinePanel {...panelProps} />,
+    status: <StatusStripPanel {...panelProps} />,
+  };
 
   return (
-    <main
-      className="shell workspace-shell"
-      style={{
-        "--left-width": `${String(leftWidth)}px`,
-        "--right-width": `${String(rightWidth)}px`,
-      } as React.CSSProperties}
-    >
+    <main className="shell workspace-shell">
       <header className="titlebar">
         <div className="wordmark" aria-label="Guyditor">
           <span className="wordmark-glyph" aria-hidden="true">G</span>
@@ -346,29 +366,24 @@ export function App(): React.JSX.Element {
           <GlobalProgress refreshOverview={refreshOverview} setNotice={setNotice} />
           <button type="button" data-testid="undo-action" disabled={undoCount === 0} onClick={() => void undoLast().then(() => refreshProject()).catch((error: unknown) => setNotice(errorMessage(error)))}>Undo</button>
           <button type="button" data-testid="redo-action" disabled={redoCount === 0} onClick={() => void redoLast().then(() => refreshProject()).catch((error: unknown) => setNotice(errorMessage(error)))}>Redo</button>
+          <button type="button" data-testid="reset-layout" onClick={resetLayout}>Reset layout</button>
           <button type="button" className="open-button" onClick={() => void openProject()} data-testid="open-project">Open project</button>
         </div>
       </header>
-      <div className="workspace-layout">
-        <div className="left-stack">
-          <MediaBrowserPanel {...panelProps} />
+      <DockWorkspace
+        panels={dockPanels}
+        leftUtilities={(
+          <>
           <BrollPanel {...panelProps} />
           <GraphicsPanel {...panelProps} />
           <SkillsPanel {...panelProps} />
           <StoragePanel setNotice={setNotice} />
-        </div>
-        <div className="center-stack">
-          <PreviewPanel {...panelProps} />
-          <TranscriptPanel {...panelProps} />
-        </div>
-        <div className="right-stack">
-          <ProposalPanel {...panelProps} />
-          <InspectorPanel {...panelProps} />
+          </>
+        )}
+        rightUtilities={(
           <PublishPanel {...panelProps} />
-        </div>
-        <TimelinePanel {...panelProps} />
-        <StatusStripPanel {...panelProps} />
-      </div>
+        )}
+      />
       <p className="global-notice" role="status" data-testid="shell-status">{notice}</p>
     </main>
   );

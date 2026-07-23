@@ -1,6 +1,23 @@
 import { create } from "zustand";
 
 import type { FrameTime, KeySettings } from "../../../../core/src/index.js";
+import {
+  activatePanel as activateLayoutPanel,
+  assignPanel as assignLayoutPanel,
+  createDefaultLayout,
+  DOCK_PANEL_IDS,
+  loadProjectLayout,
+  reorderPanel as reorderLayoutPanel,
+  saveProjectLayout,
+  setCollapsed,
+  setSplitter as setLayoutSplitter,
+} from "./layout-state.js";
+import type {
+  DockPanelId,
+  DockRegionId,
+  SplitterId,
+  WorkspaceLayout,
+} from "./layout-state.js";
 
 export type DiagnosticBackground = "none" | "black" | "white" | "saturated" | "checkerboard";
 
@@ -46,14 +63,30 @@ interface TimelineViewState {
 }
 
 interface WorkspaceState {
+  layout: WorkspaceLayout;
+  projectKey: string | null;
   collapsed: Record<PanelId, boolean>;
   focusedPanel: PanelId;
   leftWidth: number;
   rightWidth: number;
   statusHeight: number;
   jobsPanelWidth: number;
+  setProjectKey: (projectKey: string) => void;
   togglePanel: (panel: PanelId) => void;
   focusPanel: (panel: PanelId) => void;
+  assignPanel: (
+    panel: DockPanelId,
+    region: DockRegionId,
+    targetIndex?: number,
+  ) => void;
+  reorderPanel: (
+    region: DockRegionId,
+    panel: DockPanelId,
+    targetIndex: number,
+  ) => void;
+  activatePanel: (region: DockRegionId, panel: DockPanelId) => void;
+  setSplitter: (splitter: SplitterId, value: number, persistChange?: boolean) => void;
+  resetLayout: () => void;
   setLeftWidth: (width: number) => void;
   setRightWidth: (width: number) => void;
   setJobsPanelWidth: (width: number) => void;
@@ -139,22 +172,105 @@ const expandedPanels: Record<PanelId, boolean> = {
   publish: false,
 };
 
-export const useWorkspaceStore = create<WorkspaceState>((set) => ({
-  collapsed: expandedPanels,
+function browserStorage(): Storage | null {
+  return typeof window === "undefined" ? null : window.localStorage;
+}
+
+function isDockPanel(panel: PanelId): panel is DockPanelId {
+  return (DOCK_PANEL_IDS as readonly string[]).includes(panel);
+}
+
+function persisted(
+  projectKey: string | null,
+  layout: WorkspaceLayout,
+): void {
+  const storage = browserStorage();
+  if (projectKey === null || storage === null) return;
+  try {
+    saveProjectLayout(projectKey, layout, storage);
+  } catch {
+    // Browser storage failures leave the current in-memory view state usable.
+  }
+}
+
+function layoutFields(
+  layout: WorkspaceLayout,
+  currentCollapsed?: Record<PanelId, boolean>,
+): Pick<
+  WorkspaceState,
+  "layout" | "collapsed" | "leftWidth" | "rightWidth" | "statusHeight" | "jobsPanelWidth"
+> {
+  return {
+    layout,
+    collapsed: { ...expandedPanels, ...currentCollapsed, ...layout.collapsed },
+    leftWidth: layout.splitters.left,
+    rightWidth: layout.splitters.right,
+    statusHeight: layout.splitters.status,
+    jobsPanelWidth: layout.splitters.right,
+  };
+}
+
+const initialLayout = createDefaultLayout();
+
+export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
+  ...layoutFields(initialLayout),
+  projectKey: null,
   focusedPanel: "preview",
-  leftWidth: 250,
-  rightWidth: 310,
-  statusHeight: 150,
-  jobsPanelWidth: 310,
-  togglePanel: (panel) => set((state) => ({
-    collapsed: { ...state.collapsed, [panel]: !state.collapsed[panel] },
-  })),
+  setProjectKey: (projectKey) => {
+    const storage = browserStorage();
+    const layout = storage === null
+      ? createDefaultLayout()
+      : loadProjectLayout(projectKey, storage);
+    set({ projectKey, ...layoutFields(layout, get().collapsed) });
+  },
+  togglePanel: (panel) => {
+    const state = get();
+    const collapsed = !state.collapsed[panel];
+    if (!isDockPanel(panel)) {
+      set({ collapsed: { ...state.collapsed, [panel]: collapsed } });
+      return;
+    }
+    const layout = setCollapsed(state.layout, panel, collapsed);
+    persisted(state.projectKey, layout);
+    set(layoutFields(layout, state.collapsed));
+  },
   focusPanel: (focusedPanel) => set({ focusedPanel }),
-  setLeftWidth: (leftWidth) => set({ leftWidth: Math.min(420, Math.max(190, leftWidth)) }),
-  setRightWidth: (rightWidth) => set({
-    rightWidth: Math.min(520, Math.max(250, rightWidth)),
-    jobsPanelWidth: Math.min(520, Math.max(250, rightWidth)),
-  }),
+  assignPanel: (panel, region, targetIndex) => {
+    const state = get();
+    const layout = assignLayoutPanel(state.layout, panel, region, targetIndex);
+    persisted(state.projectKey, layout);
+    set(layoutFields(layout, state.collapsed));
+  },
+  reorderPanel: (region, panel, targetIndex) => {
+    const state = get();
+    const layout = reorderLayoutPanel(state.layout, region, panel, targetIndex);
+    persisted(state.projectKey, layout);
+    set(layoutFields(layout, state.collapsed));
+  },
+  activatePanel: (region, panel) => {
+    const state = get();
+    const layout = activateLayoutPanel(state.layout, region, panel);
+    persisted(state.projectKey, layout);
+    set(layoutFields(layout, state.collapsed));
+  },
+  setSplitter: (splitter, value, persistChange = true) => {
+    const state = get();
+    const layout = setLayoutSplitter(state.layout, splitter, value);
+    if (persistChange) persisted(state.projectKey, layout);
+    set(layoutFields(layout, state.collapsed));
+  },
+  resetLayout: () => {
+    const state = get();
+    const layout = createDefaultLayout();
+    persisted(state.projectKey, layout);
+    set(layoutFields(layout, state.collapsed));
+  },
+  setLeftWidth: (leftWidth) => {
+    get().setSplitter("left", leftWidth);
+  },
+  setRightWidth: (rightWidth) => {
+    get().setSplitter("right", rightWidth);
+  },
   setJobsPanelWidth: (jobsPanelWidth) => set({
     jobsPanelWidth: Math.min(520, Math.max(240, jobsPanelWidth)),
   }),

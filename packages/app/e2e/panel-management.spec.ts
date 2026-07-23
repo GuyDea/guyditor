@@ -1,0 +1,163 @@
+import { rm } from "node:fs/promises";
+
+import { expect, test } from "@playwright/test";
+
+import { launchApp } from "./helpers/launch-app.js";
+import { createWorkspaceProject } from "./helpers/workspace-project.js";
+
+test("persists splitter resize, collapse, and docked tabs across an app relaunch", async () => {
+  const template = await createWorkspaceProject({ proposal: true });
+  const first = await launchApp({ projectTemplate: template });
+  let second: Awaited<ReturnType<typeof launchApp>> | null = null;
+  try {
+    const splitter = first.page.getByTestId("splitter-left");
+    const before = Number(await splitter.getAttribute("data-splitter-value"));
+    const box = await splitter.boundingBox();
+    expect(box).not.toBeNull();
+    if (box === null) throw new Error("Left splitter did not have a bounding box.");
+    await first.page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await first.page.mouse.down();
+    await first.page.mouse.move(box.x + box.width / 2 + 64, box.y + box.height / 2);
+    await first.page.mouse.up();
+    const resized = Number(await splitter.getAttribute("data-splitter-value"));
+    expect(resized).toBeGreaterThan(before);
+
+    await first.page.getByTestId("media-panel-toggle").click();
+    await expect(first.page.getByTestId("panel-rail-media")).toBeVisible();
+
+    await first.page.getByTestId("transcript-panel-drag-handle")
+      .dragTo(first.page.getByTestId("dock-region-right-top"));
+    await expect(first.page.getByTestId("dock-tabs-right-top")).toBeVisible();
+    await expect(first.page.getByTestId("dock-tab-agent")).toBeVisible();
+    await expect(first.page.getByTestId("dock-tab-transcript")).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    await first.page.getByTestId("dock-tab-transcript")
+      .dragTo(first.page.getByTestId("dock-tab-agent"));
+    await expect(first.page.getByTestId("dock-tabs-right-top").getByRole("tab"))
+      .toHaveText(["TTranscript", "AAgent"]);
+
+    await first.electronApp.close();
+    if (first.projectPath === undefined) throw new Error("Relaunch fixture path was missing.");
+    second = await launchApp({
+      projectPath: first.projectPath,
+      userDataDirectory: first.userDataDirectory,
+    });
+
+    await expect(second.page.getByTestId("splitter-left"))
+      .toHaveAttribute("data-splitter-value", String(resized));
+    await expect(second.page.getByTestId("panel-rail-media")).toBeVisible();
+    await expect(second.page.getByTestId("dock-tab-transcript")).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    await expect(second.page.getByTestId("dock-tabs-right-top").getByRole("tab"))
+      .toHaveText(["TTranscript", "AAgent"]);
+
+    await second.page.getByTestId("panel-rail-media").click();
+    await expect(second.page.getByTestId("media-panel")).toBeVisible();
+  } finally {
+    await first.electronApp.close().catch(() => undefined);
+    await second?.electronApp.close().catch(() => undefined);
+    await rm(template, { recursive: true, force: true });
+  }
+});
+
+test("reset layout restores the section 10.1 regions and splitter defaults", async () => {
+  const template = await createWorkspaceProject();
+  const launched = await launchApp({ projectTemplate: template });
+  try {
+    await launched.page.getByTestId("transcript-panel-drag-handle")
+      .dragTo(launched.page.getByTestId("dock-region-right-top"));
+    await launched.page.getByTestId("splitter-left").focus();
+    await launched.page.keyboard.press("End");
+    await launched.page.getByTestId("media-panel-toggle").click();
+
+    await launched.page.getByTestId("reset-layout").click();
+
+    await expect(launched.page.getByTestId("dock-region-center-bottom"))
+      .toHaveAttribute("data-active-panel", "transcript");
+    await expect(launched.page.getByTestId("dock-tabs-right-top")).toHaveCount(0);
+    await expect(launched.page.getByTestId("splitter-left"))
+      .toHaveAttribute("data-splitter-value", "250");
+    await expect(launched.page.getByTestId("media-panel")).toBeVisible();
+  } finally {
+    await launched.electronApp.close();
+    await rm(template, { recursive: true, force: true });
+  }
+});
+
+test("timeline and status collapse in place to slim restorable bars", async () => {
+  const template = await createWorkspaceProject();
+  const launched = await launchApp({ projectTemplate: template });
+  try {
+    await launched.page.getByTestId("timeline-panel-toggle").click();
+    await launched.page.getByTestId("status-panel-toggle").click();
+
+    const timelineBar = launched.page.getByTestId("collapsed-bar-timeline");
+    const statusBar = launched.page.getByTestId("collapsed-bar-status");
+    await expect(timelineBar).toBeVisible();
+    await expect(statusBar).toBeVisible();
+    const timelineBox = await timelineBar.boundingBox();
+    const statusBox = await statusBar.boundingBox();
+    expect(timelineBox).not.toBeNull();
+    expect(statusBox).not.toBeNull();
+    if (timelineBox === null || statusBox === null) {
+      throw new Error("Collapsed timeline/status bars had no layout boxes.");
+    }
+    expect(statusBox.y).toBeGreaterThan(timelineBox.y);
+
+    await timelineBar.click();
+    await statusBar.click();
+    await expect(launched.page.getByTestId("timeline-panel")).toBeVisible();
+    await expect(launched.page.getByTestId("status-panel")).toBeVisible();
+  } finally {
+    await launched.electronApp.close();
+    await rm(template, { recursive: true, force: true });
+  }
+});
+
+test("agent and inspector content scroll internally at their minimum layout size", async () => {
+  const template = await createWorkspaceProject({ proposal: true });
+  const launched = await launchApp({ projectTemplate: template });
+  try {
+    await launched.page.getByTestId("timeline-clip-clp_aaaaaaaaaa").click();
+    for (const splitterId of ["splitter-timeline", "splitter-status"]) {
+      await launched.page.getByTestId(splitterId).focus();
+      await launched.page.keyboard.press("End");
+    }
+
+    for (const panelId of ["agent", "inspector"]) {
+      const scroll = launched.page.getByTestId(`${panelId}-panel-scroll`);
+      await expect(scroll).toBeVisible();
+      const dimensions = await scroll.evaluate((element) => ({
+        clientHeight: element.clientHeight,
+        scrollHeight: element.scrollHeight,
+      }));
+      expect(dimensions.scrollHeight).toBeGreaterThan(dimensions.clientHeight);
+      await scroll.evaluate((element) => {
+        element.scrollTop = 48;
+      });
+      await expect.poll(() => scroll.evaluate((element) => element.scrollTop))
+        .toBeGreaterThan(0);
+    }
+
+    const overflowViolations = await launched.page.locator("[data-testid$='-panel-scroll']")
+      .evaluateAll((elements) => elements.flatMap((element) => {
+        const style = window.getComputedStyle(element);
+        const needsVerticalScroll = element.scrollHeight > element.clientHeight;
+        const needsHorizontalScroll = element.scrollWidth > element.clientWidth;
+        const verticalScrollable = style.overflowY === "auto" || style.overflowY === "scroll";
+        const horizontalScrollable = style.overflowX === "auto" || style.overflowX === "scroll";
+        return needsVerticalScroll && !verticalScrollable ||
+          needsHorizontalScroll && !horizontalScrollable
+          ? [element.getAttribute("data-testid") ?? element.className]
+          : [];
+      }));
+    expect(overflowViolations).toEqual([]);
+  } finally {
+    await launched.electronApp.close();
+    await rm(template, { recursive: true, force: true });
+  }
+});

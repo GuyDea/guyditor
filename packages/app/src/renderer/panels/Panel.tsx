@@ -1,5 +1,8 @@
 import type { PropsWithChildren } from "react";
 
+import { beginPanelDrag } from "../DockWorkspace.js";
+import { DOCK_PANEL_IDS } from "../state/layout-state.js";
+import type { DockPanelId } from "../state/layout-state.js";
 import { useWorkspaceStore } from "../state/view-state.js";
 import type { PanelId } from "../state/view-state.js";
 
@@ -19,6 +22,7 @@ export function Panel({
   actions,
   children,
 }: PanelProps): React.JSX.Element {
+  const dockable = (DOCK_PANEL_IDS as readonly string[]).includes(id);
   const collapsed = useWorkspaceStore((state) => state.collapsed[id]);
   const togglePanel = useWorkspaceStore((state) => state.togglePanel);
   const focusPanel = useWorkspaceStore((state) => state.focusPanel);
@@ -31,7 +35,15 @@ export function Panel({
       aria-labelledby={`${id}-title`}
       onFocusCapture={() => focusPanel(id)}
     >
-      <header className="panel-bar">
+      <header
+        className="panel-bar"
+        draggable={dockable}
+        data-testid={dockable ? `${id}-panel-drag-handle` : undefined}
+        title={dockable ? `Drag ${title} to another docking region` : undefined}
+        onDragStart={(event) => {
+          if (dockable) beginPanelDrag(event, id as DockPanelId);
+        }}
+      >
         <div className="panel-title">
           <span className="panel-index">P{String(panelNumber(id))}</span>
           <div>
@@ -53,7 +65,11 @@ export function Panel({
           </button>
         </div>
       </header>
-      {collapsed ? null : <div className="panel-body">{children}</div>}
+      {collapsed ? null : (
+        <div className="panel-body" data-testid={`${id}-panel-scroll`}>
+          {children}
+        </div>
+      )}
     </section>
   );
 }

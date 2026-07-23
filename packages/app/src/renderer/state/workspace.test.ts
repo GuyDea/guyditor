@@ -14,6 +14,13 @@ import {
   useSelectionStore,
   useWorkspaceStore,
 } from "./view-state.js";
+import {
+  assignPanel,
+  clampSplitterValue,
+  createDefaultLayout,
+  parseLayout,
+  reorderPanel,
+} from "./layout-state.js";
 
 describe("workspace renderer state", () => {
   it("mirrors the global overview and derives active, waiting, and idle copy", () => {
@@ -94,6 +101,7 @@ describe("workspace renderer state", () => {
   });
 
   it("keeps panel, selection, and preview choices in Zustand view state", () => {
+    useWorkspaceStore.getState().resetLayout();
     useWorkspaceStore.getState().togglePanel("media");
     useSelectionStore.getState().selectWord("w000042");
     usePreviewStore.getState().setPlayhead({ frames: 12, fps: "24/1" });
@@ -106,6 +114,71 @@ describe("workspace renderer state", () => {
       settled: false,
       quality: "proxy",
     });
+  });
+
+  it("assigns panels between regions and keeps every panel in exactly one region", () => {
+    const moved = assignPanel(createDefaultLayout(), "transcript", "right-top", 1);
+
+    expect(moved.regions["center-bottom"].panelIds).toEqual([]);
+    expect(moved.regions["right-top"]).toEqual({
+      panelIds: ["agent", "transcript"],
+      activePanelId: "transcript",
+    });
+    expect(Object.values(moved.regions).flatMap(({ panelIds }) => panelIds)
+      .filter((panelId) => panelId === "transcript")).toHaveLength(1);
+  });
+
+  it("reorders tabs within a region without duplicating a panel", () => {
+    const stacked = assignPanel(createDefaultLayout(), "transcript", "right-top", 1);
+    const reordered = reorderPanel(stacked, "right-top", "transcript", 0);
+
+    expect(reordered.regions["right-top"]).toEqual({
+      panelIds: ["transcript", "agent"],
+      activePanelId: "transcript",
+    });
+  });
+
+  it("clamps every splitter to its supported range", () => {
+    expect(clampSplitterValue("left", -100)).toBe(190);
+    expect(clampSplitterValue("right", 9_999)).toBe(520);
+    expect(clampSplitterValue("center-horizontal", 0.01)).toBe(0.25);
+    expect(clampSplitterValue("right-horizontal", 0.99)).toBe(0.75);
+    expect(clampSplitterValue("timeline", 10)).toBe(96);
+    expect(clampSplitterValue("status", -1_000)).toBe(96);
+    expect(clampSplitterValue("status", 1_000)).toBe(220);
+  });
+
+  it("resets the live workspace layout to a fresh default", () => {
+    useWorkspaceStore.getState().assignPanel("transcript", "right-top", 1);
+    useWorkspaceStore.getState().setSplitter("left", 410);
+    useWorkspaceStore.getState().togglePanel("agent");
+
+    useWorkspaceStore.getState().resetLayout();
+
+    expect(useWorkspaceStore.getState().layout).toEqual(createDefaultLayout());
+  });
+
+  it("preserves auxiliary panel collapse state across dock layout mutations", () => {
+    useWorkspaceStore.getState().togglePanel("broll");
+
+    useWorkspaceStore.getState().setSplitter("left", 320);
+
+    expect(useWorkspaceStore.getState().collapsed.broll).toBe(true);
+    useWorkspaceStore.getState().togglePanel("broll");
+  });
+
+  it("falls back to the default for absent, older, or malformed schemas", () => {
+    const fallback = createDefaultLayout();
+
+    expect(parseLayout(undefined)).toEqual(fallback);
+    expect(parseLayout({ schema: "layout/v0" })).toEqual(fallback);
+    expect(parseLayout({
+      ...fallback,
+      regions: {
+        ...fallback.regions,
+        left: { panelIds: ["media", "media"], activePanelId: "media" },
+      },
+    })).toEqual(fallback);
   });
 
   it("caps direct undo history at 200 and clears redo on a new action", () => {

@@ -7,6 +7,8 @@ import type { ElectronApplication, Page } from "@playwright/test";
 
 export interface LaunchAppOptions {
   projectTemplate?: string;
+  projectPath?: string;
+  userDataDirectory?: string;
   prepareUserData?: (userDataDirectory: string) => Promise<void>;
 }
 
@@ -19,10 +21,13 @@ export interface LaunchedApp {
 
 export async function launchApp(options: LaunchAppOptions = {}): Promise<LaunchedApp> {
   const temporaryRoot = await mkdtemp(join(tmpdir(), "guyditor-e2e-"));
-  const userDataDirectory = join(temporaryRoot, "user-data");
+  const userDataDirectory = options.userDataDirectory ?? join(temporaryRoot, "user-data");
   await options.prepareUserData?.(userDataDirectory);
-  let projectPath: string | undefined;
+  let projectPath = options.projectPath;
   if (options.projectTemplate !== undefined) {
+    if (projectPath !== undefined) {
+      throw new Error("Launch with either projectTemplate or projectPath, not both.");
+    }
     projectPath = join(temporaryRoot, basename(options.projectTemplate));
     await cp(options.projectTemplate, projectPath, { recursive: true });
   }
