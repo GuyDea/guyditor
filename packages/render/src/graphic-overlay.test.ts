@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import { success } from "../../core/src/index.js";
 import { projectFixture } from "../../core/src/project/test-fixtures.js";
 import { TemplateRegistry } from "./template-registry.js";
+import { TemplateAuthoringService } from "./template-authoring.js";
 import {
   renderGraphicFrame,
   renderGraphicOverlaySequence,
@@ -137,5 +138,77 @@ describe("FR-601 anchored graphic overlay painter", () => {
       frame: 12,
       brand: { palette: {} },
     })).rejects.toMatchObject({ code: "E_GRAPHIC_NEGATIVE_SPAN" });
+  });
+
+  it("blocks an unreviewed authored template from the deliverable overlay renderer", async () => {
+    const root = await mkdtemp(join(tmpdir(), "guyditor-draft-overlay-"));
+    const registry = new TemplateRegistry({
+      builtinsRoot: join(root, "builtins"),
+      userRoot: join(root, "templates"),
+      draftRoot: join(root, "templates", ".drafts"),
+    });
+    const ids = ["tas_a2c3d4e5f6", "tpl_b2c3d4e5f6"];
+    const authoring = new TemplateAuthoringService({
+      registry,
+      draftRoot: join(root, "templates", ".drafts"),
+      idFactory: () => ids.shift()!,
+      probe: { frames: 2, framesPerSecondFloor: 0.1 },
+    });
+    const submitted = await authoring.submit({
+      name: "Preview-only card",
+      description: "Proves the export boundary.",
+      manifest: {
+        params: { type: "object", additionalProperties: false },
+        duration: { mode: "fixed", default: { frames: 12, fps: "24/1" } },
+        assets: [],
+      },
+      source: "export default { render(ctx) { ctx.canvas.fillRect(0, 0, 20, 20); } };\n",
+    }, { sessionId: "ses_a2c3d4e5f6", model: "overlay-test" });
+    if (!submitted.ok) throw new Error("expected authored draft");
+
+    const project = projectFixture();
+    project.templates = {
+      [submitted.draft.templateId]: {
+        version: submitted.draft.draftVersion,
+        contentHash: "0".repeat(64),
+      },
+    };
+    project.layers.push({
+      id: "lyr_bbbbbbbbbb",
+      kind: "animation",
+      name: "Draft graphics",
+      order: 2,
+      enabled: true,
+      locked: false,
+      sequence: "seq_aaaaaaaaaa",
+      items: [{
+        id: "gfx_bbbbbbbbbb",
+        template: submitted.draft.templateId,
+        at: "timeline:seq_aaaaaaaaaa@0",
+        duration: { frames: 12, fps: "24/1" },
+        params: {},
+        seed: 7,
+      }],
+    });
+    const pkg = await registry.package(
+      submitted.draft.templateId,
+      submitted.draft.draftVersion,
+    );
+    if (!pkg.ok) throw pkg.error;
+    project.templates[submitted.draft.templateId]!.contentHash = pkg.value.contentHash;
+
+    await expect(renderGraphicOverlaySequence({
+      project,
+      sequenceId: "seq_aaaaaaaaaa",
+      registry,
+      cacheRoot: join(root, "cache"),
+      width: 640,
+      height: 360,
+      fps: "24/1",
+      brand: { palette: {} },
+    })).rejects.toMatchObject({
+      code: "E_TEMPLATE_UNREVIEWED",
+      acceptedStateChanged: false,
+    });
   });
 });

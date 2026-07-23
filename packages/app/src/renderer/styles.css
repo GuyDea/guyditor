@@ -345,6 +345,14 @@ small { color: var(--muted); }
 }
 .graphic-compose { padding: 6px; border-bottom: 1px solid var(--line); }
 .template-live-preview { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border: 1px solid #3b474e; background: #020304; }
+.template-preview-strip { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(52px, 1fr); gap: 2px; margin-top: 4px; overflow-x: auto; }
+.template-preview-strip img { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border: 1px solid #33434b; background: #020304; }
+.template-author-review { display: grid; gap: 5px; margin-top: 6px; padding: 7px; border: 1px solid #5b4b2b; border-left: 3px solid var(--amber); background: #19160e; }
+.template-author-review header { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.template-author-review header strong { color: #f0d394; font-size: 8px; }
+.template-author-review header span { color: var(--amber); font: 600 6px/1 ui-monospace, monospace; text-transform: uppercase; }
+.template-author-review p { margin: 0; color: var(--muted); font-size: 7px; line-height: 1.4; }
+.template-author-review > div { display: flex; flex-wrap: wrap; gap: 4px; }
 .template-param-grid, .graphic-placement { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; margin-top: 6px; }
 .template-param-grid label, .graphic-placement label { min-width: 0; display: grid; gap: 3px; color: var(--muted); font: 600 6px/1 ui-monospace, monospace; text-transform: uppercase; }
 .template-param-grid input, .template-param-grid select, .graphic-placement input, .graphic-placement select { min-width: 0; width: 100%; min-height: 22px; padding: 2px 4px; font-size: 7px; }

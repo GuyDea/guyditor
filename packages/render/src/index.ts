@@ -13,6 +13,26 @@ export type {
   TemplateManifest,
   TemplateRegistryOptions,
 } from "./template-registry.js";
+export {
+  DEFAULT_TEMPLATE_AUTHOR_FRAMES_PER_SECOND_FLOOR,
+  DEFAULT_TEMPLATE_AUTHOR_PROBE_FRAMES,
+  MAX_AUTHORED_TEMPLATE_SOURCE_BYTES,
+  TemplateAuthoringService,
+} from "./template-authoring.js";
+export type {
+  TemplateAuthorAuditEvent,
+  TemplateAuthorCheckName,
+  TemplateAuthorManifest,
+  TemplateAuthorProvenance,
+  TemplateAuthorReviewInput,
+  TemplateAuthorStatus,
+  TemplateAuthorStatusValue,
+  TemplateAuthorSubmission,
+  TemplateAuthorSubmitResult,
+  TemplateAuthorValidationCheck,
+  TemplateAuthorValidationError,
+  TemplateAuthoringServiceOptions,
+} from "./template-authoring.js";
 export { createSeededRng } from "./seeded-rng.js";
 export {
   TEMPLATE_CANVAS_VERSION,

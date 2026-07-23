@@ -47,6 +47,33 @@ async function valueOf<T>(result: Promise<Result<T>>): Promise<T> {
 }
 
 describe("FR-600/601 graphic operation catalog", () => {
+  it("keeps an unreviewed authored template out of accepted graphic placements", async () => {
+    const project = projectFixture();
+    const engine = new OperationEngine(project, {
+      templateProvider: {
+        latest: () => Promise.resolve(success({ ...descriptor, reviewState: "draft" as const })),
+        get: () => Promise.resolve(success({ ...descriptor, reviewState: "draft" as const })),
+      },
+    });
+
+    await expect(engine.execute([{
+      op: "graphic.add",
+      params: {
+        templateId: TEMPLATE_ID,
+        anchor: "timeline:seq_aaaaaaaaaa@4",
+        duration: { frames: 48, fps: "24/1" },
+        params: { title: "Unreviewed", accent: "#ff5a1f" },
+      },
+    }], {
+      baseRevision: project.revision,
+      origin: "ui",
+      dryRun: false,
+    })).resolves.toMatchObject({
+      ok: false,
+      error: { code: "E_TEMPLATE_UNREVIEWED", acceptedStateChanged: false },
+    });
+  });
+
   it("pins the latest template on first use and stores a seeded gfx PlacedItem", async () => {
     const project = projectFixture();
     const provider = {

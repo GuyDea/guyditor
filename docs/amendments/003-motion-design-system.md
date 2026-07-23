@@ -1,5 +1,6 @@
 ---
 status: accepted        # accepted 2026-07-23 by the project owner (conversation)
+implemented: 2026-07-23
 affects: ["Part 7 §7.2–7.6 (templates)", "Part 9 §9.2 (gateway tools)", "Part 12 §12.3 (overlay renderer)", "BRD §13 (FR-600..602)"]
 brd_ids: [FR-600, FR-602, FR-700, BR-007]
 author: Claude Fable 5 (coordinator), from creator requirements 2026-07-23

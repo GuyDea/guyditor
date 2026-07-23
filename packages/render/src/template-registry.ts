@@ -65,6 +65,14 @@ export interface LoadedTemplatePackage {
   contentHash: string;
   compiledSource: string;
   files: string[];
+  reviewState: "published" | "draft";
+  authoring?: {
+    submissionId: string;
+    status: "awaiting_review" | "changes_requested" | "rejected" | "superseded" | "published";
+    description: string;
+    previewPaths: string[];
+    reason?: string;
+  };
 }
 
 export interface TemplateCatalogEntry extends TemplateDescriptor {
@@ -73,6 +81,13 @@ export interface TemplateCatalogEntry extends TemplateDescriptor {
   previewParams: Record<string, unknown>;
   assets: TemplateAssetDeclaration[];
   builtinName?: string;
+  reviewState: "published" | "draft";
+  authoringStatus?: "awaiting_review" | "changes_requested" | "rejected" | "superseded" | "published";
+  submissionId?: string;
+  description?: string;
+  reviewReason?: string;
+  previewStripPaths?: string[];
+  previewStripDataUrls?: string[];
 }
 
 export interface TemplateRegistryOptions {
@@ -80,6 +95,7 @@ export interface TemplateRegistryOptions {
   userRoot?: string;
   projectRoot?: string;
   compiledRoot?: string;
+  draftRoot?: string;
 }
 
 const SEMVER = "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$";
@@ -274,6 +290,7 @@ export function templateDescriptor(pkg: LoadedTemplatePackage): TemplateDescript
     duration: structuredClone(pkg.manifest.duration),
     params: structuredClone(pkg.manifest.params),
     contentHash: pkg.contentHash,
+    reviewState: pkg.reviewState,
   };
 }
 
@@ -440,6 +457,7 @@ export async function validateTemplatePackage(
     contentHash: await contentHash(absoluteRoot, files.value),
     compiledSource,
     files: files.value,
+    reviewState: "published",
   });
 }
 
@@ -495,6 +513,16 @@ function catalogEntry(
     previewPath: resolve(pkg.root, pkg.manifest.preview.file),
     previewParams: structuredClone(pkg.manifest.preview.params),
     assets: structuredClone(pkg.manifest.assets ?? []),
+    reviewState: pkg.reviewState,
+    ...(pkg.authoring === undefined
+      ? {}
+      : {
+          authoringStatus: pkg.authoring.status,
+          submissionId: pkg.authoring.submissionId,
+          description: pkg.authoring.description,
+          ...(pkg.authoring.reason === undefined ? {} : { reviewReason: pkg.authoring.reason }),
+          previewStripPaths: [...pkg.authoring.previewPaths],
+        }),
     ...(builtinName === undefined ? {} : { builtinName }),
   };
 }
@@ -515,6 +543,7 @@ export class TemplateRegistry implements TemplateProvider {
   readonly #userRoot: string;
   readonly #projectRoot: string | undefined;
   readonly #compiledRoot: string;
+  readonly #draftRoot: string;
 
   public constructor(options: TemplateRegistryOptions = {}) {
     this.#builtinsRoot = resolve(options.builtinsRoot ?? join(process.cwd(), "templates"));
@@ -523,6 +552,14 @@ export class TemplateRegistry implements TemplateProvider {
       ? undefined
       : resolve(options.projectRoot);
     this.#compiledRoot = resolve(options.compiledRoot ?? join(this.#userRoot, ".compiled"));
+    this.#draftRoot = resolve(options.draftRoot ?? join(this.#userRoot, ".drafts"));
+  }
+
+  public async validateDraftPackage(root: string): Promise<Result<LoadedTemplatePackage>> {
+    const loaded = await validateTemplatePackage(root);
+    return loaded.ok
+      ? success({ ...loaded.value, reviewState: "draft" })
+      : loaded;
   }
 
   async #builtinPackages(): Promise<Result<Array<{
@@ -558,19 +595,62 @@ export class TemplateRegistry implements TemplateProvider {
     return success(packages);
   }
 
+  async #draftPackages(): Promise<Result<LoadedTemplatePackage[]>> {
+    const packages: LoadedTemplatePackage[] = [];
+    for (const submissionId of await directoryNames(this.#draftRoot)) {
+      if (!/^tas_[a-z2-7]{10}$/u.test(submissionId)) continue;
+      let authoring: LoadedTemplatePackage["authoring"];
+      try {
+        const metadata = JSON.parse(
+          await readFile(join(this.#draftRoot, submissionId, "authoring.json"), "utf8"),
+        ) as Record<string, unknown>;
+        const previewPaths = Array.isArray(metadata["previewPaths"])
+          ? metadata["previewPaths"].filter((value): value is string => typeof value === "string")
+          : [];
+        const status = metadata["status"];
+        if (
+          typeof metadata["submissionId"] !== "string" ||
+          typeof metadata["description"] !== "string" ||
+          typeof status !== "string" ||
+          !["awaiting_review", "changes_requested", "rejected", "superseded", "published"]
+            .includes(status)
+        ) {
+          return packageFailure(`draft ${submissionId} has invalid authoring metadata.`);
+        }
+        authoring = {
+          submissionId: metadata["submissionId"],
+          description: metadata["description"],
+          status: status as NonNullable<LoadedTemplatePackage["authoring"]>["status"],
+          previewPaths,
+          ...(typeof metadata["reason"] === "string" ? { reason: metadata["reason"] } : {}),
+        };
+      } catch (error: unknown) {
+        return packageFailure(
+          `draft ${submissionId} has unreadable authoring metadata: ${errorMessage(error)}.`,
+        );
+      }
+      const loaded = await this.validateDraftPackage(join(this.#draftRoot, submissionId));
+      if (!loaded.ok) return loaded;
+      packages.push({ ...loaded.value, authoring });
+    }
+    return success(packages);
+  }
+
   async #all(): Promise<Result<Array<{
     package: LoadedTemplatePackage;
     priority: number;
     builtinName?: string;
   }>>> {
-    const [builtins, user, project] = await Promise.all([
+    const [builtins, user, project, drafts] = await Promise.all([
       this.#builtinPackages(),
       this.#installedPackages(this.#userRoot),
       this.#installedPackages(this.#projectRoot),
+      this.#draftPackages(),
     ]);
     if (!builtins.ok) return builtins;
     if (!user.ok) return user;
     if (!project.ok) return project;
+    if (!drafts.ok) return drafts;
     return success([
       ...builtins.value.map(({ package: pkg, builtinName }) => ({
         package: pkg,
@@ -579,6 +659,7 @@ export class TemplateRegistry implements TemplateProvider {
       })),
       ...user.value.map((pkg) => ({ package: pkg, priority: 1 })),
       ...project.value.map((pkg) => ({ package: pkg, priority: 2 })),
+      ...drafts.value.map((pkg) => ({ package: pkg, priority: -1 })),
     ]);
   }
 
@@ -629,15 +710,23 @@ export class TemplateRegistry implements TemplateProvider {
   public async list(): Promise<Result<TemplateCatalogEntry[]>> {
     const all = await this.#all();
     if (!all.ok) return all;
-    const ids = [...new Set(all.value.map(({ package: pkg }) => pkg.manifest.id))].sort();
     const entries: TemplateCatalogEntry[] = [];
+    const published = all.value.filter(({ package: pkg }) => pkg.reviewState === "published");
+    const ids = [...new Set(published.map(({ package: pkg }) => pkg.manifest.id))].sort();
     for (const id of ids) {
-      const candidates = all.value.filter(({ package: pkg }) => pkg.manifest.id === id);
+      const candidates = published.filter(({ package: pkg }) => pkg.manifest.id === id);
       const latestVersion = candidates.map(({ package: pkg }) => pkg.manifest.version)
         .sort(compareSemver).at(-1)!;
       const selected = candidates.filter(({ package: pkg }) => pkg.manifest.version === latestVersion)
         .sort((left, right) => right.priority - left.priority)[0]!;
       entries.push(catalogEntry(selected.package, selected.builtinName));
+    }
+    for (const draft of all.value
+      .filter(({ package: pkg }) =>
+        pkg.reviewState === "draft" && pkg.authoring?.status === "awaiting_review")
+      .sort((left, right) =>
+        left.package.manifest.name.localeCompare(right.package.manifest.name))) {
+      entries.push(catalogEntry(draft.package));
     }
     return success(entries);
   }
@@ -656,6 +745,16 @@ export class TemplateRegistry implements TemplateProvider {
     }
     const loaded = await validateTemplatePackage(source);
     if (!loaded.ok) return loaded;
+    if (
+      loaded.value.files.includes("authoring.json") ||
+      /-draft\.\d+$/u.test(loaded.value.manifest.version)
+    ) {
+      return failure(makeGuyditorError(
+        "E_TEMPLATE_UNREVIEWED",
+        `Authored draft ${loaded.value.manifest.id}@${loaded.value.manifest.version} cannot be installed; creator approval must publish it first.`,
+        { affected: [loaded.value.manifest.id] },
+      ));
+    }
     if (options.dryRun) return success(templateDescriptor(loaded.value));
     const destination = join(
       this.#userRoot,

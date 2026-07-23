@@ -7,6 +7,7 @@ import type { ElectronApplication, Page } from "@playwright/test";
 
 export interface LaunchAppOptions {
   projectTemplate?: string;
+  prepareUserData?: (userDataDirectory: string) => Promise<void>;
 }
 
 export interface LaunchedApp {
@@ -19,6 +20,7 @@ export interface LaunchedApp {
 export async function launchApp(options: LaunchAppOptions = {}): Promise<LaunchedApp> {
   const temporaryRoot = await mkdtemp(join(tmpdir(), "guyditor-e2e-"));
   const userDataDirectory = join(temporaryRoot, "user-data");
+  await options.prepareUserData?.(userDataDirectory);
   let projectPath: string | undefined;
   if (options.projectTemplate !== undefined) {
     projectPath = join(temporaryRoot, basename(options.projectTemplate));

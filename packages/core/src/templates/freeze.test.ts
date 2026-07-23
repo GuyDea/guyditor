@@ -227,4 +227,21 @@ describe("template.freeze semantic operation", () => {
       error: { code: "E_TEMPLATE_FREEZE_PROVENANCE_INVALID" },
     });
   });
+
+  it("blocks an unreviewed authored template before a frozen asset can enter accepted state", async () => {
+    await expect(applyTemplateFreezeOperation(
+      emptyProject(),
+      operation(false),
+      {
+        latest: () => success({ ...descriptor(), reviewState: "draft" }),
+        get: () => success({ ...descriptor(), reviewState: "draft" }),
+      },
+    )).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "E_TEMPLATE_UNREVIEWED",
+        acceptedStateChanged: false,
+      },
+    });
+  });
 });

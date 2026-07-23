@@ -811,6 +811,12 @@ export class RenderService {
           : { brand: brand.templateDefaults }),
       }),
       previewDataUrl: `data:image/png;base64,${(await readFile(entry.previewPath)).toString("base64")}`,
+      ...(entry.previewStripPaths === undefined
+        ? {}
+        : {
+            previewStripDataUrls: await Promise.all(entry.previewStripPaths.map(async (path) =>
+              `data:image/png;base64,${(await readFile(path)).toString("base64")}`)),
+          }),
     })));
   }
 
@@ -885,6 +891,13 @@ export class RenderService {
       ? await this.#templateRegistry.latest(request.templateId)
       : await this.#templateRegistry.get(request.templateId, pin.version);
     if (!descriptor.ok) throw descriptor.error;
+    if (descriptor.value.reviewState === "draft") {
+      throw makeGuyditorError(
+        "E_TEMPLATE_UNREVIEWED",
+        `Template ${request.templateId}@${descriptor.value.version} is awaiting creator review and is preview-only.`,
+        { affected: [request.templateId] },
+      );
+    }
     if (pin !== undefined && descriptor.value.contentHash !== pin.contentHash) {
       throw makeGuyditorError(
         "E_TEMPLATE_MISSING_VERSION",

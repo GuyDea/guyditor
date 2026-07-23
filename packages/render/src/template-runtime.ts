@@ -102,7 +102,7 @@ function deterministicMath(): object {
   return Object.freeze(target);
 }
 
-function sandbox(): { context: Context; module: ModuleContainer } {
+function sandbox(pkg: LoadedTemplatePackage): { context: Context; module: ModuleContainer } {
   const module: ModuleContainer = { exports: {} };
   const values: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
   Object.assign(values, {
@@ -123,6 +123,12 @@ function sandbox(): { context: Context; module: ModuleContainer } {
           primitivesV1,
           default: primitivesV1,
         });
+      }
+      if (typeof specifier === "string" && specifier.startsWith("asset:")) {
+        const name = specifier.slice("asset:".length);
+        if ((pkg.manifest.assets ?? []).some((asset) => asset.name === name)) {
+          return Object.freeze({ __esModule: true, default: name, name });
+        }
       }
       throw new TypeError(
         `Module ${String(specifier)} is unavailable in deterministic templates.`,
@@ -316,7 +322,7 @@ export async function loadTemplateRuntime(
       [pkg.manifest.id],
     );
   }
-  const isolated = sandbox();
+  const isolated = sandbox(pkg);
   try {
     new Script(pkg.compiledSource, {
       filename: `${pkg.manifest.id}@${pkg.manifest.version}.js`,

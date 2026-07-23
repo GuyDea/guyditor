@@ -66,13 +66,17 @@ function templateCatalog(): Promise<TemplateCatalogEntry[]> {
   );
 }
 
+function catalogKey(entry: TemplateCatalogEntry): string {
+  return `${entry.id}@${entry.version}#${entry.submissionId ?? "published"}`;
+}
+
 export function GraphicsPanel({
   snapshot,
   refreshProject,
   setNotice,
 }: WorkspacePanelProps): React.JSX.Element {
   const [catalog, setCatalog] = useState<TemplateCatalogEntry[]>([]);
-  const [templateId, setTemplateId] = useState("");
+  const [templateKey, setTemplateKey] = useState("");
   const [params, setParams] = useState<Record<string, unknown>>({});
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [selectedGraphicId, setSelectedGraphicId] = useState<string | null>(null);
@@ -81,10 +85,11 @@ export function GraphicsPanel({
   const [durationMode, setDurationMode] = useState<"intrinsic" | "fixed" | "until">("intrinsic");
   const [durationFrames, setDurationFrames] = useState(90);
   const [freezing, setFreezing] = useState(false);
+  const [reviewReason, setReviewReason] = useState("");
   const playhead = usePreviewStore((state) => state.playhead);
   const selectedWordId = useSelectionStore((state) => state.selectedWordId);
   const selectLayer = useSelectionStore((state) => state.selectLayer);
-  const selectedTemplate = catalog.find(({ id }) => id === templateId);
+  const selectedTemplate = catalog.find((entry) => catalogKey(entry) === templateKey);
   const schema = schemaOf(selectedTemplate);
   const required = new Set(schema.required?.filter((value): value is string => typeof value === "string") ?? []);
   const graphicLayers = snapshot?.master.layers.filter((layer) =>
@@ -102,8 +107,8 @@ export function GraphicsPanel({
       .then((entries) => {
         if (!current) return;
         setCatalog(entries);
-        if (entries.length > 0 && templateId.length === 0) {
-          setTemplateId(entries[0]!.id);
+        if (entries.length > 0 && templateKey.length === 0) {
+          setTemplateKey(catalogKey(entries[0]!));
           setParams(defaults(entries[0]!));
         }
       })
@@ -134,14 +139,61 @@ export function GraphicsPanel({
   }, [params, selectedTemplate]);
 
   function chooseTemplate(entry: TemplateCatalogEntry): void {
-    setTemplateId(entry.id);
+    setTemplateKey(catalogKey(entry));
     setParams(defaults(entry));
     setSelectedGraphicId(null);
+    setReviewReason("");
+  }
+
+  async function reviewDraft(
+    decision: "approve" | "reject" | "request_changes",
+  ): Promise<void> {
+    if (selectedTemplate?.submissionId === undefined) return;
+    const reason = reviewReason.trim();
+    if (decision !== "approve" && reason.length === 0) {
+      setNotice("Add a review reason before rejecting or requesting changes.");
+      return;
+    }
+    try {
+      await window.guyditor.call(
+        "TemplateAuthoringService",
+        "review",
+        {
+          submissionId: selectedTemplate.submissionId,
+          decision,
+          ...(reason.length === 0 ? {} : { reason }),
+        },
+      );
+      const entries = await templateCatalog();
+      setCatalog(entries);
+      const next = entries.find(({ id }) => id === selectedTemplate.id) ?? entries[0];
+      if (next === undefined) {
+        setTemplateKey("");
+        setParams({});
+      } else {
+        chooseTemplate(next);
+      }
+      setNotice(
+        decision === "approve"
+          ? `Published ${selectedTemplate.name} as an immutable template version.`
+          : decision === "reject"
+            ? `Rejected ${selectedTemplate.name}: ${reason}`
+            : `Requested changes to ${selectedTemplate.name}: ${reason}`,
+      );
+    } catch (error: unknown) {
+      setNotice(errorMessage(error));
+    }
   }
 
   function chooseInstance(instance: GraphicInstance): void {
     setSelectedGraphicId(instance.item.id);
-    setTemplateId(instance.item.template ?? "");
+    const templateId = instance.item.template;
+    const pin = templateId === undefined ? undefined : snapshot?.master.templates?.[templateId];
+    const entry = catalog.find((candidate) =>
+      candidate.id === templateId &&
+      (pin === undefined ||
+        candidate.version === pin.version && candidate.contentHash === pin.contentHash));
+    setTemplateKey(entry === undefined ? "" : catalogKey(entry));
     setParams(structuredClone(instance.item.params ?? {}));
     setLayerId(instance.layerId);
     selectLayer(instance.layerId);
@@ -326,7 +378,10 @@ export function GraphicsPanel({
             type="button"
             className="freeze-action"
             data-testid="template-browser-freeze"
-            disabled={snapshot === null || selectedTemplate === undefined || freezing}
+            disabled={
+              snapshot === null || selectedTemplate === undefined || freezing ||
+              selectedTemplate.reviewState === "draft"
+            }
             onClick={() => void freezeTemplate()}
           >
             {freezing ? "Freezing…" : "Freeze selected to clip"}
@@ -337,14 +392,18 @@ export function GraphicsPanel({
         {catalog.map((entry) => (
           <button
             type="button"
-            key={entry.id}
-            data-active={entry.id === templateId && selectedGraphicId === null}
-            data-testid={`template-${entry.builtinName ?? entry.id}`}
+            key={`${entry.id}@${entry.version}`}
+            data-active={catalogKey(entry) === templateKey && selectedGraphicId === null}
+            data-testid={`template-${entry.builtinName ?? entry.submissionId ?? entry.id}`}
             onClick={() => chooseTemplate(entry)}
           >
             <img src={entry.previewDataUrl ?? entry.previewPath} alt="" />
             <span>{entry.name}</span>
-            <small>{entry.kind.replace("_", " ")} · v{entry.version}</small>
+            <small>
+              {entry.reviewState === "draft"
+                ? "awaiting review"
+                : `${entry.kind.replace("_", " ")} · v${entry.version}`}
+            </small>
           </button>
         ))}
       </div>
@@ -354,6 +413,21 @@ export function GraphicsPanel({
         <div className="graphic-compose">
           {previewUrl === null ? null : (
             <img className="template-live-preview" src={previewUrl} alt={`${selectedTemplate.name} live preview`} data-testid="template-live-preview" />
+          )}
+          {selectedTemplate.previewStripDataUrls === undefined ? null : (
+            <div
+              className="template-preview-strip"
+              data-testid="template-preview-strip"
+              aria-label={`${selectedTemplate.name} probe frames`}
+            >
+              {selectedTemplate.previewStripDataUrls.map((url, index) => (
+                <img
+                  key={url}
+                  src={url}
+                  alt={`Probe frame ${String(index + 1)}`}
+                />
+              ))}
+            </div>
           )}
           <div className="template-param-grid">
             {Object.entries(schema.properties ?? {}).map(([name, property]) => {
@@ -412,6 +486,49 @@ export function GraphicsPanel({
               }
             </p>
           ))}
+          {selectedTemplate.reviewState !== "draft" ? null : (
+            <section className="template-author-review" data-testid="template-author-review">
+              <header>
+                <strong>Awaiting creator review</strong>
+                <span>Preview only</span>
+              </header>
+              <p>{selectedTemplate.description ?? "Agent-authored template draft."}</p>
+              <label>
+                Review reason
+                <input
+                  data-testid="template-review-reason"
+                  type="text"
+                  value={reviewReason}
+                  placeholder="Required for changes or rejection"
+                  onChange={(event) => setReviewReason(event.currentTarget.value)}
+                />
+              </label>
+              <div>
+                <button
+                  type="button"
+                  className="primary-action"
+                  data-testid="template-review-approve"
+                  onClick={() => void reviewDraft("approve")}
+                >
+                  Approve & publish
+                </button>
+                <button
+                  type="button"
+                  data-testid="template-review-changes"
+                  onClick={() => void reviewDraft("request_changes")}
+                >
+                  Request changes
+                </button>
+                <button
+                  type="button"
+                  data-testid="template-review-reject"
+                  onClick={() => void reviewDraft("reject")}
+                >
+                  Reject
+                </button>
+              </div>
+            </section>
+          )}
           <div className="graphic-placement">
             <label>Anchor
               <select data-testid="graphic-anchor" value={anchorMode} onChange={(event) => setAnchorMode(event.currentTarget.value as "playhead" | "word")}>
@@ -439,8 +556,8 @@ export function GraphicsPanel({
           <div className="graphic-actions">
             {selectedInstance === undefined ? (
               <>
-                <button type="button" className="primary-action" data-testid="graphic-add" disabled={snapshot === null || freezing} onClick={() => void addGraphic()}>Place graphic</button>
-                <button type="button" className="freeze-action" data-testid="template-freeze" disabled={snapshot === null || freezing} onClick={() => void freezeTemplate()}>
+                <button type="button" className="primary-action" data-testid="graphic-add" disabled={snapshot === null || freezing || selectedTemplate.reviewState === "draft"} onClick={() => void addGraphic()}>Place graphic</button>
+                <button type="button" className="freeze-action" data-testid="template-freeze" disabled={snapshot === null || freezing || selectedTemplate.reviewState === "draft"} onClick={() => void freezeTemplate()}>
                   {freezing ? "Freezing…" : "Freeze to clip"}
                 </button>
               </>

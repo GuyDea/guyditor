@@ -1046,6 +1046,36 @@ export const IPC_SURFACES: readonly IpcSurface[] = Object.freeze([
     },
   },
   {
+    service: "TemplateAuthoringService",
+    methods: {
+      status: {
+        paramsSchema: {
+          type: "object",
+          properties: {
+            submissionId: { type: "string", pattern: "^tas_[a-z2-7]{10}$" },
+          },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 100,
+      },
+      review: {
+        paramsSchema: {
+          type: "object",
+          required: ["submissionId", "decision"],
+          properties: {
+            submissionId: { type: "string", pattern: "^tas_[a-z2-7]{10}$" },
+            decision: { enum: ["approve", "reject", "request_changes"] },
+            reason: { type: "string" },
+          },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 1_000,
+      },
+    },
+  },
+  {
     service: "CostMeter",
     methods: {
       status: { paramsSchema: emptyParams, resultSchema: anyResult, budgetMs: 20 },

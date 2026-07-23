@@ -3,6 +3,10 @@ import { join, resolve } from "node:path";
 
 import { expect, test } from "@playwright/test";
 
+import {
+  TemplateAuthoringService,
+  TemplateRegistry,
+} from "../../render/src/index.js";
 import { launchApp } from "./helpers/launch-app.js";
 import { createWorkspaceProject } from "./helpers/workspace-project.js";
 
@@ -280,6 +284,75 @@ test("places a schema-driven lower third at a word and previews the journaled gr
     const master = await readFile(join(launched.projectPath!, "episode.guyditor.yaml"), "utf8");
     expect(master).toContain("tpl_a2c3d4e5f6");
     expect(master).toContain("Word anchored title");
+  } finally {
+    await launched.electronApp.close();
+    await rm(template, { recursive: true, force: true });
+  }
+});
+
+test("reviews an agent-authored template preview strip before enabling deliverable actions", async () => {
+  const template = await createWorkspaceProject();
+  const launched = await launchApp({
+    projectTemplate: template,
+    prepareUserData: async (userDataDirectory) => {
+      const root = join(userDataDirectory, ".guyditor", "templates");
+      const registry = new TemplateRegistry({
+        builtinsRoot: join(userDataDirectory, "empty-builtins"),
+        userRoot: root,
+        draftRoot: join(root, ".drafts"),
+      });
+      const ids = ["tas_a2c3d4e5f6", "tpl_b2c3d4e5f6"];
+      const authoring = new TemplateAuthoringService({
+        registry,
+        draftRoot: join(root, ".drafts"),
+        idFactory: () => ids.shift()!,
+        probe: { frames: 3, framesPerSecondFloor: 0.1 },
+      });
+      const result = await authoring.submit({
+        name: "Agent stat badge",
+        description: "A compact, animated review fixture.",
+        manifest: {
+          params: {
+            type: "object",
+            additionalProperties: false,
+            required: ["value"],
+            properties: {
+              value: { type: "number", minimum: 0, maximum: 100, default: 72 },
+            },
+          },
+          duration: { mode: "fixed", default: { frames: 24, fps: "24/1" } },
+          assets: [],
+        },
+        source: `import { primitivesV1 as motion } from "@guyditor/render/primitives/v1";
+export default {
+  render(ctx, params) {
+    motion.shapes.roundedRect(ctx.canvas, {
+      x: 40, y: 40, width: 80 + params.value, height: 48,
+      radius: 8, fill: "#4DD6A4"
+    });
+  }
+};`,
+      }, { sessionId: "ses_a2c3d4e5f6", model: "e2e-director" });
+      if (!result.ok) throw new Error("Could not seed authored-template e2e draft.");
+    },
+  });
+  try {
+    await launched.page.getByTestId("template-tas_a2c3d4e5f6").click();
+    await expect(launched.page.getByTestId("template-author-review"))
+      .toContainText("Awaiting creator review");
+    await expect(launched.page.getByTestId("template-preview-strip").locator("img"))
+      .toHaveCount(3);
+    await expect(launched.page.getByTestId("graphic-add")).toBeDisabled();
+    await expect(launched.page.getByTestId("template-freeze")).toBeDisabled();
+    await launched.page.getByTestId("template-review-approve").click();
+    await expect(launched.page.getByTestId("template-author-review")).toHaveCount(0);
+    await expect(launched.page.getByTestId("graphic-add")).toBeEnabled();
+    await expect.poll(() => launched.page.evaluate(() =>
+      window.guyditor.call<{ status: string }>(
+        "TemplateAuthoringService",
+        "status",
+        { submissionId: "tas_a2c3d4e5f6" },
+      ))).toMatchObject({ status: "published" });
   } finally {
     await launched.electronApp.close();
     await rm(template, { recursive: true, force: true });

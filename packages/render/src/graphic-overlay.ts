@@ -310,6 +310,13 @@ async function resolvedGraphics(options: GraphicOverlayOptions): Promise<Resolve
       if (runtime === undefined) {
         const pkg = await options.registry.package(item.template, pin.version, pin.contentHash);
         if (!pkg.ok) throw pkg.error;
+        if (pkg.value.reviewState === "draft") {
+          throw graphicError(
+            "E_TEMPLATE_UNREVIEWED",
+            `Template ${item.template}@${pin.version} is awaiting creator review and is preview-only.`,
+            [item.id, item.template],
+          );
+        }
         const loaded = await loadTemplateRuntime(pkg.value);
         if (!loaded.ok) throw loaded.error;
         runtime = loaded.value;

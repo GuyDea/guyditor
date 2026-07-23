@@ -203,6 +203,13 @@ export async function applyTemplateFreezeOperation(
     provenance.template.id,
     provenance.template.version,
   );
+  if (descriptor.ok && descriptor.value.reviewState === "draft") {
+    return freezeFailure(
+      "E_TEMPLATE_UNREVIEWED",
+      `Template ${provenance.template.id}@${provenance.template.version} is awaiting creator review and is preview-only.`,
+      [provenance.template.id],
+    );
+  }
   if (
     !descriptor.ok ||
     descriptor.value.contentHash !== provenance.template.contentHash

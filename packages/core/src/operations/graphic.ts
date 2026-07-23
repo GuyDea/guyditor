@@ -27,7 +27,15 @@ export async function resolveTemplateDescriptor(
   const resolved = pin === undefined
     ? await provider.latest(templateId)
     : await provider.get(templateId, pin.version);
-  if (!resolved.ok || pin === undefined) return resolved;
+  if (!resolved.ok) return resolved;
+  if (resolved.value.reviewState === "draft") {
+    return graphicFailure(
+      "E_TEMPLATE_UNREVIEWED",
+      `Template ${templateId}@${resolved.value.version} is awaiting creator review and is preview-only.`,
+      [templateId],
+    );
+  }
+  if (pin === undefined) return resolved;
   return resolved.value.contentHash === pin.contentHash
     ? resolved
     : graphicFailure(
@@ -144,6 +152,13 @@ async function pinnedDescriptor(
   }
   const resolved = await provider.get(templateId, pin.version);
   if (!resolved.ok) return resolved;
+  if (resolved.value.reviewState === "draft") {
+    return graphicFailure(
+      "E_TEMPLATE_UNREVIEWED",
+      `Template ${templateId}@${pin.version} is awaiting creator review and is preview-only.`,
+      [item.id, templateId],
+    );
+  }
   return resolved.value.contentHash === pin.contentHash
     ? resolved
     : graphicFailure(

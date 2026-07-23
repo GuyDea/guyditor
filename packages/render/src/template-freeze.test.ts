@@ -20,6 +20,7 @@ import {
 } from "../../core/src/index.js";
 import {
   RenderService,
+  TemplateAuthoringService,
   TemplateRegistry,
   loadTemplateRuntime,
   renderTemplatePng,
@@ -57,6 +58,66 @@ async function fixtureProfiles(root: string): Promise<string> {
 }
 
 describe("template freeze service", () => {
+  it("rejects an authored draft before materializing freeze frames or assets", async () => {
+    const root = await mkdtemp(join(tmpdir(), "guyditor-template-freeze-draft-"));
+    temporaryDirectories.push(root);
+    const projectRoot = join(root, "project");
+    const profilesRoot = await fixtureProfiles(root);
+    const storeResult = await createProject(projectRoot, {
+      name: "Draft freeze boundary",
+      primaryOutputFormat: "youtube-longform@1.0.0",
+    }, { profilesDirectory: profilesRoot });
+    if (!storeResult.ok) throw storeResult.error;
+    const templatesRoot = join(root, "user-templates");
+    const registry = new TemplateRegistry({
+      builtinsRoot: join(root, "empty-builtins"),
+      userRoot: templatesRoot,
+      draftRoot: join(templatesRoot, ".drafts"),
+    });
+    const ids = ["tas_a2c3d4e5f6", "tpl_b2c3d4e5f6"];
+    const authoring = new TemplateAuthoringService({
+      registry,
+      draftRoot: join(templatesRoot, ".drafts"),
+      idFactory: () => ids.shift()!,
+      probe: { frames: 2, framesPerSecondFloor: 0.1 },
+    });
+    const submitted = await authoring.submit({
+      name: "Unreviewed freeze fixture",
+      description: "Must remain preview-only.",
+      manifest: {
+        params: { type: "object", additionalProperties: false },
+        duration: { mode: "fixed", default: { frames: 12, fps: "24/1" } },
+        assets: [],
+      },
+      source: "export default { render(ctx) { ctx.canvas.fillRect(0, 0, 12, 12); } };\n",
+    }, { sessionId: "ses_a2c3d4e5f6", model: "freeze-test" });
+    if (!submitted.ok) throw new Error("expected authored draft");
+    const { queue } = JobQueue.open(":memory:", { concurrency: 1 });
+    const service = new RenderService({
+      projectRoot,
+      profilesRoot,
+      store: storeResult.value,
+      jobQueue: queue,
+      templateRegistry: registry,
+    });
+    try {
+      await expect(service.templateFreeze({
+        revision: storeResult.value.currentProject.revision,
+        templateId: submitted.draft.templateId,
+        params: {},
+        durationFrames: 2,
+      })).rejects.toMatchObject({
+        code: "E_TEMPLATE_UNREVIEWED",
+        acceptedStateChanged: false,
+      });
+      await expect(stat(join(projectRoot, ".guyditor/cache/render/template-freeze")))
+        .rejects.toMatchObject({ code: "ENOENT" });
+      expect(storeResult.value.currentProject.assets).toHaveLength(0);
+    } finally {
+      queue.close();
+    }
+  });
+
   it("freezes and places the first clip in an empty project", async () => {
     const root = await mkdtemp(join(tmpdir(), "guyditor-template-freeze-"));
     temporaryDirectories.push(root);

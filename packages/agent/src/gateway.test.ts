@@ -4,6 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 
 import {
   AnnotationService,
@@ -104,6 +107,97 @@ async function annotatedProject(): Promise<ProjectStore> {
 }
 
 describe("AgentGateway", () => {
+  it("exposes audited template author submission and status tools with session/model provenance", async () => {
+    const store = await annotatedProject();
+    const userDirectory = await mkdtemp(join(tmpdir(), "guyditor-author-gateway-user-"));
+    temporaryDirectories.push(userDirectory);
+    const audit = new AuditLog({ userDir: userDirectory });
+    const { queue: jobs } = JobQueue.open(":memory:");
+    const calls: unknown[] = [];
+    const draft = {
+      submissionId: "tas_a2c3d4e5f6",
+      templateId: "tpl_b2c3d4e5f6",
+      draftVersion: "1.0.0-draft.1",
+      draftRevision: 1,
+      name: "Agent badge",
+      description: "Novel stat badge",
+      status: "awaiting_review",
+      provenance: { sessionId: "ses_bbbbbbbbbb", model: "template-director" },
+      submittedAt: "2026-07-23T12:00:00.000Z",
+      updatedAt: "2026-07-23T12:00:00.000Z",
+      previewPaths: ["/draft/frame-00.png"],
+      checks: [],
+    };
+    const gateway = new AgentGateway({
+      auditLog: audit,
+      jobQueue: jobs,
+      project: store,
+      stateDirectory: join(userDirectory, "state"),
+      sessionIdFactory: () => "ses_bbbbbbbbbb",
+      director: {
+        profileId: "adp_bbbbbbbbbb",
+        modelLabel: "template-director",
+        locality: "local",
+      },
+      templateAuthoring: {
+        submit: (input, provenance) => {
+          calls.push({ input, provenance });
+          return Promise.resolve({ ok: true as const, draft, checks: [] });
+        },
+        status: (submissionId) => Promise.resolve(
+          submissionId === undefined ? [draft] : draft,
+        ),
+      },
+    });
+    const started = await gateway.start();
+    const client = new Client({ name: "template-author-test", version: "1" });
+    const transport = new StreamableHTTPClientTransport(new URL(started.endpoint), {
+      requestInit: { headers: { authorization: `Bearer ${started.token}` } },
+    });
+    await client.connect(transport as unknown as Transport);
+    try {
+      const tools = (await client.listTools()).tools.map(({ name }) => name);
+      expect(tools).toContain("template_author_submit");
+      expect(tools).toContain("template_author_status");
+      const submission = {
+        name: "Agent badge",
+        description: "Novel stat badge",
+        manifest: {
+          params: { type: "object", additionalProperties: false },
+          duration: { mode: "fixed", default: { frames: 30, fps: "30/1" } },
+          assets: [],
+        },
+        source: "export default { render() {} };",
+      };
+      const submitted = await client.callTool({
+        name: "template_author_submit",
+        arguments: submission,
+      });
+      const status = await client.callTool({
+        name: "template_author_status",
+        arguments: { submissionId: draft.submissionId },
+      });
+      expect(JSON.stringify(submitted)).toContain(draft.submissionId);
+      expect(JSON.stringify(status)).toContain("awaiting_review");
+      expect(calls).toEqual([{
+        input: submission,
+        provenance: {
+          sessionId: "ses_bbbbbbbbbb",
+          model: "template-director",
+        },
+      }]);
+    } finally {
+      await client.close();
+      await gateway.close();
+      jobs.close();
+    }
+    expect(audit.readSession("ses_bbbbbbbbbb").records)
+      .toEqual(expect.arrayContaining([
+        expect.objectContaining({ type: "tool.call", tool: "template_author_submit" }),
+        expect.objectContaining({ type: "tool.result", tool: "template_author_status", ok: true }),
+      ]));
+  });
+
   it("serves the AC-004 tools over authenticated loopback MCP without mutating accepted state", async () => {
     const store = await annotatedProject();
     const userDirectory = await mkdtemp(join(tmpdir(), "guyditor-gateway-user-"));

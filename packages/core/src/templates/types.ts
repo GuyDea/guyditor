@@ -44,6 +44,7 @@ export interface TemplateDescriptor {
   };
   params: Record<string, unknown>;
   contentHash: string;
+  reviewState?: "published" | "draft";
 }
 
 export interface TemplateInstallRequest {

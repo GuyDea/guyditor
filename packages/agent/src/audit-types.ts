@@ -93,6 +93,17 @@ export interface BudgetEventRecord extends AuditBase {
   projectedUsd: number;
 }
 
+export interface TemplateAuthorRecord extends AuditBase {
+  type: "template.author.submitted" | "template.author.reviewed";
+  submissionId: string;
+  templateId: string;
+  model: string;
+  status: "awaiting_review" | "changes_requested" | "rejected" | "superseded" | "published";
+  decision?: "approve" | "reject" | "request_changes";
+  reason?: string;
+  contentHash?: string;
+}
+
 export type AuditRecord =
   | SessionRecord
   | InstructionRecord
@@ -101,7 +112,8 @@ export type AuditRecord =
   | ExternalCallRecord
   | CostChargeRecord
   | PolicyRecord
-  | BudgetEventRecord;
+  | BudgetEventRecord
+  | TemplateAuthorRecord;
 
 export type AuditRecordDraft = AuditRecord extends infer RecordType
   ? RecordType extends AuditRecord

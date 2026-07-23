@@ -64,6 +64,26 @@ export const M3_COMMANDS = Object.freeze([
 export const M4_COMMANDS = Object.freeze([
   Object.freeze({ args: ["fixtures"], command: "pnpm" }),
   Object.freeze({ args: ["check:conventions"], command: "pnpm" }),
+  Object.freeze({
+    args: [
+      "exec", "vitest", "run",
+      "packages/render/src/template-authoring.test.ts",
+      "packages/core/src/templates/freeze.test.ts",
+      "packages/render/src/template-freeze.test.ts",
+      "packages/core/src/operations/graphic.test.ts",
+      "packages/render/src/graphic-overlay.test.ts",
+      "packages/agent/src/gateway.test.ts",
+      "packages/app/src/main/service-host.test.ts",
+    ],
+    command: "pnpm",
+  }),
+  Object.freeze({
+    args: [
+      "exec", "vitest", "run", "--project", "golden",
+      "packages/render/test/golden/authored-template.golden.test.ts",
+    ],
+    command: "pnpm",
+  }),
   Object.freeze({ args: ["test"], command: "pnpm" }),
   Object.freeze({ args: ["test:contract"], command: "pnpm" }),
   Object.freeze({ args: ["test:golden"], command: "pnpm" }),
@@ -147,6 +167,7 @@ export const M4_IDS = Object.freeze([
   "FR-304",
   "FR-503",
   ...identifiers("FR", 603, 606, 3),
+  ...identifiers("FR", 610, 612, 3),
   ...identifiers("FR", 700, 705, 3),
   "NFR-102",
   "NFR-107",
