@@ -1,6 +1,5 @@
 import { cpus } from "node:os";
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
 import { access, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { basename, extname, isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -70,7 +69,6 @@ import { loadTranscriptWorkspace } from "../../../transcript/src/operations.js";
 import {
   renderFramingPreviewStrip,
   RenderService,
-  TemplateRegistry,
 } from "../../../render/src/index.js";
 import type { ExportReport } from "../../../render/src/index.js";
 import {
@@ -80,6 +78,7 @@ import {
   FileCredentialStore,
   GenerationExecutionService,
   KlingRestyleAdapter,
+  pinnedBrandTemplateDefaults,
   RestyleExecutionService,
   SkillRegistry,
 } from "../../../agent/src/index.js";
@@ -137,6 +136,10 @@ import {
 import type { ProjectServices } from "./project-services.js";
 import { MatteService } from "./matte-service.js";
 import { OtioService } from "./otio-service.js";
+import {
+  createProjectTemplateServices,
+  templateAuthoringIpc,
+} from "./template-authoring-service.js";
 
 interface AppHostSettings {
   auditRetentionDays: number;
@@ -165,6 +168,7 @@ export interface WindowServiceHostOptions {
   publisher: WindowEventPublisher;
   chooseProject?: () => Promise<string | undefined>;
   chooseMedia?: () => Promise<string[]>;
+  chooseTemplate?: () => Promise<string | undefined>;
   revealPath?: (path: string) => void;
   openPath?: (path: string) => Promise<string>;
 }
@@ -172,15 +176,6 @@ export interface WindowServiceHostOptions {
 function resultValue<Value>(result: Result<Value>): Value {
   if (!result.ok) throw result.error;
   return result.value;
-}
-
-function builtinsRoot(): string {
-  const candidates = [
-    resolve("templates"),
-    resolve("../..", "templates"),
-    resolve(import.meta.dirname, "../../../../templates"),
-  ];
-  return candidates.find((candidate) => existsSync(candidate)) ?? candidates[0]!;
 }
 
 function concurrency(value: number | "auto"): number {
@@ -670,6 +665,7 @@ export class WindowServiceHost {
   readonly #app: AppServiceHost;
   readonly #chooseProject: (() => Promise<string | undefined>) | undefined;
   readonly #chooseMedia: (() => Promise<string[]>) | undefined;
+  readonly #chooseTemplate: (() => Promise<string | undefined>) | undefined;
   readonly #revealPath: ((path: string) => void) | undefined;
   readonly #openPath: ((path: string) => Promise<string>) | undefined;
   #project: ProjectServices | undefined;
@@ -680,6 +676,7 @@ export class WindowServiceHost {
     this.publisher = options.publisher;
     this.#chooseProject = options.chooseProject;
     this.#chooseMedia = options.chooseMedia;
+    this.#chooseTemplate = options.chooseTemplate;
     this.#revealPath = options.revealPath;
     this.#openPath = options.openPath;
   }
@@ -983,11 +980,10 @@ export class WindowServiceHost {
         audioPath: (assetId) => projectAudioPath(store, assetId),
       },
     });
-    const templates = new TemplateRegistry({
-      builtinsRoot: builtinsRoot(),
-      userRoot: join(this.#app.userDirectory, "templates"),
-      projectRoot: join(store.root, "templates"),
-      compiledRoot: join(this.#app.userDirectory, "templates", ".compiled"),
+    const { templates, templateAuthoring } = createProjectTemplateServices({
+      userDirectory: this.#app.userDirectory,
+      store,
+      auditLog: this.#app.auditLog,
     });
     const render = new RenderService({
       projectRoot: store.root,
@@ -995,6 +991,7 @@ export class WindowServiceHost {
       jobQueue: jobs,
       profilesRoot: this.#app.profilesRoot,
       templateRegistry: templates,
+      brandDefaults: () => pinnedBrandTemplateDefaults(store, this.#app.skillRegistry),
     });
     const publish = new PublishService({
       projectRoot: store.root,
@@ -1178,6 +1175,7 @@ export class WindowServiceHost {
       publish,
       batch,
       templates,
+      templateAuthoring,
       adapters,
       generation,
       restyle,
@@ -1198,6 +1196,7 @@ export class WindowServiceHost {
             const selected = await this.#chooseProject?.();
             return selected === undefined ? null : this.openProject(selected);
           },
+          pickTemplatePackage: async () => await this.#chooseTemplate?.() ?? null,
           open: ({ path }: { path: string }) => this.openProject(path),
           getSnapshot: () => this.snapshot(),
           listHistory: () => project === undefined ? [] : history(project.store),
@@ -1862,6 +1861,8 @@ export class WindowServiceHost {
           templateCatalog: () => project.render.templateCatalog(),
           templateFrame: (params: Parameters<RenderService["templateFrame"]>[0]) =>
             project.render.templateFrame(params),
+          templateFreeze: (params: Parameters<RenderService["templateFreeze"]>[0]) =>
+            project.render.templateFreeze(params),
           renderExport: (params: Parameters<RenderService["renderExport"]>[0]) =>
             project.render.renderExport(params),
           renderDiagnostic: (params: Parameters<RenderService["renderDiagnostic"]>[0]) =>
@@ -1878,6 +1879,10 @@ export class WindowServiceHost {
           }),
           exportReport: () => latestExportReport(project.store),
         };
+      case "TemplateAuthoringService":
+        return project === undefined
+          ? undefined
+          : templateAuthoringIpc(project.templateAuthoring);
       case "AuditLog":
         return {
           readSession: ({ sessionId }: { sessionId: string }) => this.#app.auditLog.readSession(sessionId),

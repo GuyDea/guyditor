@@ -1,5 +1,4 @@
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import {
   copyFile,
   mkdir,
@@ -7,7 +6,6 @@ import {
   readFile,
   rm,
   symlink,
-  writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -130,9 +128,9 @@ function operationEngine(core, store, registry) {
   });
 }
 
-async function execute(coreEngine, operations, label) {
-  return resultValue(await coreEngine.execute(operations, {
-    baseRevision: coreEngine.currentProject.revision,
+async function execute(engine, operations, label) {
+  return resultValue(await engine.execute(operations, {
+    baseRevision: engine.currentProject.revision,
     origin: "ui",
     dryRun: false,
   }), label);
@@ -153,7 +151,6 @@ export async function runNoFootageProbe({ log = console.log } = {}) {
   const sandboxRoot = await mkdtemp(path.join(tmpdir(), "guyditor-no-footage-"));
   const projectRoot = path.join(sandboxRoot, "project");
   const outputRoot = path.join(sandboxRoot, "exports");
-  const materializationRoot = path.join(sandboxRoot, "materialized");
   const userRoot = path.join(sandboxRoot, "user");
   const runtime = await buildRuntime();
   const { agent, core, media, render } = runtime;
@@ -167,10 +164,10 @@ export async function runNoFootageProbe({ log = console.log } = {}) {
     }, {
       profilesDirectory: PROFILES_ROOT,
     }), "createProject");
-    const sequenceId = store.currentProject.deliverables.find(
-      ({ id }) => id === store.currentProject.settings.primaryDeliverable,
-    )?.sequenceId;
     const deliverableId = store.currentProject.settings.primaryDeliverable;
+    const sequenceId = store.currentProject.deliverables.find(
+      ({ id }) => id === deliverableId,
+    )?.sequenceId;
     const sequenceLayerId = store.currentProject.layers.find(
       ({ kind, sequence }) => kind === "video" && sequence === sequenceId,
     )?.id;
@@ -192,27 +189,6 @@ export async function runNoFootageProbe({ log = console.log } = {}) {
       projectRoot: path.join(projectRoot, "templates"),
       userRoot: path.join(userRoot, "templates"),
     });
-    let engine = operationEngine(core, store, registry);
-    const audit = new agent.AuditLog({ userDir: userRoot });
-    meter = agent.CostMeter.open({
-      userDir: userRoot,
-      auditLog: audit,
-      budgets: NO_BUDGETS,
-    });
-    const adapters = new agent.AdapterRegistry();
-    const stubAdapter = new agent.DeterministicGenerationAdapter();
-    adapters.register(stubAdapter);
-    const generation = new agent.GenerationExecutionService({
-      projectStore: store,
-      operationEngine: engine,
-      adapters,
-      jobs: queue,
-      costMeter: meter,
-    });
-    const mediaEngine = new media.MediaEngine({
-      jobQueue: queue,
-      followUpJobs: [],
-    });
     const renderService = new render.RenderService({
       projectRoot,
       profilesRoot: PROFILES_ROOT,
@@ -221,12 +197,12 @@ export async function runNoFootageProbe({ log = console.log } = {}) {
       templateRegistry: registry,
     });
 
-    const emptyGraphicLayerId = core.makeId("lyr");
-    const emptyGraphicId = core.makeId("gfx");
-    const emptyProgrammaticRoute = media.resolveBrollSourcePath({
-      sourceClass: "programmatic-animation",
+    // This is deliberately the first content mutation. The deterministic
+    // template renderer must create the asset and establish sequence duration.
+    const frozen = await renderService.templateFreeze({
+      revision: store.currentProject.revision,
+      deliverableId,
       templateId: INFOGRAPHIC_TEMPLATE_ID,
-      version: "1.0.0",
       params: {
         title: "No Camera Needed",
         body: "A complete edit can begin with generated visuals and deterministic motion graphics.",
@@ -234,56 +210,45 @@ export async function runNoFootageProbe({ log = console.log } = {}) {
         logoSlot: "none",
       },
       seed: 20260723,
+      durationFrames: CLIP_FRAMES,
+      placeAsClip: true,
     });
-    if (emptyProgrammaticRoute.kind !== "template") {
-      throw new Error("The UI programmatic-animation route did not produce a GraphicInstance.");
+    const programmaticAsset = store.currentProject.assets.find(
+      ({ id }) => id === frozen.assetId,
+    );
+    if (
+      programmaticAsset === undefined ||
+      programmaticAsset.kind !== "generated" ||
+      programmaticAsset.rights?.origin !== "programmatic" ||
+      frozen.clipId === undefined
+    ) {
+      throw new Error("Template freeze did not create and place a programmatic clip.");
     }
-    await execute(engine, [
-      {
-        op: "layer.add",
-        params: {
-          kind: "animation",
-          name: "Empty-sequence infographic",
-          index: engine.currentProject.layers.length,
-          layerId: emptyGraphicLayerId,
-        },
-      },
-      {
-        op: "graphic.add",
-        params: {
-          templateId: emptyProgrammaticRoute.graphic.templateId,
-          layerId: emptyGraphicLayerId,
-          graphicId: emptyGraphicId,
-          anchor: `timeline:${sequenceId}@0`,
-          duration: {
-            frames: CLIP_FRAMES,
-            fps: store.currentProject.settings.timeline.fps,
-          },
-          params: emptyProgrammaticRoute.graphic.params,
-          seed: emptyProgrammaticRoute.graphic.seed,
-        },
-      },
-    ], "place infographic on empty sequence through UI route");
-    let emptySequenceBreak;
-    try {
-      const impossible = await renderService.renderExport({
-        revision: store.currentProject.revision,
-        deliverableId,
-        variants: ["clean"],
-        outputDir: path.join(sandboxRoot, "empty-sequence-attempt"),
-        skipValidationWarnings: true,
-      });
-      await awaitJob(queue, impossible.jobId, "empty-sequence template materialization");
-      throw new Error("The zero-duration template export unexpectedly completed.");
-    } catch (error) {
-      emptySequenceBreak = errorText(error);
-      log(`empty-sequence template break: ${emptySequenceBreak}`);
-    }
-    await execute(engine, [{
-      op: "layer.remove",
-      params: { layerId: emptyGraphicLayerId },
-    }], "remove empty-sequence infographic attempt");
+    const frozenTimeline = resultValue(
+      core.deriveTimeline(store.currentProject, sequenceId),
+      "derive template-first timeline",
+    );
+    log(
+      `template frozen first: asset=${frozen.assetId} clip=${frozen.clipId} ` +
+      `frames=${String(frozen.frames)} duration=${frozenTimeline.duration}`,
+    );
 
+    let engine = operationEngine(core, store, registry);
+    const audit = new agent.AuditLog({ userDir: userRoot });
+    meter = agent.CostMeter.open({
+      userDir: userRoot,
+      auditLog: audit,
+      budgets: NO_BUDGETS,
+    });
+    const adapters = new agent.AdapterRegistry();
+    adapters.register(new agent.DeterministicGenerationAdapter());
+    const generation = new agent.GenerationExecutionService({
+      projectStore: store,
+      operationEngine: engine,
+      adapters,
+      jobs: queue,
+      costMeter: meter,
+    });
     const requested = await generation.request({
       adapterId: "adp_stubgenaaa",
       context: {
@@ -324,7 +289,7 @@ export async function runNoFootageProbe({ log = console.log } = {}) {
     const layersBeforeAcceptance = new Set(engine.currentProject.layers.map(({ id }) => id));
     const acceptance = resultValue(await generation.acceptCandidate(candidate.candidateId, {
       sequenceId,
-      atFrame: 0,
+      atFrame: CLIP_FRAMES,
       durationFrames: CLIP_FRAMES,
     }), "propose generated candidate acceptance");
     resultValue(
@@ -344,171 +309,19 @@ export async function runNoFootageProbe({ log = console.log } = {}) {
       `stub accepted: ${generatedAsset.id} ${generatedAsset.path} ` +
       `readonly lifecycle revision=${engine.currentProject.revision}`,
     );
-
-    const temporaryClipId = core.makeId("clp");
-    const temporaryGraphicLayerId = core.makeId("lyr");
-    const temporaryGraphicId = core.makeId("gfx");
-    await execute(engine, [
-      {
-        op: "clip.insert",
-        params: {
-          sequenceId,
-          layerId: sequenceLayerId,
-          index: 0,
-          clipId: temporaryClipId,
-          source: {
-            assetId: generatedAsset.id,
-            in: { frames: 0, fps: store.currentProject.settings.timeline.fps },
-            out: { frames: CLIP_FRAMES, fps: store.currentProject.settings.timeline.fps },
-          },
-        },
-      },
-      {
-        op: "layer.add",
-        params: {
-          kind: "animation",
-          name: "Infographic materialization",
-          index: engine.currentProject.layers.length,
-          layerId: temporaryGraphicLayerId,
-        },
-      },
-      {
-        op: "graphic.add",
-        params: {
-          templateId: INFOGRAPHIC_TEMPLATE_ID,
-          layerId: temporaryGraphicLayerId,
-          graphicId: temporaryGraphicId,
-          anchor: `timeline:${sequenceId}@0`,
-          duration: {
-            frames: CLIP_FRAMES,
-            fps: store.currentProject.settings.timeline.fps,
-          },
-          params: {
-            title: "No Camera Needed",
-            body: "A complete edit can begin with generated visuals and deterministic motion graphics.",
-            accent: "#77E7C4",
-            logoSlot: "none",
-          },
-          seed: 20260723,
-        },
-      },
-    ], "prepare full-frame infographic materialization");
-
-    const materialization = await renderService.renderExport({
-      revision: store.currentProject.revision,
-      deliverableId,
-      variants: ["clean"],
-      outputDir: materializationRoot,
-      skipValidationWarnings: true,
-    });
-    await awaitJob(queue, materialization.jobId, "programmatic animation materialization");
-    const materializedPath = render.exportOutputPath(
-      materializationRoot,
-      deliverableId,
-      "clean",
-      "mp4",
-    );
-    log(`infographic rendered through RenderService: ${materializedPath}`);
-
-    await execute(engine, [
-      { op: "layer.remove", params: { layerId: temporaryGraphicLayerId } },
-      { op: "layer.remove", params: { layerId: generatedPlacementLayer.id } },
-      { op: "clip.remove", params: { clipId: temporaryClipId, closeGap: true } },
-    ], "clear temporary materialization composition");
-
-    const provenanceName = "provenance-programmatic-no-camera-needed";
-    const provenancePath = path.join(
-      projectRoot,
-      "sidecars/programmatic/no-camera-needed.json",
-    );
-    const routed = media.resolveBrollSourcePath({
-      sourceClass: "programmatic-animation",
-      templateId: INFOGRAPHIC_TEMPLATE_ID,
-      version: "1.0.0",
-      params: {
-        title: "No Camera Needed",
-        body: "A complete edit can begin with generated visuals and deterministic motion graphics.",
-        accent: "#77E7C4",
-        logoSlot: "none",
-      },
-      seed: 20260723,
-      exportedPath: materializedPath,
-      provenanceSidecar: provenanceName,
-    });
-    if (routed.kind !== "ingest" || routed.programmaticProvenance === undefined) {
-      throw new Error("Programmatic-animation export did not route through generated ingest.");
-    }
-    const provenanceSource = `${JSON.stringify({
-      schema: "guyditor.programmatic-provenance/v1",
-      ...routed.programmaticProvenance,
-    }, null, 2)}\n`;
-    await mkdir(path.dirname(provenancePath), { recursive: true });
-    await writeFile(provenancePath, provenanceSource, "utf8");
     await execute(engine, [{
-      op: "sidecar.register",
-      params: {
-        name: provenanceName,
-        sidecar: {
-          name: provenanceName,
-          path: path.relative(projectRoot, provenancePath).replaceAll("\\", "/"),
-          schema: "guyditor.programmatic-provenance/v1",
-          sha256: createHash("sha256").update(provenanceSource).digest("hex"),
-          generatedBy: {
-            tool: INFOGRAPHIC_TEMPLATE_ID,
-            version: "1.0.0",
-          },
-          inputs: [],
-        },
-      },
-    }], "register programmatic provenance");
-    const ingestJob = mediaEngine.ingest(store, routed.request);
-    const ingested = await awaitJob(queue, ingestJob.jobId, "programmatic animation ingest");
-    const programmaticAssetId = ingested.payload?.assets?.[0]?.assetId;
-    if (typeof programmaticAssetId !== "string") {
-      throw new Error(`Programmatic ingest returned no asset: ${JSON.stringify(ingested.payload)}`);
-    }
-    const programmaticAsset = store.currentProject.assets.find(
-      ({ id }) => id === programmaticAssetId,
-    );
-    if (
-      programmaticAsset === undefined ||
-      programmaticAsset.kind !== "generated" ||
-      programmaticAsset.rights?.origin !== "programmatic"
-    ) {
-      throw new Error("Materialized infographic was not stored as a programmatic generated asset.");
-    }
-    log(
-      `infographic ingested: ${programmaticAsset.id} kind=${programmaticAsset.kind} ` +
-      `origin=${programmaticAsset.rights.origin}`,
-    );
+      op: "layer.remove",
+      params: { layerId: generatedPlacementLayer.id },
+    }], "clear generated candidate placement");
 
     engine = operationEngine(core, store, registry);
-    const infographicClipId = core.makeId("clp");
     const brollClipId = core.makeId("clp");
     const lowerThirdId = core.makeId("gfx");
-    const infographicDuration = exactFrameDuration(
-      programmaticAsset,
-      store.currentProject.settings.timeline.fps,
-    );
     const brollDuration = exactFrameDuration(
       generatedAsset,
       store.currentProject.settings.timeline.fps,
     );
     await execute(engine, [
-      {
-        op: "clip.insert",
-        params: {
-          sequenceId,
-          layerId: sequenceLayerId,
-          index: 0,
-          clipId: infographicClipId,
-          source: {
-            assetId: programmaticAsset.id,
-            in: { frames: 0, fps: infographicDuration.fps },
-            out: infographicDuration,
-          },
-        },
-      },
       {
         op: "clip.insert",
         params: {
@@ -605,6 +418,7 @@ export async function runNoFootageProbe({ log = console.log } = {}) {
       outputPath,
       reportPath,
       projectRoot,
+      frozen,
       ffprobe: ffprobeSummary,
       report,
     };
@@ -620,7 +434,11 @@ const invokedUrl = process.argv[1]
   : undefined;
 if (invokedUrl === import.meta.url) {
   runNoFootageProbe().catch((error) => {
-    console.error(`probe-no-footage: ${error instanceof Error ? error.stack ?? error.message : errorText(error)}`);
+    console.error(
+      `probe-no-footage: ${
+        error instanceof Error ? error.stack ?? error.message : errorText(error)
+      }`,
+    );
     process.exitCode = 1;
   });
 }

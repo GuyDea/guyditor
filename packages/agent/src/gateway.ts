@@ -56,6 +56,8 @@ export const M4_ASSESSMENT_SUBMIT_TOOL = "assessment_submit" as const;
 export const M4_CRITIC_REQUEST_TOOL = "critic_request" as const;
 export const M4_CRITIC_RESULT_GET_TOOL = "critic_result_get" as const;
 export const M4_TAKES_COMPARE_TOOL = "assist_takes_compare" as const;
+export const TEMPLATE_AUTHOR_SUBMIT_TOOL = "template_author_submit" as const;
+export const TEMPLATE_AUTHOR_STATUS_TOOL = "template_author_status" as const;
 
 export interface CandidateDiscoveryToolInput {
   profile: string;
@@ -70,6 +72,44 @@ export interface GatewayDirector {
   profileId: string;
   modelLabel: string;
   locality: "local" | "remote";
+}
+
+export interface GatewayTemplateAuthorSubmission {
+  name: string;
+  description: string;
+  manifest: {
+    params: Record<string, unknown>;
+    duration: {
+      mode: "fixed" | "param" | "intrinsic" | "anchor_span";
+      default?: { frames: number; fps: string };
+    };
+    assets: Array<{
+      name: string;
+      kind: "image" | "svg" | "lottie";
+      file: string;
+      sha256: string;
+      license: {
+        origin: "licensed" | "stock" | "generated" | "programmatic" | "unknown";
+        licenseName: string;
+        licenseUrl?: string;
+        licensor: string;
+        restrictions: string[];
+      };
+    }>;
+    previewParams?: Record<string, unknown>;
+    kind?: "title" | "lower_third" | "diagram" | "callout" | "highlight" | "transition" | "motion";
+    safeAreaAware?: boolean;
+  };
+  source: string;
+  supersedes?: string;
+}
+
+export interface GatewayTemplateAuthoring {
+  submit(
+    input: GatewayTemplateAuthorSubmission,
+    provenance: { sessionId: string; model: string },
+  ): Promise<unknown>;
+  status(submissionId?: string): Promise<unknown>;
 }
 
 export interface GatewaySkillRegistry {
@@ -96,6 +136,7 @@ export interface AgentGatewayOptions {
   assessmentStore?: Pick<AssessmentStore, "submit" | "get">;
   criticExecution?: Pick<CriticExecutionService, "request" | "get">;
   takeComparison?: (takeIds: string[]) => Promise<unknown>;
+  templateAuthoring?: GatewayTemplateAuthoring;
 }
 
 export interface StartedAgentGateway {
@@ -215,6 +256,7 @@ export class AgentGateway {
   readonly #assessmentStore: AgentGatewayOptions["assessmentStore"];
   readonly #criticExecution: AgentGatewayOptions["criticExecution"];
   readonly #takeComparison: AgentGatewayOptions["takeComparison"];
+  readonly #templateAuthoring: AgentGatewayOptions["templateAuthoring"];
   readonly #sessions: SessionManager;
   readonly #transports = new Map<string, ActiveTransport>();
   #http: Server | undefined;
@@ -239,6 +281,7 @@ export class AgentGateway {
     this.#assessmentStore = options.assessmentStore;
     this.#criticExecution = options.criticExecution;
     this.#takeComparison = options.takeComparison;
+    this.#templateAuthoring = options.templateAuthoring;
     this.#sessions = new SessionManager(this.#audit, {
       ...(options.sessionIdFactory === undefined
         ? {}
@@ -652,6 +695,78 @@ export class AgentGateway {
         }),
       ));
     }
+    if (this.#templateAuthoring !== undefined) {
+      const license = z.object({
+        origin: z.enum(["licensed", "stock", "generated", "programmatic", "unknown"]),
+        licenseName: z.string().min(1),
+        licenseUrl: z.string().min(1).optional(),
+        licensor: z.string().min(1),
+        restrictions: z.array(z.string().min(1)),
+      }).strict();
+      const asset = z.object({
+        name: z.string().regex(/^[a-z][a-z0-9_-]*$/u),
+        kind: z.enum(["image", "svg", "lottie"]),
+        file: z.string().min(1),
+        sha256: z.string().regex(/^[0-9a-f]{64}$/u),
+        license,
+      }).strict();
+      const submission = z.object({
+        name: z.string().min(1),
+        description: z.string().min(1),
+        manifest: z.object({
+          params: z.record(z.string(), z.unknown()),
+          duration: z.object({
+            mode: z.enum(["fixed", "param", "intrinsic", "anchor_span"]),
+            default: z.object({
+              frames: z.number().int().min(1),
+              fps: z.string().regex(/^[1-9][0-9]*\/[1-9][0-9]*$/u),
+            }).strict().optional(),
+          }).strict(),
+          assets: z.array(asset),
+          previewParams: z.record(z.string(), z.unknown()).optional(),
+          kind: z.enum([
+            "title", "lower_third", "diagram", "callout", "highlight",
+            "transition", "motion",
+          ]).optional(),
+          safeAreaAware: z.boolean().optional(),
+        }).strict(),
+        source: z.string().min(1),
+        supersedes: z.string().regex(/^tas_[a-z2-7]{10}$/u).optional(),
+      }).strict();
+      server.registerTool(TEMPLATE_AUTHOR_SUBMIT_TOOL, {
+        description: "Submit deterministic primitives-only template source for sandbox validation and creator review.",
+        inputSchema: submission.shape,
+        annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+      }, async (params, extra) => this.#toolCall(
+        session,
+        TEMPLATE_AUTHOR_SUBMIT_TOOL,
+        String(extra.requestId),
+        params,
+        async () => ({
+          value: await this.#templateAuthoring!.submit(
+            params as GatewayTemplateAuthorSubmission,
+            { sessionId: session.sessionId, model: session.director.modelLabel },
+          ),
+          dataClasses: ["metadata" as const],
+        }),
+      ));
+      server.registerTool(TEMPLATE_AUTHOR_STATUS_TOOL, {
+        description: "Read creator review status and structured validation results for authored templates.",
+        inputSchema: {
+          submissionId: z.string().regex(/^tas_[a-z2-7]{10}$/u).optional(),
+        },
+        annotations: { readOnlyHint: true, openWorldHint: false },
+      }, async ({ submissionId }, extra) => this.#toolCall(
+        session,
+        TEMPLATE_AUTHOR_STATUS_TOOL,
+        String(extra.requestId),
+        { submissionId },
+        async () => ({
+          value: await this.#templateAuthoring!.status(submissionId),
+          dataClasses: ["metadata" as const],
+        }),
+      ));
+    }
 
     server.registerTool("proposal_get", {
       description: "Read current proposal status and creator outcome.",
@@ -753,7 +868,9 @@ export class AgentGateway {
       typeof M4_ASSESSMENT_SUBMIT_TOOL |
       typeof M4_CRITIC_REQUEST_TOOL |
       typeof M4_CRITIC_RESULT_GET_TOOL |
-      typeof M4_TAKES_COMPARE_TOOL,
+      typeof M4_TAKES_COMPARE_TOOL |
+      typeof TEMPLATE_AUTHOR_SUBMIT_TOOL |
+      typeof TEMPLATE_AUTHOR_STATUS_TOOL,
     callId: string,
     params: unknown,
     execute: () => Promise<{ value: Value; dataClasses: DataClass[] }>,

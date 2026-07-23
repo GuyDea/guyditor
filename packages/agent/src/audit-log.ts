@@ -169,6 +169,19 @@ function parsedAuditRecord(value: unknown): AuditRecord | undefined {
         !isOneOf(value["kind"], ["warn", "cap_block", "creator_override"]) ||
         !isNumber(value["thresholdUsd"]) || !isNumber(value["projectedUsd"])) return undefined;
       break;
+    case "template.author.submitted":
+    case "template.author.reviewed":
+      if (!isString(value["submissionId"]) || !isString(value["templateId"]) ||
+        !isString(value["model"]) ||
+        !isOneOf(value["status"], [
+          "awaiting_review", "changes_requested", "rejected", "superseded", "published",
+        ]) ||
+        (value["decision"] !== undefined &&
+          !isOneOf(value["decision"], ["approve", "reject", "request_changes"])) ||
+        !isOptionalString(value["reason"]) || !isOptionalString(value["contentHash"])) {
+        return undefined;
+      }
+      break;
     default:
       return undefined;
   }

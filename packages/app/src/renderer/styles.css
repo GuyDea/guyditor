@@ -325,14 +325,48 @@ small { color: var(--muted); }
 .template-rack span, .template-rack small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .template-rack span { align-self: end; font-size: 7px; }
 .template-rack small { font: 500 6px/1 ui-monospace, monospace; text-transform: uppercase; }
+.template-browser-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 5px 6px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font: 600 6px/1 ui-monospace, monospace;
+  text-transform: uppercase;
+}
+.template-browser-actions > div { display: flex; gap: 4px; }
+.freeze-action {
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--line));
+  background:
+    repeating-linear-gradient(90deg, transparent 0 8px, #0003 8px 10px),
+    color-mix(in srgb, var(--accent) 13%, var(--surface));
+}
 .graphic-compose { padding: 6px; border-bottom: 1px solid var(--line); }
 .template-live-preview { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border: 1px solid #3b474e; background: #020304; }
+.template-preview-strip { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(52px, 1fr); gap: 2px; margin-top: 4px; overflow-x: auto; }
+.template-preview-strip img { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; border: 1px solid #33434b; background: #020304; }
+.template-author-review { display: grid; gap: 5px; margin-top: 6px; padding: 7px; border: 1px solid #5b4b2b; border-left: 3px solid var(--amber); background: #19160e; }
+.template-author-review header { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.template-author-review header strong { color: #f0d394; font-size: 8px; }
+.template-author-review header span { color: var(--amber); font: 600 6px/1 ui-monospace, monospace; text-transform: uppercase; }
+.template-author-review p { margin: 0; color: var(--muted); font-size: 7px; line-height: 1.4; }
+.template-author-review > div { display: flex; flex-wrap: wrap; gap: 4px; }
 .template-param-grid, .graphic-placement { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; margin-top: 6px; }
 .template-param-grid label, .graphic-placement label { min-width: 0; display: grid; gap: 3px; color: var(--muted); font: 600 6px/1 ui-monospace, monospace; text-transform: uppercase; }
 .template-param-grid input, .template-param-grid select, .graphic-placement input, .graphic-placement select { min-width: 0; width: 100%; min-height: 22px; padding: 2px 4px; font-size: 7px; }
 .template-param-grid input[type="color"] { padding: 2px; }
 .template-param-grid .graphic-checkbox { display: flex; align-items: center; gap: 5px; }
 .template-param-grid .graphic-checkbox input { width: auto; min-height: auto; }
+.lottie-profile {
+  margin: 6px 0 0;
+  padding: 5px;
+  border: 1px solid #35464d;
+  color: #8fcbd3;
+  background: #0b1215;
+  font: 500 6px/1.35 ui-monospace, monospace;
+}
 .graphic-actions { display: flex; gap: 4px; margin-top: 6px; }
 .graphic-actions button { min-height: 22px; padding: 2px 6px; font-size: 7px; }
 .graphic-instance-list { display: grid; gap: 3px; padding: 6px; }

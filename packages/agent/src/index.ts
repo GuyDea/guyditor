@@ -16,11 +16,15 @@ export {
   M4_CRITIC_REQUEST_TOOL,
   M4_CRITIC_RESULT_GET_TOOL,
   M4_TAKES_COMPARE_TOOL,
+  TEMPLATE_AUTHOR_STATUS_TOOL,
+  TEMPLATE_AUTHOR_SUBMIT_TOOL,
 } from "./gateway.js";
 export type {
   AgentGatewayOptions,
   CandidateDiscoveryToolInput,
   GatewayDirector,
+  GatewayTemplateAuthoring,
+  GatewayTemplateAuthorSubmission,
   StartedAgentGateway,
 } from "./gateway.js";
 export { CostMeter, DEFAULT_BUDGETS } from "./cost-meter.js";
@@ -55,6 +59,7 @@ export type {
   ProposalRecord,
   SessionRecord,
   ToolCallRecord,
+  TemplateAuthorRecord,
 } from "./audit-types.js";
 export { AdapterRegistry } from "./adapters/registry.js";
 export {
@@ -174,6 +179,11 @@ export type {
   GenerationCandidateStoreOptions,
 } from "./generation-candidates.js";
 export * from "./skills/index.js";
+export {
+  parseBrandTemplateDefaults,
+  pinnedBrandTemplateDefaults,
+  resolveBrandTemplateParams,
+} from "./brand-template.js";
 export {
   buildTakeComparison,
   takePreferenceRubric,

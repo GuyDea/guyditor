@@ -10,6 +10,7 @@ import type {
 import type { TranscriptEngine } from "../../../transcript/src/index.js";
 import type {
   RenderService,
+  TemplateAuthoringService,
   TemplateRegistry,
 } from "../../../render/src/index.js";
 import type { CompositorModel } from "../../../compositor/src/index.js";
@@ -42,6 +43,7 @@ export interface ProjectServices extends RecoveryServices {
   publish: PublishService;
   batch: BatchExportService;
   templates: TemplateRegistry;
+  templateAuthoring: TemplateAuthoringService;
   adapters: AdapterRegistry;
   generation: GenerationExecutionService;
   restyle: RestyleExecutionService;

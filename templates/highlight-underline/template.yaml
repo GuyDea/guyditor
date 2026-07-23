@@ -1,0 +1,38 @@
+schema: guyditor/template/v1
+id: tpl_j2k3m4n5p6
+name: Highlight underline
+kind: highlight
+version: 1.0.0
+engine: overlay/v1
+entry: render.ts
+min_guyditor: 1.0.0
+duration:
+  mode: anchor_span
+params:
+  type: object
+  additionalProperties: false
+  required: [text, accent, textColor, fontFamily]
+  properties:
+    text: { type: string, minLength: 1, maxLength: 64, default: "the turning point" }
+    accent: { type: string, pattern: "^#[0-9A-Fa-f]{6}$", default: "#FFE45E" }
+    textColor: { type: string, pattern: "^#[0-9A-Fa-f]{6}$", default: "#FFFFFF" }
+    fontFamily: { type: string, minLength: 1, default: "Inconsolata Guyditor" }
+preview:
+  file: preview.png
+  params:
+    text: the turning point
+    accent: "#FFE45E"
+    textColor: "#FFFFFF"
+    fontFamily: Inconsolata Guyditor
+fonts:
+  - family: Inconsolata Guyditor
+    file: fonts/Inconsolata.otf
+    weight: 600
+    sha256: 1561e616c414a1b82d6e6dfbd18e5726fd65028913ade191e5fa38b6ec375a1a
+    license:
+      origin: licensed
+      licenseName: SIL Open Font License 1.1
+      licenseUrl: https://openfontlicense.org/
+      licensor: Raph Levien
+      restrictions: []
+safe_area_aware: true

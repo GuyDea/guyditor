@@ -8,6 +8,10 @@ import type { JobOverview, Proposal, Result } from "../../../core/src/index.js";
 import { projectFixture } from "../../../core/src/project/test-fixtures.js";
 import { TranscriptEngine } from "../../../transcript/src/index.js";
 import { SkillRegistry } from "../../../agent/src/index.js";
+import {
+  TemplateAuthoringService,
+  TemplateRegistry,
+} from "../../../render/src/index.js";
 import { describe, expect, it } from "vitest";
 
 import type { GdEvent } from "../shared/ipc.js";
@@ -15,6 +19,72 @@ import { WindowEventPublisher } from "./events.js";
 import { AppServiceHost } from "./service-host.js";
 
 describe("AppServiceHost", () => {
+  it("exposes creator review for authored-template drafts and audits immutable publication", async () => {
+    const root = await mkdtemp(join(tmpdir(), "guyditor-host-template-author-"));
+    const userDirectory = await mkdtemp(join(tmpdir(), "guyditor-host-template-author-user-"));
+    const created = await createProject(root, projectFixture());
+    if (!created.ok) throw created.error;
+    const templatesRoot = join(userDirectory, "templates");
+    const registry = new TemplateRegistry({
+      builtinsRoot: join(root, "empty-builtins"),
+      userRoot: templatesRoot,
+      draftRoot: join(templatesRoot, ".drafts"),
+    });
+    const ids = ["tas_a2c3d4e5f6", "tpl_b2c3d4e5f6"];
+    const authoring = new TemplateAuthoringService({
+      registry,
+      draftRoot: join(templatesRoot, ".drafts"),
+      idFactory: () => ids.shift()!,
+      probe: { frames: 2, framesPerSecondFloor: 0.1 },
+    });
+    const submitted = await authoring.submit({
+      name: "Review badge",
+      description: "Creator-facing review fixture.",
+      manifest: {
+        params: { type: "object", additionalProperties: false },
+        duration: { mode: "fixed", default: { frames: 12, fps: "24/1" } },
+        assets: [],
+      },
+      source: "export default { render(ctx) { ctx.canvas.fillRect(0, 0, 12, 12); } };\n",
+    }, { sessionId: "ses_a2c3d4e5f6", model: "author-director" });
+    if (!submitted.ok) throw new Error("expected draft fixture");
+
+    const appHost = testAppHost(userDirectory);
+    const windowHost = appHost.createWindowHost({
+      publisher: new WindowEventPublisher(() => undefined),
+    });
+    await windowHost.openProject(root);
+    const service = windowHost.resolveService("TemplateAuthoringService");
+    const status = service?.["status"];
+    const review = service?.["review"];
+    if (typeof status !== "function" || typeof review !== "function") {
+      throw new Error("Template authoring review service is unavailable.");
+    }
+    await expect(Reflect.apply(status, service, [{
+      submissionId: submitted.draft.submissionId,
+    }])).resolves.toMatchObject({ status: "awaiting_review" });
+    await expect(Reflect.apply(review, service, [{
+      submissionId: submitted.draft.submissionId,
+      decision: "approve",
+    }])).resolves.toMatchObject({
+      status: "published",
+      published: {
+        id: submitted.draft.templateId,
+        version: "1.0.0",
+        reviewState: "published",
+      },
+    });
+    expect(appHost.auditLog.readSession("ses_a2c3d4e5f6").records).toEqual([
+      expect.objectContaining({
+        type: "template.author.reviewed",
+        submissionId: submitted.draft.submissionId,
+        status: "published",
+      }),
+    ]);
+    await windowHost.close();
+    await appHost.close();
+  });
+
   it("freezes an accepted matte candidate as a read-only generated asset with provenance", async () => {
     const root = await mkdtemp(join(tmpdir(), "guyditor-host-matte-"));
     const userDirectory = await mkdtemp(join(tmpdir(), "guyditor-host-matte-user-"));

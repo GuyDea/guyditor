@@ -100,6 +100,11 @@ export const IPC_SURFACES: readonly IpcSurface[] = Object.freeze([
     service: "ProjectStore",
     methods: {
       openDialog: { paramsSchema: emptyParams, resultSchema: anyResult, budgetMs: 20 },
+      pickTemplatePackage: {
+        paramsSchema: emptyParams,
+        resultSchema: anyResult,
+        budgetMs: 20,
+      },
       open: {
         paramsSchema: {
           type: "object",
@@ -988,6 +993,25 @@ export const IPC_SURFACES: readonly IpcSurface[] = Object.freeze([
         resultSchema: anyResult,
         budgetMs: 100,
       },
+      templateFreeze: {
+        paramsSchema: {
+          type: "object",
+          required: ["revision", "templateId"],
+          properties: {
+            revision: { type: "string", pattern: "^rev_[0-9]{5}$" },
+            deliverableId: { type: "string", pattern: "^dlv_[a-z2-7]{10}$" },
+            templateId: { type: "string", pattern: "^tpl_[a-z2-7]{10}$" },
+            params: { type: "object" },
+            seed: { type: "integer", minimum: 0, maximum: 4294967295 },
+            durationFrames: { type: "integer", minimum: 1 },
+            placeAsClip: { type: "boolean" },
+            clipIndex: { type: "integer", minimum: 0 },
+          },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 30_000,
+      },
       renderExport: { paramsSchema: { type: "object" }, resultSchema: anyResult, budgetMs: 20 },
       renderDiagnostic: { paramsSchema: { type: "object" }, resultSchema: anyResult, budgetMs: 20 },
       validateExport: {
@@ -1018,6 +1042,36 @@ export const IPC_SURFACES: readonly IpcSurface[] = Object.freeze([
         },
         resultSchema: anyResult,
         budgetMs: 20,
+      },
+    },
+  },
+  {
+    service: "TemplateAuthoringService",
+    methods: {
+      status: {
+        paramsSchema: {
+          type: "object",
+          properties: {
+            submissionId: { type: "string", pattern: "^tas_[a-z2-7]{10}$" },
+          },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 100,
+      },
+      review: {
+        paramsSchema: {
+          type: "object",
+          required: ["submissionId", "decision"],
+          properties: {
+            submissionId: { type: "string", pattern: "^tas_[a-z2-7]{10}$" },
+            decision: { enum: ["approve", "reject", "request_changes"] },
+            reason: { type: "string" },
+          },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 1_000,
       },
     },
   },

@@ -348,6 +348,20 @@ test("m3 runs the complete §14.8 gate and requires all FR-800..813 and AC rows"
 });
 
 test("m4 gate runs the full row, earlier milestone suites, and loud manual sign-off list", () => {
+  assert.equal(
+    M4_COMMANDS.some(({ command, args }) =>
+      command === "pnpm" &&
+      args.join(" ").includes("packages/render/src/template-authoring.test.ts")),
+    true,
+    "M4 must run the focused FR-612 unit suite",
+  );
+  assert.equal(
+    M4_COMMANDS.some(({ command, args }) =>
+      command === "pnpm" &&
+      args.join(" ").includes("authored-template.golden.test.ts")),
+    true,
+    "M4 must run the authored-template export golden",
+  );
   const commands = [];
   const output = [];
   const status = runGate("m4", {
@@ -365,6 +379,7 @@ test("m4 gate runs the full row, earlier milestone suites, and loud manual sign-
   assert.deepEqual(commands, M4_COMMANDS.map(({ command, args }) => [command, ...args]));
   assert.deepEqual(validateM4Traceability(completeM4Traceability()), []);
   for (const id of [
+    "FR-610", "FR-611", "FR-612",
     "FR-304", "FR-503", "FR-603", "FR-604", "FR-605", "FR-606",
     "FR-700", "FR-701", "FR-702", "FR-703", "FR-704", "FR-705",
     "NFR-102", "NFR-107", "NFR-108", "NFR-109", "FR-1102",

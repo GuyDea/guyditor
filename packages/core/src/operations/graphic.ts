@@ -4,6 +4,7 @@ import type { ErrorObject } from "ajv";
 import { failure, makeGuyditorError, success } from "../errors.js";
 import type { Result } from "../errors.js";
 import type { GuyditorProject, Layer, PlacedItem } from "../project/index.js";
+import { applyTemplateFreezeOperation } from "../templates/freeze.js";
 import type { TemplateDescriptor, TemplateProvider } from "../templates/index.js";
 import type { IdFactory } from "./engine.js";
 import type { ClipApplication, EntityMutation } from "./clip.js";
@@ -26,7 +27,15 @@ export async function resolveTemplateDescriptor(
   const resolved = pin === undefined
     ? await provider.latest(templateId)
     : await provider.get(templateId, pin.version);
-  if (!resolved.ok || pin === undefined) return resolved;
+  if (!resolved.ok) return resolved;
+  if (resolved.value.reviewState === "draft") {
+    return graphicFailure(
+      "E_TEMPLATE_UNREVIEWED",
+      `Template ${templateId}@${resolved.value.version} is awaiting creator review and is preview-only.`,
+      [templateId],
+    );
+  }
+  if (pin === undefined) return resolved;
   return resolved.value.contentHash === pin.contentHash
     ? resolved
     : graphicFailure(
@@ -143,6 +152,13 @@ async function pinnedDescriptor(
   }
   const resolved = await provider.get(templateId, pin.version);
   if (!resolved.ok) return resolved;
+  if (resolved.value.reviewState === "draft") {
+    return graphicFailure(
+      "E_TEMPLATE_UNREVIEWED",
+      `Template ${templateId}@${pin.version} is awaiting creator review and is preview-only.`,
+      [item.id, templateId],
+    );
+  }
   return resolved.value.contentHash === pin.contentHash
     ? resolved
     : graphicFailure(
@@ -434,6 +450,9 @@ export async function applyTemplateOperation(
   provider: TemplateProvider,
   dryRun: boolean,
 ): Promise<Result<ClipApplication>> {
+  if (input.op === "template.freeze") {
+    return applyTemplateFreezeOperation(project, input, provider);
+  }
   if (input.op === "template.install") {
     if (provider.install === undefined) {
       return graphicFailure(

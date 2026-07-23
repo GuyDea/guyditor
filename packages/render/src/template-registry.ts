@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { cp, lstat, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { Ajv2020 } from "ajv/dist/2020.js";
 import type { ErrorObject } from "ajv";
@@ -10,12 +10,15 @@ import { transform } from "esbuild";
 import { parse } from "yaml";
 
 import {
+  analyzeLottieDocument,
   failure,
   makeGuyditorError,
   success,
 } from "../../core/src/index.js";
 import type {
   FrameTime,
+  TemplateAssetDeclaration,
+  TemplateAssetLicense,
   Result,
   TemplateDescriptor,
   TemplateInstallRequest,
@@ -27,7 +30,14 @@ export interface TemplateFontDeclaration {
   family: string;
   file: string;
   weight: number;
+  sha256: string;
+  license: TemplateAssetLicense;
 }
+
+export type {
+  TemplateAssetDeclaration,
+  TemplateAssetLicense,
+} from "../../core/src/index.js";
 
 export interface TemplateManifest {
   schema: "guyditor/template/v1";
@@ -45,6 +55,7 @@ export interface TemplateManifest {
   params: Record<string, unknown>;
   preview: { file: string; params: Record<string, unknown> };
   fonts: TemplateFontDeclaration[];
+  assets?: TemplateAssetDeclaration[];
   safe_area_aware: boolean;
 }
 
@@ -54,13 +65,29 @@ export interface LoadedTemplatePackage {
   contentHash: string;
   compiledSource: string;
   files: string[];
+  reviewState: "published" | "draft";
+  authoring?: {
+    submissionId: string;
+    status: "awaiting_review" | "changes_requested" | "rejected" | "superseded" | "published";
+    description: string;
+    previewPaths: string[];
+    reason?: string;
+  };
 }
 
 export interface TemplateCatalogEntry extends TemplateDescriptor {
   previewPath: string;
   previewDataUrl?: string;
   previewParams: Record<string, unknown>;
+  assets: TemplateAssetDeclaration[];
   builtinName?: string;
+  reviewState: "published" | "draft";
+  authoringStatus?: "awaiting_review" | "changes_requested" | "rejected" | "superseded" | "published";
+  submissionId?: string;
+  description?: string;
+  reviewReason?: string;
+  previewStripPaths?: string[];
+  previewStripDataUrls?: string[];
 }
 
 export interface TemplateRegistryOptions {
@@ -68,11 +95,32 @@ export interface TemplateRegistryOptions {
   userRoot?: string;
   projectRoot?: string;
   compiledRoot?: string;
+  draftRoot?: string;
 }
 
 const SEMVER = "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$";
 const TEMPLATE_ID = "^tpl_[a-z2-7]{10}$";
 const RATIONAL = "^[0-9]+/[1-9][0-9]*$";
+const SHA256 = "^[0-9a-f]{64}$";
+
+const licenseSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["origin", "licenseName", "licensor", "restrictions"],
+  properties: {
+    origin: {
+      enum: ["licensed", "stock", "generated", "programmatic", "unknown"],
+    },
+    licenseName: { type: "string", minLength: 1 },
+    licenseUrl: { type: "string", minLength: 1 },
+    licensor: { type: "string", minLength: 1 },
+    restrictions: {
+      type: "array",
+      items: { type: "string", minLength: 1 },
+      uniqueItems: true,
+    },
+  },
+} as const;
 
 const manifestSchema = {
   $schema: "https://json-schema.org/draft/2020-12/schema",
@@ -129,11 +177,28 @@ const manifestSchema = {
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["family", "file", "weight"],
         properties: {
           family: { type: "string", minLength: 1 },
           file: { type: "string", minLength: 1 },
           weight: { type: "integer", minimum: 1, maximum: 1000 },
+          sha256: { type: "string", pattern: SHA256 },
+          license: licenseSchema,
+        },
+        required: ["family", "file", "weight", "sha256", "license"],
+      },
+    },
+    assets: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["name", "kind", "file", "sha256", "license"],
+        properties: {
+          name: { type: "string", pattern: "^[a-z][a-z0-9_-]*$" },
+          kind: { enum: ["image", "svg", "lottie"] },
+          file: { type: "string", minLength: 1 },
+          sha256: { type: "string", pattern: SHA256 },
+          license: licenseSchema,
         },
       },
     },
@@ -225,6 +290,7 @@ export function templateDescriptor(pkg: LoadedTemplatePackage): TemplateDescript
     duration: structuredClone(pkg.manifest.duration),
     params: structuredClone(pkg.manifest.params),
     contentHash: pkg.contentHash,
+    reviewState: pkg.reviewState,
   };
 }
 
@@ -260,6 +326,7 @@ export async function validateTemplatePackage(
     { name: value.entry, label: "entry" },
     { name: value.preview.file, label: "preview.file" },
     ...value.fonts.map(({ file }) => ({ name: file, label: "fonts[].file" })),
+    ...(value.assets ?? []).map(({ file }) => ({ name: file, label: "assets[].file" })),
   ];
   for (const declaration of declared) {
     const path = safePackagePath(absoluteRoot, declaration.name, declaration.label);
@@ -268,6 +335,74 @@ export async function validateTemplatePackage(
     if (!files.value.includes(relativeName)) {
       return packageFailure(`${declaration.label} ${declaration.name} does not exist.`);
     }
+  }
+  if (new Set(value.fonts.map(({ family }) => family)).size !== value.fonts.length) {
+    return packageFailure("fonts contains duplicate family declarations.", [value.id]);
+  }
+  if (
+    value.assets !== undefined &&
+    new Set(value.assets.map(({ name }) => name)).size !== value.assets.length
+  ) {
+    return packageFailure("assets contains duplicate names.", [value.id]);
+  }
+  for (const declaration of [
+    ...value.fonts.map(({ file, sha256: expected }) => ({ file, expected, kind: "font" })),
+    ...(value.assets ?? []).map(({ file, sha256: expected, kind }) => ({
+      file,
+      expected,
+      kind,
+    })),
+  ]) {
+    if (declaration.kind === "svg" && extname(declaration.file).toLowerCase() !== ".svg") {
+      return packageFailure(`SVG asset ${declaration.file} must use the .svg extension.`, [value.id]);
+    }
+    if (declaration.kind === "lottie" && extname(declaration.file).toLowerCase() !== ".json") {
+      return packageFailure(
+        `Lottie asset ${declaration.file} must use the .json extension.`,
+        [value.id],
+      );
+    }
+    const actual = createHash("sha256")
+      .update(await readFile(resolve(absoluteRoot, declaration.file)))
+      .digest("hex");
+    if (actual !== declaration.expected) {
+      return packageFailure(
+        `${declaration.file} does not match its declared SHA-256.`,
+        [value.id, declaration.file],
+      );
+    }
+  }
+  const registeredAssets = structuredClone(value.assets ?? []);
+  const registeredRasterPaths = registeredAssets
+    .filter(({ kind }) => kind === "image")
+    .map(({ file }) => file);
+  for (const declaration of registeredAssets) {
+    if (declaration.kind !== "lottie") continue;
+    let document: unknown;
+    try {
+      document = JSON.parse(
+        await readFile(resolve(absoluteRoot, declaration.file), "utf8"),
+      ) as unknown;
+    } catch (error: unknown) {
+      return packageFailure(
+        `Lottie asset ${declaration.file} is not valid JSON: ${errorMessage(error)}.`,
+        [value.id, declaration.file],
+      );
+    }
+    const analysis = analyzeLottieDocument(document, {
+      documentPath: declaration.file,
+      registeredRasterPaths,
+    });
+    if (!analysis.ok) {
+      return packageFailure(
+        `Lottie asset ${declaration.file} uses unsupported features: ${
+          analysis.unsupported.map(({ feature, layerPath: path }) =>
+            `${feature} at ${path}`).join("; ")
+        }.`,
+        [value.id, declaration.file],
+      );
+    }
+    declaration.featureProfile = analysis.profile;
   }
 
   try {
@@ -315,10 +450,14 @@ export async function validateTemplatePackage(
 
   return success({
     root: absoluteRoot,
-    manifest: structuredClone(value),
+    manifest: {
+      ...structuredClone(value),
+      ...(registeredAssets.length === 0 ? {} : { assets: registeredAssets }),
+    },
     contentHash: await contentHash(absoluteRoot, files.value),
     compiledSource,
     files: files.value,
+    reviewState: "published",
   });
 }
 
@@ -373,6 +512,17 @@ function catalogEntry(
     ...templateDescriptor(pkg),
     previewPath: resolve(pkg.root, pkg.manifest.preview.file),
     previewParams: structuredClone(pkg.manifest.preview.params),
+    assets: structuredClone(pkg.manifest.assets ?? []),
+    reviewState: pkg.reviewState,
+    ...(pkg.authoring === undefined
+      ? {}
+      : {
+          authoringStatus: pkg.authoring.status,
+          submissionId: pkg.authoring.submissionId,
+          description: pkg.authoring.description,
+          ...(pkg.authoring.reason === undefined ? {} : { reviewReason: pkg.authoring.reason }),
+          previewStripPaths: [...pkg.authoring.previewPaths],
+        }),
     ...(builtinName === undefined ? {} : { builtinName }),
   };
 }
@@ -393,6 +543,7 @@ export class TemplateRegistry implements TemplateProvider {
   readonly #userRoot: string;
   readonly #projectRoot: string | undefined;
   readonly #compiledRoot: string;
+  readonly #draftRoot: string;
 
   public constructor(options: TemplateRegistryOptions = {}) {
     this.#builtinsRoot = resolve(options.builtinsRoot ?? join(process.cwd(), "templates"));
@@ -401,6 +552,14 @@ export class TemplateRegistry implements TemplateProvider {
       ? undefined
       : resolve(options.projectRoot);
     this.#compiledRoot = resolve(options.compiledRoot ?? join(this.#userRoot, ".compiled"));
+    this.#draftRoot = resolve(options.draftRoot ?? join(this.#userRoot, ".drafts"));
+  }
+
+  public async validateDraftPackage(root: string): Promise<Result<LoadedTemplatePackage>> {
+    const loaded = await validateTemplatePackage(root);
+    return loaded.ok
+      ? success({ ...loaded.value, reviewState: "draft" })
+      : loaded;
   }
 
   async #builtinPackages(): Promise<Result<Array<{
@@ -436,19 +595,62 @@ export class TemplateRegistry implements TemplateProvider {
     return success(packages);
   }
 
+  async #draftPackages(): Promise<Result<LoadedTemplatePackage[]>> {
+    const packages: LoadedTemplatePackage[] = [];
+    for (const submissionId of await directoryNames(this.#draftRoot)) {
+      if (!/^tas_[a-z2-7]{10}$/u.test(submissionId)) continue;
+      let authoring: LoadedTemplatePackage["authoring"];
+      try {
+        const metadata = JSON.parse(
+          await readFile(join(this.#draftRoot, submissionId, "authoring.json"), "utf8"),
+        ) as Record<string, unknown>;
+        const previewPaths = Array.isArray(metadata["previewPaths"])
+          ? metadata["previewPaths"].filter((value): value is string => typeof value === "string")
+          : [];
+        const status = metadata["status"];
+        if (
+          typeof metadata["submissionId"] !== "string" ||
+          typeof metadata["description"] !== "string" ||
+          typeof status !== "string" ||
+          !["awaiting_review", "changes_requested", "rejected", "superseded", "published"]
+            .includes(status)
+        ) {
+          return packageFailure(`draft ${submissionId} has invalid authoring metadata.`);
+        }
+        authoring = {
+          submissionId: metadata["submissionId"],
+          description: metadata["description"],
+          status: status as NonNullable<LoadedTemplatePackage["authoring"]>["status"],
+          previewPaths,
+          ...(typeof metadata["reason"] === "string" ? { reason: metadata["reason"] } : {}),
+        };
+      } catch (error: unknown) {
+        return packageFailure(
+          `draft ${submissionId} has unreadable authoring metadata: ${errorMessage(error)}.`,
+        );
+      }
+      const loaded = await this.validateDraftPackage(join(this.#draftRoot, submissionId));
+      if (!loaded.ok) return loaded;
+      packages.push({ ...loaded.value, authoring });
+    }
+    return success(packages);
+  }
+
   async #all(): Promise<Result<Array<{
     package: LoadedTemplatePackage;
     priority: number;
     builtinName?: string;
   }>>> {
-    const [builtins, user, project] = await Promise.all([
+    const [builtins, user, project, drafts] = await Promise.all([
       this.#builtinPackages(),
       this.#installedPackages(this.#userRoot),
       this.#installedPackages(this.#projectRoot),
+      this.#draftPackages(),
     ]);
     if (!builtins.ok) return builtins;
     if (!user.ok) return user;
     if (!project.ok) return project;
+    if (!drafts.ok) return drafts;
     return success([
       ...builtins.value.map(({ package: pkg, builtinName }) => ({
         package: pkg,
@@ -457,6 +659,7 @@ export class TemplateRegistry implements TemplateProvider {
       })),
       ...user.value.map((pkg) => ({ package: pkg, priority: 1 })),
       ...project.value.map((pkg) => ({ package: pkg, priority: 2 })),
+      ...drafts.value.map((pkg) => ({ package: pkg, priority: -1 })),
     ]);
   }
 
@@ -507,15 +710,23 @@ export class TemplateRegistry implements TemplateProvider {
   public async list(): Promise<Result<TemplateCatalogEntry[]>> {
     const all = await this.#all();
     if (!all.ok) return all;
-    const ids = [...new Set(all.value.map(({ package: pkg }) => pkg.manifest.id))].sort();
     const entries: TemplateCatalogEntry[] = [];
+    const published = all.value.filter(({ package: pkg }) => pkg.reviewState === "published");
+    const ids = [...new Set(published.map(({ package: pkg }) => pkg.manifest.id))].sort();
     for (const id of ids) {
-      const candidates = all.value.filter(({ package: pkg }) => pkg.manifest.id === id);
+      const candidates = published.filter(({ package: pkg }) => pkg.manifest.id === id);
       const latestVersion = candidates.map(({ package: pkg }) => pkg.manifest.version)
         .sort(compareSemver).at(-1)!;
       const selected = candidates.filter(({ package: pkg }) => pkg.manifest.version === latestVersion)
         .sort((left, right) => right.priority - left.priority)[0]!;
       entries.push(catalogEntry(selected.package, selected.builtinName));
+    }
+    for (const draft of all.value
+      .filter(({ package: pkg }) =>
+        pkg.reviewState === "draft" && pkg.authoring?.status === "awaiting_review")
+      .sort((left, right) =>
+        left.package.manifest.name.localeCompare(right.package.manifest.name))) {
+      entries.push(catalogEntry(draft.package));
     }
     return success(entries);
   }
@@ -534,6 +745,16 @@ export class TemplateRegistry implements TemplateProvider {
     }
     const loaded = await validateTemplatePackage(source);
     if (!loaded.ok) return loaded;
+    if (
+      loaded.value.files.includes("authoring.json") ||
+      /-draft\.\d+$/u.test(loaded.value.manifest.version)
+    ) {
+      return failure(makeGuyditorError(
+        "E_TEMPLATE_UNREVIEWED",
+        `Authored draft ${loaded.value.manifest.id}@${loaded.value.manifest.version} cannot be installed; creator approval must publish it first.`,
+        { affected: [loaded.value.manifest.id] },
+      ));
+    }
     if (options.dryRun) return success(templateDescriptor(loaded.value));
     const destination = join(
       this.#userRoot,

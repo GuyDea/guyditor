@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,7 +13,22 @@ const TEMPLATE_ID = "tpl_a2c3d4e5f6";
 interface RegistryExports {
   validateTemplatePackage?: (path: string) => Promise<{
     ok: boolean;
-    value?: { manifest: { id: string; version: string }; contentHash: string };
+    value?: {
+      manifest: {
+        id: string;
+        version: string;
+        assets?: Array<{
+          name: string;
+          kind: string;
+          featureProfile?: {
+            renderer: string;
+            features: string[];
+            colorSlots: string[];
+          };
+        }>;
+      };
+      contentHash: string;
+    };
     error?: { code: string; message: string };
   }>;
   TemplateRegistry?: new (options: {
@@ -72,6 +88,72 @@ async function rewriteManifest(
   let manifest = await readFile(join(root, "template.yaml"), "utf8");
   for (const [from, to] of Object.entries(replacements)) manifest = manifest.replace(from, to);
   await writeFile(join(root, "template.yaml"), manifest, "utf8");
+}
+
+function lottieFixture(layer: Record<string, unknown>): Record<string, unknown> {
+  return {
+    v: "5.12.2",
+    fr: 30,
+    ip: 0,
+    op: 30,
+    w: 160,
+    h: 90,
+    assets: [],
+    layers: [layer],
+  };
+}
+
+function shapeLayer(): Record<string, unknown> {
+  return {
+    ty: 4,
+    nm: "Badge",
+    ip: 0,
+    op: 30,
+    ks: {
+      a: { a: 0, k: [0, 0] },
+      p: { a: 0, k: [80, 45] },
+      s: { a: 0, k: [100, 100] },
+      r: { a: 0, k: 0 },
+      o: { a: 0, k: 100 },
+    },
+    shapes: [
+      {
+        ty: "rc",
+        nm: "Card",
+        p: { a: 0, k: [0, 0] },
+        s: { a: 0, k: [120, 50] },
+        r: { a: 0, k: 8 },
+      },
+      {
+        ty: "fl",
+        nm: "accent",
+        c: { a: 0, k: [0.46, 0.91, 0.77, 1] },
+        o: { a: 0, k: 100 },
+      },
+    ],
+  };
+}
+
+async function declareLottie(
+  root: string,
+  document: Record<string, unknown>,
+): Promise<void> {
+  const bytes = Buffer.from(`${JSON.stringify(document, null, 2)}\n`);
+  await writeFile(join(root, "assets", "card.json"), bytes);
+  const hash = createHash("sha256").update(bytes).digest("hex");
+  await rewriteManifest(root, {
+    "fonts: []": `fonts: []
+assets:
+  - name: card-motion
+    kind: lottie
+    file: assets/card.json
+    sha256: ${hash}
+    license:
+      origin: licensed
+      licenseName: Fixture License
+      licensor: Fixture Studio
+      restrictions: []`,
+  });
 }
 
 describe("FR-600 template package validation", () => {
@@ -204,6 +286,141 @@ describe("FR-600 template package validation", () => {
       expect(result, matrixCase.name).toMatchObject({
         ok: false,
         error: { code: "E_TEMPLATE_PACKAGE_INVALID" },
+      });
+    }
+  });
+
+  it("registers license-fielded SVG assets and fails closed on hash mismatch", async () => {
+    const validate = (render as unknown as RegistryExports).validateTemplatePackage;
+    if (validate === undefined) return;
+    const root = await packageFixture();
+    const svg = Buffer.from(
+      '<svg xmlns="http://www.w' + '3.org/2000/svg" width="20" height="10">' +
+      '<path fill="#77e7c4" d="M0 0h20v10H0z"/></svg>',
+    );
+    await writeFile(join(root, "assets", "map.svg"), svg);
+    const hash = createHash("sha256").update(svg).digest("hex");
+    await rewriteManifest(root, {
+      "fonts: []": `fonts: []
+assets:
+  - name: map
+    kind: svg
+    file: assets/map.svg
+    sha256: ${hash}
+    license:
+      origin: licensed
+      licenseName: CC BY 4.0
+      licenseUrl: https://creativecommons.org/licenses/by/4.0/
+      licensor: Fixture Maps
+      restrictions: []`,
+    });
+
+    const valid = await validate(root);
+    expect(valid.ok).toBe(true);
+    await writeFile(join(root, "assets", "map.svg"), Buffer.concat([svg, Buffer.from("\n")]));
+    await expect(validate(root)).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "E_TEMPLATE_PACKAGE_INVALID",
+        message: expect.stringMatching(/map\.svg.*SHA-256/iu),
+      },
+    });
+
+    await rewriteManifest(root, {
+      "      licensor: Fixture Maps\n": "",
+    });
+    await expect(validate(root)).resolves.toMatchObject({
+      ok: false,
+      error: { code: "E_TEMPLATE_PACKAGE_INVALID" },
+    });
+  });
+
+  it("registers a supported Lottie profile and rejects each unsupported file with named paths", async () => {
+    const validate = (render as unknown as RegistryExports).validateTemplatePackage;
+    if (validate === undefined) return;
+    const supportedRoot = await packageFixture();
+    await declareLottie(supportedRoot, lottieFixture(shapeLayer()));
+
+    const supported = await validate(supportedRoot);
+
+    expect(supported.ok).toBe(true);
+    expect(supported.value?.manifest.assets?.[0]).toMatchObject({
+      name: "card-motion",
+      kind: "lottie",
+      featureProfile: {
+        renderer: "guyditor-lottie-subset/v1",
+        features: ["fill", "rectangle", "shape-layer", "transform"],
+        colorSlots: ["accent"],
+      },
+    });
+
+    const cases: Array<{
+      name: string;
+      document: Record<string, unknown>;
+      feature: string;
+      path: string;
+    }> = [
+      {
+        name: "expression",
+        document: lottieFixture({
+          ...shapeLayer(),
+          ks: {
+            ...(shapeLayer()["ks"] as Record<string, unknown>),
+            r: { a: 0, k: 0, x: "time * 20" },
+          },
+        }),
+        feature: "expression",
+        path: "layers[0] \"Badge\"",
+      },
+      {
+        name: "text",
+        document: lottieFixture({
+          ty: 5,
+          nm: "Forbidden title",
+          ip: 0,
+          op: 30,
+          ks: shapeLayer()["ks"],
+          t: {},
+        }),
+        feature: "text layer",
+        path: "layers[0] \"Forbidden title\"",
+      },
+      {
+        name: "unregistered raster",
+        document: {
+          ...lottieFixture({
+            ty: 2,
+            nm: "Unregistered portrait",
+            refId: "image_0",
+            ip: 0,
+            op: 30,
+            ks: shapeLayer()["ks"],
+          }),
+          assets: [{
+            id: "image_0",
+            w: 32,
+            h: 32,
+            u: "images/",
+            p: "portrait.png",
+            e: 0,
+          }],
+        },
+        feature: "unregistered raster",
+        path: "layers[0] \"Unregistered portrait\"",
+      },
+    ];
+    for (const matrixCase of cases) {
+      const root = await packageFixture();
+      await declareLottie(root, matrixCase.document);
+      const result = await validate(root);
+      expect(result, matrixCase.name).toMatchObject({
+        ok: false,
+        error: {
+          code: "E_TEMPLATE_PACKAGE_INVALID",
+          message: expect.stringContaining(
+            `${matrixCase.feature} at ${matrixCase.path}`,
+          ),
+        },
       });
     }
   });

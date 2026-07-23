@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import {
   access,
+  chmod,
   mkdir,
   readFile,
   rename,
@@ -13,9 +14,13 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 import {
   convertTimeRounding,
+  canonicalJson,
   deriveTimeline,
+  makeId,
   makeGuyditorError,
+  OperationEngine,
   parseProjectYaml,
+  resolveBrandTemplateParams,
   resolveAnchor,
 } from "../../core/src/index.js";
 import type {
@@ -27,6 +32,7 @@ import type {
   JobQueue,
   KeySettings,
   ProjectStore,
+  TemplateBrandDefaults,
 } from "../../core/src/index.js";
 import {
   DEFAULT_CAPTION_STYLE,
@@ -46,6 +52,7 @@ import type {
 } from "../../transcript/src/index.js";
 import {
   parseSubjectTrackAnalysis,
+  materializeProgrammaticAnimationArtifact,
   probeMedia,
   resolveFfmpeg,
   resolveFfprobe,
@@ -78,13 +85,22 @@ import {
   renderGraphicFrame,
   renderGraphicOverlaySequence,
 } from "./graphic-overlay.js";
+import { PRIMITIVES_V1_VERSION } from "./primitives/v1.js";
+import {
+  LOTTIE_RENDERER_VERSION,
+  LOTTIE_SHIM_VERSION,
+  lottieToolchainHash,
+} from "./lottie.js";
 import {
   loadTemplateRuntime,
   renderTemplatePng,
+  resolveTemplateDuration,
+  TEMPLATE_CANVAS_VERSION,
   TEMPLATE_RENDERER_VERSION,
 } from "./template-runtime.js";
 import { TemplateRegistry } from "./template-registry.js";
 import type { TemplateCatalogEntry } from "./template-registry.js";
+import type { BrandContext } from "./template-contract.js";
 import { rasterizeKeyMasks } from "./key-mask.js";
 import { rasterizePipAssets } from "./pip-assets.js";
 import type { RasterizedPipAssets } from "./pip-assets.js";
@@ -219,6 +235,31 @@ export interface RenderServiceOptions {
   jobQueue: JobQueue;
   profilesRoot?: string | URL;
   templateRegistry?: TemplateRegistry;
+  brandDefaults?: () => Promise<TemplateBrandDefaults | undefined>;
+}
+
+export interface TemplateFreezeRequest {
+  revision: string;
+  deliverableId?: string;
+  templateId: string;
+  params?: Record<string, unknown>;
+  seed?: number;
+  durationFrames?: number;
+  placeAsClip?: boolean;
+  clipIndex?: number;
+}
+
+export interface TemplateFreezeResult {
+  assetId: string;
+  clipId?: string;
+  sequenceId: string;
+  outputPath: string;
+  provenancePath: string;
+  frames: number;
+  fps: string;
+  width: number;
+  height: number;
+  revision: string;
 }
 
 interface PreparedExport {
@@ -480,7 +521,10 @@ async function toolchainManifest(): Promise<ToolchainManifest> {
     renderPackage: RENDER_PACKAGE_VERSION,
     overlayRenderer: {
       ...captionOverlayToolchain(),
-      version: `${captionOverlayToolchain().version}+${GRAPHIC_OVERLAY_RENDERER_VERSION}+${TEMPLATE_RENDERER_VERSION}`,
+      version:
+        `${captionOverlayToolchain().version}+${GRAPHIC_OVERLAY_RENDERER_VERSION}+` +
+        `${TEMPLATE_RENDERER_VERSION}+${PRIMITIVES_V1_VERSION}+` +
+        `${LOTTIE_RENDERER_VERSION}+${LOTTIE_SHIM_VERSION}+${lottieToolchainHash()}`,
     },
     encoderThreads: 1,
     os: platform(),
@@ -552,6 +596,7 @@ export class RenderService {
   readonly #jobQueue: JobQueue;
   readonly #profilesRoot: string | URL;
   readonly #templateRegistry: TemplateRegistry;
+  readonly #brandDefaults: () => Promise<TemplateBrandDefaults | undefined>;
   readonly #prepared = new Map<string, PreparedExport>();
 
   public constructor(options: RenderServiceOptions) {
@@ -562,6 +607,7 @@ export class RenderService {
     this.#templateRegistry = options.templateRegistry ?? new TemplateRegistry({
       projectRoot: join(this.#projectRoot, "templates"),
     });
+    this.#brandDefaults = options.brandDefaults ?? (() => Promise.resolve(undefined));
     this.#jobQueue.registerExecutor("render.export", async (job, context) => {
       const prepared = this.#prepared.get(job.jobId);
       if (prepared === undefined) {
@@ -610,6 +656,18 @@ export class RenderService {
       }
       return this.#finalizeOutputSet(deliverableId, revision, outputDir, context);
     });
+  }
+
+  async #brandContext(): Promise<BrandContext> {
+    const defaults = await this.#brandDefaults();
+    return defaults === undefined
+      ? { palette: {} }
+      : {
+          palette: structuredClone(defaults.palette),
+          fontSlots: structuredClone(defaults.fonts),
+          logoSlotDefaults: structuredClone(defaults.logoSlots),
+          templateDefaults: structuredClone(defaults),
+        };
   }
 
   public async renderPreview(req: RenderRequest): Promise<{ jobId: string }> {
@@ -741,9 +799,24 @@ export class RenderService {
   public async templateCatalog(): Promise<TemplateCatalogEntry[]> {
     const catalog = await this.#templateRegistry.list();
     if (!catalog.ok) throw catalog.error;
+    const brand = await this.#brandContext();
     return Promise.all(catalog.value.map(async (entry) => ({
       ...entry,
+      previewParams: resolveBrandTemplateParams({
+        templateId: entry.id,
+        schema: entry.params,
+        explicit: {},
+        ...(brand.templateDefaults === undefined
+          ? {}
+          : { brand: brand.templateDefaults }),
+      }),
       previewDataUrl: `data:image/png;base64,${(await readFile(entry.previewPath)).toString("base64")}`,
+      ...(entry.previewStripPaths === undefined
+        ? {}
+        : {
+            previewStripDataUrls: await Promise.all(entry.previewStripPaths.map(async (path) =>
+              `data:image/png;base64,${(await readFile(path)).toString("base64")}`)),
+          }),
     })));
   }
 
@@ -765,8 +838,16 @@ export class RenderService {
     if (!runtime.ok) throw runtime.error;
     const totalFrames = pkg.value.manifest.duration.default?.frames ?? 120;
     const frame = request.frame ?? Math.round(totalFrames * 0.38);
+    const brand = await this.#brandContext();
     const png = renderTemplatePng(runtime.value, {
-      params: request.params ?? pkg.value.manifest.preview.params,
+      params: resolveBrandTemplateParams({
+        templateId: pkg.value.manifest.id,
+        schema: pkg.value.manifest.params,
+        explicit: request.params ?? {},
+        ...(brand.templateDefaults === undefined
+          ? {}
+          : { brand: brand.templateDefaults }),
+      }),
       seed: request.seed ?? 0x4755_5944,
       frame: Math.max(0, Math.min(totalFrames - 1, frame)),
       totalFrames,
@@ -774,13 +855,289 @@ export class RenderService {
       width: 640,
       height: 360,
       safeArea: { top: 22, right: 32, bottom: 22, left: 32 },
-      brand: { palette: {} },
+      brand,
     });
     if (!png.ok) throw png.error;
     return {
       dataUrl: `data:image/png;base64,${png.value.toString("base64")}`,
       width: 640,
       height: 360,
+    };
+  }
+
+  public async templateFreeze(
+    request: TemplateFreezeRequest,
+  ): Promise<TemplateFreezeResult> {
+    const project = await this.#loadProject(request.revision);
+    const deliverableId = request.deliverableId ?? project.settings.primaryDeliverable;
+    const deliverable = project.deliverables.find(({ id }) => id === deliverableId);
+    if (deliverable === undefined) {
+      throw makeGuyditorError(
+        "E_RENDER_DELIVERABLE_NOT_FOUND",
+        `Deliverable ${deliverableId} does not exist at ${project.revision}.`,
+        { affected: [deliverableId, project.revision] },
+      );
+    }
+    const profile = (await loadRenderProfile(
+      deliverable.profile,
+      this.#profilesRoot,
+      deliverable.profileOverrides,
+    )).profile;
+    const width = profile.video.resolution?.width ?? project.settings.timeline.width;
+    const height = profile.video.resolution?.height ?? project.settings.timeline.height;
+    const fps = profile.video.fps ?? project.settings.timeline.fps;
+    const pin = project.templates?.[request.templateId];
+    const descriptor = pin === undefined
+      ? await this.#templateRegistry.latest(request.templateId)
+      : await this.#templateRegistry.get(request.templateId, pin.version);
+    if (!descriptor.ok) throw descriptor.error;
+    if (descriptor.value.reviewState === "draft") {
+      throw makeGuyditorError(
+        "E_TEMPLATE_UNREVIEWED",
+        `Template ${request.templateId}@${descriptor.value.version} is awaiting creator review and is preview-only.`,
+        { affected: [request.templateId] },
+      );
+    }
+    if (pin !== undefined && descriptor.value.contentHash !== pin.contentHash) {
+      throw makeGuyditorError(
+        "E_TEMPLATE_MISSING_VERSION",
+        `Template ${request.templateId}@${pin.version} does not match the project pin.`,
+        { affected: [request.templateId] },
+      );
+    }
+    const pkg = await this.#templateRegistry.package(
+      descriptor.value.id,
+      descriptor.value.version,
+      descriptor.value.contentHash,
+    );
+    if (!pkg.ok) throw pkg.error;
+    const runtime = await loadTemplateRuntime(pkg.value);
+    if (!runtime.ok) throw runtime.error;
+    const brand = await this.#brandContext();
+    const params = resolveBrandTemplateParams({
+      templateId: descriptor.value.id,
+      schema: descriptor.value.params,
+      explicit: request.params ?? {},
+      ...(brand.templateDefaults === undefined
+        ? {}
+        : { brand: brand.templateDefaults }),
+    });
+    let frames = request.durationFrames;
+    if (frames === undefined && descriptor.value.duration.default !== undefined) {
+      const converted = convertTimeRounding(descriptor.value.duration.default, fps);
+      if (!converted.ok) throw converted.error;
+      frames = converted.value.time.frames;
+    }
+    if (frames === undefined) {
+      const duration = resolveTemplateDuration(runtime.value, params, { width, height, fps });
+      if (!duration.ok) throw duration.error;
+      if (duration.value.mode !== "fixed") {
+        throw makeGuyditorError(
+          "E_TEMPLATE_DURATION_INVALID",
+          `Template ${descriptor.value.id} needs an explicit duration to freeze.`,
+          { affected: [descriptor.value.id] },
+        );
+      }
+      const converted = convertTimeRounding(
+        { frames: duration.value.frames, fps: duration.value.fps },
+        fps,
+      );
+      if (!converted.ok) throw converted.error;
+      frames = converted.value.time.frames;
+    }
+    if (!Number.isSafeInteger(frames) || frames < 1) {
+      throw makeGuyditorError(
+        "E_TEMPLATE_DURATION_INVALID",
+        "Template freeze duration must be a positive safe frame count.",
+        { affected: [descriptor.value.id] },
+      );
+    }
+    const seed = request.seed ?? 0x4755_5944;
+    if (!Number.isSafeInteger(seed) || seed < 0 || seed > 0xffff_ffff) {
+      throw makeGuyditorError(
+        "E_TEMPLATE_RENDER_CONTEXT",
+        "Template freeze seed must be a uint32.",
+        { affected: [descriptor.value.id] },
+      );
+    }
+    const titleSafe = profile.safeAreas?.title;
+    const safeArea = {
+      top: Math.round(height * (titleSafe?.top ?? 0.05)),
+      right: Math.round(width * (titleSafe?.right ?? 0.05)),
+      bottom: Math.round(height * (titleSafe?.bottom ?? 0.05)),
+      left: Math.round(width * (titleSafe?.left ?? 0.05)),
+    };
+    const freezeKey = createHash("sha256").update(canonicalJson({
+      template: {
+        id: descriptor.value.id,
+        version: descriptor.value.version,
+        contentHash: descriptor.value.contentHash,
+      },
+      params,
+      seed,
+      frames,
+      fps,
+      width,
+      height,
+      safeArea,
+      renderer: TEMPLATE_RENDERER_VERSION,
+      primitives: PRIMITIVES_V1_VERSION,
+      lottie: {
+        renderer: LOTTIE_RENDERER_VERSION,
+        shim: LOTTIE_SHIM_VERSION,
+        sha256: lottieToolchainHash(),
+      },
+      canvas: TEMPLATE_CANVAS_VERSION,
+      brand: brand.templateDefaults ?? null,
+    })).digest("hex");
+    const frameDirectory = join(
+      this.#projectRoot,
+      ".guyditor/cache/render/template-freeze",
+      freezeKey,
+    );
+    await mkdir(frameDirectory, { recursive: true });
+    for (let frame = 0; frame < frames; frame += 1) {
+      const png = renderTemplatePng(runtime.value, {
+        params,
+        seed,
+        frame,
+        totalFrames: frames,
+        fps,
+        width,
+        height,
+        safeArea,
+        brand,
+        timeline: { frames: frame, fps },
+      });
+      if (!png.ok) throw png.error;
+      await writeFile(
+        join(frameDirectory, `${String(frame).padStart(8, "0")}.png`),
+        png.value,
+      );
+    }
+    let assetId = makeId("ast");
+    while (project.assets.some(({ id }) => id === assetId)) assetId = makeId("ast");
+    const outputDirectory = join(this.#projectRoot, "media/programmatic");
+    const outputPath = join(outputDirectory, `${assetId}.${profile.container}`);
+    await mkdir(outputDirectory, { recursive: true });
+    await runFfmpeg([
+      "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
+      "-framerate", fps,
+      "-start_number", "0",
+      "-i", join(frameDirectory, "%08d.png"),
+      "-frames:v", String(frames),
+      "-an",
+      "-c:v", profile.video.codec,
+      "-preset", "medium",
+      "-crf", String(profile.video.crf),
+      "-pix_fmt", profile.video.pixelFormat,
+      "-r", fps,
+      "-threads", "1",
+      "-fflags", "+bitexact",
+      "-flags:v", "+bitexact",
+      "-map_metadata", "-1",
+      "-metadata", "creation_time=2000-01-01T00:00:00.000Z",
+      ...(profile.container === "mp4" ? ["-movflags", "+faststart"] : []),
+      outputPath,
+    ]);
+    const toolchain = await toolchainManifest();
+    const artifact = await materializeProgrammaticAnimationArtifact({
+      projectRoot: this.#projectRoot,
+      outputPath,
+      assetId,
+      template: {
+        id: descriptor.value.id,
+        version: descriptor.value.version,
+        contentHash: descriptor.value.contentHash,
+      },
+      params,
+      seed,
+      renderer: {
+        template: TEMPLATE_RENDERER_VERSION,
+        primitives: PRIMITIVES_V1_VERSION,
+        canvas: TEMPLATE_CANVAS_VERSION,
+        toolchainHash: `sha256:${createHash("sha256")
+          .update(canonicalJson(toolchain))
+          .digest("hex")}`,
+        fontHashes: Object.fromEntries(
+          Object.entries(runtime.value.fonts).map(([family, font]) =>
+            [family, font.sha256]),
+        ),
+      },
+      expected: { frames, fps, width, height },
+      ingestedAt: new Date().toISOString(),
+    });
+    const provenancePath = join(this.#projectRoot, artifact.sidecar.path);
+    await mkdir(dirname(provenancePath), { recursive: true });
+    await writeFile(provenancePath, artifact.serialized, "utf8");
+    await Promise.all([
+      chmod(outputPath, 0o444),
+      chmod(provenancePath, 0o444),
+    ]);
+    let clipId: string | undefined;
+    let placement: {
+      sequenceId: string;
+      layerId: string;
+      clipId: string;
+      index: number;
+    } | undefined;
+    if (request.placeAsClip === true) {
+      const layer = project.layers.find(({ kind, sequence }) =>
+        kind === "video" && sequence === deliverable.sequenceId);
+      const sequence = project.sequences.find(({ id }) => id === deliverable.sequenceId);
+      if (layer === undefined || sequence === undefined) {
+        throw makeGuyditorError(
+          "E_OP_LAYER_TARGET",
+          `Deliverable ${deliverable.id} has no sequence-bound video layer.`,
+          { affected: [deliverable.id, deliverable.sequenceId] },
+        );
+      }
+      clipId = makeId("clp");
+      while (project.sequences.some(({ clips }) => clips.some(({ id }) => id === clipId))) {
+        clipId = makeId("clp");
+      }
+      placement = {
+        sequenceId: sequence.id,
+        layerId: layer.id,
+        clipId,
+        index: request.clipIndex ?? sequence.clips.length,
+      };
+    }
+    const engine = new OperationEngine(this.#store.currentProject, {
+      committer: this.#store,
+      templateProvider: this.#templateRegistry,
+    });
+    const committed = await engine.execute([{
+      op: "template.freeze",
+      params: {
+        asset: artifact.asset,
+        provenance: artifact.provenance,
+        sidecar: artifact.sidecar,
+        ...(placement === undefined ? {} : { placement }),
+      },
+    }], {
+      baseRevision: request.revision,
+      origin: "ui",
+      dryRun: false,
+    });
+    if (!committed.ok) {
+      await Promise.all([
+        chmod(outputPath, 0o644).then(() => rm(outputPath, { force: true })),
+        chmod(provenancePath, 0o644).then(() => rm(provenancePath, { force: true })),
+      ]);
+      throw committed.error;
+    }
+    return {
+      assetId,
+      ...(clipId === undefined ? {} : { clipId }),
+      sequenceId: deliverable.sequenceId,
+      outputPath,
+      provenancePath,
+      frames,
+      fps,
+      width,
+      height,
+      revision: this.#store.currentProject.revision,
     };
   }
 
@@ -810,7 +1167,7 @@ export class RenderService {
       height: project.settings.timeline.height,
       fps: project.settings.timeline.fps,
       frame: request.frame,
-      brand: { palette: {} },
+      brand: await this.#brandContext(),
     });
     return {
       dataUrl: `data:image/png;base64,${png.toString("base64")}`,
@@ -1102,7 +1459,7 @@ export class RenderService {
           height: project.settings.timeline.height,
           fps: project.settings.timeline.fps,
           frame: 0,
-          brand: { palette: {} },
+          brand: await this.#brandContext(),
         });
         checks.push({
           id: "VAL-GRAPHICS",
@@ -1526,7 +1883,7 @@ export class RenderService {
       width: profileResolution?.width ?? project.settings.timeline.width,
       height: profileResolution?.height ?? project.settings.timeline.height,
       fps: profileFps ?? project.settings.timeline.fps,
-      brand: { palette: {} },
+      brand: await this.#brandContext(),
       cacheRoot: join(this.#projectRoot, ".guyditor/cache/render/graphics"),
     });
     const graphicOverlays: Parameters<typeof compileRenderGraph>[0]["graphicOverlays"] =

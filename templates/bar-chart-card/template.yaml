@@ -1,0 +1,47 @@
+schema: guyditor/template/v1
+id: tpl_g2h3j4k5m6
+name: Bar chart card
+kind: diagram
+version: 1.0.0
+engine: overlay/v1
+entry: render.ts
+min_guyditor: 1.0.0
+duration:
+  mode: fixed
+  default: { frames: 120, fps: "30/1" }
+params:
+  type: object
+  additionalProperties: false
+  required: [title, valueA, valueB, valueC, maximum, accent, background, fontFamily]
+  properties:
+    title: { type: string, minLength: 1, maxLength: 64, default: "Housing costs, indexed" }
+    valueA: { type: number, minimum: 0, default: 42 }
+    valueB: { type: number, minimum: 0, default: 68 }
+    valueC: { type: number, minimum: 0, default: 91 }
+    maximum: { type: number, exclusiveMinimum: 0, default: 100 }
+    accent: { type: string, pattern: "^#[0-9A-Fa-f]{6}$", default: "#FFE45E" }
+    background: { type: string, pattern: "^#[0-9A-Fa-f]{6}$", default: "#102A43" }
+    fontFamily: { type: string, minLength: 1, default: "Inconsolata Guyditor" }
+preview:
+  file: preview.png
+  params:
+    title: Housing costs, indexed
+    valueA: 42
+    valueB: 68
+    valueC: 91
+    maximum: 100
+    accent: "#FFE45E"
+    background: "#102A43"
+    fontFamily: Inconsolata Guyditor
+fonts:
+  - family: Inconsolata Guyditor
+    file: fonts/Inconsolata.otf
+    weight: 600
+    sha256: 1561e616c414a1b82d6e6dfbd18e5726fd65028913ade191e5fa38b6ec375a1a
+    license:
+      origin: licensed
+      licenseName: SIL Open Font License 1.1
+      licenseUrl: https://openfontlicense.org/
+      licensor: Raph Levien
+      restrictions: []
+safe_area_aware: true

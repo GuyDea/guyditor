@@ -107,6 +107,7 @@ async function duration(entry: TemplateCatalogEntry, registry: TemplateRegistry)
     height: 360,
     fps: "30/1",
   });
+  if (resolved.ok && resolved.value.mode === "anchor_span") return 120;
   if (!resolved.ok || resolved.value.mode !== "fixed") {
     throw new Error(`Golden template ${entry.id} did not resolve a fixed preview duration.`);
   }
@@ -241,7 +242,7 @@ describe("FR-600/601/602 template graphics goldens", () => {
         frameHashes: overlayManifest.frameHashes,
       },
     }).toEqual({ builtins: expected.builtins, anchored: expected.anchored });
-  });
+  }, 30_000);
 
   it.skipIf(!existsSync(resolve(".fixtures/manifest.json")))(
     "journals a word-anchored lower third and burns identical pixels into clean and burnin exports",

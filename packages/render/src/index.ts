@@ -6,11 +6,33 @@ export {
 } from "./template-registry.js";
 export type {
   LoadedTemplatePackage,
+  TemplateAssetDeclaration,
+  TemplateAssetLicense,
   TemplateCatalogEntry,
   TemplateFontDeclaration,
   TemplateManifest,
   TemplateRegistryOptions,
 } from "./template-registry.js";
+export {
+  DEFAULT_TEMPLATE_AUTHOR_FRAMES_PER_SECOND_FLOOR,
+  DEFAULT_TEMPLATE_AUTHOR_PROBE_FRAMES,
+  MAX_AUTHORED_TEMPLATE_SOURCE_BYTES,
+  TemplateAuthoringService,
+} from "./template-authoring.js";
+export type {
+  TemplateAuthorAuditEvent,
+  TemplateAuthorCheckName,
+  TemplateAuthorManifest,
+  TemplateAuthorProvenance,
+  TemplateAuthorReviewInput,
+  TemplateAuthorStatus,
+  TemplateAuthorStatusValue,
+  TemplateAuthorSubmission,
+  TemplateAuthorSubmitResult,
+  TemplateAuthorValidationCheck,
+  TemplateAuthorValidationError,
+  TemplateAuthoringServiceOptions,
+} from "./template-authoring.js";
 export { createSeededRng } from "./seeded-rng.js";
 export {
   TEMPLATE_CANVAS_VERSION,
@@ -19,6 +41,31 @@ export {
   renderTemplatePng,
   resolveTemplateDuration,
 } from "./template-runtime.js";
+export {
+  PRIMITIVES_V1_VERSION,
+  primitivesV1,
+} from "./primitives/v1.js";
+export {
+  LOTTIE_RENDERER_VERSION,
+  LOTTIE_SHIM_VERSION,
+  createLottieAnimation,
+  drawLottie,
+  lottieToolchainHash,
+  renderLottiePng,
+} from "./lottie.js";
+export type {
+  DrawLottieOptions,
+  LottieAnimation,
+  RenderLottiePngOptions,
+} from "./lottie.js";
+export type {
+  PrimitiveEasing,
+  PrimitiveFrameTime,
+  PrimitiveWordTiming,
+  PrimitivesV1,
+  TextRevealOptions,
+  TextRevealResult,
+} from "./primitives/v1.js";
 export type { LoadedTemplateRuntime } from "./template-runtime.js";
 export {
   GRAPHIC_OVERLAY_RENDERER_VERSION,
@@ -150,6 +197,8 @@ export type {
   FunctionalEquivalenceSpec,
   RenderRequest,
   RenderServiceOptions,
+  TemplateFreezeRequest,
+  TemplateFreezeResult,
 } from "./service.js";
 export { validateOverlayLayout, validatePublishMetadataCheck } from "./validation.js";
 export { laplacianVariance } from "./cover-analysis.js";
