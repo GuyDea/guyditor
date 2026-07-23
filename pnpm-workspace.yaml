@@ -1,2 +1,8 @@
 packages:
   - "packages/*"
+
+# pnpm 10 blocks dependency install scripts by default; these need theirs
+# (Electron downloads its binary, esbuild installs its platform binary).
+onlyBuiltDependencies:
+  - electron
+  - esbuild

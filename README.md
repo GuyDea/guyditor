@@ -34,6 +34,12 @@ bash workers/mlworker/setup.sh   # uv-managed Python 3.11 venv: faster-whisper, 
                                  # CTC alignment, mediapipe tracking (~400 MB, CPU-only)
 ```
 
+> **"Error: Electron uninstall" on `dev`?** pnpm 10 blocks dependency install
+> scripts unless approved; the workspace approves `electron` and `esbuild` via
+> `onlyBuiltDependencies` in `pnpm-workspace.yaml`. If the Electron binary is still
+> missing after `pnpm install` (older installs), run
+> `node node_modules/electron/install.js` once.
+
 Optional ML extras:
 
 - **Whisper models** download on first transcription into
