@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import {
+  mkdir,
   mkdtemp,
   readFile,
   readdir,
@@ -124,6 +125,24 @@ async function allPaths(root: string, relative = ""): Promise<string[]> {
 }
 
 describe("ProjectStore", () => {
+  it("overlays archive state without changing the accepted master", async () => {
+    const root = await directory();
+    const store = await valueOf(createProject(root, projectFixture()));
+    const before = await readFile(join(root, "episode.guyditor.yaml"), "utf8");
+    await mkdir(join(root, "archive"), { recursive: true });
+    await writeFile(join(root, "archive/archive.manifest.json"), JSON.stringify({
+      format: "guyditor-archive/v1",
+      archiveId: "arc_aaaaaaaaaa",
+      projectId: "prj_aaaaaaaaaa",
+      entries: [{ assetId: "ast_aaaaaaaaaa", state: "offline" }],
+    }));
+
+    await expect(store.readAssetAvailability()).resolves.toEqual({
+      ast_aaaaaaaaaa: "offline",
+    });
+    await expect(readFile(join(root, "episode.guyditor.yaml"), "utf8")).resolves.toBe(before);
+  });
+
   it("creates the project skeleton and initial accepted revision", async () => {
     const root = await directory();
     const store: ProjectStore = await valueOf(createProject(root, projectFixture(), {

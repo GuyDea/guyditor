@@ -1337,6 +1337,24 @@ export class ProjectStore {
     return this.#root;
   }
 
+  /** Archive state is an overlay and is never serialized into the accepted master. */
+  public async readAssetAvailability(): Promise<Record<string, "offline" | "restored">> {
+    const source = await readOptional(join(this.#root, "archive/archive.manifest.json"));
+    if (source === undefined) return {};
+    const parsed = JSON.parse(source) as unknown;
+    if (typeof parsed !== "object" || parsed === null || !("entries" in parsed) ||
+        !Array.isArray(parsed.entries)) {
+      throw new Error("Archive manifest is malformed.");
+    }
+    const known = new Set(this.#project.assets.map(({ id }) => id));
+    return Object.fromEntries(parsed.entries.flatMap((entry: unknown) => {
+      if (typeof entry !== "object" || entry === null ||
+          !("assetId" in entry) || typeof entry.assetId !== "string" || !known.has(entry.assetId) ||
+          !("state" in entry) || entry.state !== "offline" && entry.state !== "restored") return [];
+      return [[entry.assetId, entry.state]];
+    }));
+  }
+
   public static createProject(
     root: string,
     request: CreateProjectRequest,

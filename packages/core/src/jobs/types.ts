@@ -120,7 +120,11 @@ export interface JobOverview {
 export interface JobQueueOptions {
   concurrency?: number;
   overviewSources?: JobOverviewSources;
+  /** Runs before an executor so media-scale jobs can fail without producing output. */
+  preflight?: JobPreflight;
 }
+
+export type JobPreflight = (job: JobRecord) => void | Promise<void>;
 
 export type JobChangeEvent = {
   kind: "job.state" | "job.progress";

@@ -145,6 +145,12 @@ export const M4_PARTIAL_IDS = Object.freeze([
   "FR-701",
   "FR-705",
   "AC-010",
+  "NFR-102",
+  "NFR-106",
+  "NFR-107",
+  "NFR-108",
+  "NFR-109",
+  "AC-012",
 ]);
 
 // The M1 table explicitly permits scoped rows ("core" and "foundation"), and the
@@ -409,7 +415,7 @@ export function runGate(
   }
 
   if (milestone === "m4") {
-    log("gate m4: partial milestone scope passed (editorial skills, preference examples, controlled upgrades, AC-010)");
+    log("gate m4: automated scope passed (editorial skills, storage, backup, archival, restore, migration, AC-010, AC-012); physical-machine restore remains dogfood-gated");
     return 0;
   }
 

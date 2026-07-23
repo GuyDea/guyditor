@@ -21,6 +21,7 @@ import type {
   JobDependencyNode,
   JobOverview,
   JobOverviewSources,
+  JobPreflight,
   JobQueueOptions,
   JobRecord,
   JobState,
@@ -249,6 +250,7 @@ export class JobQueue {
   readonly #database: DatabaseSync;
   readonly #concurrency: number;
   readonly #overviewSources: JobOverviewSources;
+  readonly #preflight: JobPreflight | undefined;
   readonly #executors = new Map<string, JobExecutor>();
   readonly #listeners = new Set<JobChangeListener>();
   readonly #active = new Map<string, ActiveJob>();
@@ -258,10 +260,12 @@ export class JobQueue {
     database: DatabaseSync,
     concurrency: number,
     overviewSources: JobOverviewSources,
+    preflight: JobPreflight | undefined,
   ) {
     this.#database = database;
     this.#concurrency = concurrency;
     this.#overviewSources = overviewSources;
+    this.#preflight = preflight;
   }
 
   public static open(
@@ -301,7 +305,12 @@ export class JobQueue {
       }
 
       return {
-        queue: new JobQueue(database, concurrency, options.overviewSources ?? {}),
+        queue: new JobQueue(
+          database,
+          concurrency,
+          options.overviewSources ?? {},
+          options.preflight,
+        ),
         recoveryNeeded: running.length > 0,
       };
     } catch (error: unknown) {
@@ -729,6 +738,7 @@ export class JobQueue {
     active: ActiveJob,
   ): Promise<void> {
     try {
+      await this.#preflight?.(job);
       const result = await executor(job, {
         signal: active.controller.signal,
         reportProgress: (progress, etaSeconds) => {

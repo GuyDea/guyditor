@@ -974,4 +974,43 @@ export const IPC_SURFACES: readonly IpcSurface[] = Object.freeze([
       status: { paramsSchema: emptyParams, resultSchema: anyResult, budgetMs: 20 },
     },
   },
+  {
+    service: "BackupService",
+    methods: {
+      scan: { paramsSchema: emptyParams, resultSchema: anyResult, budgetMs: 20 },
+      planCleanup: {
+        paramsSchema: {
+          type: "object",
+          required: ["categories"],
+          properties: {
+            categories: {
+              type: "array",
+              items: { enum: ["sources", "generated", "project-state", "proxies", "caches", "renders", "archives", "jobs-db", "audit"] },
+              uniqueItems: true,
+            },
+          },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 20,
+      },
+      executeCleanup: {
+        paramsSchema: {
+          type: "object",
+          required: ["plan"],
+          properties: { plan: { type: "object" } },
+          additionalProperties: false,
+        },
+        resultSchema: anyResult,
+        budgetMs: 20,
+      },
+      run: { paramsSchema: { type: "object" }, resultSchema: anyResult, budgetMs: 20 },
+      verify: { paramsSchema: { type: "object" }, resultSchema: anyResult, budgetMs: 20 },
+      restoreTest: { paramsSchema: { type: "object" }, resultSchema: anyResult, budgetMs: 20 },
+      archiveStates: { paramsSchema: emptyParams, resultSchema: anyResult, budgetMs: 20 },
+      planArchive: { paramsSchema: { type: "object" }, resultSchema: anyResult, budgetMs: 20 },
+      offline: { paramsSchema: { type: "object" }, resultSchema: anyResult, budgetMs: 20 },
+      archiveRestore: { paramsSchema: { type: "object" }, resultSchema: anyResult, budgetMs: 20 },
+    },
+  },
 ]);

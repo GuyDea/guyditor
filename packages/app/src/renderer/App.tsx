@@ -15,6 +15,7 @@ import { PreviewPanel } from "./panels/PreviewPanel.js";
 import { ProposalPanel } from "./panels/ProposalPanel.js";
 import { PublishPanel } from "./panels/PublishPanel.js";
 import { StatusStripPanel } from "./panels/StatusStripPanel.js";
+import { StoragePanel } from "./panels/StoragePanel.js";
 import { SkillsPanel } from "./panels/SkillsPanel.js";
 import { TimelinePanel } from "./panels/TimelinePanel.js";
 import { TranscriptPanel } from "./panels/TranscriptPanel.js";
@@ -354,6 +355,7 @@ export function App(): React.JSX.Element {
           <BrollPanel {...panelProps} />
           <GraphicsPanel {...panelProps} />
           <SkillsPanel {...panelProps} />
+          <StoragePanel setNotice={setNotice} />
         </div>
         <div className="center-stack">
           <PreviewPanel {...panelProps} />

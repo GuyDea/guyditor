@@ -9,6 +9,7 @@ export type PanelId =
   | "broll"
   | "graphics"
   | "skills"
+  | "storage"
   | "preview"
   | "transcript"
   | "inspector"
@@ -128,6 +129,7 @@ const expandedPanels: Record<PanelId, boolean> = {
   broll: false,
   graphics: false,
   skills: false,
+  storage: false,
   preview: false,
   transcript: false,
   inspector: false,

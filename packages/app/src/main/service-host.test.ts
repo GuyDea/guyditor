@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -15,6 +15,37 @@ import { WindowEventPublisher } from "./events.js";
 import { AppServiceHost } from "./service-host.js";
 
 describe("AppServiceHost", () => {
+  it("exposes storage scan and plan-then-execute cleanup through BackupService", async () => {
+    const root = await mkdtemp(join(tmpdir(), "guyditor-host-storage-"));
+    const userDirectory = await mkdtemp(join(tmpdir(), "guyditor-host-storage-user-"));
+    const created = await createProject(root, projectFixture());
+    if (!created.ok) throw created.error;
+    const cacheFile = join(root, ".guyditor/cache/analysis/disposable.bin");
+    await mkdir(join(root, ".guyditor/cache/analysis"), { recursive: true });
+    await writeFile(cacheFile, "disposable");
+    const appHost = testAppHost(userDirectory);
+    const windowHost = appHost.createWindowHost({
+      publisher: new WindowEventPublisher(() => undefined),
+    });
+    await windowHost.openProject(root);
+
+    const service = windowHost.resolveService("BackupService");
+    const scan = service?.["scan"];
+    const planCleanup = service?.["planCleanup"];
+    const executeCleanup = service?.["executeCleanup"];
+    if (typeof scan !== "function" || typeof planCleanup !== "function" ||
+        typeof executeCleanup !== "function") throw new Error("BackupService storage IPC is unavailable.");
+    await expect(Reflect.apply(scan, service, [{}])).resolves.toMatchObject({
+      categories: { caches: { bytes: 10, reclaimable: true } },
+    });
+    const plan = await Reflect.apply(planCleanup, service, [{ categories: ["caches"] }]);
+    await Reflect.apply(executeCleanup, service, [{ plan }]);
+    await expect(access(cacheFile)).rejects.toMatchObject({ code: "ENOENT" });
+
+    await windowHost.close();
+    await appHost.close();
+  });
+
   it("routes take comparison through the persistent project job queue", async () => {
     const source = await readFile(new URL("./take-comparison-service.ts", import.meta.url), "utf8");
     expect(source).toContain('registerExecutor("assist.takes.compare"');

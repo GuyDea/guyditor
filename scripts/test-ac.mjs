@@ -134,6 +134,13 @@ export const M4_PARTIAL_AC_COMMANDS = Object.freeze([
       "packages/app/src/main/service-host.test.ts",
       "packages/app/src/main/surfaces.test.ts",
       "packages/app/src/renderer/panels/SkillsPanel.test.ts",
+      "packages/media/src/ac012.integration.test.ts",
+      "packages/media/src/storage.test.ts",
+      "packages/media/src/backup.test.ts",
+      "packages/media/src/archive.test.ts",
+      "packages/core/src/jobs/preflight.test.ts",
+      "packages/core/src/migration/migration.test.ts",
+      "packages/app/src/renderer/panels/StoragePanel.test.ts",
     ],
   }),
   Object.freeze({ command: "pnpm", args: ["--filter", "@guyditor/app", "build"] }),
@@ -171,7 +178,7 @@ export function main(args = process.argv.slice(2)) {
       ? "test:ac m2: AC-003 captions, AC-005 keyed presenter diagnostics, and AC-006 semantic PiP passed"
       : milestone === "m3"
         ? "test:ac m3: AC-007 output sets, AC-008 lifecycle, and AC-011 upload packaging passed"
-        : "test:ac m4: AC-010 exact preference reuse and controlled skill evolution passed");
+        : "test:ac m4: AC-010 preference reuse and AC-012 verified clean-machine restore passed");
   return 0;
 }
 

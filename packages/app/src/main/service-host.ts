@@ -26,26 +26,10 @@ import {
   serializeTakeMarkerSidecar,
 } from "../../../core/src/index.js";
 import type {
-  Asset,
-  FaceTrackAvailability,
-  JumpCutConcealmentConfig,
-  JobFilter,
-  JobOverview,
-  JobRecord,
-  OperationBatchResult,
-  OperationCommitter,
-  OperationInput,
-  Proposal,
-  ProjectStore,
-  Result,
-  RestyleFrameRange,
-  RestylePlan,
-  RestyleSeamTreatment,
-  RightsPolicy,
-  SidecarRef,
-  TakeMarkerSidecar,
-  TransactionRecord,
-  WatchFolderConfig,
+  Asset, FaceTrackAvailability, JumpCutConcealmentConfig, JobFilter, JobOverview, JobRecord,
+  OperationBatchResult, OperationCommitter, OperationInput, Proposal, ProjectStore, Result,
+  RestyleFrameRange, RestylePlan, RestyleSeamTreatment, RightsPolicy, SidecarRef,
+  TakeMarkerSidecar, TransactionRecord, WatchFolderConfig,
 } from "../../../core/src/index.js";
 import {
   buildCaptureGuidanceReport,
@@ -58,16 +42,15 @@ import {
   probeMedia,
   proxyCachePaths,
   registerKeyQcExecutor,
+  createStoragePreflight,
   parseSubjectTrackAnalysis,
   subjectTrackSidecarPath,
   writeSubjectTrackAnalysis,
   writeCaptureGuidanceReport,
+  StorageAccountant,
 } from "../../../media/src/index.js";
 import type {
-  KeyQcJobPayload,
-  KeyQcReport,
-  MlworkerTrackResult,
-  SubjectTrackAnalysis,
+  KeyQcJobPayload, KeyQcReport, MlworkerTrackResult, SubjectTrackAnalysis,
 } from "../../../media/src/index.js";
 import {
   compileFillerProposal,
@@ -149,6 +132,11 @@ import {
 } from "./generation-service.js";
 import { skillRegistryService } from "./skill-service.js";
 import { TakeComparisonService } from "./take-comparison-service.js";
+import {
+  createRecoveryServices,
+  recoveryService,
+} from "./recovery-service.js";
+import type { ProjectServices } from "./project-services.js";
 
 interface AppHostSettings {
   auditRetentionDays: number;
@@ -179,25 +167,6 @@ export interface WindowServiceHostOptions {
   chooseMedia?: () => Promise<string[]>;
   revealPath?: (path: string) => void;
   openPath?: (path: string) => Promise<string>;
-}
-
-interface ProjectServices {
-  store: ProjectStore;
-  jobs: JobQueue;
-  media: MediaEngine;
-  capture: CaptureWatcher;
-  transcript: TranscriptEngine;
-  annotations: AnnotationService;
-  compositor: CompositorModel;
-  render: RenderService;
-  publish: PublishService;
-  batch: BatchExportService;
-  templates: TemplateRegistry;
-  adapters: AdapterRegistry;
-  generation: GenerationExecutionService;
-  restyle: RestyleExecutionService;
-  takeComparisons: TakeComparisonService;
-  unsubscribeJobs: () => void;
 }
 
 function resultValue<Value>(result: Result<Value>): Value {
@@ -722,8 +691,10 @@ export class WindowServiceHost {
     this.#closeProject();
     const annotations = new AnnotationService({ appVersion: this.#app.appVersion });
     const restyleRuntime: { service?: RestyleExecutionService } = {};
+    const storage = new StorageAccountant({ userDirectory: this.#app.userDirectory });
     const { queue: jobs } = JobQueue.open(join(store.root, ".guyditor/jobs.sqlite"), {
       concurrency: this.#app.maxConcurrentJobs,
+      preflight: createStoragePreflight(storage, { projectDir: store.root }),
       overviewSources: {
         proposals: async () => (await activeProposals(store))
           .filter(({ status }) => status === "ready")
@@ -754,6 +725,10 @@ export class WindowServiceHost {
         external: () => restyleRuntime.service?.externalWaits() ?? [],
       },
     });
+    const recovery = await createRecoveryServices(
+      store, jobs, storage, this.#app.appVersion, this.#app.userDirectory,
+      () => this.#app.credentials.values(),
+    );
     jobs.registerExecutor("candidates", async (job, context) => {
       const payload = jsonRecord(job.payload);
       const profilePin = payload?.["profile"];
@@ -1217,6 +1192,7 @@ export class WindowServiceHost {
       generation,
       restyle,
       takeComparisons,
+      ...recovery,
       unsubscribeJobs,
     };
     await capture.start(store.currentProject.watchFolders ?? []);
@@ -1915,6 +1891,8 @@ export class WindowServiceHost {
         return {
           status: () => this.#app.costMeter.status(project?.store.currentProject.project.id ?? "unopened"),
         };
+      case "BackupService":
+        return project === undefined ? undefined : recoveryService(project);
       default:
         return undefined;
     }
@@ -1938,6 +1916,7 @@ export class WindowServiceHost {
   public async close(): Promise<void> {
     if (this.#closed) return;
     this.#closed = true;
+    await this.#project?.backupScheduler?.quit().catch(() => undefined);
     this.#closeProject();
     this.publisher.dispose();
     this.#app.forgetWindow(this);
@@ -1991,6 +1970,7 @@ export class WindowServiceHost {
     if (txnId === undefined) throw new Error("Accepted operation did not produce a transaction ID.");
     const revision = project.store.currentProject.revision;
     this.publisher.publish({ kind: "project.revision", revision });
+    project.backupScheduler?.acceptedRevision();
     return { txnId, revision, inverse: inverseOperations(result) };
   }
 
@@ -2469,6 +2449,7 @@ export class WindowServiceHost {
     const project = this.#project;
     this.#project = undefined;
     if (project === undefined) return;
+    project.backupScheduler?.close();
     project.unsubscribeJobs();
     void project.capture.close();
     project.jobs.close();

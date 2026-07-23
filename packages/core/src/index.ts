@@ -8,6 +8,7 @@ export * from "./deliverables/types.js";
 export * from "./errors.js";
 export * from "./generation/index.js";
 export * from "./jobs/index.js";
+export * from "./migration/index.js";
 export * from "./operations/index.js";
 export * from "./project/index.js";
 export * from "./restyle/index.js";

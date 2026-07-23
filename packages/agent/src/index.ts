@@ -105,6 +105,8 @@ export type {
   SafeStorageCodec,
   SafeStorageCredentialStoreOptions,
 } from "./adapters/credentials.js";
+export { restoredAdapterCredentialStates } from "./adapters/restored-state.js";
+export type { RestoredAdapterCredentialState } from "./adapters/restored-state.js";
 export {
   KLING_ADAPTER_CANONICAL_NAME,
   KLING_ADAPTER_ID,

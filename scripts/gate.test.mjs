@@ -347,7 +347,7 @@ test("m3 runs the complete §14.8 gate and requires all FR-800..813 and AC rows"
   assert.match(output.join("\n"), /full FR-800\.\.813/iu);
 });
 
-test("m4 partial gate runs editorial-skill checks and enforces FR-700/701/705 plus AC-010", () => {
+test("m4 gate runs editorial-skill and durability checks through AC-012", () => {
   const commands = [];
   const output = [];
   const status = runGate("m4", {
@@ -363,7 +363,7 @@ test("m4 partial gate runs editorial-skill checks and enforces FR-700/701/705 pl
   assert.equal(status, 0);
   assert.deepEqual(commands, M4_PARTIAL_COMMANDS.map(({ command, args }) => [command, ...args]));
   assert.deepEqual(validateM4PartialTraceability(completeM4Traceability()), []);
-  assert.match(output.join("\n"), /partial milestone scope passed.*editorial skills/iu);
+  assert.match(output.join("\n"), /automated scope passed.*editorial skills.*storage.*AC-012/iu);
 });
 
 test("m1 rejects absent, incomplete, or un-evidenced checklist rows", () => {

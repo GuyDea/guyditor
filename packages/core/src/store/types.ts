@@ -23,7 +23,7 @@ export interface TransactionRecord {
   actor: { kind: "human" | "agent" | "tool"; id: string; model?: string };
   versions: {
     app: string;
-    schema: "guyditor/v1";
+    schema: string;
     skills: { id: string; version: string }[];
     presets: { id: string; version: number }[];
     tools: { name: string; version: string }[];

@@ -31,6 +31,46 @@ export type {
   ProjectedProxySize,
 } from "./cache.js";
 export {
+  StorageAccountant,
+  createStoragePreflight,
+} from "./storage.js";
+export {
+  BackupService,
+  BackupScheduler,
+  DEFAULT_BACKUP_CONFIG_YAML,
+} from "./backup.js";
+export { ArchiveService } from "./archive.js";
+export type {
+  ArchiveEntry,
+  ArchiveManifest,
+  ArchivePlan,
+  ArchivePlanEntry,
+} from "./archive.js";
+export type {
+  BackupConfig,
+  BackupListEntry,
+  BackupManifest,
+  BackupManifestEntry,
+  BackupManifestRole,
+  BackupTarget,
+  BackupTargetKind,
+  EnvironmentBundleManifest,
+  EnvironmentImportReport,
+  RestoreTestReport,
+  VerificationReport,
+} from "./backup.js";
+export type {
+  CleanupPlan,
+  EstimatableOperation,
+  GlobalStorageReport,
+  JobRef as StorageJobRef,
+  RenderResolution,
+  StorageCategory,
+  StorageEstimate,
+  StoragePreflightRequest,
+  StorageReport,
+} from "./storage.js";
+export {
   buildCaptureGuidanceReport,
   writeCaptureGuidanceReport,
 } from "./capture-guidance.js";
