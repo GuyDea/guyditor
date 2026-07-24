@@ -27,7 +27,7 @@ import {
   reorderPanel,
   WORKFLOW_PHASES,
 } from "./layout-state.js";
-import { phaseBadgeCounts } from "../workflow-phases.js";
+import { panelBadgeCounts, phaseBadgeCounts } from "../workflow-phases.js";
 
 function memoryStorage(initial: Record<string, string> = {}): Storage {
   const values = new Map(Object.entries(initial));
@@ -216,6 +216,21 @@ describe("workspace renderer state", () => {
       review: 3,
       publish: 2,
     });
+    expect(panelBadgeCounts(overview)).toEqual({
+      agent: 2,
+      broll: 0,
+      graphics: 0,
+      help: 0,
+      inspector: 0,
+      media: 2,
+      preview: 1,
+      publish: 2,
+      skills: 0,
+      status: 2,
+      storage: 0,
+      timeline: 0,
+      transcript: 1,
+    });
   });
 
   it("replaces the read-only project mirror as a whole snapshot", () => {
@@ -239,7 +254,7 @@ describe("workspace renderer state", () => {
     usePreviewStore.getState().setPlayhead({ frames: 12, fps: "24/1" });
     usePreviewStore.getState().setSettled(false);
 
-    expect(useWorkspaceStore.getState().collapsed.media).toBe(true);
+    expect(useWorkspaceStore.getState().railCollapsed.media).toBe(true);
     expect(useSelectionStore.getState().selectedWordId).toBe("w000042");
     expect(usePreviewStore.getState()).toMatchObject({
       playhead: { frames: 12, fps: "24/1" },
@@ -265,7 +280,7 @@ describe("workspace renderer state", () => {
     expect(reordered.regions["right-top"].activePanelId).toBe("transcript");
   });
 
-  it("creates five curated defaults while keeping every panel available", () => {
+  it("creates five curated defaults while keeping every panel rail-reachable", () => {
     const defaults = createDefaultLayouts();
     const expandedByPhase = {
       ingest: ["media", "status", "storage"],
@@ -279,30 +294,40 @@ describe("workspace renderer state", () => {
     for (const phase of WORKFLOW_PHASES) {
       const layout = defaults.layouts[phase];
       const panels = Object.values(layout.regions).flatMap(({ panelIds }) => panelIds);
-      expect(panels).toHaveLength(DOCK_PANEL_IDS.length);
-      expect(new Set(panels).size).toBe(DOCK_PANEL_IDS.length);
-      expect(DOCK_PANEL_IDS.every((panelId) => panels.includes(panelId))).toBe(true);
-      expect(DOCK_PANEL_IDS.filter((panelId) => !layout.collapsed[panelId]).sort())
-        .toEqual([...expandedByPhase[phase]].sort());
+      expect(panels.sort()).toEqual([...expandedByPhase[phase]].sort());
+      expect(new Set(panels).size).toBe(panels.length);
+      expect(Object.keys(layout.railCollapsed).sort()).toEqual([...DOCK_PANEL_IDS].sort());
+      expect(panels.every((panelId) => !layout.railCollapsed[panelId])).toBe(true);
     }
   });
 
-  it("keeps Help available as P13 but collapsed by default on every phase", () => {
+  it("keeps Help rail-collapsed by default until it is added to a phase", () => {
     const defaults = createDefaultLayouts();
 
     expect(DOCK_PANEL_IDS).toContain("help");
     for (const phase of WORKFLOW_PHASES) {
-      expect(defaults.layouts[phase].collapsed.help).toBe(true);
+      expect(defaults.layouts[phase].railCollapsed.help).toBe(true);
       expect(Object.values(defaults.layouts[phase].regions)
-        .flatMap(({ panelIds }) => panelIds)).toContain("help");
+        .flatMap(({ panelIds }) => panelIds)).not.toContain("help");
     }
   });
 
-  it("adds collapsed Help to layouts persisted before Amendment 006", () => {
-    const prior = structuredClone(createDefaultLayouts()) as unknown as {
+  it("loads layouts persisted before Amendment 006 without losing their panels", () => {
+    const complete = createDefaultLayouts();
+    for (const phase of WORKFLOW_PHASES) {
+      for (const panelId of DOCK_PANEL_IDS.filter((candidate) => candidate !== "help")) {
+        const present = Object.values(complete.layouts[phase].regions)
+          .some(({ panelIds }) => panelIds.includes(panelId));
+        if (!present) {
+          complete.layouts[phase] = assignPanel(complete.layouts[phase], panelId, "left");
+        }
+      }
+    }
+    const prior = structuredClone(complete) as unknown as {
       activePhase: string;
       layouts: Record<string, {
         collapsed: Record<string, boolean>;
+        railCollapsed?: Record<string, boolean>;
         regions: Record<string, { activePanelId: string | null; panelIds: string[] }>;
         schema: string;
         splitters: Record<string, number>;
@@ -311,10 +336,8 @@ describe("workspace renderer state", () => {
     };
     for (const phase of WORKFLOW_PHASES) {
       const layout = prior.layouts[phase]!;
-      for (const region of Object.values(layout.regions)) {
-        region.panelIds = region.panelIds.filter((panelId) => panelId !== "help");
-        if (region.activePanelId === "help") region.activePanelId = region.panelIds[0] ?? null;
-      }
+      layout.collapsed = { ...layout.railCollapsed };
+      delete layout.railCollapsed;
       delete layout.collapsed["help"];
     }
     prior.layouts.cut!.splitters.left = 377;
@@ -329,7 +352,13 @@ describe("workspace renderer state", () => {
 
     expect(migrated.layouts.cut.splitters.left).toBe(377);
     for (const phase of WORKFLOW_PHASES) {
-      expect(migrated.layouts[phase].collapsed.help).toBe(true);
+      expect(migrated.layouts[phase].railCollapsed.help).toBe(true);
+      for (const regionId of Object.keys(prior.layouts[phase]!.regions)) {
+        expect(migrated.layouts[phase].regions[
+          regionId as keyof typeof migrated.layouts[typeof phase]["regions"]
+        ].panelIds.filter((panelId) => panelId !== "help"))
+          .toEqual(prior.layouts[phase]!.regions[regionId]!.panelIds);
+      }
       expect(migrated.layouts[phase].regions["right-bottom"].panelIds).toContain("help");
     }
   });

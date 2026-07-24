@@ -80,6 +80,8 @@ test("a pending proposal badges Review and badge click jumps to its panel", asyn
   try {
     const badge = launched.page.getByTestId("phase-badge-review");
     await expect(badge).toHaveText("1");
+    await expect(launched.page.getByTestId("tool-rail-badge-agent")).toBeVisible();
+    await expect(launched.page.getByTestId("tool-rail-badge-agent")).toHaveText("1");
     await badge.click();
 
     await expect(launched.page.getByTestId("phase-tab-review"))

@@ -23,17 +23,24 @@ export function Panel({
   children,
 }: PanelProps): React.JSX.Element {
   const dockable = (DOCK_PANEL_IDS as readonly string[]).includes(id);
-  const collapsed = useWorkspaceStore((state) => state.collapsed[id]);
+  const collapsed = useWorkspaceStore((state) => state.railCollapsed[id]);
+  const flashing = useWorkspaceStore((state) => state.flashingPanel === id);
   const togglePanel = useWorkspaceStore((state) => state.togglePanel);
+  const clearPanelFlash = useWorkspaceStore((state) => state.clearPanelFlash);
   const focusPanel = useWorkspaceStore((state) => state.focusPanel);
   return (
     <section
-      className={`workspace-panel panel-${id} ${collapsed ? "is-collapsed" : ""} ${className}`}
+      className={`workspace-panel panel-${id} ${collapsed ? "is-collapsed" : ""} ${
+        flashing ? "panel-flash" : ""
+      } ${className}`}
       data-testid={`${id}-panel`}
       data-panel={id}
       tabIndex={-1}
       aria-labelledby={`${id}-title`}
       onFocusCapture={() => focusPanel(id)}
+      onAnimationEnd={(event) => {
+        if (event.animationName === "panel-border-pulse") clearPanelFlash(id);
+      }}
     >
       <header
         className="panel-bar"

@@ -22,6 +22,12 @@ export const TOUR_STOPS: readonly TourStop[] = [
     copy: "These five phase tabs are layout presets for the editorial workflow. Nothing is locked: every panel can still move wherever you need it.",
   },
   {
+    id: "master-tool-rail",
+    selector: "[data-testid='master-tool-rail']",
+    title: "Keep every tool within reach",
+    copy: "The master rail is the complete panel map. Activate a tool to expand or collapse it in this tab; tools added here return to their home region.",
+  },
+  {
     id: "global-progress",
     selector: "[data-testid='global-progress']",
     title: "See what the project is waiting on",

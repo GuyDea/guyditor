@@ -22,15 +22,15 @@ test("persists splitter resize, collapse, and docked tabs across an app relaunch
     const resized = Number(await splitter.getAttribute("data-splitter-value"));
     expect(resized).toBeGreaterThan(before);
 
-    await first.page.getByTestId("panel-rail-media").click();
+    await first.page.getByTestId("tool-rail-entry-media").click();
     await first.page.getByTestId("media-panel-toggle").click();
-    await expect(first.page.getByTestId("panel-rail-media")).toBeVisible();
+    await expect(first.page.getByTestId("tool-rail-entry-media"))
+      .toHaveAttribute("data-state", "collapsed");
 
     await first.page.getByTestId("transcript-panel-drag-handle")
       .dragTo(first.page.getByTestId("dock-region-right-top"));
     await expect(first.page.getByTestId("dock-tabs-right-top")).toBeVisible();
     await expect(first.page.getByTestId("dock-tab-agent")).toBeVisible();
-    await expect(first.page.getByTestId("dock-tab-publish")).toBeVisible();
     await expect(first.page.getByTestId("dock-tab-transcript")).toHaveAttribute(
       "aria-selected",
       "true",
@@ -38,7 +38,7 @@ test("persists splitter resize, collapse, and docked tabs across an app relaunch
     await first.page.getByTestId("dock-tab-transcript")
       .dragTo(first.page.getByTestId("dock-tab-agent"));
     await expect(first.page.getByTestId("dock-tabs-right-top").getByRole("tab"))
-      .toHaveText(["TTranscript", "AAgent", "UPublish"]);
+      .toHaveText(["TTranscript", "AAgent"]);
 
     await first.electronApp.close();
     if (first.projectPath === undefined) throw new Error("Relaunch fixture path was missing.");
@@ -49,15 +49,16 @@ test("persists splitter resize, collapse, and docked tabs across an app relaunch
 
     await expect(second.page.getByTestId("splitter-left"))
       .toHaveAttribute("data-splitter-value", String(resized));
-    await expect(second.page.getByTestId("panel-rail-media")).toBeVisible();
+    await expect(second.page.getByTestId("tool-rail-entry-media"))
+      .toHaveAttribute("data-state", "collapsed");
     await expect(second.page.getByTestId("dock-tab-transcript")).toHaveAttribute(
       "aria-selected",
       "true",
     );
     await expect(second.page.getByTestId("dock-tabs-right-top").getByRole("tab"))
-      .toHaveText(["TTranscript", "AAgent", "UPublish"]);
+      .toHaveText(["TTranscript", "AAgent"]);
 
-    await second.page.getByTestId("panel-rail-media").click();
+    await second.page.getByTestId("tool-rail-entry-media").click();
     await expect(second.page.getByTestId("media-panel")).toBeVisible();
   } finally {
     await first.electronApp.close().catch(() => undefined);
@@ -74,7 +75,7 @@ test("reset layout restores the section 10.1 regions and splitter defaults", asy
       .dragTo(launched.page.getByTestId("dock-region-right-top"));
     await launched.page.getByTestId("splitter-left").focus();
     await launched.page.keyboard.press("End");
-    await launched.page.getByTestId("panel-rail-media").click();
+    await launched.page.getByTestId("tool-rail-entry-media").click();
 
     await launched.page.getByTestId("reset-layout").click();
 
@@ -82,44 +83,47 @@ test("reset layout restores the section 10.1 regions and splitter defaults", asy
       .toHaveAttribute("data-active-panel", "transcript");
     await expect(launched.page.getByTestId("dock-region-right-top")
       .getByTestId("dock-tab-transcript")).toHaveCount(0);
-    await expect(launched.page.getByTestId("dock-tab-transcript"))
-      .toHaveAttribute("aria-selected", "true");
-    await expect(launched.page.getByTestId("dock-tab-agent"))
-      .toHaveAttribute("aria-selected", "true");
+    await expect(launched.page.getByTestId("dock-region-right-top"))
+      .toHaveAttribute("data-active-panel", "agent");
     await expect(launched.page.getByTestId("splitter-left"))
       .toHaveAttribute("data-splitter-value", "250");
-    await expect(launched.page.getByTestId("panel-rail-media")).toBeVisible();
+    await expect(launched.page.getByTestId("tool-rail-entry-media"))
+      .toHaveAttribute("data-state", "in-another-tab-only");
   } finally {
     await launched.electronApp.close();
     await rm(template, { recursive: true, force: true });
   }
 });
 
-test("timeline and status collapse in place to slim restorable bars", async () => {
+test("the master rail toggles, flashes, reports three states, and collapses sequentially", async () => {
   const template = await createWorkspaceProject();
   const launched = await launchApp({ projectTemplate: template });
   try {
-    await launched.page.getByTestId("collapsed-bar-status").click();
-    await launched.page.getByTestId("timeline-panel-toggle").click();
-    await launched.page.getByTestId("status-panel-toggle").click();
+    const rail = launched.page.getByTestId("master-tool-rail");
+    await expect(rail).toBeVisible();
+    await expect(launched.page.getByTestId("tool-rail-entry-preview"))
+      .toHaveAttribute("data-state", "expanded-here");
+    await expect(launched.page.getByTestId("tool-rail-entry-help"))
+      .toHaveAttribute("data-state", "collapsed");
+    const media = launched.page.getByTestId("tool-rail-entry-media");
+    await expect(media).toHaveAttribute("data-state", "in-another-tab-only");
 
-    const timelineBar = launched.page.getByTestId("collapsed-bar-timeline");
-    const statusBar = launched.page.getByTestId("collapsed-bar-status");
-    await expect(timelineBar).toBeVisible();
-    await expect(statusBar).toBeVisible();
-    const timelineBox = await timelineBar.boundingBox();
-    const statusBox = await statusBar.boundingBox();
-    expect(timelineBox).not.toBeNull();
-    expect(statusBox).not.toBeNull();
-    if (timelineBox === null || statusBox === null) {
-      throw new Error("Collapsed timeline/status bars had no layout boxes.");
+    await media.focus();
+    await launched.page.keyboard.press("ArrowDown");
+    await expect(launched.page.getByTestId("tool-rail-entry-broll")).toBeFocused();
+    await launched.page.keyboard.press("ArrowUp");
+    await expect(media).toBeFocused();
+    await launched.page.keyboard.press("Enter");
+    await expect(media).toHaveAttribute("data-state", "expanded-here");
+    await expect(launched.page.getByTestId("media-panel")).toHaveClass(/panel-flash/u);
+
+    for (const panel of ["media", "transcript", "agent", "timeline"]) {
+      await launched.page.getByTestId(`tool-rail-entry-${panel}`).click();
+      await expect(launched.page.getByTestId(`${panel}-panel`)).toHaveCount(0);
     }
-    expect(statusBox.y).toBeGreaterThan(timelineBox.y);
-
-    await timelineBar.click();
-    await statusBar.click();
-    await expect(launched.page.getByTestId("timeline-panel")).toBeVisible();
-    await expect(launched.page.getByTestId("status-panel")).toBeVisible();
+    await expect(launched.page.getByTestId("preview-panel")).toBeVisible();
+    await expect(launched.page.locator(".dock-icon-rail, .collapsed-bottom-bar"))
+      .toHaveCount(0);
   } finally {
     await launched.electronApp.close();
     await rm(template, { recursive: true, force: true });
@@ -130,7 +134,7 @@ test("agent and inspector content scroll internally at their minimum layout size
   const template = await createWorkspaceProject({ proposal: true });
   const launched = await launchApp({ projectTemplate: template });
   try {
-    await launched.page.getByTestId("panel-rail-inspector").click();
+    await launched.page.getByTestId("tool-rail-entry-inspector").click();
     await launched.page.getByTestId("timeline-clip-clp_aaaaaaaaaa").click();
     for (const splitterId of ["splitter-timeline", "splitter-status"]) {
       await launched.page.getByTestId(splitterId).focus();
@@ -208,6 +212,11 @@ test("every phase layout fits a 1920x1080 viewport without outer clipping", asyn
         workspaceBottom: 1054,
         workspaceRight: 1920,
       });
+      const railBounds = await launched.page.getByTestId("master-tool-rail").boundingBox();
+      expect(railBounds).not.toBeNull();
+      if (railBounds === null) throw new Error("Master tool rail had no layout box.");
+      expect(railBounds.x).toBe(0);
+      expect(railBounds.width).toBeGreaterThan(0);
 
       const regionBounds = await launched.page.locator("[data-testid^='dock-region-']")
         .evaluateAll((regions) => regions.map((region) => {

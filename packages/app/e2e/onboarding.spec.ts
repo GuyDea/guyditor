@@ -27,7 +27,7 @@ test("fresh user data shows welcome and Skip persists across relaunch", async ()
   }
 });
 
-test("tour advances through the phase strip, progress overview, and first panel", async () => {
+test("tour introduces the phase strip, master rail, progress, and first panel", async () => {
   const launched = await launchApp({ seedOnboarding: false });
   try {
     await launched.page.getByTestId("welcome-tour").click();
@@ -35,6 +35,12 @@ test("tour advances through the phase strip, progress overview, and first panel"
       "data-tour-stop",
       "phase-tabs",
     );
+    await launched.page.keyboard.press("ArrowRight");
+    await expect(launched.page.getByTestId("tour-stop")).toHaveAttribute(
+      "data-tour-stop",
+      "master-tool-rail",
+    );
+    await expect(launched.page.getByTestId("master-tool-rail")).toBeVisible();
     await launched.page.keyboard.press("ArrowRight");
     await expect(launched.page.getByTestId("tour-stop")).toHaveAttribute(
       "data-tour-stop",

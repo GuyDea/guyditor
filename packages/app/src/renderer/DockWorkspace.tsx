@@ -15,25 +15,10 @@ import type {
   DockRegionId,
   SplitterId,
 } from "./state/layout-state.js";
+import { PANEL_LABELS } from "./state/tool-rail.js";
 import { useWorkspaceStore } from "./state/view-state.js";
 
 const PANEL_DRAG_MIME = "application/x-guyditor-panel";
-
-const PANEL_LABELS: Record<DockPanelId, { icon: string; name: string }> = {
-  media: { icon: "M", name: "Media" },
-  preview: { icon: "P", name: "Preview" },
-  transcript: { icon: "T", name: "Transcript" },
-  inspector: { icon: "I", name: "Inspector" },
-  agent: { icon: "A", name: "Agent" },
-  timeline: { icon: "L", name: "Timeline" },
-  status: { icon: "S", name: "Status" },
-  graphics: { icon: "G", name: "Graphics" },
-  publish: { icon: "U", name: "Publish" },
-  skills: { icon: "K", name: "Skills" },
-  broll: { icon: "B", name: "B-roll" },
-  storage: { icon: "D", name: "Storage" },
-  help: { icon: "?", name: "Help" },
-};
 
 function isDockPanelId(value: string): value is DockPanelId {
   return (DOCK_PANEL_IDS as readonly string[]).includes(value);
@@ -58,18 +43,16 @@ interface DockRegionProps {
 
 function DockRegion({ regionId, panels }: DockRegionProps): React.JSX.Element {
   const region = useWorkspaceStore((state) => state.layout.regions[regionId]);
-  const collapsed = useWorkspaceStore((state) => state.layout.collapsed);
+  const railCollapsed = useWorkspaceStore((state) => state.layout.railCollapsed);
   const assignPanel = useWorkspaceStore((state) => state.assignPanel);
   const activatePanel = useWorkspaceStore((state) => state.activatePanel);
   const togglePanel = useWorkspaceStore((state) => state.togglePanel);
   const [dropActive, setDropActive] = useState(false);
-  const isBottom = regionId === "bottom-timeline" || regionId === "bottom-status";
-  const expandedPanelIds = region.panelIds.filter((panelId) => !collapsed[panelId]);
+  const expandedPanelIds = region.panelIds.filter((panelId) => !railCollapsed[panelId]);
   const activePanelId = region.activePanelId !== null &&
     expandedPanelIds.includes(region.activePanelId)
     ? region.activePanelId
     : expandedPanelIds[0] ?? null;
-  const collapsedPanelIds = region.panelIds.filter((panelId) => collapsed[panelId]);
 
   const receiveDrop = (
     event: DragEvent<HTMLElement>,
@@ -81,42 +64,6 @@ function DockRegion({ regionId, panels }: DockRegionProps): React.JSX.Element {
     const panelId = draggedPanel(event);
     if (panelId !== null) assignPanel(panelId, regionId, targetIndex);
   };
-
-  if (isBottom && activePanelId === null && collapsedPanelIds.length > 0) {
-    const panelId = collapsedPanelIds[0]!;
-    const label = PANEL_LABELS[panelId];
-    return (
-      <div
-        className="dock-region collapsed-bottom-region"
-        data-testid={`dock-region-${regionId}`}
-        data-region={regionId}
-        data-active-panel=""
-        data-drop-active={dropActive}
-        onDragEnter={(event) => {
-          event.preventDefault();
-          setDropActive(true);
-        }}
-        onDragLeave={(event) => {
-          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
-            setDropActive(false);
-          }
-        }}
-        onDragOver={(event) => event.preventDefault()}
-        onDrop={(event) => receiveDrop(event)}
-      >
-        <button
-          type="button"
-          className="collapsed-bottom-bar"
-          title={`Restore ${label.name}`}
-          data-testid={`collapsed-bar-${panelId}`}
-          onClick={() => togglePanel(panelId)}
-        >
-          <span aria-hidden="true">{label.icon}</span>
-          {label.name}
-        </button>
-      </div>
-    );
-  }
 
   return (
     <section
@@ -156,12 +103,12 @@ function DockRegion({ regionId, panels }: DockRegionProps): React.JSX.Element {
                 draggable
                 aria-selected={activePanelId === panelId}
                 className="dock-tab"
-                data-collapsed={collapsed[panelId]}
+                data-collapsed={railCollapsed[panelId]}
                 data-testid={`dock-tab-${panelId}`}
                 key={panelId}
                 title={label.name}
                 onClick={() => {
-                  if (collapsed[panelId]) togglePanel(panelId);
+                  if (railCollapsed[panelId]) togglePanel(panelId);
                   activatePanel(regionId, panelId);
                 }}
                 onDragStart={(event) => beginPanelDrag(event, panelId)}
@@ -174,29 +121,6 @@ function DockRegion({ regionId, panels }: DockRegionProps): React.JSX.Element {
             );
           })}
         </div>
-      ) : null}
-      {collapsedPanelIds.length > 0 ? (
-        <aside className="dock-icon-rail" aria-label={`${regionId} collapsed panels`}>
-          {collapsedPanelIds.map((panelId) => {
-            const label = PANEL_LABELS[panelId];
-            return (
-              <button
-                type="button"
-                key={panelId}
-                title={`Restore ${label.name}`}
-                aria-label={`Restore ${label.name}`}
-                data-testid={`panel-rail-${panelId}`}
-                onClick={() => {
-                  togglePanel(panelId);
-                  activatePanel(regionId, panelId);
-                }}
-              >
-                <span aria-hidden="true">{label.icon}</span>
-                <span className="rail-name">{label.name}</span>
-              </button>
-            );
-          })}
-        </aside>
       ) : null}
       <div className="dock-panel-stage">
         {activePanelId === null ? (
@@ -318,17 +242,17 @@ export function DockWorkspace({
   const layout = useWorkspaceStore((state) => state.layout);
   const activePhase = useWorkspaceStore((state) => state.activePhase);
   const leftCollapsed = layout.regions.left.panelIds.every(
-    (panelId) => layout.collapsed[panelId],
+    (panelId) => layout.railCollapsed[panelId],
   );
   const rightCollapsed = [
     ...layout.regions["right-top"].panelIds,
     ...layout.regions["right-bottom"].panelIds,
-  ].every((panelId) => layout.collapsed[panelId]);
+  ].every((panelId) => layout.railCollapsed[panelId]);
   const timelineCollapsed = layout.regions["bottom-timeline"].panelIds.every(
-    (panelId) => layout.collapsed[panelId],
+    (panelId) => layout.railCollapsed[panelId],
   );
   const statusCollapsed = layout.regions["bottom-status"].panelIds.every(
-    (panelId) => layout.collapsed[panelId],
+    (panelId) => layout.railCollapsed[panelId],
   );
   const style = {
     "--left-width": `${String(leftCollapsed ? 46 : layout.splitters.left)}px`,

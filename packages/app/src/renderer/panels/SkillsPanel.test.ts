@@ -35,7 +35,7 @@ describe("SkillsPanel", () => {
   });
 
   it("renders library, exact project pin, upgrade review, and inactive draft controls", () => {
-    useWorkspaceStore.getInitialState().collapsed.skills = false;
+    useWorkspaceStore.getInitialState().railCollapsed.skills = false;
     const v1 = skill("skl_aaaaaaaaaa", "Pacing", "1.0.0");
     const v2 = skill("skl_aaaaaaaaaa", "Pacing", "2.0.0");
     const draft = skill("skl_aaaaaaaaaa", "Pacing", "2.1.0");

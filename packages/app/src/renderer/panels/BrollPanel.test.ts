@@ -31,7 +31,7 @@ function props(): WorkspacePanelProps {
 
 describe("B-roll panel", () => {
   it("exposes every source class, generation preflight, review checklist, and rights state", () => {
-    useWorkspaceStore.getInitialState().collapsed.broll = false;
+    useWorkspaceStore.getInitialState().railCollapsed.broll = false;
     const html = renderToStaticMarkup(createElement(BrollPanel, props()));
 
     for (const source of BROLL_SOURCE_TAXONOMY) expect(html).toContain(source.label);
