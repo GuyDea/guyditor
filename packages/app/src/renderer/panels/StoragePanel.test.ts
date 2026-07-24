@@ -37,7 +37,7 @@ describe("StoragePanel", () => {
   });
 
   it("renders per-class byte totals, safety labels, orphan count, and archived asset state", () => {
-    useWorkspaceStore.getInitialState().collapsed.storage = false;
+    useWorkspaceStore.getInitialState().railCollapsed.storage = false;
     const html = renderToStaticMarkup(createElement(StoragePanel, {
       initialReport: report,
       initialArchivedStates: { ast_aaaaaaaaaa: "offline" },

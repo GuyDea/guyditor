@@ -8,7 +8,7 @@ import { PublishPanel } from "./PublishPanel.js";
 
 describe("PublishPanel", () => {
   it("shows editable metadata limits, stale chapters, thumbnail candidates, and batch controls", () => {
-    useWorkspaceStore.getInitialState().collapsed.publish = false;
+    useWorkspaceStore.getInitialState().railCollapsed.publish = false;
     const project = projectFixture();
     project.deliverables[0] = {
       ...project.deliverables[0]!,

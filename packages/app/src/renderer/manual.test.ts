@@ -22,6 +22,8 @@ describe("in-app manual markdown pipeline", () => {
     expect(html).toContain('id="1-quick-start"');
     expect(html).toContain("<table>");
     expect(html).toContain("Global progress bar");
+    expect(html).toContain("Master tool rail");
+    expect(html).toContain("per-region rails are not used");
   });
 
   it("filters whole manual sections by heading or body text", () => {

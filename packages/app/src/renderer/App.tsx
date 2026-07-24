@@ -13,6 +13,7 @@ import type { JobOverview, JobStatus, ProjectSnapshot } from "../shared/ipc.js";
 import { DockWorkspace } from "./DockWorkspace.js";
 import { GlobalProgress } from "./GlobalProgress.js";
 import { GuidedTour } from "./GuidedTour.js";
+import { MasterToolRail } from "./MasterToolRail.js";
 import { WelcomeSurface } from "./WelcomeSurface.js";
 import { WorkflowPhaseTabs } from "./WorkflowPhaseTabs.js";
 import { BrollPanel } from "./panels/BrollPanel.js";
@@ -516,8 +517,13 @@ export function App(): React.JSX.Element {
         </div>
       </header>
       <WorkflowPhaseTabs setNotice={setNotice} />
-      <DockWorkspace panels={dockPanels} />
-      <p className="global-notice" role="status" data-testid="shell-status">{notice}</p>
+      <div className="workspace-main">
+        <MasterToolRail />
+        <DockWorkspace panels={dockPanels} />
+      </div>
+      <p className="global-notice" role="status" data-testid="shell-status">
+        {snapshot === null ? "Open a project to begin" : notice}
+      </p>
       {welcomeOpen ? (
         <WelcomeSurface
           onCreateProject={() => welcomeProjectAction("create")}

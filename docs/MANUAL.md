@@ -5,7 +5,7 @@ is: by workflow phase tab, then cross-cutting systems. Setup lives in
 [README.md](../README.md); this manual assumes the app is running (`pnpm dev`).
 
 **Conventions:** *Tab* = top-level phase tab. *Panel* = a dockable panel (drag its
-header to move it, drag splitters to resize, click the region's rail icon to
+header to move it, drag splitters to resize, click its master-rail entry to
 restore a collapsed panel). Every agent-initiated change is a **proposal** you
 review — nothing consequential applies silently, ever.
 
@@ -25,8 +25,9 @@ review — nothing consequential applies silently, ever.
 | Feature | Where | How |
 |---|---|---|
 | Phase tabs | Top strip | `Ctrl+Alt+1..5` (Cmd on macOS). Each tab is a layout preset; nothing is locked — any panel can be added to any tab. |
+| Master tool rail | Left edge, always visible | Every panel grouped by Ingest/Cut/Polish/Review/Publish/System. Click or press `Enter` to expand/collapse it in this tab; absent panels open in their home region. Arrow keys move between entries. |
 | Panel resize / reorder | Any splitter / panel header | Drag splitters (keyboard-accessible). Drag a panel header to another region; multiple panels in a region become tabs. |
-| Collapse | Panel header `–` | Side panels collapse to an icon rail; timeline/status to slim bars. |
+| Collapse | Panel header `–` or master tool rail | Collapsed panels stay assigned to the current tab and are restored from the single master rail; per-region rails are not used. |
 | Reset layout | Layout menu | Per-tab reset, or "Reset all tabs" for the five defaults. Layouts persist per project. |
 | Global progress bar | Title bar, always visible | Aggregate of all background work. Click it → the **waiting-on view**: running jobs (cancel/retry), queued chains, **waiting on you** (proposals, confirmations — badge), and external provider calls with spend. |
 | Tab badges | On each phase tab | Live counts from the same data: proposals → Review, ingest chains → Ingest, failed exports/budget prompts → Publish. Click badge → jumps to the exact panel. |

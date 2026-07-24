@@ -8,6 +8,10 @@ test("opens the secure Electron shell with the generated facade and jobs panel",
     await launched.page.getByTestId("phase-tab-ingest").click();
     await expect(launched.page.getByTestId("jobs-panel")).toBeVisible();
     await expect(launched.page.getByTestId("revision-indicator")).toContainText("no revision");
+    await expect(launched.page.getByTestId("shell-status")).toHaveText(
+      "Open a project to begin",
+    );
+    await expect(launched.page.getByTestId("shell-status")).not.toContainText("unavailable");
     await expect.poll(() => launched.page.evaluate(() => ({
       call: typeof window.guyditor?.call,
       on: typeof window.guyditor?.on,

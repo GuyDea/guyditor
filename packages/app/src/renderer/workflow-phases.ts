@@ -3,6 +3,7 @@ import {
   WORKFLOW_PHASES,
 } from "./state/layout-state.js";
 import type {
+  DockPanelId,
   WorkflowPhase,
 } from "./state/layout-state.js";
 
@@ -46,6 +47,27 @@ export function phaseBadgeCounts(
     review: overview.waitingOnCreator.proposals.length +
       overview.waitingOnCreator.annotations.length,
     publish: publishBlockers + overview.waitingOnCreator.confirmations.length,
+  };
+}
+
+export function panelBadgeCounts(
+  overview: JobOverview,
+): Record<DockPanelId, number> {
+  const phases = phaseBadgeCounts(overview);
+  return {
+    media: phases.ingest,
+    preview: overview.waitingOnCreator.annotations.length,
+    transcript: phases.cut,
+    inspector: 0,
+    agent: overview.waitingOnCreator.proposals.length,
+    timeline: 0,
+    status: phases.ingest,
+    graphics: 0,
+    publish: phases.publish,
+    skills: 0,
+    broll: 0,
+    storage: 0,
+    help: 0,
   };
 }
 

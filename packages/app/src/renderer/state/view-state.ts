@@ -10,9 +10,12 @@ import {
   loadProjectLayouts,
   reorderPanel as reorderLayoutPanel,
   saveProjectLayouts,
-  setCollapsed,
   setSplitter as setLayoutSplitter,
 } from "./layout-state.js";
+import {
+  panelRegion,
+  togglePanelFromRail as toggleLayoutPanelFromRail,
+} from "./tool-rail.js";
 import type {
   DockPanelId,
   DockRegionId,
@@ -58,7 +61,8 @@ interface WorkspaceState {
   layouts: Record<WorkflowPhase, WorkspaceLayout>;
   activePhase: WorkflowPhase;
   projectKey: string | null;
-  collapsed: Record<PanelId, boolean>;
+  railCollapsed: Record<PanelId, boolean>;
+  flashingPanel: PanelId | null;
   focusedPanel: PanelId;
   leftWidth: number;
   rightWidth: number;
@@ -67,6 +71,8 @@ interface WorkspaceState {
   setProjectKey: (projectKey: string) => void;
   setPhase: (phase: WorkflowPhase) => void;
   togglePanel: (panel: PanelId) => void;
+  expandPanel: (panel: PanelId) => void;
+  clearPanelFlash: (panel: PanelId) => void;
   focusPanel: (panel: PanelId) => void;
   assignPanel: (
     panel: DockPanelId,
@@ -173,11 +179,11 @@ function layoutFields(
   layout: WorkspaceLayout,
 ): Pick<
   WorkspaceState,
-  "layout" | "collapsed" | "leftWidth" | "rightWidth" | "statusHeight" | "jobsPanelWidth"
+  "layout" | "railCollapsed" | "leftWidth" | "rightWidth" | "statusHeight" | "jobsPanelWidth"
 > {
   return {
     layout,
-    collapsed: { ...layout.collapsed },
+    railCollapsed: { ...layout.railCollapsed },
     leftWidth: layout.splitters.left,
     rightWidth: layout.splitters.right,
     statusHeight: layout.splitters.status,
@@ -200,6 +206,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   layouts: initialLayouts.layouts,
   activePhase: initialLayouts.activePhase,
   projectKey: null,
+  flashingPanel: null,
   focusedPanel: "preview",
   setProjectKey: (projectKey) => {
     const storage = browserStorage();
@@ -210,6 +217,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       projectKey,
       layouts: projectLayouts.layouts,
       activePhase: projectLayouts.activePhase,
+      flashingPanel: null,
       ...layoutFields(projectLayouts.layouts[projectLayouts.activePhase]),
     });
   },
@@ -219,24 +227,49 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     persisted(state.projectKey, document);
     set({
       activePhase,
+      flashingPanel: null,
       ...layoutFields(state.layouts[activePhase]),
     });
   },
   togglePanel: (panel) => {
     const state = get();
-    const collapsed = !state.collapsed[panel];
-    const layout = setCollapsed(state.layout, panel, collapsed);
+    const { layout, expanded } = toggleLayoutPanelFromRail(state.layout, panel);
     const layouts = { ...state.layouts, [state.activePhase]: layout };
     persisted(state.projectKey, workflowDocument(state.activePhase, layouts));
-    set({ layouts, ...layoutFields(layout) });
+    set({
+      layouts,
+      flashingPanel: expanded
+        ? panel
+        : state.flashingPanel === panel ? null : state.flashingPanel,
+      ...layoutFields(layout),
+    });
   },
+  expandPanel: (panel) => {
+    const state = get();
+    const region = panelRegion(state.layout, panel);
+    const alreadyExpanded = region !== null && !state.railCollapsed[panel];
+    const result = alreadyExpanded
+      ? { layout: activateLayoutPanel(state.layout, region, panel), expanded: false }
+      : toggleLayoutPanelFromRail(state.layout, panel);
+    const layouts = { ...state.layouts, [state.activePhase]: result.layout };
+    persisted(state.projectKey, workflowDocument(state.activePhase, layouts));
+    set({
+      layouts,
+      focusedPanel: panel,
+      flashingPanel: result.expanded ? panel : state.flashingPanel,
+      ...layoutFields(result.layout),
+    });
+  },
+  clearPanelFlash: (panel) => set((state) => ({
+    flashingPanel: state.flashingPanel === panel ? null : state.flashingPanel,
+  })),
   focusPanel: (focusedPanel) => set({ focusedPanel }),
   assignPanel: (panel, region, targetIndex) => {
     const state = get();
     const layout = assignLayoutPanel(state.layout, panel, region, targetIndex);
     const layouts = { ...state.layouts, [state.activePhase]: layout };
     persisted(state.projectKey, workflowDocument(state.activePhase, layouts));
-    set({ layouts, ...layoutFields(layout) });
+    set({ layouts, flashingPanel: null, ...layoutFields(layout) });
   },
   reorderPanel: (region, panel, targetIndex) => {
     const state = get();
@@ -266,7 +299,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     const layout = createDefaultLayout(state.activePhase);
     const layouts = { ...state.layouts, [state.activePhase]: layout };
     persisted(state.projectKey, workflowDocument(state.activePhase, layouts));
-    set({ layouts, ...layoutFields(layout) });
+    set({ layouts, flashingPanel: null, ...layoutFields(layout) });
   },
   resetAllLayouts: () => {
     const state = get();
@@ -275,6 +308,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     set({
       layouts: defaults.layouts,
       activePhase: defaults.activePhase,
+      flashingPanel: null,
       ...layoutFields(defaults.layouts[defaults.activePhase]),
     });
   },

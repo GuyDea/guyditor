@@ -8,15 +8,7 @@ import {
 import type { PanelId } from "./state/view-state.js";
 
 export function revealPanel(panel: PanelId): void {
-  const workspace = useWorkspaceStore.getState();
-  if (workspace.collapsed[panel]) workspace.togglePanel(panel);
-  for (const [regionId, region] of Object.entries(workspace.layout.regions)) {
-    if (region.panelIds.includes(panel)) {
-      workspace.activatePanel(regionId as keyof typeof workspace.layout.regions, panel);
-      break;
-    }
-  }
-  workspace.focusPanel(panel);
+  useWorkspaceStore.getState().expandPanel(panel);
   queueMicrotask(() => document.querySelector<HTMLElement>(`[data-panel="${panel}"]`)?.focus());
 }
 

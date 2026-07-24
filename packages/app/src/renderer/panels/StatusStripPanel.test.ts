@@ -9,7 +9,7 @@ import { StatusStripPanel } from "./StatusStripPanel.js";
 
 describe("AC-008 deliverable staleness UI", () => {
   it("renders the stale badge, affected source range, and refresh review action", () => {
-    useWorkspaceStore.getInitialState().collapsed.status = false;
+    useWorkspaceStore.getInitialState().railCollapsed.status = false;
     const project = projectFixture();
     project.deliverables.push({
       id: "dlv_bbbbbbbbbb",
