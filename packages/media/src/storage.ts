@@ -252,6 +252,7 @@ export class StorageAccountant {
     const categories = emptyCategories();
     const projectState = [
       ...await optionalFile(join(root, "episode.guyditor.yaml")),
+      ...await optionalFile(join(root, "workspace.guyditor.yaml")),
       ...await optionalFile(join(root, "backup.guyditor.yaml")),
       ...await walkFiles(join(root, "sidecars")),
       ...await walkFiles(join(root, "history")),

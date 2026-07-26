@@ -46,16 +46,20 @@ async function storageFixture(): Promise<{
   externalSource: string;
   projectDir: string;
   userDir: string;
+  workspaceBytes: number;
 }> {
   const root = await temporaryRoot("guyditor-storage-");
   const userDir = join(root, "user");
   const projectDir = join(root, "project");
   const externalSource = join(root, "external.mov");
+  const workspaceDocument =
+    "format: guyditor.workspace/v1\nactiveDeliverableId: dlv_aaaaaaaaaa\n";
   const project = projectFixture();
   project.assets[0]!.path = externalSource;
   project.assets[0]!.bytes = 13;
   await writeFile(externalSource, Buffer.alloc(13));
   await valueOf(createProject(projectDir, project));
+  await writeFile(join(projectDir, "workspace.guyditor.yaml"), workspaceDocument);
   await mkdir(join(projectDir, "media/generated"), { recursive: true });
   await mkdir(join(projectDir, ".guyditor/cache/proxies"), { recursive: true });
   await mkdir(join(projectDir, ".guyditor/cache/analysis"), { recursive: true });
@@ -73,14 +77,17 @@ async function storageFixture(): Promise<{
     externalSource,
     projectDir,
     userDir,
+    workspaceBytes: Buffer.byteLength(workspaceDocument),
   };
 }
 
 describe("StorageAccountant", () => {
   it("classifies every managed byte and reports external sources and orphans", async () => {
-    const { accountant, externalSource, projectDir } = await storageFixture();
+    const { accountant, externalSource, projectDir, workspaceBytes } = await storageFixture();
 
     const report = await accountant.scan(projectDir);
+    await rm(join(projectDir, "workspace.guyditor.yaml"));
+    const legacyReport = await accountant.scan(projectDir);
 
     expect(report.projectDir).toBe(projectDir);
     expect(report.volumeFreeBytes).toBeGreaterThan(0);
@@ -91,6 +98,10 @@ describe("StorageAccountant", () => {
     expect(report.categories.archives).toMatchObject({ bytes: 29, reclaimable: false });
     expect(report.categories.audit).toMatchObject({ bytes: 37, reclaimable: false });
     expect(report.categories["project-state"].bytes).toBeGreaterThan(0);
+    expect(legacyReport.categories["project-state"].files)
+      .toBe(report.categories["project-state"].files - 1);
+    expect(legacyReport.categories["project-state"].bytes)
+      .toBe(report.categories["project-state"].bytes - workspaceBytes);
     expect(report.externalSources).toEqual([expect.objectContaining({
       assetId: "ast_aaaaaaaaaa",
       path: externalSource,

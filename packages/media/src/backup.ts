@@ -94,6 +94,7 @@ export interface BackupConfig {
 
 export type BackupManifestRole =
   | "master"
+  | "workspace"
   | "sidecar"
   | "history"
   | "proposal"
@@ -532,6 +533,19 @@ export class BackupService {
       backupPath: "episode.guyditor.yaml",
       role: "master",
     });
+    const workspacePath = join(root, "workspace.guyditor.yaml");
+    try {
+      const metadata = await stat(workspacePath);
+      if (metadata.isFile()) {
+        candidates.set("workspace.guyditor.yaml", {
+          sourcePath: workspacePath,
+          backupPath: "workspace.guyditor.yaml",
+          role: "workspace",
+        });
+      }
+    } catch (error: unknown) {
+      if (!isMissing(error)) throw error;
+    }
     candidates.set("backup.guyditor.yaml", {
       sourcePath: join(root, "backup.guyditor.yaml"),
       backupPath: "backup.guyditor.yaml",
@@ -809,7 +823,8 @@ export class BackupService {
         Math.ceil(entries.length * sampling.samplePercent / 100),
       ));
       const forced = entries.filter((entry) =>
-        entry.role === "master" || entry.role === "archive-manifest" ||
+        entry.role === "master" || entry.role === "workspace" ||
+        entry.role === "archive-manifest" ||
         entry.path === "history/transactions.jsonl" ||
         /history\/revisions\/rev_\d+\.yaml$/u.test(entry.path));
       const ranked = [...entries].sort((left, right) =>

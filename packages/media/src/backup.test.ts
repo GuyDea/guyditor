@@ -32,6 +32,9 @@ import type {
 
 const roots: string[] = [];
 const queues: JobQueue[] = [];
+const WORKSPACE_DOCUMENT = Buffer.from(
+  "format: guyditor.workspace/v1\nactiveDeliverableId: dlv_aaaaaaaaaa\n",
+);
 
 afterEach(async () => {
   for (const queue of queues.splice(0)) queue.close();
@@ -105,6 +108,7 @@ async function fixture(): Promise<{
     probe: {},
   });
   await valueOf(createProject(projectDir, project, { appVersion: "4.0.0-test" }));
+  await writeFile(join(projectDir, "workspace.guyditor.yaml"), WORKSPACE_DOCUMENT);
   await mkdir(join(projectDir, "media/generated"), { recursive: true });
   await writeFile(join(projectDir, "media/a.mov"), source);
   await writeFile(join(projectDir, "media/generated/accepted.bin"), generated);
@@ -224,6 +228,12 @@ describe("BackupService", () => {
       "environment",
       "audit",
     ]));
+    expect(first.entries).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        path: "workspace.guyditor.yaml",
+        role: "workspace",
+      }),
+    ]));
     expect(first.entries.some(({ path }) => path.includes(".guyditor/cache"))).toBe(false);
     expect(first.entries.some(({ path }) => path.includes("jobs.sqlite"))).toBe(false);
     expect(first.stats.newObjects).toBeGreaterThan(0);
@@ -239,6 +249,41 @@ describe("BackupService", () => {
     const contents = await Promise.all(backupFiles.map((file) =>
       readFile(join(targetDir, "guyditor-backup", file))));
     expect(Buffer.concat(contents).includes(Buffer.from(secret))).toBe(false);
+  });
+
+  it("always verifies workspace state in sampled verification", async () => {
+    const { projectDir, service, target, targetDir } = await fixture();
+    const manifest = await service.run(projectDir, "local", "manual");
+    const workspace = manifest.entries.find(({ role }) => role === "workspace");
+    expect(workspace).toMatchObject({
+      path: "workspace.guyditor.yaml",
+      role: "workspace",
+    });
+    if (workspace === undefined) throw new Error("workspace entry missing");
+    await writeFile(join(
+      targetDir,
+      "guyditor-backup/objects",
+      workspace.sha256.slice(0, 2),
+      workspace.sha256,
+    ), "tampered");
+
+    await expect(service.verify(target, manifest.backupId, "sample", {
+      samplePercent: 0,
+      minSample: 0,
+    })).rejects.toMatchObject({
+      code: "E_BACKUP_VERIFY_MISMATCH",
+      affected: ["workspace.guyditor.yaml"],
+    });
+  });
+
+  it("backs up legacy projects without optional workspace state", async () => {
+    const { projectDir, service } = await fixture();
+    await rm(join(projectDir, "workspace.guyditor.yaml"));
+
+    const manifest = await service.run(projectDir, "local", "manual");
+
+    expect(manifest.entries.some(({ role }) => role === "workspace")).toBe(false);
+    expect(manifest.entries.some(({ path }) => path === "workspace.guyditor.yaml")).toBe(false);
   });
 
   it("marks a run damaged when full verification finds a changed object", async () => {
@@ -275,6 +320,17 @@ describe("BackupService", () => {
       validationErrors: [],
       failures: [],
     });
+    await expect(readdir(scratchRoot)).resolves.toEqual([]);
+
+    const destination = join(scratchRoot, manifest.backupId);
+    await service.restoreTest(target, manifest.backupId, {
+      knownProjectDirectory: projectDir,
+      scratchRoot,
+      keepScratch: true,
+    });
+    expect(await readFile(join(destination, "workspace.guyditor.yaml")))
+      .toEqual(WORKSPACE_DOCUMENT);
+    await rm(destination, { recursive: true, force: true });
     await expect(readdir(scratchRoot)).resolves.toEqual([]);
     await expect(service.restoreTest(target, manifest.backupId, {
       knownProjectDirectory: projectDir,
