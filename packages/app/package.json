@@ -24,7 +24,8 @@
     "@napi-rs/canvas": "1.0.2",
     "react": "18.3.1",
     "react-dom": "18.3.1",
-    "zustand": "5.0.14"
+    "zustand": "5.0.14",
+    "yaml": "^2.9.0"
   },
   "devDependencies": {
     "@playwright/test": "1.61.1",
