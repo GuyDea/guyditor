@@ -262,6 +262,7 @@ export class StorageAccountant {
       ...await walkFiles(join(root, "archive")),
     ];
     addFiles(categories, "project-state", projectState);
+    const projectStatePaths = new Set(projectState.map(({ path }) => resolve(path)));
     addFiles(categories, "generated", await walkFiles(join(root, "media/generated")));
 
     const externalSources: StorageReport["externalSources"] = [];
@@ -269,7 +270,8 @@ export class StorageAccountant {
     const seenSources = new Set<string>();
     for (const asset of project.assets) {
       const sourcePath = resolve(root, asset.path);
-      if (inside(generatedRoot, sourcePath) || seenSources.has(sourcePath)) continue;
+      if (inside(generatedRoot, sourcePath) || projectStatePaths.has(sourcePath) ||
+          seenSources.has(sourcePath)) continue;
       const files = await optionalFile(sourcePath);
       if (files.length === 0) continue;
       seenSources.add(sourcePath);

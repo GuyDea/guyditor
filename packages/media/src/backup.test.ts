@@ -32,9 +32,10 @@ import type {
 
 const roots: string[] = [];
 const queues: JobQueue[] = [];
-const WORKSPACE_DOCUMENT = Buffer.from(
-  "format: guyditor.workspace/v1\nactiveDeliverableId: dlv_aaaaaaaaaa\n",
-);
+const WORKSPACE_DOCUMENT = Buffer.concat([
+  Buffer.from("format: guyditor.workspace/v1\nactiveDeliverableId: dlv_aaaaaaaaaa\n"),
+  Buffer.from([0xff, 0x00, 0xfe, 0x80]),
+]);
 
 afterEach(async () => {
   for (const queue of queues.splice(0)) queue.close();
@@ -82,7 +83,9 @@ function config(target: BackupTarget): BackupConfig {
   };
 }
 
-async function fixture(): Promise<{
+async function fixture(
+  options: { workspaceAsset?: boolean } = {},
+): Promise<{
   projectDir: string;
   secret: string;
   service: BackupService;
@@ -99,6 +102,16 @@ async function fixture(): Promise<{
   const project: GuyditorProject = projectFixture();
   project.assets[0]!.sha256 = sha256(source);
   project.assets[0]!.bytes = source.length;
+  if (options.workspaceAsset === true) {
+    project.assets.push({
+      id: "ast_cccccccccc",
+      kind: "image",
+      path: "workspace.guyditor.yaml",
+      sha256: sha256(WORKSPACE_DOCUMENT),
+      bytes: WORKSPACE_DOCUMENT.length,
+      probe: {},
+    });
+  }
   project.assets.push({
     id: "ast_bbbbbbbbbb",
     kind: "image",
@@ -284,6 +297,17 @@ describe("BackupService", () => {
 
     expect(manifest.entries.some(({ role }) => role === "workspace")).toBe(false);
     expect(manifest.entries.some(({ path }) => path === "workspace.guyditor.yaml")).toBe(false);
+  });
+
+  it("rejects asset backup paths that collide with reserved workspace state", async () => {
+    const { projectDir, service } = await fixture({ workspaceAsset: true });
+
+    await expect(service.run(projectDir, "local", "manual")).rejects.toMatchObject({
+      code: "E_BACKUP_PATH_COLLISION",
+      acceptedStateChanged: false,
+      affected: ["ast_cccccccccc", "workspace.guyditor.yaml"],
+      message: expect.stringContaining("workspace.guyditor.yaml"),
+    });
   });
 
   it("marks a run damaged when full verification finds a changed object", async () => {

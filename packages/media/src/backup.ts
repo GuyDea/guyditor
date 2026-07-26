@@ -566,6 +566,13 @@ export class BackupService {
         path = `ext/${asset.sha256.slice(0, 8)}/${basename(sourcePath)}`;
         originalPath = sourcePath;
       }
+      if (candidates.has(path)) {
+        throw backupError(
+          "E_BACKUP_PATH_COLLISION",
+          `Asset ${asset.id} backup path ${path} collides with an existing backup entry.`,
+          { affected: [asset.id, path], retry: "none" },
+        );
+      }
       candidates.set(path, {
         sourcePath,
         backupPath: path,

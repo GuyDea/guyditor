@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   mkdir,
   mkdtemp,
@@ -41,7 +42,9 @@ async function valueOf<T>(result: Promise<Result<T>>): Promise<T> {
   return settled.value;
 }
 
-async function storageFixture(): Promise<{
+async function storageFixture(
+  options: { workspaceAsset?: boolean } = {},
+): Promise<{
   accountant: StorageAccountant;
   externalSource: string;
   projectDir: string;
@@ -57,6 +60,16 @@ async function storageFixture(): Promise<{
   const project = projectFixture();
   project.assets[0]!.path = externalSource;
   project.assets[0]!.bytes = 13;
+  if (options.workspaceAsset === true) {
+    project.assets.push({
+      id: "ast_bbbbbbbbbb",
+      kind: "image",
+      path: "workspace.guyditor.yaml",
+      sha256: createHash("sha256").update(workspaceDocument).digest("hex"),
+      bytes: Buffer.byteLength(workspaceDocument),
+      probe: {},
+    });
+  }
   await writeFile(externalSource, Buffer.alloc(13));
   await valueOf(createProject(projectDir, project));
   await writeFile(join(projectDir, "workspace.guyditor.yaml"), workspaceDocument);
@@ -111,6 +124,26 @@ describe("StorageAccountant", () => {
       path: join(projectDir, ".guyditor/cache/proxies/orphan.bin"),
       bytes: 19,
     });
+  });
+
+  it("does not count workspace state again when an asset references its path", async () => {
+    const { accountant, projectDir, workspaceBytes } = await storageFixture({
+      workspaceAsset: true,
+    });
+
+    const report = await accountant.scan(projectDir);
+    await rm(join(projectDir, "workspace.guyditor.yaml"));
+    const missingWorkspaceReport = await accountant.scan(projectDir);
+
+    expect(report.categories["project-state"].files)
+      .toBe(missingWorkspaceReport.categories["project-state"].files + 1);
+    expect(report.categories["project-state"].bytes)
+      .toBe(missingWorkspaceReport.categories["project-state"].bytes + workspaceBytes);
+    expect(report.categories.sources).toEqual(missingWorkspaceReport.categories.sources);
+    expect(report.categories.generated).toEqual(missingWorkspaceReport.categories.generated);
+    expect(report.externalSources.map(({ assetId, path, bytes }) => ({ assetId, path, bytes })))
+      .toEqual(missingWorkspaceReport.externalSources
+        .map(({ assetId, path, bytes }) => ({ assetId, path, bytes })));
   });
 
   it("deduplicates shared external media in global accounting", async () => {
