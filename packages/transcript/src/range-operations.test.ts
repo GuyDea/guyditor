@@ -277,6 +277,103 @@ describe("transcript range operations", () => {
     expect(withoutRevision(store.currentProject)).toEqual(withoutRevision(before));
   });
 
+  it("removes a range from an explicitly targeted derivative without touching primary", async () => {
+    const { store, engine } = await fixture();
+    await valueOf(engine.execute(store, [{
+      op: "transcript.range.shortCandidate",
+      params: {
+        wordRange: { fromWord: "w000002", toWord: "w000003" },
+        title: "Targeted short",
+      },
+    }]));
+    const primaryBefore = structuredClone(
+      store.currentProject.sequences.find(({ id }) => id === "seq_aaaaaaaaaa"),
+    );
+
+    await valueOf(engine.execute(
+      store,
+      [{
+        op: "transcript.range.remove",
+        params: {
+          sequenceId: "seq_bbbbbbbbbb",
+          wordRange: { fromWord: "w000002", toWord: "w000002" },
+          paddingMs: 0,
+          snapPolicy: "none",
+        },
+      }],
+      { origin: "ui", dryRun: false, divergence: "cuts" },
+    ));
+
+    expect(
+      store.currentProject.sequences.find(({ id }) => id === "seq_aaaaaaaaaa"),
+    ).toEqual(primaryBefore);
+    expect(
+      store.currentProject.sequences.find(({ id }) => id === "seq_bbbbbbbbbb")
+        ?.clips.map(({ source }) => source),
+    ).toEqual([{
+      in: { frames: 48, fps: "24/1" },
+      out: { frames: 72, fps: "24/1" },
+    }]);
+  });
+
+  it("rejects an explicitly targeted sequence that does not exist", async () => {
+    const { store, engine } = await fixture();
+    const before = structuredClone(store.currentProject);
+
+    const result = await engine.execute(store, [{
+      op: "transcript.range.remove",
+      params: {
+        sequenceId: "seq_cccccccccc",
+        wordRange: { fromWord: "w000002", toWord: "w000002" },
+        paddingMs: 0,
+        snapPolicy: "none",
+      },
+    }]);
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: "E_OP_NOT_FOUND",
+        message: "Sequence seq_cccccccccc does not exist.",
+        affected: ["seq_cccccccccc"],
+        acceptedStateChanged: false,
+      },
+    });
+    expect(store.currentProject).toEqual(before);
+  });
+
+  it("reports an out-of-bounds range against the explicitly targeted sequence", async () => {
+    const { store, engine } = await fixture();
+    await valueOf(engine.execute(store, [{
+      op: "transcript.range.shortCandidate",
+      params: {
+        wordRange: { fromWord: "w000002", toWord: "w000003" },
+        title: "Targeted short",
+      },
+    }]));
+    const before = structuredClone(store.currentProject);
+
+    const result = await engine.execute(store, [{
+      op: "transcript.range.remove",
+      params: {
+        sequenceId: "seq_bbbbbbbbbb",
+        wordRange: { fromWord: "w000001", toWord: "w000001" },
+        paddingMs: 0,
+        snapPolicy: "none",
+      },
+    }]);
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: "E_OP_RANGE_OUT_OF_BOUNDS",
+        message: "The word range has no editable instance in sequence seq_bbbbbbbbbb.",
+        acceptedStateChanged: false,
+      },
+    });
+    expect(store.currentProject).toEqual(before);
+  });
+
   it("returns E_OP_NO_TRANSCRIPT instead of mutating a transcript-less sequence", async () => {
     const root = await mkdtemp(join(tmpdir(), "guyditor-no-transcript-"));
     roots.push(root);

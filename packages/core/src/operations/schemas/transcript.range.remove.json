@@ -5,6 +5,10 @@
   "required": ["wordRange"],
   "additionalProperties": false,
   "properties": {
+    "sequenceId": {
+      "type": "string",
+      "pattern": "^seq_[a-z2-7]{10}$"
+    },
     "wordRange": { "$ref": "#/$defs/wordRange" },
     "paddingMs": { "type": "integer", "minimum": 0, "default": 120 },
     "snapPolicy": {

@@ -65,6 +65,24 @@ function primarySequenceId(project: GuyditorProject): Result<string> {
     : success(deliverable.sequenceId);
 }
 
+function removalSequenceId(
+  project: GuyditorProject,
+  input: OperationInput,
+): Result<string> {
+  const requested = input.params["sequenceId"];
+  if (requested !== undefined) {
+    return typeof requested === "string" &&
+      project.sequences.some(({ id }) => id === requested)
+      ? success(requested)
+      : operationFailure(
+          "E_OP_NOT_FOUND",
+          `Sequence ${String(requested)} does not exist.`,
+          typeof requested === "string" ? [requested] : [],
+        );
+  }
+  return primarySequenceId(project);
+}
+
 function sourceDuration(project: GuyditorProject, assetId: string, rate: number) {
   const duration = project.assets.find(({ id }) => id === assetId)?.probe.duration;
   if (duration === undefined) return undefined;
@@ -268,7 +286,7 @@ function removeWordRange(
   const snapPolicy = (input.params["snapPolicy"] as WordSourceRange["snapPolicy"] | undefined) ?? "none";
   const range = mappedRange(project, sidecars, wordRange, paddingMs, snapPolicy);
   if (!range.ok) return range;
-  const sequenceId = primarySequenceId(project);
+  const sequenceId = removalSequenceId(project, input);
   if (!sequenceId.ok) return sequenceId;
   const sequence = project.sequences.find(({ id }) => id === sequenceId.value);
   if (sequence === undefined) {
@@ -292,7 +310,7 @@ function removeWordRange(
   if (run.applications.length === 0) {
     return operationFailure(
       "E_OP_RANGE_OUT_OF_BOUNDS",
-      "The word range has no editable instance in the primary sequence.",
+      `The word range has no editable instance in sequence ${sequence.id}.`,
       [range.value.assetId, wordRange.fromWord, wordRange.toWord],
     );
   }
