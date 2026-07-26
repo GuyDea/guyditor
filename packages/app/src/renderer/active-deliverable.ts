@@ -12,6 +12,35 @@ import {
 
 type PersistSelection = (deliverableId: string) => Promise<unknown>;
 
+let activationGeneration = 0;
+
+function nextActivationGeneration(): number {
+  activationGeneration += 1;
+  return activationGeneration;
+}
+
+function requireDeliverable(
+  project: GuyditorProject,
+  deliverableId: string,
+): Deliverable {
+  const deliverable = project.deliverables.find(({ id }) => id === deliverableId);
+  if (deliverable === undefined) {
+    throw new Error(`Deliverable ${deliverableId} does not exist.`);
+  }
+  return deliverable;
+}
+
+function applyValidatedDeliverableSelection(
+  project: GuyditorProject,
+  deliverable: Deliverable,
+): number {
+  const generation = nextActivationGeneration();
+  usePreviewStore.getState().resetForDeliverable(project.settings.timeline.fps);
+  useTimelineViewStore.getState().setScrollOffset(0);
+  useSelectionStore.getState().activateDeliverable(deliverable.id);
+  return generation;
+}
+
 export function resolveActiveDeliverable(
   project: GuyditorProject,
   selectedDeliverableId: string | null,
@@ -36,18 +65,8 @@ export function applyDeliverableSelection(
   project: GuyditorProject,
   deliverableId: string,
 ): Deliverable {
-  const deliverable = project.deliverables.find(({ id }) => id === deliverableId);
-  if (deliverable === undefined) {
-    throw new Error(`Deliverable ${deliverableId} does not exist.`);
-  }
-
-  const preview = usePreviewStore.getState();
-  preview.setPlaying(false);
-  preview.setPlayhead({ frames: 0, fps: project.settings.timeline.fps });
-  preview.setLoopRange(null);
-  preview.setPreviewKeySettings(null);
-  useTimelineViewStore.getState().setScrollOffset(0);
-  useSelectionStore.getState().activateDeliverable(deliverable.id);
+  const deliverable = requireDeliverable(project, deliverableId);
+  applyValidatedDeliverableSelection(project, deliverable);
   return deliverable;
 }
 
@@ -57,19 +76,22 @@ export async function activateDeliverable(
   setNotice: (message: string) => void,
   persist: PersistSelection = setActiveDeliverable,
 ): Promise<void> {
+  const deliverable = requireDeliverable(project, deliverableId);
   const current = useSelectionStore.getState().selectedDeliverableId;
-  const deliverable = current === deliverableId
-    ? project.deliverables.find(({ id }) => id === deliverableId)
-    : applyDeliverableSelection(project, deliverableId);
-  if (deliverable === undefined) {
-    throw new Error(`Deliverable ${deliverableId} does not exist.`);
-  }
+  const generation = current === deliverableId
+    ? nextActivationGeneration()
+    : applyValidatedDeliverableSelection(project, deliverable);
 
   try {
     await persist(deliverable.id);
   } catch (error: unknown) {
+    if (generation !== activationGeneration) return;
     setNotice(
       `Switched to ${deliverable.name}, but workspace autosave failed: ${errorMessage(error)}`,
     );
+    return;
+  }
+  if (generation === activationGeneration) {
+    setNotice(`Switched to ${deliverable.name}.`);
   }
 }

@@ -31,6 +31,16 @@ function projectWithShort() {
   return project;
 }
 
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, reject, resolve };
+}
+
 function resetRendererState(): void {
   useSelectionStore.setState({
     selectedClipId: null,
@@ -43,7 +53,10 @@ function resetRendererState(): void {
   usePreviewStore.setState({
     playhead: { frames: 0, fps: "24/1" },
     playing: false,
+    settled: true,
+    warning: null,
     loopRange: null,
+    diagnosticBackground: "none",
     previewKeySettings: null,
   });
   useTimelineViewStore.setState({
@@ -116,7 +129,7 @@ describe("active deliverable", () => {
     });
   });
 
-  it("resets sequence navigation while preserving zoom, layout, and undo history", () => {
+  it("atomically resets preview and sequence navigation while preserving view context", () => {
     const project = projectWithShort();
     project.settings.timeline.fps = "30/1";
     useSelectionStore.setState({
@@ -130,7 +143,10 @@ describe("active deliverable", () => {
     usePreviewStore.setState({
       playing: true,
       playhead: { frames: 72, fps: "24/1" },
+      settled: true,
+      warning: "Showing an old frame",
       loopRange: { start: 12, end: 24 },
+      diagnosticBackground: "checkerboard",
       previewKeySettings: {
         schema: "guyditor/key@1",
         mode: "chroma",
@@ -157,10 +173,19 @@ describe("active deliverable", () => {
     });
     const undoBefore = structuredClone(useUndoStore.getState().undo);
     const layoutBefore = useWorkspaceStore.getState().layout;
+    const previewNotifications = vi.fn();
+    const unsubscribe = usePreviewStore.subscribe(previewNotifications);
 
-    const selected = applyDeliverableSelection(project, SHORT_DELIVERABLE_ID);
+    const selected = (() => {
+      try {
+        return applyDeliverableSelection(project, SHORT_DELIVERABLE_ID);
+      } finally {
+        unsubscribe();
+      }
+    })();
 
     expect(selected.id).toBe(SHORT_DELIVERABLE_ID);
+    expect(previewNotifications).toHaveBeenCalledOnce();
     expect(useSelectionStore.getState()).toMatchObject({
       selectedDeliverableId: SHORT_DELIVERABLE_ID,
       selectedClipId: null,
@@ -172,7 +197,11 @@ describe("active deliverable", () => {
     expect(usePreviewStore.getState()).toMatchObject({
       playing: false,
       playhead: { frames: 0, fps: "30/1" },
+      quality: "proxy",
+      settled: false,
+      warning: null,
       loopRange: null,
+      diagnosticBackground: "checkerboard",
       previewKeySettings: null,
     });
     expect(useTimelineViewStore.getState()).toMatchObject({
@@ -213,6 +242,40 @@ describe("active deliverable", () => {
     );
   });
 
+  it("replaces a failed autosave notice after a successful same-item retry", async () => {
+    const project = projectWithShort();
+    const persist = vi.fn()
+      .mockRejectedValueOnce(new Error("disk full"))
+      .mockResolvedValueOnce(undefined);
+    let notice = "";
+    const setNotice = vi.fn((message: string) => {
+      notice = message;
+    });
+    useSelectionStore.setState({
+      selectedDeliverableId: PRIMARY_DELIVERABLE_ID,
+    });
+
+    await activateDeliverable(
+      project,
+      SHORT_DELIVERABLE_ID,
+      setNotice,
+      persist,
+    );
+    expect(notice).toBe(
+      "Switched to Portrait short, but workspace autosave failed: disk full",
+    );
+
+    await activateDeliverable(
+      project,
+      SHORT_DELIVERABLE_ID,
+      setNotice,
+      persist,
+    );
+
+    expect(persist).toHaveBeenCalledTimes(2);
+    expect(notice).toBe("Switched to Portrait short.");
+  });
+
   it("retries persistence without resetting navigation when reselecting the active item", async () => {
     const project = projectWithShort();
     applyDeliverableSelection(project, SHORT_DELIVERABLE_ID);
@@ -247,7 +310,8 @@ describe("active deliverable", () => {
 
     expect(persist).toHaveBeenCalledOnce();
     expect(persist).toHaveBeenCalledWith(SHORT_DELIVERABLE_ID);
-    expect(setNotice).not.toHaveBeenCalled();
+    expect(setNotice).toHaveBeenCalledOnce();
+    expect(setNotice).toHaveBeenCalledWith("Switched to Portrait short.");
     expect(useSelectionStore.getState()).toMatchObject(selectionBefore);
     expect(usePreviewStore.getState()).toMatchObject({
       playing: true,
@@ -258,5 +322,99 @@ describe("active deliverable", () => {
       zoomPixelsPerFrame: 12,
       scrollOffsetFrames: 5,
     });
+  });
+
+  it("ignores an older failed switch after a newer switch succeeds", async () => {
+    const project = projectWithShort();
+    const shortPersist = deferred<unknown>();
+    const primaryPersist = deferred<unknown>();
+    const persist = vi.fn((deliverableId: string) => deliverableId === SHORT_DELIVERABLE_ID
+      ? shortPersist.promise
+      : primaryPersist.promise);
+    const notices: string[] = [];
+    const setNotice = vi.fn((message: string) => {
+      notices.push(message);
+    });
+    useSelectionStore.setState({
+      selectedDeliverableId: PRIMARY_DELIVERABLE_ID,
+    });
+
+    const switchToShort = activateDeliverable(
+      project,
+      SHORT_DELIVERABLE_ID,
+      setNotice,
+      persist,
+    );
+    const switchToPrimary = activateDeliverable(
+      project,
+      PRIMARY_DELIVERABLE_ID,
+      setNotice,
+      persist,
+    );
+
+    expect(useSelectionStore.getState().selectedDeliverableId)
+      .toBe(PRIMARY_DELIVERABLE_ID);
+    primaryPersist.resolve(undefined);
+    await switchToPrimary;
+    shortPersist.reject(new Error("short autosave failed"));
+    await switchToShort;
+
+    expect(notices).toEqual(["Switched to master."]);
+    expect(useSelectionStore.getState().selectedDeliverableId)
+      .toBe(PRIMARY_DELIVERABLE_ID);
+  });
+
+  it("lets direct hydration invalidate an older pending failure", async () => {
+    const project = projectWithShort();
+    const pendingPersist = deferred<unknown>();
+    const setNotice = vi.fn();
+    useSelectionStore.setState({
+      selectedDeliverableId: PRIMARY_DELIVERABLE_ID,
+    });
+    const pendingSwitch = activateDeliverable(
+      project,
+      SHORT_DELIVERABLE_ID,
+      setNotice,
+      vi.fn(() => pendingPersist.promise),
+    );
+
+    applyDeliverableSelection(project, PRIMARY_DELIVERABLE_ID);
+    pendingPersist.reject(new Error("obsolete autosave failure"));
+    await pendingSwitch;
+
+    expect(setNotice).not.toHaveBeenCalled();
+    expect(useSelectionStore.getState().selectedDeliverableId)
+      .toBe(PRIMARY_DELIVERABLE_ID);
+  });
+
+  it("does not supersede a pending request when an invalid target is rejected", async () => {
+    const project = projectWithShort();
+    const pendingPersist = deferred<unknown>();
+    const persist = vi.fn(() => pendingPersist.promise);
+    const setNotice = vi.fn();
+    useSelectionStore.setState({
+      selectedDeliverableId: PRIMARY_DELIVERABLE_ID,
+    });
+    const pendingSwitch = activateDeliverable(
+      project,
+      SHORT_DELIVERABLE_ID,
+      setNotice,
+      persist,
+    );
+
+    await expect(activateDeliverable(
+      project,
+      MISSING_DELIVERABLE_ID,
+      setNotice,
+      persist,
+    )).rejects.toThrow(`Deliverable ${MISSING_DELIVERABLE_ID} does not exist.`);
+    pendingPersist.reject(new Error("latest autosave failed"));
+    await pendingSwitch;
+
+    expect(persist).toHaveBeenCalledOnce();
+    expect(setNotice).toHaveBeenCalledOnce();
+    expect(setNotice).toHaveBeenCalledWith(
+      "Switched to Portrait short, but workspace autosave failed: latest autosave failed",
+    );
   });
 });

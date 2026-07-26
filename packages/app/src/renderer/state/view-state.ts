@@ -104,6 +104,7 @@ interface PreviewState {
   loopRange: { start: number; end: number } | null;
   diagnosticBackground: DiagnosticBackground;
   previewKeySettings: KeySettings | null;
+  resetForDeliverable: (fps: FrameTime["fps"]) => void;
   setPlayhead: (playhead: FrameTime) => void;
   setPlaying: (playing: boolean) => void;
   setSettled: (settled: boolean) => void;
@@ -342,6 +343,14 @@ export const usePreviewStore = create<PreviewState>((set) => ({
   loopRange: null,
   diagnosticBackground: "none",
   previewKeySettings: null,
+  resetForDeliverable: (fps) => set({
+    playing: false,
+    playhead: { frames: 0, fps },
+    settled: false,
+    warning: null,
+    loopRange: null,
+    previewKeySettings: null,
+  }),
   setPlayhead: (playhead) => set({ playhead }),
   setPlaying: (playing) => set({ playing }),
   setSettled: (settled) => set({ settled }),
