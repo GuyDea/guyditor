@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { access, mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -813,25 +813,141 @@ describe("AppServiceHost", () => {
       publisher: new WindowEventPublisher(() => undefined),
       chooseNewProject: async () => target,
     });
-    const createDialog = windowHost.resolveService("ProjectStore")?.["createDialog"];
-    if (typeof createDialog !== "function") {
-      throw new Error("Project create dialog is unavailable.");
+    try {
+      const createDialog = windowHost.resolveService("ProjectStore")?.["createDialog"];
+      if (typeof createDialog !== "function") {
+        throw new Error("Project create dialog is unavailable.");
+      }
+
+      const snapshot = await Reflect.apply(createDialog, undefined, []);
+
+      expect(snapshot).toMatchObject({
+        revision: "rev_00001",
+        master: {
+          project: { name: "My first episode" },
+          settings: { timeline: { width: 3840, height: 2160 } },
+          deliverables: [expect.objectContaining({ profile: "youtube-longform@1.0.0" })],
+        },
+        projectPath: target,
+      });
+      await expect(access(join(target, "episode.guyditor.yaml"))).resolves.toBeUndefined();
+      await expect(readFile(join(target, "workspace.guyditor.yaml"), "utf8"))
+        .resolves.toBe(
+          [
+            "format: guyditor.workspace/v1",
+            `activeDeliverableId: ${snapshot.master.settings.primaryDeliverable}`,
+            "",
+          ].join("\n"),
+        );
+    } finally {
+      await windowHost.close();
+      await appHost.close();
+      await Promise.all([
+        rm(sandbox, { recursive: true, force: true }),
+        rm(userDirectory, { recursive: true, force: true }),
+      ]);
     }
+  });
 
-    const snapshot = await Reflect.apply(createDialog, undefined, []);
-
-    expect(snapshot).toMatchObject({
-      revision: "rev_00001",
-      master: {
-        project: { name: "My first episode" },
-        settings: { timeline: { width: 3840, height: 2160 } },
-        deliverables: [expect.objectContaining({ profile: "youtube-longform@1.0.0" })],
-      },
-      projectPath: target,
+  it("persists workspace selection without mutating canonical project state", async () => {
+    const root = await mkdtemp(join(tmpdir(), "guyditor-host-workspace-"));
+    const userDirectory = await mkdtemp(join(tmpdir(), "guyditor-host-workspace-user-"));
+    const model = projectFixture();
+    model.sequences.push({
+      id: "seq_bbbbbbbbbb",
+      name: "short",
+      clips: [{
+        id: "clp_cccccccccc",
+        asset: "ast_aaaaaaaaaa",
+        source: {
+          in: { frames: 0, fps: "24/1" },
+          out: { frames: 12, fps: "24/1" },
+        },
+      }],
     });
-    await expect(access(join(target, "episode.guyditor.yaml"))).resolves.toBeUndefined();
-    await windowHost.close();
-    await appHost.close();
+    model.layers.push({
+      id: "lyr_bbbbbbbbbb",
+      kind: "video",
+      name: "short video",
+      order: 0,
+      enabled: true,
+      locked: false,
+      sequence: "seq_bbbbbbbbbb",
+    });
+    model.captions.push({
+      ...structuredClone(model.captions[0]!),
+      id: "cts_bbbbbbbbbb",
+      name: "short captions",
+      sourceLayerIds: ["lyr_bbbbbbbbbb"],
+    });
+    model.deliverables.push({
+      id: "dlv_bbbbbbbbbb",
+      kind: "short",
+      name: "Portrait short",
+      profile: "youtube-shorts@1.0.0",
+      sequenceId: "seq_bbbbbbbbbb",
+      captionsTrackId: "cts_bbbbbbbbbb",
+      status: "draft",
+    });
+    const created = await createProject(root, model);
+    if (!created.ok) throw created.error;
+
+    const appHost = testAppHost(userDirectory);
+    const windowHost = appHost.createWindowHost({
+      publisher: new WindowEventPublisher(() => undefined),
+    });
+    try {
+      await windowHost.openProject(root);
+      await expect(access(join(root, "workspace.guyditor.yaml")))
+        .rejects.toMatchObject({ code: "ENOENT" });
+
+      const protectedPaths = [
+        "episode.guyditor.yaml",
+        "history/HEAD",
+        "history/transactions.jsonl",
+      ];
+      const before = await Promise.all(protectedPaths.map((path) =>
+        readFile(join(root, path), "utf8"),
+      ));
+      const projectService = windowHost.resolveService("ProjectStore");
+      const setActive = projectService?.["setActiveDeliverable"];
+      const getWorkspace = projectService?.["getWorkspaceState"];
+      if (typeof setActive !== "function" || typeof getWorkspace !== "function") {
+        throw new Error("Workspace-state IPC is unavailable.");
+      }
+
+      await expect(Reflect.apply(setActive, projectService, [{
+        deliverableId: "dlv_bbbbbbbbbb",
+      }])).resolves.toEqual({
+        format: "guyditor.workspace/v1",
+        activeDeliverableId: "dlv_bbbbbbbbbb",
+      });
+      await expect(Reflect.apply(getWorkspace, projectService, []))
+        .resolves.toEqual({
+          state: {
+            format: "guyditor.workspace/v1",
+            activeDeliverableId: "dlv_bbbbbbbbbb",
+          },
+        });
+      await expect(Reflect.apply(setActive, projectService, [{
+        deliverableId: "dlv_cccccccccc",
+      }])).rejects.toMatchObject({
+        code: "E_WORKSPACE_DELIVERABLE_NOT_FOUND",
+      });
+
+      const after = await Promise.all(protectedPaths.map((path) =>
+        readFile(join(root, path), "utf8"),
+      ));
+      expect(after).toEqual(before);
+      expect(windowHost.snapshot().revision).toBe("rev_00001");
+    } finally {
+      await windowHost.close();
+      await appHost.close();
+      await Promise.all([
+        rm(root, { recursive: true, force: true }),
+        rm(userDirectory, { recursive: true, force: true }),
+      ]);
+    }
   });
 });
 

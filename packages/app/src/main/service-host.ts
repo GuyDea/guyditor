@@ -132,6 +132,7 @@ import {
   createRecoveryServices,
   recoveryService,
 } from "./recovery-service.js";
+import { ProjectWorkspaceStateStore } from "./project-workspace-state.js";
 import type { ProjectServices } from "./project-services.js";
 import { createProjectDialog } from "./project-creation.js";
 import { history, transcriptSidecars } from "./project-readers.js";
@@ -671,11 +672,18 @@ export class WindowServiceHost {
     this.#openPath = options.openPath;
   }
 
-  public async openProject(projectPath: string): Promise<ReturnType<WindowServiceHost["snapshot"]>> {
+  public async openProject(
+    projectPath: string,
+    options: { initializeWorkspace?: boolean } = {},
+  ): Promise<ReturnType<WindowServiceHost["snapshot"]>> {
     if (this.#closed) throw new Error("Window service host is closed.");
     const opened = await openCoreProject(resolve(projectPath), { appVersion: this.#app.appVersion });
     const store = resultValue(opened);
     this.#closeProject();
+    const workspace = new ProjectWorkspaceStateStore(store.root);
+    if (options.initializeWorkspace === true) {
+      await workspace.initialize(store.currentProject);
+    }
     const annotations = new AnnotationService({ appVersion: this.#app.appVersion });
     const otio = new OtioService({ store, annotations });
     const restyleRuntime: { service?: RestyleExecutionService } = {};
@@ -1153,6 +1161,7 @@ export class WindowServiceHost {
     });
     this.#project = {
       store,
+      workspace,
       jobs,
       media,
       capture,
@@ -1182,7 +1191,12 @@ export class WindowServiceHost {
     switch (service) {
       case "ProjectStore":
         return {
-          createDialog: () => createProjectDialog(this.#chooseNewProject, (path) => this.openProject(path), this.#app.appVersion, this.#app.profilesRoot),
+          createDialog: () => createProjectDialog(
+            this.#chooseNewProject,
+            (path) => this.openProject(path, { initializeWorkspace: true }),
+            this.#app.appVersion,
+            this.#app.profilesRoot,
+          ),
           openDialog: async () => {
             const selected = await this.#chooseProject?.();
             return selected === undefined ? null : this.openProject(selected);
@@ -1190,6 +1204,16 @@ export class WindowServiceHost {
           pickTemplatePackage: async () => await this.#chooseTemplate?.() ?? null,
           open: ({ path }: { path: string }) => this.openProject(path),
           getSnapshot: () => this.snapshot(),
+          getWorkspaceState: () => project === undefined
+            ? Promise.reject(new Error("No project is open."))
+            : project.workspace.load(project.store.currentProject),
+          setActiveDeliverable: ({ deliverableId }: { deliverableId: string }) => {
+            const current = this.#requireProject();
+            return current.workspace.setActiveDeliverable(
+              current.store.currentProject,
+              deliverableId,
+            );
+          },
           listHistory: () => project === undefined ? [] : history(project.store),
           listProposals: () => project === undefined ? [] : activeProposals(project.store),
           readTranscript: () => project === undefined ? [] : transcriptSidecars(project.store),

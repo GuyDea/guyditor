@@ -28,9 +28,11 @@ import type { RecoveryServices } from "./recovery-service.js";
 import type { TakeComparisonService } from "./take-comparison-service.js";
 import type { MatteService } from "./matte-service.js";
 import type { OtioService } from "./otio-service.js";
+import type { ProjectWorkspaceStateStore } from "./project-workspace-state.js";
 
 export interface ProjectServices extends RecoveryServices {
   store: ProjectStore;
+  workspace: ProjectWorkspaceStateStore;
   jobs: JobQueue;
   media: MediaEngine;
   capture: CaptureWatcher;

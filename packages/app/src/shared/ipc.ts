@@ -30,6 +30,16 @@ export type IpcResponse<T = unknown> =
   | { v: 1; requestId: string; ok: true;  result: T }
   | { v: 1; requestId: string; ok: false; error: GuyditorError };
 
+export interface ProjectWorkspaceState {
+  format: "guyditor.workspace/v1";
+  activeDeliverableId: string;
+}
+
+export interface LoadedProjectWorkspaceState {
+  state: ProjectWorkspaceState;
+  warning?: string;
+}
+
 export interface JobStatus {                  // superset of Part 0's job shape
   jobId: string; kind: string;
   state: "queued" | "running" | "done" | "failed" | "cancelled";

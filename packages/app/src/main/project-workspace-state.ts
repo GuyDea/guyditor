@@ -9,18 +9,13 @@ import {
 import type { GuyditorProject } from "../../../core/src/index.js";
 import { parse as parseYaml } from "yaml";
 
+import type {
+  LoadedProjectWorkspaceState,
+  ProjectWorkspaceState,
+} from "../shared/ipc.js";
+
 export const PROJECT_WORKSPACE_FILE = "workspace.guyditor.yaml";
 const WORKSPACE_FORMAT = "guyditor.workspace/v1" as const;
-
-export interface ProjectWorkspaceState {
-  format: typeof WORKSPACE_FORMAT;
-  activeDeliverableId: string;
-}
-
-export interface LoadedProjectWorkspaceState {
-  state: ProjectWorkspaceState;
-  warning?: string;
-}
 
 function errorDetail(error: unknown): string {
   return error instanceof Error ? error.message : String(error);

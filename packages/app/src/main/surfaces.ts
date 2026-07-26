@@ -117,6 +117,16 @@ export const IPC_SURFACES: readonly IpcSurface[] = Object.freeze([
         budgetMs: 20,
       },
       getSnapshot: { paramsSchema: emptyParams, resultSchema: anyResult, budgetMs: 20 },
+      getWorkspaceState: {
+        paramsSchema: emptyParams,
+        resultSchema: anyResult,
+        budgetMs: 20,
+      },
+      setActiveDeliverable: {
+        paramsSchema: deliverableIdParams,
+        resultSchema: anyResult,
+        budgetMs: 20,
+      },
       listHistory: { paramsSchema: emptyParams, resultSchema: { type: "array" }, budgetMs: 20 },
       listProposals: { paramsSchema: emptyParams, resultSchema: { type: "array" }, budgetMs: 20 },
       readTranscript: { paramsSchema: emptyParams, resultSchema: { type: "array" }, budgetMs: 50 },
