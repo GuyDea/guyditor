@@ -267,4 +267,33 @@ describe("ProjectWorkspaceStateStore", () => {
       readFile(join(projectRoot, PROJECT_WORKSPACE_FILE), "utf8"),
     ).resolves.toBe(serialized(PRIMARY_DELIVERABLE_ID));
   });
+
+  it("cleans the sibling temp after rename failure and allows a later write", async () => {
+    const path = await root();
+    const obstruction = join(path, PROJECT_WORKSPACE_FILE);
+    await mkdir(obstruction);
+    const store = new ProjectWorkspaceStateStore(path);
+    const project = projectWithShort();
+
+    await expect(
+      store.setActiveDeliverable(project, SHORT_DELIVERABLE_ID),
+    ).rejects.toMatchObject({ syscall: "rename" });
+
+    const entriesAfterFailure = await readdir(path, { withFileTypes: true });
+    expect(entriesAfterFailure.map(({ name }) => name)).toEqual([
+      PROJECT_WORKSPACE_FILE,
+    ]);
+    expect(entriesAfterFailure[0]?.isDirectory()).toBe(true);
+    expect(
+      entriesAfterFailure.some(({ name }) => name.includes(".tmp-")),
+    ).toBe(false);
+
+    await rm(obstruction, { recursive: true });
+    await expect(
+      store.setActiveDeliverable(project, SHORT_DELIVERABLE_ID),
+    ).resolves.toEqual(expectedState(SHORT_DELIVERABLE_ID));
+    await expect(store.load(project)).resolves.toEqual({
+      state: expectedState(SHORT_DELIVERABLE_ID),
+    });
+  });
 });
