@@ -150,6 +150,38 @@ function withoutRevision(project: GuyditorProject): GuyditorProject {
   return { ...project, revision: "rev_00000" };
 }
 
+function expectDerivativeProvenance(
+  project: GuyditorProject,
+  clipId: string,
+  start: number,
+  end: number,
+): void {
+  expect.soft(
+    project.sequences.find(({ id }) => id === "seq_bbbbbbbbbb")?.clips,
+  ).toEqual([{
+    id: clipId,
+    asset: "ast_aaaaaaaaaa",
+    source: {
+      in: { frames: start, fps: "24/1" },
+      out: { frames: end, fps: "24/1" },
+    },
+  }]);
+  expect.soft(
+    project.deliverables.find(({ id }) => id === "dlv_bbbbbbbbbb")?.dependencies,
+  ).toEqual([{
+    derivativeClipId: clipId,
+    source: {
+      assetId: "ast_aaaaaaaaaa",
+      range: {
+        start: { frames: start, fps: "24/1" },
+        end: { frames: end, fps: "24/1" },
+      },
+      words: { startWordId: "w000002", endWordId: "w000003" },
+      longformClipId: "clp_aaaaaaaaaa",
+    },
+  }]);
+}
+
 describe("transcript range operations", () => {
   it("records range.remove as one semantic operation and its inverse restores the project", async () => {
     const { store, engine } = await fixture();
@@ -289,8 +321,9 @@ describe("transcript range operations", () => {
     const primaryBefore = structuredClone(
       store.currentProject.sequences.find(({ id }) => id === "seq_aaaaaaaaaa"),
     );
+    const cuts = { origin: "ui" as const, dryRun: false, divergence: "cuts" as const };
 
-    await valueOf(engine.execute(
+    const removed = await valueOf(engine.execute(
       store,
       [{
         op: "transcript.range.remove",
@@ -301,19 +334,53 @@ describe("transcript range operations", () => {
           snapPolicy: "none",
         },
       }],
-      { origin: "ui", dryRun: false, divergence: "cuts" },
+      cuts,
     ));
+    const normalizedRemove = {
+      op: removed.applied[0]!.op,
+      params: removed.applied[0]!.params,
+    };
 
-    expect(
+    expect.soft(normalizedRemove).toMatchObject({
+      op: "transcript.range.remove",
+      params: {
+        sequenceId: "seq_bbbbbbbbbb",
+        compiledSplits: [{ newClipId: "clp_dddddddddd" }],
+      },
+    });
+    expect.soft(
       store.currentProject.sequences.find(({ id }) => id === "seq_aaaaaaaaaa"),
     ).toEqual(primaryBefore);
-    expect(
-      store.currentProject.sequences.find(({ id }) => id === "seq_bbbbbbbbbb")
-        ?.clips.map(({ source }) => source),
-    ).toEqual([{
-      in: { frames: 48, fps: "24/1" },
-      out: { frames: 72, fps: "24/1" },
-    }]);
+    expectDerivativeProvenance(
+      store.currentProject,
+      "clp_dddddddddd",
+      48,
+      72,
+    );
+
+    await valueOf(engine.execute(store, removed.applied[0]!.inverse, cuts));
+
+    expect.soft(
+      store.currentProject.sequences.find(({ id }) => id === "seq_aaaaaaaaaa"),
+    ).toEqual(primaryBefore);
+    expectDerivativeProvenance(
+      store.currentProject,
+      "clp_cccccccccc",
+      36,
+      72,
+    );
+
+    await valueOf(engine.execute(store, [normalizedRemove], cuts));
+
+    expect.soft(
+      store.currentProject.sequences.find(({ id }) => id === "seq_aaaaaaaaaa"),
+    ).toEqual(primaryBefore);
+    expectDerivativeProvenance(
+      store.currentProject,
+      "clp_dddddddddd",
+      48,
+      72,
+    );
   });
 
   it("rejects an explicitly targeted sequence that does not exist", async () => {
@@ -368,6 +435,12 @@ describe("transcript range operations", () => {
       error: {
         code: "E_OP_RANGE_OUT_OF_BOUNDS",
         message: "The word range has no editable instance in sequence seq_bbbbbbbbbb.",
+        affected: [
+          "ast_aaaaaaaaaa",
+          "w000001",
+          "w000001",
+          "seq_bbbbbbbbbb",
+        ],
         acceptedStateChanged: false,
       },
     });

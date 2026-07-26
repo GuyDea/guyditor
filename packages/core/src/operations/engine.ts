@@ -138,6 +138,7 @@ import type { Result } from "../errors.js";
 import { validateSubjectiveAssessment } from "../assessments/index.js";
 import {
   formatRevision,
+  isId,
   makeId,
   parseRevision,
   validateProject,
@@ -711,6 +712,47 @@ function rangeContains(container: DependencyEntry["source"]["range"], candidate:
   return start.ok && end.ok && start.value !== 1 && end.value !== 1;
 }
 
+function splitClipIds(operation: AppliedOperation): string[] {
+  const direct = operation.op === "clip.split"
+    ? operation.params["newClipId"]
+    : undefined;
+  const compiled = operation.op === "transcript.range.remove" ||
+      operation.op === "transcript.range.retain"
+    ? operation.params["compiledSplits"]
+    : undefined;
+  return [
+    ...(isId("clp", direct) ? [direct] : []),
+    ...(Array.isArray(compiled)
+      ? compiled.flatMap((entry) => {
+          if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return [];
+          const newClipId = (entry as Record<string, unknown>)["newClipId"];
+          return isId("clp", newClipId) ? [newClipId] : [];
+        })
+      : []),
+  ];
+}
+
+function joinedClipParents(applied: readonly AppliedOperation[]): ReadonlyMap<string, readonly string[]> {
+  const parents = new Map<string, string[]>();
+  for (const operation of applied) {
+    const clipIds = operation.op === "clip.join"
+      ? operation.params["clipIds"]
+      : undefined;
+    if (
+      !Array.isArray(clipIds) || clipIds.length < 2 ||
+      !clipIds.every((clipId) => isId("clp", clipId))
+    ) {
+      continue;
+    }
+    const survivor = clipIds[0]!;
+    parents.set(survivor, [
+      ...(parents.get(survivor) ?? []),
+      ...clipIds.slice(1),
+    ]);
+  }
+  return parents;
+}
+
 function synchronizeDerivativeDependencies(
   before: GuyditorProject,
   after: GuyditorProject,
@@ -719,10 +761,8 @@ function synchronizeDerivativeDependencies(
 ): GuyditorProject {
   if (touched.length === 0) return after;
   const model = structuredClone(after);
-  const splitIds = new Set(applied.flatMap((operation) =>
-    operation.op === "clip.split" && typeof operation.params["newClipId"] === "string"
-      ? [operation.params["newClipId"]]
-      : []));
+  const splitIds = new Set(applied.flatMap(splitClipIds));
+  const joinedParents = joinedClipParents(applied);
   for (const deliverableId of touched) {
     const deliverable = model.deliverables.find(({ id }) => id === deliverableId);
     const priorDeliverable = before.deliverables.find(({ id }) => id === deliverableId);
@@ -752,11 +792,16 @@ function synchronizeDerivativeDependencies(
             sourceRangesOverlap(dependency.source.range, range) &&
             rangeContains(dependency.source.range, range))
         : undefined;
-      if (parent !== undefined) {
+      const joinedParent = joinedParents.get(clip.id)
+        ?.map((clipId) => byClip.get(clipId))
+        .find((dependency) =>
+          dependency !== undefined && dependency.source.assetId === clip.asset);
+      const inherited = parent ?? joinedParent;
+      if (inherited !== undefined) {
         delete clip.origin;
         dependencies.push({
           derivativeClipId: clip.id,
-          source: { ...structuredClone(parent.source), range },
+          source: { ...structuredClone(inherited.source), range },
         });
       } else if (!byClip.has(clip.id)) {
         clip.origin = "local";

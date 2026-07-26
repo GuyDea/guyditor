@@ -311,7 +311,7 @@ function removeWordRange(
     return operationFailure(
       "E_OP_RANGE_OUT_OF_BOUNDS",
       `The word range has no editable instance in sequence ${sequence.id}.`,
-      [range.value.assetId, wordRange.fromWord, wordRange.toWord],
+      [range.value.assetId, wordRange.fromWord, wordRange.toWord, sequence.id],
     );
   }
   const sidecar = sidecars.find(({ assetId }) => assetId === range.value.assetId)!;
