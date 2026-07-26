@@ -1204,9 +1204,10 @@ export class WindowServiceHost {
           pickTemplatePackage: async () => await this.#chooseTemplate?.() ?? null,
           open: ({ path }: { path: string }) => this.openProject(path),
           getSnapshot: () => this.snapshot(),
-          getWorkspaceState: () => project === undefined
-            ? Promise.reject(new Error("No project is open."))
-            : project.workspace.load(project.store.currentProject),
+          getWorkspaceState: () => {
+            const current = this.#requireProject();
+            return current.workspace.load(current.store.currentProject);
+          },
           setActiveDeliverable: ({ deliverableId }: { deliverableId: string }) => {
             const current = this.#requireProject();
             return current.workspace.setActiveDeliverable(

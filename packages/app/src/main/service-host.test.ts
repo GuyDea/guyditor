@@ -892,12 +892,14 @@ describe("AppServiceHost", () => {
     const created = await createProject(root, model);
     if (!created.ok) throw created.error;
 
+    const events: GdEvent[] = [];
     const appHost = testAppHost(userDirectory);
     const windowHost = appHost.createWindowHost({
-      publisher: new WindowEventPublisher(() => undefined),
+      publisher: new WindowEventPublisher((_channel, event) => events.push(event)),
     });
     try {
       await windowHost.openProject(root);
+      events.length = 0;
       await expect(access(join(root, "workspace.guyditor.yaml")))
         .rejects.toMatchObject({ code: "ENOENT" });
 
@@ -922,6 +924,7 @@ describe("AppServiceHost", () => {
         format: "guyditor.workspace/v1",
         activeDeliverableId: "dlv_bbbbbbbbbb",
       });
+      expect(events.filter(({ kind }) => kind === "project.revision")).toHaveLength(0);
       await expect(Reflect.apply(getWorkspace, projectService, []))
         .resolves.toEqual({
           state: {
@@ -945,6 +948,116 @@ describe("AppServiceHost", () => {
       await appHost.close();
       await Promise.all([
         rm(root, { recursive: true, force: true }),
+        rm(userDirectory, { recursive: true, force: true }),
+      ]);
+    }
+  });
+
+  it("binds retained workspace IPC methods to the currently open project", async () => {
+    const rootA = await mkdtemp(join(tmpdir(), "guyditor-host-workspace-a-"));
+    const rootB = await mkdtemp(join(tmpdir(), "guyditor-host-workspace-b-"));
+    const userDirectory = await mkdtemp(join(tmpdir(), "guyditor-host-workspace-switch-user-"));
+    const projectA = await createProject(rootA, projectFixture());
+    if (!projectA.ok) throw projectA.error;
+
+    const modelB = projectFixture();
+    modelB.project = {
+      ...modelB.project,
+      id: "prj_bbbbbbbbbb",
+      name: "Project B",
+    };
+    modelB.sequences.push({
+      id: "seq_bbbbbbbbbb",
+      name: "short",
+      clips: [{
+        id: "clp_cccccccccc",
+        asset: "ast_aaaaaaaaaa",
+        source: {
+          in: { frames: 0, fps: "24/1" },
+          out: { frames: 12, fps: "24/1" },
+        },
+      }],
+    });
+    modelB.layers.push({
+      id: "lyr_bbbbbbbbbb",
+      kind: "video",
+      name: "short video",
+      order: 0,
+      enabled: true,
+      locked: false,
+      sequence: "seq_bbbbbbbbbb",
+    });
+    modelB.captions.push({
+      ...structuredClone(modelB.captions[0]!),
+      id: "cts_bbbbbbbbbb",
+      name: "short captions",
+      sourceLayerIds: ["lyr_bbbbbbbbbb"],
+    });
+    modelB.deliverables.push({
+      id: "dlv_bbbbbbbbbb",
+      kind: "short",
+      name: "Portrait short",
+      profile: "youtube-shorts@1.0.0",
+      sequenceId: "seq_bbbbbbbbbb",
+      captionsTrackId: "cts_bbbbbbbbbb",
+      status: "draft",
+    });
+    const projectB = await createProject(rootB, modelB);
+    if (!projectB.ok) throw projectB.error;
+
+    const appHost = testAppHost(userDirectory);
+    const windowHost = appHost.createWindowHost({
+      publisher: new WindowEventPublisher(() => undefined),
+    });
+    try {
+      await windowHost.openProject(rootA);
+      const projectService = windowHost.resolveService("ProjectStore");
+      const open = projectService?.["open"];
+      const setActive = projectService?.["setActiveDeliverable"];
+      const getWorkspace = projectService?.["getWorkspaceState"];
+      if (
+        typeof open !== "function" ||
+        typeof setActive !== "function" ||
+        typeof getWorkspace !== "function"
+      ) {
+        throw new Error("Retained workspace-state IPC is unavailable.");
+      }
+
+      await expect(access(join(rootA, "workspace.guyditor.yaml")))
+        .rejects.toMatchObject({ code: "ENOENT" });
+      await Reflect.apply(open, projectService, [{ path: rootB }]);
+      await expect(access(join(rootB, "workspace.guyditor.yaml")))
+        .rejects.toMatchObject({ code: "ENOENT" });
+
+      await expect(Reflect.apply(setActive, projectService, [{
+        deliverableId: "dlv_bbbbbbbbbb",
+      }])).resolves.toEqual({
+        format: "guyditor.workspace/v1",
+        activeDeliverableId: "dlv_bbbbbbbbbb",
+      });
+      await expect(Reflect.apply(getWorkspace, projectService, []))
+        .resolves.toEqual({
+          state: {
+            format: "guyditor.workspace/v1",
+            activeDeliverableId: "dlv_bbbbbbbbbb",
+          },
+        });
+      await expect(readFile(join(rootB, "workspace.guyditor.yaml"), "utf8"))
+        .resolves.toBe(
+          [
+            "format: guyditor.workspace/v1",
+            "activeDeliverableId: dlv_bbbbbbbbbb",
+            "",
+          ].join("\n"),
+        );
+      await expect(access(join(rootA, "workspace.guyditor.yaml")))
+        .rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await windowHost.close();
+      await appHost.close();
+      await Promise.all([
+        rm(rootA, { recursive: true, force: true }),
+        rm(rootB, { recursive: true, force: true }),
         rm(userDirectory, { recursive: true, force: true }),
       ]);
     }
