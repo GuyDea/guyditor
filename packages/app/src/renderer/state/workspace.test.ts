@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { projectFixture } from "../../../../core/src/project/test-fixtures.js";
 import type { JobOverview } from "../../shared/ipc.js";
@@ -78,6 +78,17 @@ function legacyLayout(left = 250): Record<string, unknown> {
     },
   };
 }
+
+afterEach(() => {
+  useSelectionStore.setState({
+    selectedClipId: null,
+    selectedLayerId: null,
+    selectedWordId: null,
+    selectedAnnotationId: null,
+    selectedDeliverableId: null,
+    wordRange: null,
+  });
+});
 
 describe("workspace renderer state", () => {
   it("mirrors the global overview and derives active, waiting, and idle copy", () => {
@@ -260,6 +271,28 @@ describe("workspace renderer state", () => {
       playhead: { frames: 12, fps: "24/1" },
       settled: false,
       quality: "proxy",
+    });
+  });
+
+  it("atomically activates a deliverable and clears sequence-scoped selection", () => {
+    useSelectionStore.setState({
+      selectedClipId: "clp_aaaaaaaaaa",
+      selectedLayerId: "lyr_aaaaaaaaaa",
+      selectedWordId: "w000001",
+      selectedAnnotationId: "ann_aaaaaaaaaa",
+      selectedDeliverableId: "dlv_aaaaaaaaaa",
+      wordRange: { fromWord: "w000001", toWord: "w000002" },
+    });
+
+    useSelectionStore.getState().activateDeliverable("dlv_bbbbbbbbbb");
+
+    expect(useSelectionStore.getState()).toMatchObject({
+      selectedDeliverableId: "dlv_bbbbbbbbbb",
+      selectedClipId: null,
+      selectedLayerId: null,
+      selectedWordId: null,
+      selectedAnnotationId: null,
+      wordRange: null,
     });
   });
 

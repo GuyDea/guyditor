@@ -1,6 +1,8 @@
 import type {
   ExecuteRequest,
   ExecuteResult,
+  LoadedProjectWorkspaceState,
+  ProjectWorkspaceState,
   ProjectSnapshot,
 } from "../shared/ipc.js";
 import { useUndoStore } from "./state/undo.js";
@@ -8,6 +10,20 @@ import type { UndoOperation, UndoStackEntry } from "./state/undo.js";
 
 export function getSnapshot(): Promise<ProjectSnapshot> {
   return window.guyditor.call("ProjectStore", "getSnapshot", {});
+}
+
+export function getWorkspaceState(): Promise<LoadedProjectWorkspaceState> {
+  return window.guyditor.call("ProjectStore", "getWorkspaceState", {});
+}
+
+export function setActiveDeliverable(
+  deliverableId: string,
+): Promise<ProjectWorkspaceState> {
+  return window.guyditor.call(
+    "ProjectStore",
+    "setActiveDeliverable",
+    { deliverableId },
+  );
 }
 
 export function executeOperations(request: ExecuteRequest): Promise<ExecuteResult> {
