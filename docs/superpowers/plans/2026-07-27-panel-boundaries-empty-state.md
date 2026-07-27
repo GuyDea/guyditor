@@ -179,14 +179,14 @@ the approved visual behavior is absent.
 - Modify: `packages/app/src/renderer/styles.css:471-566`
 - Test: `packages/app/e2e/panel-management.spec.ts`
 
-> **Implementation correction (2026-07-27):** The original plan placed the inset
-> highlight on `.dock-region`, where opaque panel descendants occluded it. The
-> corrected implementation paints frame, focus, and drag shadows on a foreground
-> `::before` layer. A browser regression compares the top three rendered pixels
-> before and after disabling that layer, proving actual paint rather than only a
-> computed declaration.
+> **Implementation correction (2026-07-27):** The documented base has no resting
+> highlight, so the rendered-pixel regression starts RED with equal buffers. The
+> original attempted fix placed the inset on `.dock-region` and remained RED
+> because opaque panel descendants occluded it. The corrected implementation paints
+> frame, focus, and drag shadows on a foreground `::before` layer, proving actual
+> paint rather than only a computed declaration.
 
-- [ ] **Step 1: Add the rendered-pixel regression and verify the occluded-parent RED**
+- [ ] **Step 1: Add the rendered-pixel regression and verify the initial RED**
 
 Add a separate test named
 `resting dock highlight paints above opaque panel content` before changing CSS:
@@ -210,9 +210,11 @@ pnpm --filter @guyditor/app build
 pnpm --filter @guyditor/app exec playwright test --config playwright.config.ts panel-management.spec.ts --grep "paints above opaque panel content"
 ```
 
-Expected RED: the assertion reports expected `false`, received `true`, because the
-legacy parent inset is fully occluded by opaque panel content. After Step 2 moves
-the frame to the foreground `::before`, the same pixel comparison must pass.
+Expected RED on the documented base: the assertion reports expected `false`,
+received `true` because no resting highlight exists. The same regression remains
+RED for the attempted parent-inset implementation because opaque panel descendants
+occlude that highlight. It turns GREEN only after Step 2 paints the frame through
+the foreground `::before`.
 
 - [ ] **Step 2: Add the neutral resting frame as a foreground layer**
 
