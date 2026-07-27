@@ -39,6 +39,7 @@
     },
     "params": { "type": "object" },
     "seed": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+    "restoreIndex": { "type": "integer", "minimum": 0 },
     "restore": { "type": "object", "additionalProperties": true }
   }
 }

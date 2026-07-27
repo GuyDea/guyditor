@@ -1,7 +1,17 @@
 import { describe, expect, it } from "vitest";
 
-import { OperationEngine, success } from "../index.js";
-import type { IdPrefix, Result } from "../index.js";
+import {
+  failure,
+  makeGuyditorError,
+  OperationEngine,
+  success,
+} from "../index.js";
+import type {
+  IdPrefix,
+  OperationCommitter,
+  Result,
+  TransactionRecord,
+} from "../index.js";
 import { projectFixture } from "../project/test-fixtures.js";
 
 const TEMPLATE_ID = "tpl_a2c3d4e5f6";
@@ -75,6 +85,77 @@ function grandfatheredGraphicProject() {
     items: [graphic],
   });
   return { project, graphic };
+}
+
+function explicitUnresolvedGraphicProject() {
+  const project = projectFixture();
+  project.templates = {
+    [TEMPLATE_ID]: { version: descriptor.version, contentHash: descriptor.contentHash },
+  };
+  const graphic = {
+    id: "gfx_bbbbbbbbbb",
+    sequenceId: "seq_aaaaaaaaaa",
+    template: TEMPLATE_ID,
+    at: "clip:clp_dddddddddd@0",
+    duration: { frames: 12, fps: "24/1" },
+    params: { title: "Unresolved" },
+    seed: 7,
+  };
+  project.layers.push({
+    id: "lyr_bbbbbbbbbb",
+    kind: "animation",
+    name: "Graphics",
+    order: 1,
+    enabled: true,
+    locked: false,
+    items: [graphic],
+  });
+  return { project, graphic };
+}
+
+function templateProvider() {
+  return {
+    latest: () => Promise.resolve(success(descriptor)),
+    get: () => Promise.resolve(success(descriptor)),
+  };
+}
+
+function transactionCommitter(): {
+  committer: OperationCommitter;
+  transactions: TransactionRecord[];
+} {
+  const transactions: TransactionRecord[] = [];
+  return {
+    transactions,
+    committer: {
+      async commit(model, transaction) {
+        transactions.push(structuredClone(transaction));
+        return success(model);
+      },
+      async readTransaction(id) {
+        const transaction = transactions.find((candidate) => candidate.id === id);
+        return transaction === undefined
+          ? failure(makeGuyditorError(
+              "E_PROJECT_TRANSACTION",
+              `Transaction ${id} was not found.`,
+              { affected: [id] },
+            ))
+          : success(structuredClone(transaction));
+      },
+    },
+  };
+}
+
+function spareGraphicLayer() {
+  return {
+    id: "lyr_cccccccccc",
+    kind: "animation" as const,
+    name: "Spare graphics",
+    order: 2,
+    enabled: true,
+    locked: false,
+    items: [],
+  };
 }
 
 describe("FR-600/601 graphic operation catalog", () => {
@@ -206,6 +287,7 @@ describe("FR-600/601 graphic operation catalog", () => {
       op: "graphic.add",
       params: {
         sequenceId: "seq_aaaaaaaaaa",
+        restoreIndex: 0,
         restore: scopedGraphic,
       },
     }]);
@@ -322,11 +404,19 @@ describe("FR-600/601 graphic operation catalog", () => {
 
   it("restores the exact captured grandfathered graphic through its remove inverse", async () => {
     const { project, graphic } = grandfatheredGraphicProject();
-    const provider = {
-      latest: () => Promise.resolve(success(descriptor)),
-      get: () => Promise.resolve(success(descriptor)),
-    };
-    const engine = new OperationEngine(project, { templateProvider: provider });
+    const graphicLayer = project.layers.find(({ id }) => id === "lyr_bbbbbbbbbb")!;
+    graphicLayer.items!.push({
+      id: "gfx_cccccccccc",
+      template: TEMPLATE_ID,
+      at: "timeline:seq_aaaaaaaaaa@20",
+      duration: { frames: 12, fps: "24/1" },
+      params: { title: "Sibling" },
+      seed: 8,
+    });
+    const originalItems = structuredClone(graphicLayer.items!);
+    const engine = new OperationEngine(project, {
+      templateProvider: templateProvider(),
+    });
 
     const removed = await valueOf(engine.execute([{
       op: "graphic.remove",
@@ -336,7 +426,7 @@ describe("FR-600/601 graphic operation catalog", () => {
       origin: "ui",
       dryRun: false,
     }));
-    expect(engine.currentProject.layers.at(-1)!.items).toEqual([]);
+    expect(engine.currentProject.layers.at(-1)!.items).toEqual(originalItems.slice(1));
 
     await valueOf(engine.undo());
 
@@ -350,19 +440,23 @@ describe("FR-600/601 graphic operation catalog", () => {
         duration: graphic.duration,
         params: graphic.params,
         seed: graphic.seed,
+        restoreIndex: 0,
         restore: graphic,
       },
     }]);
-    expect(engine.currentProject.layers.at(-1)!.items).toEqual([graphic]);
+    expect(engine.currentProject.layers.find(({ id }) => id === "lyr_bbbbbbbbbb")!.items)
+      .toEqual(originalItems);
   });
 
-  it("rejects a captured graphic restore that disagrees with its addressing fields", async () => {
-    const { project, graphic } = grandfatheredGraphicProject();
-    const provider = {
-      latest: () => Promise.resolve(success(descriptor)),
-      get: () => Promise.resolve(success(descriptor)),
-    };
-    const engine = new OperationEngine(project, { templateProvider: provider });
+  it.each([
+    ["unowned contradictory", grandfatheredGraphicProject],
+    ["explicit-owner unresolved", explicitUnresolvedGraphicProject],
+  ] as const)("rejects direct %s captured restoration without engine authorization", async (
+    _kind,
+    fixture,
+  ) => {
+    const { project, graphic } = fixture();
+    const engine = new OperationEngine(project, { templateProvider: templateProvider() });
     const removed = await valueOf(engine.execute([{
       op: "graphic.remove",
       params: { graphicId: graphic.id },
@@ -372,13 +466,8 @@ describe("FR-600/601 graphic operation catalog", () => {
       dryRun: false,
     }));
     const accepted = structuredClone(engine.currentProject);
-    const tampered = structuredClone(removed.applied[0]!.inverse);
-    tampered[0]!.params["restore"] = {
-      ...structuredClone(graphic),
-      at: "timeline:seq_bbbbbbbbbb@4",
-    };
 
-    await expect(engine.execute(tampered, {
+    await expect(engine.execute(removed.applied[0]!.inverse, {
       baseRevision: engine.currentProject.revision,
       origin: "ui",
       dryRun: false,
@@ -394,48 +483,191 @@ describe("FR-600/601 graphic operation catalog", () => {
   });
 
   it("restores a captured explicit-owner graphic with a legacy unresolved anchor", async () => {
-    const project = projectFixture();
-    project.templates = {
-      [TEMPLATE_ID]: { version: descriptor.version, contentHash: descriptor.contentHash },
-    };
-    project.layers.push({
-      id: "lyr_bbbbbbbbbb",
-      kind: "animation",
-      name: "Graphics",
-      order: 1,
-      enabled: true,
-      locked: false,
-      items: [{
-        id: "gfx_bbbbbbbbbb",
-        sequenceId: "seq_aaaaaaaaaa",
-        template: TEMPLATE_ID,
-        at: "clip:clp_dddddddddd@0",
-        duration: { frames: 12, fps: "24/1" },
-        params: { title: "Unresolved" },
-        seed: 7,
-      }],
-    });
-    const graphic = structuredClone(project.layers.at(-1)!.items![0]!);
-    const provider = {
-      latest: () => Promise.resolve(success(descriptor)),
-      get: () => Promise.resolve(success(descriptor)),
-    };
-    const engine = new OperationEngine(project, { templateProvider: provider });
-    const removed = await valueOf(engine.execute([{
+    const { project, graphic } = explicitUnresolvedGraphicProject();
+    const engine = new OperationEngine(project, { templateProvider: templateProvider() });
+    await valueOf(engine.execute([{
       op: "graphic.remove",
-      params: { graphicId: "gfx_bbbbbbbbbb" },
+      params: { graphicId: graphic.id },
     }], {
       baseRevision: project.revision,
       origin: "ui",
       dryRun: false,
     }));
 
-    await valueOf(engine.execute(removed.applied[0]!.inverse, {
-      baseRevision: engine.currentProject.revision,
+    await valueOf(engine.undo());
+    expect(engine.currentProject.layers.at(-1)!.items).toEqual([graphic]);
+  });
+
+  it("authorizes an exact recorded graphic inverse on a fresh engine", async () => {
+    const { project, graphic } = grandfatheredGraphicProject();
+    const { committer } = transactionCommitter();
+    const removing = new OperationEngine(project, {
+      committer,
+      idFactory: ids,
+      templateProvider: templateProvider(),
+    });
+    const removed = await valueOf(removing.execute([{
+      op: "graphic.remove",
+      params: { graphicId: graphic.id },
+    }], {
+      baseRevision: project.revision,
+      origin: "ui",
+      dryRun: false,
+      recordUndo: false,
+    }));
+    const fresh = new OperationEngine(removing.currentProject, {
+      committer,
+      idFactory: ids,
+      templateProvider: templateProvider(),
+    });
+
+    await valueOf(fresh.execute(removed.applied[0]!.inverse, {
+      baseRevision: fresh.currentProject.revision,
+      origin: "ui",
+      dryRun: false,
+      undoOf: removed.transactionId!,
+      recordUndo: false,
+    }));
+    expect(fresh.currentProject.layers.at(-1)!.items).toEqual([graphic]);
+  });
+
+  it.each(["layout", "addressing", "layer", "undoOf"] as const)(
+    "rejects %s tampering against a recorded graphic inverse",
+    async (tamper) => {
+      const { project, graphic } = grandfatheredGraphicProject();
+      project.layers.push(spareGraphicLayer());
+      const { committer } = transactionCommitter();
+      const removing = new OperationEngine(project, {
+        committer,
+        idFactory: ids,
+        templateProvider: templateProvider(),
+      });
+      const removed = await valueOf(removing.execute([{
+        op: "graphic.remove",
+        params: { graphicId: graphic.id },
+      }], {
+        baseRevision: project.revision,
+        origin: "ui",
+        dryRun: false,
+        recordUndo: false,
+      }));
+      const fresh = new OperationEngine(removing.currentProject, {
+        committer,
+        idFactory: ids,
+        templateProvider: templateProvider(),
+      });
+      const requested = structuredClone(removed.applied[0]!.inverse);
+      if (tamper === "layout") {
+        const restore = requested[0]!.params["restore"] as Record<string, unknown>;
+        restore["layout"] = { align: "tampered" };
+      } else if (tamper === "addressing") {
+        const anchor = "timeline:seq_bbbbbbbbbb@4";
+        requested[0]!.params["anchor"] = anchor;
+        const restore = requested[0]!.params["restore"] as Record<string, unknown>;
+        restore["at"] = anchor;
+      } else if (tamper === "layer") {
+        requested[0]!.params["layerId"] = "lyr_cccccccccc";
+      }
+      const accepted = structuredClone(fresh.currentProject);
+
+      await expect(fresh.execute(requested, {
+        baseRevision: fresh.currentProject.revision,
+        origin: "ui",
+        dryRun: false,
+        undoOf: tamper === "undoOf" ? "txn_aaaaaaaaaa" : removed.transactionId!,
+        recordUndo: false,
+      })).resolves.toMatchObject({
+        ok: false,
+        error: {
+          code: "E_OP_CAPTURE_MISMATCH",
+          acceptedStateChanged: false,
+        },
+      });
+      expect(fresh.currentProject).toEqual(accepted);
+    },
+  );
+
+  it("protects trusted in-memory undo from mutations to the returned inverse", async () => {
+    const { project, graphic } = grandfatheredGraphicProject();
+    project.layers.push(spareGraphicLayer());
+    const engine = new OperationEngine(project, {
+      idFactory: ids,
+      templateProvider: templateProvider(),
+    });
+    const removed = await valueOf(engine.execute([{
+      op: "graphic.remove",
+      params: { graphicId: graphic.id },
+    }], {
+      baseRevision: project.revision,
       origin: "ui",
       dryRun: false,
     }));
-    expect(engine.currentProject.layers.at(-1)!.items).toEqual([graphic]);
+    const exposed = removed.applied[0]!.inverse[0]!;
+    exposed.params["layerId"] = "lyr_cccccccccc";
+    const exposedRestore = exposed.params["restore"] as Record<string, unknown>;
+    exposedRestore["layout"] = { align: "tampered" };
+
+    await valueOf(engine.undo());
+    expect(engine.currentProject.layers.find(({ id }) => id === "lyr_bbbbbbbbbb")!.items)
+      .toEqual([graphic]);
+    expect(engine.currentProject.layers.find(({ id }) => id === "lyr_cccccccccc")!.items)
+      .toEqual([]);
+  });
+
+  it("undoes a retime repair back to an unowned grandfathered conflict", async () => {
+    const { project, graphic } = grandfatheredGraphicProject();
+    const engine = new OperationEngine(project, { templateProvider: templateProvider() });
+
+    await valueOf(engine.execute([{
+      op: "graphic.retime",
+      params: {
+        graphicId: graphic.id,
+        duration: { until: "timeline:seq_aaaaaaaaaa@12" },
+      },
+    }], {
+      baseRevision: project.revision,
+      origin: "ui",
+      dryRun: false,
+    }));
+    await valueOf(engine.undo());
+
+    expect(engine.currentProject.layers.at(-1)!.items).toMatchObject([graphic]);
+  });
+
+  it("authorizes a recorded reanchor repair inverse on a fresh engine", async () => {
+    const { project, graphic } = explicitUnresolvedGraphicProject();
+    const { committer } = transactionCommitter();
+    const repairing = new OperationEngine(project, {
+      committer,
+      idFactory: ids,
+      templateProvider: templateProvider(),
+    });
+    const repaired = await valueOf(repairing.execute([{
+      op: "graphic.anchor.set",
+      params: {
+        graphicId: graphic.id,
+        anchor: "timeline:seq_aaaaaaaaaa@4",
+      },
+    }], {
+      baseRevision: project.revision,
+      origin: "ui",
+      dryRun: false,
+      recordUndo: false,
+    }));
+    const fresh = new OperationEngine(repairing.currentProject, {
+      committer,
+      idFactory: ids,
+      templateProvider: templateProvider(),
+    });
+    await valueOf(fresh.execute(repaired.applied[0]!.inverse, {
+      baseRevision: fresh.currentProject.revision,
+      origin: "ui",
+      dryRun: false,
+      undoOf: repaired.transactionId!,
+      recordUndo: false,
+    }));
+
+    expect(fresh.currentProject.layers.at(-1)!.items).toMatchObject([graphic]);
   });
 
   it("rejects missing sequence ownership and sequence-owned placement layers", async () => {
@@ -759,14 +991,11 @@ describe("FR-600/601 graphic operation catalog", () => {
         duration: { until: "timeline:seq_aaaaaaaaaa@20" },
         params: { title: "Anchored" },
         seed: 9,
+        restoreIndex: 0,
         restore: removedGraphic,
       },
     }]);
-    await valueOf(engine.execute(removed.applied[0]!.inverse, {
-      baseRevision: "rev_00003",
-      origin: "ui",
-      dryRun: false,
-    }));
+    await valueOf(engine.undo());
     expect(engine.currentProject.layers[1]!.items![0]).toEqual(removedGraphic);
   });
 

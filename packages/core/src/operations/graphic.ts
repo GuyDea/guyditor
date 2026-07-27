@@ -222,6 +222,7 @@ async function applyAdd(
   provider: TemplateProvider,
   idFactory: IdFactory,
   seedFactory: () => number,
+  trustedInverse: boolean,
 ): Promise<Result<ClipApplication>> {
   const templateId = input.params["templateId"] as string;
   const sequenceId = input.params["sequenceId"] as string | undefined;
@@ -302,10 +303,15 @@ async function applyAdd(
     seed,
   };
   const restore = input.params["restore"] as PlacedItem | undefined;
-  if (restore !== undefined && !graphicRestoreMatchesAddressing(restore, item)) {
+  const restoreIndex = input.params["restoreIndex"] as number | undefined;
+  if (
+    (restore !== undefined &&
+      (!trustedInverse || !graphicRestoreMatchesAddressing(restore, item))) ||
+    (restore === undefined && restoreIndex !== undefined)
+  ) {
     return graphicFailure(
       "E_OP_CAPTURE_MISMATCH",
-      "Captured graphic payload does not match graphic.add addressing fields.",
+      "Captured graphic payload is unauthorized or does not match graphic.add addressing fields.",
       [graphicId],
     );
   }
@@ -320,7 +326,20 @@ async function applyAdd(
       sequenceConflict,
     );
   }
-  const nextLayer: Layer = { ...layer, items: [...(layer.items ?? []), added] };
+  const items = [...(layer.items ?? [])];
+  if (restoreIndex !== undefined) {
+    if (restoreIndex > items.length) {
+      return graphicFailure(
+        "E_OP_CAPTURE_MISMATCH",
+        `Captured graphic insertion index ${String(restoreIndex)} is outside layer ${layer.id}.`,
+        [graphicId, layer.id],
+      );
+    }
+    items.splice(restoreIndex, 0, added);
+  } else {
+    items.push(added);
+  }
+  const nextLayer: Layer = { ...layer, items };
   delete nextLayer.sequence;
   const layers = createdLayer === undefined
     ? project.layers.map((candidate) => candidate.id === nextLayer.id ? nextLayer : candidate)
@@ -419,6 +438,7 @@ async function applyItemField(
   input: OperationInput,
   provider: TemplateProvider,
   field: "at" | "duration",
+  trustedInverse: boolean,
 ): Promise<Result<ClipApplication>> {
   const graphicId = input.params["graphicId"] as string;
   const located = graphicLocation(project, graphicId);
@@ -435,7 +455,7 @@ async function applyItemField(
   const after = structuredClone(input.params[parameter] as PlacedItem[typeof field]);
   const item = { ...located.item, [field]: after };
   const sequenceConflict = graphicSequenceConflictAffected(project, item);
-  if (sequenceConflict !== undefined) {
+  if (sequenceConflict !== undefined && !trustedInverse) {
     return graphicFailure(
       "E_GRAPHIC_SEQUENCE_CONFLICT",
       `Graphic ${graphicId} has contradictory or unresolved sequence-qualified anchors.`,
@@ -504,6 +524,7 @@ async function applyRemove(
         duration: structuredClone(removed.duration),
         params,
         seed: removed.seed!,
+        restoreIndex: located.itemIndex,
         restore: removed,
       },
     }],
@@ -524,18 +545,19 @@ export async function applyGraphicOperation(
   provider: TemplateProvider,
   idFactory: IdFactory,
   seedFactory: () => number,
+  trustedInverse = false,
 ): Promise<Result<ClipApplication>> {
   if (input.op === "graphic.add") {
-    return applyAdd(project, input, provider, idFactory, seedFactory);
+    return applyAdd(project, input, provider, idFactory, seedFactory, trustedInverse);
   }
   if (input.op === "graphic.param.set") {
     return applyParamSet(project, input, provider);
   }
   if (input.op === "graphic.anchor.set") {
-    return applyItemField(project, input, provider, "at");
+    return applyItemField(project, input, provider, "at", trustedInverse);
   }
   if (input.op === "graphic.retime") {
-    return applyItemField(project, input, provider, "duration");
+    return applyItemField(project, input, provider, "duration", trustedInverse);
   }
   if (input.op === "graphic.remove") {
     return applyRemove(project, input, provider);

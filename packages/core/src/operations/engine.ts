@@ -644,6 +644,54 @@ function operationFailure(
   return failure(makeGuyditorError(code, message, { affected }));
 }
 
+function sameOperationValue(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true;
+  if (Array.isArray(left) && Array.isArray(right)) {
+    return left.length === right.length &&
+      left.every((value, index) => sameOperationValue(value, right[index]));
+  }
+  if (
+    typeof left !== "object" || left === null || Array.isArray(left) ||
+    typeof right !== "object" || right === null || Array.isArray(right)
+  ) {
+    return false;
+  }
+  const leftRecord = left as Record<string, unknown>;
+  const rightRecord = right as Record<string, unknown>;
+  const leftKeys = Object.keys(leftRecord).sort();
+  const rightKeys = Object.keys(rightRecord).sort();
+  return leftKeys.length === rightKeys.length &&
+    leftKeys.every((key, index) =>
+      key === rightKeys[index] &&
+      sameOperationValue(leftRecord[key], rightRecord[key]));
+}
+
+function transactionInverse(
+  transaction: TransactionRecord,
+): OperationInput[] | undefined {
+  const inverse: OperationInput[] = [];
+  for (const operation of transaction.operations.slice().reverse()) {
+    if (operation.inverse === undefined) return undefined;
+    inverse.push(...(Array.isArray(operation.inverse)
+      ? operation.inverse
+      : [operation.inverse]));
+  }
+  return inverse;
+}
+
+function sameOperationBatch(
+  requested: readonly OperationInput[],
+  recorded: readonly OperationInput[],
+): boolean {
+  return requested.length === recorded.length &&
+    requested.every((operation, index) => {
+      const expected = recorded[index];
+      return expected !== undefined &&
+        operation.op === expected.op &&
+        sameOperationValue(operation.params, expected.params);
+    });
+}
+
 function actorFor(context: OperationContext): TransactionRecord["actor"] {
   if (context.origin === "ui") return { kind: "human", id: "ui" };
   if (context.origin === "agent") {
@@ -993,7 +1041,26 @@ export class OperationEngine {
     batch: OperationInput[],
     context: OperationContext,
   ): Promise<Result<OperationBatchResult>> {
-    return this.#execute(batch, context, false);
+    const trustedInverse = context.undoOf === undefined
+      ? false
+      : await this.#matchesRecordedInverse(batch, context.undoOf);
+    return this.#execute(batch, context, false, undefined, trustedInverse);
+  }
+
+  async #matchesRecordedInverse(
+    batch: readonly OperationInput[],
+    transactionId: string,
+  ): Promise<boolean> {
+    const reader = this.#committer?.readTransaction;
+    if (reader === undefined) return false;
+    try {
+      const loaded = await reader.call(this.#committer, transactionId);
+      if (!loaded.ok || loaded.value.id !== transactionId) return false;
+      const inverse = transactionInverse(loaded.value);
+      return inverse !== undefined && sameOperationBatch(batch, inverse);
+    } catch {
+      return false;
+    }
   }
 
   async #execute(
@@ -1001,6 +1068,7 @@ export class OperationEngine {
     context: OperationContext,
     allowProposalCommit: boolean,
     captureDryRun?: (project: GuyditorProject) => void,
+    trustedInverse = false,
   ): Promise<Result<OperationBatchResult>> {
     const base = this.#project;
     if (context.baseRevision !== base.revision) {
@@ -1100,6 +1168,7 @@ export class OperationEngine {
               this.#templateProvider,
               this.#idFactory,
               this.#seedFactory,
+              trustedInverse,
             );
       } else if (requested.op.startsWith("template.")) {
         application = this.#templateProvider === undefined
@@ -1310,12 +1379,12 @@ export class OperationEngine {
       context.undoOf === undefined &&
       context.redoOf === undefined
     ) {
-      this.#undoStack.push({
+      this.#undoStack.push(structuredClone({
         transactionId,
         inverse: applied.slice().reverse().flatMap(({ inverse }) => inverse),
         redo: applied.map(({ op, params }) => ({ op, params })),
         expectedHead: committed.value.revision,
-      });
+      }));
       this.#redoStack.splice(0);
     }
     return success({ ...result, transactionId });
@@ -1341,13 +1410,19 @@ export class OperationEngine {
         [entry.transactionId],
       );
     }
-    const undone = await this.execute(entry.inverse, {
-      baseRevision: this.#project.revision,
-      origin: "ui",
-      dryRun: false,
-      undoOf: entry.transactionId,
-      recordUndo: false,
-    });
+    const undone = await this.#execute(
+      entry.inverse,
+      {
+        baseRevision: this.#project.revision,
+        origin: "ui",
+        dryRun: false,
+        undoOf: entry.transactionId,
+        recordUndo: false,
+      },
+      false,
+      undefined,
+      true,
+    );
     if (!undone.ok) return undone;
     this.#undoStack.pop();
     this.#redoStack.push({
@@ -1410,27 +1485,28 @@ export class OperationEngine {
     }
     const loaded = await reader.call(this.#committer, id);
     if (!loaded.ok) return loaded;
-    const inverse: OperationInput[] = [];
-    for (const operation of loaded.value.operations.slice().reverse()) {
-      if (operation.inverse === undefined) {
-        return operationFailure(
-          "E_OP_REVERT_CONFLICT",
-          `Transaction ${id} has no complete inverse; restore its base revision instead.`,
-          [id],
-        );
-      }
-      inverse.push(...(Array.isArray(operation.inverse)
-        ? operation.inverse
-        : [operation.inverse]));
+    const inverse = transactionInverse(loaded.value);
+    if (inverse === undefined) {
+      return operationFailure(
+        "E_OP_REVERT_CONFLICT",
+        `Transaction ${id} has no complete inverse; restore its base revision instead.`,
+        [id],
+      );
     }
-    const reverted = await this.execute(inverse, {
-      baseRevision: this.#project.revision,
-      origin: "ui",
-      dryRun: false,
-      instruction: { kind: "ui-direct" },
-      reason: `Revert transaction ${id}`,
-      recordUndo: false,
-    });
+    const reverted = await this.#execute(
+      inverse,
+      {
+        baseRevision: this.#project.revision,
+        origin: "ui",
+        dryRun: false,
+        instruction: { kind: "ui-direct" },
+        reason: `Revert transaction ${id}`,
+        recordUndo: false,
+      },
+      false,
+      undefined,
+      true,
+    );
     return reverted.ok
       ? reverted
       : operationFailure(
