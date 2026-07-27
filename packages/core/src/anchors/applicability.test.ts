@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   placedItemAppliesToSequence,
+  placedItemOwnershipConsistency,
 } from "../index.js";
 import type { PlacedItem } from "../index.js";
 import { projectFixture } from "../project/test-fixtures.js";
@@ -33,6 +34,35 @@ function item(overrides: Partial<PlacedItem> = {}): PlacedItem {
 }
 
 describe("placed item sequence applicability", () => {
+  it("reports explicit and contradictory inferred ownership conflicts separately from orphanable anchors", () => {
+    const project = twoSequenceProject();
+
+    expect(placedItemOwnershipConsistency(project, item({
+      sequenceId: "seq_aaaaaaaaaa",
+      at: "timeline:seq_bbbbbbbbbb@4",
+    }))).toMatchObject({
+      consistent: false,
+      explicitSequenceId: "seq_aaaaaaaaaa",
+      inferredSequenceIds: ["seq_bbbbbbbbbb"],
+    });
+    expect(placedItemOwnershipConsistency(project, item({
+      at: "timeline:seq_aaaaaaaaaa@4",
+      duration: { until: "clip:clp_cccccccccc@0" },
+    }))).toMatchObject({
+      consistent: false,
+      inferredSequenceIds: ["seq_aaaaaaaaaa", "seq_bbbbbbbbbb"],
+    });
+    expect(placedItemOwnershipConsistency(project, item({
+      sequenceId: "seq_aaaaaaaaaa",
+      at: "ann:ann_bbbbbbbbbb",
+      duration: { until: "word:w999999" },
+    }))).toMatchObject({
+      consistent: true,
+      explicitSequenceId: "seq_aaaaaaaaaa",
+      inferredSequenceIds: [],
+    });
+  });
+
   it("treats explicit ownership as authoritative and rejects conflicting qualified anchors", () => {
     const project = twoSequenceProject();
     const scoped = item({ sequenceId: "seq_bbbbbbbbbb" });

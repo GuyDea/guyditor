@@ -61,6 +61,7 @@ import {
 import {
   createRestyleContext,
   keyRestylePlan,
+  restylePlanContractError,
   restylePlanForContext,
 } from "./state/restyle-context.js";
 import type {
@@ -141,6 +142,11 @@ export function App(): React.JSX.Element {
   const redoCount = useUndoStore((state) => state.redo.length);
   const restyleContext = activeRestyleContext(snapshot, selectedDeliverableId);
   const restylePlan = restylePlanForContext(restylePlanState, restyleContext);
+  const currentRestyleContextKey = useRef(restyleContext?.key ?? null);
+  if (currentRestyleContextKey.current !== (restyleContext?.key ?? null)) {
+    invalidateContextRequests(restylePlanGate.current);
+  }
+  currentRestyleContextKey.current = restyleContext?.key ?? null;
 
   const applyChecklistSignal = useCallback((signal: OnboardingSignal): void => {
     setOnboarding((current) => {
@@ -253,6 +259,14 @@ export function App(): React.JSX.Element {
         request,
         current?.key ?? null,
       )) {
+        if (next !== null) {
+          const contractError = restylePlanContractError(next, context);
+          if (contractError !== null) {
+            setRestylePlanState(keyRestylePlan(context, null));
+            setNotice(contractError);
+            return;
+          }
+        }
         setRestylePlanState(keyRestylePlan(context, next));
       }
     } catch {
@@ -268,6 +282,10 @@ export function App(): React.JSX.Element {
         setRestylePlanState(keyRestylePlan(context, null));
       }
     }
+  }, []);
+
+  useEffect(() => () => {
+    invalidateContextRequests(restylePlanGate.current);
   }, []);
 
   const refreshOverview = useCallback(async (): Promise<void> => {

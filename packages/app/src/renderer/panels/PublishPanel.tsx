@@ -7,29 +7,33 @@ import {
   resolveActiveDeliverable,
 } from "../active-deliverable.js";
 import { errorMessage } from "../ipc.js";
-import {
-  beginContextRequest,
-  createContextRequestGate,
-  invalidateContextRequests,
-  isContextRequestCurrent,
-} from "../state/async-context.js";
 import type { ContextRequest } from "../state/async-context.js";
 import { useSelectionStore } from "../state/view-state.js";
 import { Panel } from "./Panel.js";
 import {
   batchIdsForProject,
+  beginPublishRequest,
   contextualValue,
   createPublishBatchState,
   createPublishMetadataState,
+  createPublishRequestGates,
   editPublishMetadata,
+  invalidatePublishRequest,
+  invalidatePublishRequests,
+  isPublishRequestCurrent,
   publishContextKey,
   publishMetadataForContext,
+  publishRequestKeys,
   reconcilePublishBatch,
   reconcilePublishMetadata,
   replacePublishMetadata,
   valueForContext,
 } from "./publish-runtime.js";
-import type { ContextualValue } from "./publish-runtime.js";
+import type {
+  ContextualValue,
+  PublishRequestKeys,
+  PublishRequestResource,
+} from "./publish-runtime.js";
 import type { WorkspacePanelProps } from "./types.js";
 
 function codePoints(value: string): number {
@@ -46,6 +50,15 @@ function outputContents(deliverable: Deliverable): string[] {
     ? [...common, "covers/cover-01..06.jpg"]
     : [...common, "thumbnail.png", "chapters.txt"];
 }
+
+const PUBLISH_REQUEST_RESOURCES = [
+  "metadata",
+  "chapters",
+  "thumbnail",
+  "output",
+  "otio",
+  "batch",
+] as const satisfies readonly PublishRequestResource[];
 
 export function PublishPanel({ snapshot, refreshProject, refreshExportReport, setNotice }: WorkspacePanelProps): React.JSX.Element {
   const selectedId = useSelectionStore((state) => state.selectedDeliverableId);
@@ -79,12 +92,15 @@ export function PublishPanel({ snapshot, refreshProject, refreshExportReport, se
   const otioRequestKey = contextKey === null
     ? null
     : JSON.stringify([contextKey, otioMediaPaths, otioAnnotations]);
-  const operationGate = useRef(createContextRequestGate());
-  const otioGate = useRef(createContextRequestGate());
-  const currentContextKey = useRef(contextKey);
-  const currentOtioRequestKey = useRef(otioRequestKey);
-  currentContextKey.current = contextKey;
-  currentOtioRequestKey.current = otioRequestKey;
+  const requestGates = useRef(createPublishRequestGates());
+  const requestKeys = publishRequestKeys(projectPath, contextKey, otioRequestKey);
+  const currentRequestKeys = useRef<PublishRequestKeys>(requestKeys);
+  for (const resource of PUBLISH_REQUEST_RESOURCES) {
+    if (currentRequestKeys.current[resource] !== requestKeys[resource]) {
+      invalidatePublishRequest(requestGates.current, resource);
+    }
+  }
+  currentRequestKeys.current = requestKeys;
   const otioLosses = valueForContext(otioPreview, otioRequestKey);
   const profile = profiles.find(({ id, version }) => `${id}@${version}` === deliverable?.profile);
 
@@ -100,18 +116,20 @@ export function PublishPanel({ snapshot, refreshProject, refreshExportReport, se
   }, [canonicalMetadata, contextKey]);
 
   useEffect(() => {
-    invalidateContextRequests(operationGate.current);
-  }, [contextKey]);
-
-  useEffect(() => {
     setBatchState((current) =>
       reconcilePublishBatch(current, projectPath, deliverables));
   }, [deliverables, projectPath]);
 
   useEffect(() => {
-    invalidateContextRequests(otioGate.current);
     setOtioPreview(null);
   }, [otioRequestKey]);
+
+  useEffect(() => () => {
+    invalidatePublishRequests(
+      requestGates.current,
+      PUBLISH_REQUEST_RESOURCES,
+    );
+  }, []);
 
   const counts = useMemo(() => ({
     title: codePoints(metadata?.title ?? ""),
@@ -120,66 +138,49 @@ export function PublishPanel({ snapshot, refreshProject, refreshExportReport, se
     hashtags: metadata?.hashtags.length ?? 0,
   }), [metadata]);
 
-  function operationIsCurrent(request: ContextRequest): boolean {
-    return isContextRequestCurrent(
-      operationGate.current,
+  function requestIsCurrent(
+    resource: PublishRequestResource,
+    request: ContextRequest,
+  ): boolean {
+    return isPublishRequestCurrent(
+      requestGates.current,
+      resource,
       request,
-      currentContextKey.current,
+      currentRequestKeys.current[resource],
     );
   }
 
   async function run(
+    resource: PublishRequestResource,
     label: string,
     action: (request: ContextRequest) => Promise<unknown>,
   ): Promise<void> {
-    if (contextKey === null) return;
-    const request = beginContextRequest(operationGate.current, contextKey);
+    const key = requestKeys[resource];
+    if (key === null) return;
+    const request = beginPublishRequest(requestGates.current, resource, key);
     setNotice(`${label}…`);
     try {
       await action(request);
-      if (!operationIsCurrent(request)) return;
+      if (!requestIsCurrent(resource, request)) return;
       await Promise.all([refreshProject(), refreshExportReport()]);
-      if (!operationIsCurrent(request)) return;
+      if (!requestIsCurrent(resource, request)) return;
       setNotice(`${label} ready.`);
     } catch (error: unknown) {
-      if (operationIsCurrent(request)) setNotice(errorMessage(error));
+      if (requestIsCurrent(resource, request)) setNotice(errorMessage(error));
     }
   }
 
   async function reviewOtioLosses(): Promise<void> {
-    if (otioRequestKey === null) return;
-    const request = beginContextRequest(otioGate.current, otioRequestKey);
     const params = structuredClone(otioParams);
-    setNotice("Review OTIO losses…");
-    try {
+    await run("otio", "Review OTIO losses", async (request) => {
       const preview = await window.guyditor.call<{ losses: OtioLoss[] }>(
         "DeliverableService",
         "previewOtioExport",
         params,
       );
-      if (!isContextRequestCurrent(
-        otioGate.current,
-        request,
-        currentOtioRequestKey.current,
-      )) return;
+      if (!requestIsCurrent("otio", request)) return;
       setOtioPreview(contextualValue(request.contextKey, preview.losses));
-      await Promise.all([refreshProject(), refreshExportReport()]);
-      if (isContextRequestCurrent(
-        otioGate.current,
-        request,
-        currentOtioRequestKey.current,
-      )) {
-        setNotice("Review OTIO losses ready.");
-      }
-    } catch (error: unknown) {
-      if (isContextRequestCurrent(
-        otioGate.current,
-        request,
-        currentOtioRequestKey.current,
-      )) {
-        setNotice(errorMessage(error));
-      }
-    }
+    });
   }
 
   const otioParams = {
@@ -191,6 +192,7 @@ export function PublishPanel({ snapshot, refreshProject, refreshExportReport, se
 
   function edit<Key extends keyof PublishMetadataDocument>(key: Key, value: PublishMetadataDocument[Key]): void {
     if (contextKey === null || metadata === null) return;
+    invalidatePublishRequest(requestGates.current, "metadata");
     setMetadataState((current) => {
       const base = publishMetadataForContext(current, contextKey, metadata);
       return base === null
@@ -242,9 +244,9 @@ export function PublishPanel({ snapshot, refreshProject, refreshExportReport, se
         <section className="publish-section" aria-label="Metadata editor">
           <header><strong>Metadata</strong><span>{metadata?.status ?? "missing"}</span></header>
           {metadata === null ? (
-            <button type="button" className="primary-action" onClick={() => void run("Draft metadata", async (request) => {
+            <button type="button" className="primary-action" onClick={() => void run("metadata", "Draft metadata", async (request) => {
               const drafted = await window.guyditor.call<PublishMetadataDocument>("DeliverableService", "draftMetadata", { deliverableId: deliverable.id });
-              if (operationIsCurrent(request)) {
+              if (requestIsCurrent("metadata", request)) {
                 setMetadataState((current) =>
                   replacePublishMetadata(current, request.contextKey, drafted));
               }
@@ -261,14 +263,14 @@ export function PublishPanel({ snapshot, refreshProject, refreshExportReport, se
               <span className="limit-indicator" data-over={hashtagLimit !== undefined && counts.hashtags > hashtagLimit}>{counts.hashtags}/{hashtagLimit ?? "—"}</span>
               <label className="wide">CTA<input value={metadata.cta ?? ""} onChange={(event) => edit("cta", event.target.value)} /></label>
               <div className="publish-actions wide">
-                <button type="button" onClick={() => void run("Save metadata", async (request) => {
+                <button type="button" onClick={() => void run("metadata", "Save metadata", async (request) => {
                   const saved = await window.guyditor.call<PublishMetadataDocument>("DeliverableService", "saveMetadata", { deliverableId: deliverable.id, metadata });
-                  if (operationIsCurrent(request)) {
+                  if (requestIsCurrent("metadata", request)) {
                     setMetadataState((current) =>
                       replacePublishMetadata(current, request.contextKey, saved));
                   }
                 })}>Save draft</button>
-                <button type="button" onClick={() => void run("Approve metadata", () => window.guyditor.call("DeliverableService", "approvePublish", { deliverableId: deliverable.id, targets: ["metadata"] }))}>Approve</button>
+                <button type="button" onClick={() => void run("metadata", "Approve metadata", () => window.guyditor.call("DeliverableService", "approvePublish", { deliverableId: deliverable.id, targets: ["metadata"] }))}>Approve</button>
               </div>
             </div>
           )}
@@ -280,8 +282,8 @@ export function PublishPanel({ snapshot, refreshProject, refreshExportReport, se
           {chapters?.stale === undefined ? null : <p className="stale-warning">{chapters.stale.warning}</p>}
           <ol>{chapters?.chapters.map((chapter) => <li key={chapter.beatId}><time>{chapter.startSeconds}s</time><span>{chapter.title}</span></li>)}</ol>
           <div className="publish-actions">
-            <button type="button" onClick={() => void run("Generate chapters", () => window.guyditor.call("DeliverableService", "generateChapters", { deliverableId: deliverable.id }))}>Generate from beats</button>
-            <button type="button" disabled={chapters === undefined} onClick={() => void run("Approve chapters", () => window.guyditor.call("DeliverableService", "approvePublish", { deliverableId: deliverable.id, targets: ["chapters"] }))}>Approve</button>
+            <button type="button" onClick={() => void run("chapters", "Generate chapters", () => window.guyditor.call("DeliverableService", "generateChapters", { deliverableId: deliverable.id }))}>Generate from beats</button>
+            <button type="button" disabled={chapters === undefined} onClick={() => void run("chapters", "Approve chapters", () => window.guyditor.call("DeliverableService", "approvePublish", { deliverableId: deliverable.id, targets: ["chapters"] }))}>Approve</button>
           </div>
         </section> : null}
 
@@ -291,7 +293,7 @@ export function PublishPanel({ snapshot, refreshProject, refreshExportReport, se
             type="button"
             key={candidate.id}
             data-selected={deliverable.publish?.selectedThumbnail === candidate.id}
-            onClick={() => void run("Select thumbnail", () => window.guyditor.call("DeliverableService", "selectThumbnail", { deliverableId: deliverable.id, composition: candidate.id }))}
+            onClick={() => void run("thumbnail", "Select thumbnail", () => window.guyditor.call("DeliverableService", "selectThumbnail", { deliverableId: deliverable.id, composition: candidate.id }))}
           ><span>{candidate.label}</span><small>{candidate.id}</small></button>)}</div>
         </section>
 
@@ -299,9 +301,9 @@ export function PublishPanel({ snapshot, refreshProject, refreshExportReport, se
           <header><strong>Output set + kit</strong><span>{deliverable.profile}</span></header>
           <ul className="output-contents">{outputContents(deliverable).map((path) => <li key={path}>{path}</li>)}</ul>
           <div className="publish-actions">
-            <button type="button" className="primary-action" onClick={() => void run("Export output set", () => window.guyditor.call("DeliverableService", "renderOutputSet", { deliverableId: deliverable.id }))}>Export output set</button>
-            <button type="button" onClick={() => void run("Build upload kit", () => window.guyditor.call("DeliverableService", "buildKit", { deliverableId: deliverable.id }))}>Build upload kit</button>
-            <button type="button" onClick={() => void run("Write text exports", () => window.guyditor.call("DeliverableService", "writeTextExports", { deliverableId: deliverable.id, targets: deliverable.kind === "longform" ? ["transcript", "chapters", "metadata"] : ["transcript", "metadata"] }))}>Text exports</button>
+            <button type="button" className="primary-action" onClick={() => void run("output", "Export output set", () => window.guyditor.call("DeliverableService", "renderOutputSet", { deliverableId: deliverable.id }))}>Export output set</button>
+            <button type="button" onClick={() => void run("output", "Build upload kit", () => window.guyditor.call("DeliverableService", "buildKit", { deliverableId: deliverable.id }))}>Build upload kit</button>
+            <button type="button" onClick={() => void run("output", "Write text exports", () => window.guyditor.call("DeliverableService", "writeTextExports", { deliverableId: deliverable.id, targets: deliverable.kind === "longform" ? ["transcript", "chapters", "metadata"] : ["transcript", "metadata"] }))}>Text exports</button>
           </div>
         </section>
 
@@ -315,7 +317,7 @@ export function PublishPanel({ snapshot, refreshProject, refreshExportReport, se
           {otioLosses === null ? null : <ul className="output-contents">{otioLosses.map((loss) => <li key={loss.construct}><strong>{loss.construct}</strong> · {loss.disposition} ({loss.ids.length})</li>)}</ul>}
           <div className="publish-actions">
             <button type="button" onClick={() => void reviewOtioLosses()}>Review OTIO losses</button>
-            <button type="button" className="primary-action" disabled={otioLosses === null} onClick={() => void run("Export .otio", () => window.guyditor.call("DeliverableService", "exportOtio", otioParams))}>Export .otio</button>
+            <button type="button" className="primary-action" disabled={otioLosses === null} onClick={() => void run("otio", "Export .otio", () => window.guyditor.call("DeliverableService", "exportOtio", otioParams))}>Export .otio</button>
           </div>
         </section>
 
@@ -339,7 +341,7 @@ export function PublishPanel({ snapshot, refreshProject, refreshExportReport, se
             })}
           />{item.name}<span className="state-chip" data-state={item.status}>{item.status}</span></label>)}</div>
           <label><input type="checkbox" checked={buildKits} onChange={(event) => setBuildKits(event.target.checked)} />Build upload kits after exports</label>
-          <button type="button" className="primary-action" disabled={batchIds.length === 0} onClick={() => void run("Batch export", () => window.guyditor.call("DeliverableService", "batchExport", { deliverableIds: batchIds, buildKits }))}>Batch export</button>
+          <button type="button" className="primary-action" disabled={batchIds.length === 0} onClick={() => void run("batch", "Batch export", () => window.guyditor.call("DeliverableService", "batchExport", { deliverableIds: batchIds, buildKits }))}>Batch export</button>
         </section>
       </div>
     </Panel>

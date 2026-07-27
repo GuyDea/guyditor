@@ -378,7 +378,6 @@ describe("AnnotationService", () => {
       order: 10,
       enabled: true,
       locked: false,
-      sequence: "seq_aaaaaaaaaa",
     });
     const service = new Service({ idFactory, now: () => NOW });
     await valueOf(service.execute(store, [{
@@ -400,6 +399,7 @@ describe("AnnotationService", () => {
     expect(converted.riskClass).toBe("normal");
     expect(store.currentProject.layers[1]!.items?.[0]).toMatchObject({
       id: "gfx_aaaaaaaaaa",
+      sequenceId: "seq_aaaaaaaaaa",
       template: "tpl_aaaaaaaaaa",
       seed: 0,
       at: "ann:ann_aaaaaaaaaa",
@@ -420,6 +420,65 @@ describe("AnnotationService", () => {
     const transactionLine = (await readFile(join(store.root, "history/transactions.jsonl"), "utf8"))
       .trim().split("\n").at(-1)!;
     expect(JSON.parse(transactionLine)).toMatchObject({ addresses: ["ann_aaaaaaaaaa"] });
+
+    const undone = await valueOf(service.execute(
+      store,
+      converted.applied[0]!.inverse,
+    ));
+    expect(store.currentProject.layers[1]!.items ?? []).toEqual([]);
+    await valueOf(service.execute(store, undone.applied[0]!.inverse));
+    expect(store.currentProject.layers[1]!.items?.[0]).toMatchObject({
+      id: "gfx_aaaaaaaaaa",
+      sequenceId: "seq_aaaaaaaaaa",
+      template: "tpl_aaaaaaaaaa",
+    });
+    expect(store.currentProject.layers[1]).not.toHaveProperty("sequence");
+  });
+
+  it("rejects conversion into a sequence-owned layer without changing accepted state", async () => {
+    const Service = serviceApi();
+    if (Service === undefined) return;
+    const idFactory = ids();
+    const store = await fixtureStore(idFactory);
+    store.currentProject.templates = {
+      tpl_aaaaaaaaaa: { version: "1.0.0", contentHash: "b".repeat(64) },
+    };
+    store.currentProject.layers.push({
+      id: "lyr_bbbbbbbbbb",
+      kind: "animation",
+      name: "owned graphics",
+      order: 10,
+      enabled: true,
+      locked: false,
+      sequence: "seq_aaaaaaaaaa",
+    });
+    const service = new Service({ idFactory, now: () => NOW });
+    await valueOf(service.execute(store, [{
+      op: "annotation.create",
+      params: { annotation: annotation() },
+    }]));
+    const accepted = structuredClone(store.currentProject);
+
+    const result = await service.execute(store, [{
+      op: "annotation.convert",
+      params: {
+        annotationId: "ann_aaaaaaaaaa",
+        layerId: "lyr_bbbbbbbbbb",
+        templateId: "tpl_aaaaaaaaaa",
+      },
+    }]);
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: "E_ANN_OVERLAY_LAYER",
+        acceptedStateChanged: false,
+      },
+    });
+    expect(store.currentProject).toEqual(accepted);
+    expect(await valueOf(service.get(store, "ann_aaaaaaaaaa"))).toMatchObject({
+      state: "open",
+    });
   });
 
   it("freezes a freehand annotation as a generated SVG asset on an image layer", async () => {
@@ -464,6 +523,7 @@ describe("AnnotationService", () => {
       kind: "image",
       items: [{
         id: "gfx_aaaaaaaaaa",
+        sequenceId: "seq_aaaaaaaaaa",
         asset: "ast_bbbbbbbbbb",
         at: "ann:ann_aaaaaaaaaa",
         source: { annotationId: "ann_aaaaaaaaaa" },

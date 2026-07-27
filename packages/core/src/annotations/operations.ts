@@ -489,6 +489,13 @@ function convertAnnotation(
   if (layer?.locked === true) {
     return annotationFailure("E_OP_LAYER_LOCKED", `Layer ${layer.id} is locked.`, [layer.id]);
   }
+  if (layer?.sequence !== undefined) {
+    return annotationFailure(
+      "E_ANN_OVERLAY_LAYER",
+      `Layer ${layer.id} is sequence-owned and cannot hold independently scoped annotation overlays.`,
+      [layer.id, layer.sequence],
+    );
+  }
   let createdLayerId: string | undefined;
   if (layer === undefined) {
     createdLayerId = input.params["createdLayerId"] as string | undefined ?? options.idFactory("lyr");
@@ -590,13 +597,13 @@ function convertAnnotation(
   }
   const item: PlacedItem = {
     id: itemId,
+    sequenceId: annotation.canvasRef.sequenceId,
     ...(assetId === undefined ? { template: templateId!, seed: 0 } : { asset: assetId }),
     at: `ann:${annotation.id}`,
     duration: structuredClone(duration),
     source: { annotationId: annotation.id },
     params: conversionParams(annotation, styleOverrides),
   };
-  delete layer.sequence;
   layer.items = [...(layer.items ?? []), item];
   workspace.pendingConversions.push({ annotationId, itemId });
   const model = { ...project, assets: modelAssets, layers, sidecars: modelSidecars };

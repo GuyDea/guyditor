@@ -2,7 +2,35 @@ import type {
   Deliverable,
   PublishMetadataDocument,
 } from "../../../../core/src/index.js";
-import { deliverableContextKey } from "../state/async-context.js";
+import {
+  beginContextRequest,
+  createContextRequestGate,
+  deliverableContextKey,
+  invalidateContextRequests,
+  isContextRequestCurrent,
+} from "../state/async-context.js";
+import type {
+  ContextRequest,
+  ContextRequestGate,
+} from "../state/async-context.js";
+
+export type PublishRequestResource =
+  | "metadata"
+  | "chapters"
+  | "thumbnail"
+  | "output"
+  | "otio"
+  | "batch";
+
+export type PublishRequestGates = Record<
+  PublishRequestResource,
+  ContextRequestGate
+>;
+
+export type PublishRequestKeys = Record<
+  PublishRequestResource,
+  string | null
+>;
 
 export interface PublishMetadataState {
   contextKey: string | null;
@@ -31,6 +59,67 @@ export function publishContextKey(
   deliverableId: string,
 ): string {
   return deliverableContextKey(projectPath, deliverableId);
+}
+
+export function publishRequestKeys(
+  projectPath: string | null,
+  contextKey: string | null,
+  otioRequestKey: string | null,
+): PublishRequestKeys {
+  return {
+    metadata: contextKey,
+    chapters: contextKey,
+    thumbnail: contextKey,
+    output: contextKey,
+    otio: otioRequestKey,
+    batch: projectPath,
+  };
+}
+
+export function createPublishRequestGates(): PublishRequestGates {
+  return {
+    metadata: createContextRequestGate(),
+    chapters: createContextRequestGate(),
+    thumbnail: createContextRequestGate(),
+    output: createContextRequestGate(),
+    otio: createContextRequestGate(),
+    batch: createContextRequestGate(),
+  };
+}
+
+export function beginPublishRequest(
+  gates: PublishRequestGates,
+  resource: PublishRequestResource,
+  contextKey: string,
+): ContextRequest {
+  return beginContextRequest(gates[resource], contextKey);
+}
+
+export function invalidatePublishRequest(
+  gates: PublishRequestGates,
+  resource: PublishRequestResource,
+): void {
+  invalidateContextRequests(gates[resource]);
+}
+
+export function invalidatePublishRequests(
+  gates: PublishRequestGates,
+  resources: readonly PublishRequestResource[],
+): void {
+  for (const resource of resources) invalidatePublishRequest(gates, resource);
+}
+
+export function isPublishRequestCurrent(
+  gates: PublishRequestGates,
+  resource: PublishRequestResource,
+  request: ContextRequest,
+  currentContextKey: string | null,
+): boolean {
+  return isContextRequestCurrent(
+    gates[resource],
+    request,
+    currentContextKey,
+  );
 }
 
 export function createPublishMetadataState(

@@ -134,7 +134,7 @@ const ORDERS = {
   look: ["presetId", "presetVersion", "exposure", "contrast", "temperatureK", "tint", "saturation"],
   matte: ["layerId", "source", "invert"],
   placedItem: [
-    "id", "asset", "template", "at", "duration", "anchorMetadata", "source", "effects",
+    "id", "sequenceId", "asset", "template", "at", "duration", "anchorMetadata", "source", "effects",
     "params", "seed", "layout",
   ],
   anchorMetadataEntry: ["lastResolved"],

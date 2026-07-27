@@ -6,12 +6,17 @@ import type {
 } from "../../../../core/src/index.js";
 import {
   batchIdsForProject,
+  beginPublishRequest,
   contextualValue,
   createPublishBatchState,
   createPublishMetadataState,
+  createPublishRequestGates,
   editPublishMetadata,
+  invalidatePublishRequest,
+  isPublishRequestCurrent,
   publishContextKey,
   publishMetadataForContext,
+  publishRequestKeys,
   reconcilePublishBatch,
   reconcilePublishMetadata,
   replacePublishMetadata,
@@ -50,6 +55,95 @@ function deliverable(
 }
 
 describe("publish context runtime", () => {
+  it("keeps unrelated resource generations independent and keys batch work to the project", () => {
+    const contextA = publishContextKey("/project-a", "dlv_aaaaaaaaaa");
+    const contextB = publishContextKey("/project-a", "dlv_bbbbbbbbbb");
+    const keysA = publishRequestKeys(
+      "/project-a",
+      contextA,
+      JSON.stringify([contextA, "relative", false]),
+    );
+    const keysB = publishRequestKeys(
+      "/project-a",
+      contextB,
+      JSON.stringify([contextB, "absolute", true]),
+    );
+    const gates = createPublishRequestGates();
+    const metadata = beginPublishRequest(gates, "metadata", keysA.metadata!);
+    const chapters = beginPublishRequest(gates, "chapters", keysA.chapters!);
+    const output = beginPublishRequest(gates, "output", keysA.output!);
+    const otio = beginPublishRequest(gates, "otio", keysA.otio!);
+    const batch = beginPublishRequest(gates, "batch", keysA.batch!);
+
+    expect(isPublishRequestCurrent(gates, "metadata", metadata, keysA.metadata))
+      .toBe(true);
+    expect(isPublishRequestCurrent(gates, "chapters", chapters, keysA.chapters))
+      .toBe(true);
+    expect(isPublishRequestCurrent(gates, "output", output, keysA.output))
+      .toBe(true);
+    expect(isPublishRequestCurrent(gates, "otio", otio, keysA.otio)).toBe(true);
+    expect(isPublishRequestCurrent(gates, "batch", batch, keysB.batch)).toBe(true);
+    expect(isPublishRequestCurrent(gates, "metadata", metadata, keysB.metadata))
+      .toBe(false);
+    expect(isPublishRequestCurrent(gates, "otio", otio, keysB.otio)).toBe(false);
+
+    beginPublishRequest(gates, "thumbnail", keysB.thumbnail!);
+    expect(isPublishRequestCurrent(gates, "chapters", chapters, keysA.chapters))
+      .toBe(true);
+    const newerMetadata = beginPublishRequest(
+      gates,
+      "metadata",
+      keysA.metadata!,
+    );
+    expect(isPublishRequestCurrent(gates, "metadata", metadata, keysA.metadata))
+      .toBe(false);
+    expect(isPublishRequestCurrent(
+      gates,
+      "metadata",
+      newerMetadata,
+      keysA.metadata,
+    )).toBe(true);
+    invalidatePublishRequest(gates, "metadata");
+    expect(isPublishRequestCurrent(
+      gates,
+      "metadata",
+      newerMetadata,
+      keysA.metadata,
+    ))
+      .toBe(false);
+    expect(isPublishRequestCurrent(gates, "chapters", chapters, keysA.chapters))
+      .toBe(true);
+  });
+
+  it("keeps an edit made while save is deferred dirty and suppresses the stale save result and notice", async () => {
+    const key = publishContextKey("/project-a", "dlv_aaaaaaaaaa");
+    const gates = createPublishRequestGates();
+    let state = createPublishMetadataState(key, metadata("A"));
+    const notices: string[] = [];
+    let resolveSave!: (value: PublishMetadataDocument) => void;
+    const save = new Promise<PublishMetadataDocument>((resolve) => {
+      resolveSave = resolve;
+    });
+    const request = beginPublishRequest(gates, "metadata", key);
+    const completion = save.then((saved) => {
+      if (!isPublishRequestCurrent(gates, "metadata", request, key)) return;
+      state = replacePublishMetadata(state, key, saved);
+      notices.push("Save metadata ready.");
+    });
+
+    invalidatePublishRequest(gates, "metadata");
+    state = editPublishMetadata(state, key, metadata("B"));
+    resolveSave(metadata("Saved A"));
+    await completion;
+
+    expect(state).toMatchObject({
+      contextKey: key,
+      dirty: true,
+      value: { title: "B" },
+    });
+    expect(notices).toEqual([]);
+  });
+
   it("preserves dirty metadata across same-context refreshes and syncs clean approvals", () => {
     const key = publishContextKey("/project-a", "dlv_aaaaaaaaaa");
     let state = createPublishMetadataState(key, metadata("Canonical"));

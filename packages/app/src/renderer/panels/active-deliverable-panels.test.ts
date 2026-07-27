@@ -24,6 +24,7 @@ import type {
   Deliverable,
   GuyditorProject,
   Layer,
+  RestylePlan,
   Sequence,
 } from "../../../../core/src/index.js";
 import {
@@ -37,6 +38,7 @@ import {
 import * as InspectorPanelModule from "./InspectorPanel.js";
 import * as GraphicsPanelModule from "./GraphicsPanel.js";
 import * as PreviewPanelModule from "./PreviewPanel.js";
+import * as RestylePlanModule from "./RestylePlan.js";
 import * as TimelinePanelModule from "./TimelinePanel.js";
 import * as TranscriptPanelModule from "./TranscriptPanel.js";
 import type { WorkspacePanelProps } from "./types.js";
@@ -176,6 +178,40 @@ function projectWithShort(): GuyditorProject {
     status: "draft",
   });
   return project;
+}
+
+function restylePlan(
+  deliverableId: string,
+  sequenceId: string,
+): RestylePlan {
+  return {
+    schema: "guyditor.restyle/v1",
+    id: "restyle-plan-shared",
+    deliverableId,
+    sequenceId,
+    sourceAssets: [],
+    adapterId: "adapter",
+    model: "model",
+    createdAt: "2026-07-27T09:00:00.000Z",
+    coverage: { mode: "full", ranges: [] },
+    constraints: {
+      maxSegmentSeconds: 10,
+      maxResolution: { width: 1920, height: 1080 },
+      fpsSupport: "any",
+      costPerSecond: 0,
+      concurrency: 1,
+    },
+    settings: { prompt: "test", providerSettings: {} },
+    chunks: [],
+    seams: [{
+      id: "seam-shared",
+      frame: 12,
+      boundary: "internal",
+      treatment: { kind: "punch-in" },
+      status: "planned",
+    }],
+    estimatedCost: { currency: "USD", amount: 0 },
+  };
 }
 
 function panelProps(project: GuyditorProject): WorkspacePanelProps {
@@ -448,6 +484,37 @@ describe("active deliverable panels", () => {
 
     expect(html).toContain("Short graphic");
     expect(html).not.toContain("Primary graphic leak");
+  });
+
+  it("server-renders restyle seam controls only for the active full context", () => {
+    const project = projectWithShort();
+    setServerSelection({ selectedDeliverableId: "dlv_bbbbbbbbbb" });
+    const props = panelProps(project);
+
+    const staleHtml = renderToStaticMarkup(createElement(
+      RestylePlanModule.RestylePlanReview,
+      {
+        snapshot: props.snapshot,
+        restylePlan: restylePlan("dlv_aaaaaaaaaa", "seq_aaaaaaaaaa"),
+        refreshProposals: props.refreshProposals,
+        refreshRestylePlan: props.refreshRestylePlan,
+        setNotice: props.setNotice,
+      },
+    ));
+    const activeHtml = renderToStaticMarkup(createElement(
+      RestylePlanModule.RestylePlanReview,
+      {
+        snapshot: props.snapshot,
+        restylePlan: restylePlan("dlv_bbbbbbbbbb", "seq_bbbbbbbbbb"),
+        refreshProposals: props.refreshProposals,
+        refreshRestylePlan: props.refreshRestylePlan,
+        setNotice: props.setNotice,
+      },
+    ));
+
+    expect(staleHtml).not.toContain('data-testid="restyle-seam-seam-shared"');
+    expect(activeHtml).toContain('data-testid="restyle-seam-seam-shared"');
+    expect(activeHtml).toContain('data-testid="restyle-plan-start"');
   });
 
   it("shows async overlay results only for an exact current request key", () => {

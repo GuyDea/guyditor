@@ -348,6 +348,52 @@ describe("project validation", () => {
     expectInvariant(project, "globally unique IDs", ["ast_aaaaaaaaaa"]);
   });
 
+  it("rejects placed-item ownership conflicts while keeping unqualified anchors orphanable", () => {
+    const explicitConflict = projectFixture();
+    explicitConflict.sequences.push({
+      id: "seq_bbbbbbbbbb",
+      name: "sibling",
+      clips: [],
+    });
+    explicitConflict.layers.push({
+      id: "lyr_bbbbbbbbbb",
+      kind: "animation",
+      name: "graphics",
+      order: 1,
+      enabled: true,
+      locked: false,
+      items: [{
+        id: "gfx_aaaaaaaaaa",
+        sequenceId: "seq_aaaaaaaaaa",
+        asset: "ast_aaaaaaaaaa",
+        at: "timeline:seq_bbbbbbbbbb@2",
+        duration: { frames: 12, fps: "24/1" },
+      }],
+    });
+    expectInvariant(
+      explicitConflict,
+      "placed item sequence ownership consistency",
+      ["gfx_aaaaaaaaaa", "seq_aaaaaaaaaa", "seq_bbbbbbbbbb"],
+    );
+
+    const inferredConflict = structuredClone(explicitConflict);
+    delete inferredConflict.layers[1]!.items![0]!.sequenceId;
+    inferredConflict.layers[1]!.items![0]!.at = "timeline:seq_aaaaaaaaaa@2";
+    inferredConflict.layers[1]!.items![0]!.duration = {
+      until: "timeline:seq_bbbbbbbbbb@8",
+    };
+    expectInvariant(
+      inferredConflict,
+      "placed item sequence ownership consistency",
+      ["gfx_aaaaaaaaaa", "seq_aaaaaaaaaa", "seq_bbbbbbbbbb"],
+    );
+
+    const orphanable = structuredClone(explicitConflict);
+    orphanable.layers[1]!.items![0]!.at = "ann:ann_bbbbbbbbbb";
+    orphanable.layers[1]!.items![0]!.duration = { until: "word:w999999" };
+    expect(valueOf(validateProject(orphanable))).toEqual(orphanable);
+  });
+
   it("requires source ranges to use one rate and increase", () => {
     const rateMismatch = projectFixture();
     rateMismatch.sequences[0]!.clips[0]!.source.out.fps = "25/1";
@@ -455,6 +501,31 @@ describe("canonical project YAML", () => {
       "audio: { gainDb: -1, fadeIn: { frames: 2, fps: 24/1 }, mute: false }",
     );
     expect(canonical).toContain('"a: b": "true"');
+    expect(valueOf(parseProjectYaml(canonical))).toEqual(project);
+  });
+
+  it("orders placed-item sequence ownership immediately after its id and round-trips it", () => {
+    const project = projectFixture();
+    project.layers.push({
+      id: "lyr_bbbbbbbbbb",
+      kind: "image",
+      name: "owned overlay",
+      order: 1,
+      enabled: true,
+      locked: false,
+      items: [{
+        duration: { frames: 12, fps: "24/1" },
+        at: "word:w000001",
+        asset: "ast_aaaaaaaaaa",
+        sequenceId: "seq_aaaaaaaaaa",
+        id: "gfx_aaaaaaaaaa",
+      }],
+    });
+
+    const canonical = canonicalizeYaml(project);
+    expect(canonical).toContain(
+      "      -\n        id: gfx_aaaaaaaaaa\n        sequenceId: seq_aaaaaaaaaa\n        asset: ast_aaaaaaaaaa",
+    );
     expect(valueOf(parseProjectYaml(canonical))).toEqual(project);
   });
 

@@ -8,6 +8,7 @@ import {
   findStoredAnchor,
   updateStoredAnchor,
 } from "../anchors/owners.js";
+import { placedItemOwnershipConsistency } from "../anchors/applicability.js";
 import type { StoredAnchorPath } from "../anchors/owners.js";
 import { parseAnchor } from "../anchors/parser.js";
 import type { AnchorLastResolved } from "../anchors/types.js";
@@ -44,6 +45,27 @@ export function applyAnchorOperation(
     );
   }
   const itemLayer = model.layers.find((layer) => layer.items?.some(({ id }) => id === owner));
+  const item = itemLayer?.items?.find(({ id }) => id === owner);
+  if (item !== undefined) {
+    const ownership = placedItemOwnershipConsistency(model, item);
+    if (!ownership.consistent) {
+      return failure(makeGuyditorError(
+        "E_GRAPHIC_SEQUENCE_CONFLICT",
+        `Placed item ${item.id} has anchors that conflict with its sequence ownership.`,
+        {
+          affected: [
+            item.id,
+            ...new Set([
+              ...(ownership.explicitSequenceId === undefined
+                ? []
+                : [ownership.explicitSequenceId]),
+              ...ownership.inferredSequenceIds,
+            ]),
+          ],
+        },
+      ));
+    }
+  }
   if (itemLayer !== undefined) delete itemLayer.sequence;
   const inverseParams: Record<string, unknown> = {
     owner,

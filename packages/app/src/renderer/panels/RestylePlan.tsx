@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import type {
   RestylePlan,
@@ -9,14 +9,27 @@ import type { RestyleStartResult } from "../../../../agent/src/index.js";
 import type { TemplateCatalogEntry } from "../../../../render/src/index.js";
 import { resolveActiveDeliverable } from "../active-deliverable.js";
 import { errorMessage } from "../ipc.js";
+import {
+  beginContextRequest,
+  createContextRequestGate,
+  invalidateContextRequests,
+  isContextRequestCurrent,
+} from "../state/async-context.js";
 import { useJobsStore } from "../state/jobs.js";
 import {
   createRestyleContext,
   keyRestylePlan,
+  restyleConfirmationMatchesContext,
+  restyleMutationRequestKey,
   restylePlanForContext,
+  restylePlanContractError,
   restylePlanMatchesContext,
+  restyleSeamEditorKey,
 } from "../state/restyle-context.js";
-import type { KeyedRestylePlan } from "../state/restyle-context.js";
+import type {
+  KeyedRestylePlan,
+  RestyleContext,
+} from "../state/restyle-context.js";
 import { useSelectionStore } from "../state/view-state.js";
 import type { WorkspacePanelProps } from "./types.js";
 
@@ -53,7 +66,8 @@ function SeamEditor({
   seam,
   catalog,
   accepted,
-  deliverableId,
+  context,
+  plan,
   fps,
   projectName,
   deliverableName,
@@ -63,7 +77,8 @@ function SeamEditor({
   seam: RestyleSeam;
   catalog: readonly TemplateCatalogEntry[];
   accepted: boolean;
-  deliverableId: string | undefined;
+  context: RestyleContext;
+  plan: RestylePlan;
   fps: string;
   projectName: string;
   deliverableName: string;
@@ -84,6 +99,22 @@ function SeamEditor({
       : defaultInterstitialParams(catalog, projectName, deliverableName),
   );
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const proposalGate = useRef(createContextRequestGate());
+  const proposalRequestKey = accepted
+    ? restyleMutationRequestKey(
+        context,
+        `seam:${plan.id}:${seam.id}`,
+      )
+    : null;
+  const currentProposalRequestKey = useRef(proposalRequestKey);
+  if (currentProposalRequestKey.current !== proposalRequestKey) {
+    invalidateContextRequests(proposalGate.current);
+  }
+  currentProposalRequestKey.current = proposalRequestKey;
+
+  useEffect(() => () => {
+    invalidateContextRequests(proposalGate.current);
+  }, []);
 
   useEffect(() => {
     let current = true;
@@ -115,7 +146,8 @@ function SeamEditor({
   }
 
   async function propose(): Promise<void> {
-    if (deliverableId === undefined || !accepted) return;
+    if (!accepted || proposalRequestKey === null) return;
+    const request = beginContextRequest(proposalGate.current, proposalRequestKey);
     const treatment: RestyleSeamTreatment = kind === "interstitial"
       ? { kind, templateId, params, durationFrames, resumeExact: true }
       : { kind };
@@ -123,12 +155,28 @@ function SeamEditor({
       const result = await window.guyditor.call<{ proposal: { id: string } }>(
         "DeliverableService",
         "setRestyleSeamTreatment",
-        { deliverableId, seamId: seam.id, treatment },
+        { deliverableId: context.deliverableId, seamId: seam.id, treatment },
       );
+      if (!isContextRequestCurrent(
+        proposalGate.current,
+        request,
+        currentProposalRequestKey.current,
+      )) return;
       await refreshProposals();
+      if (!isContextRequestCurrent(
+        proposalGate.current,
+        request,
+        currentProposalRequestKey.current,
+      )) return;
       setNotice(`Prepared ${kind} override for ${seam.id} in ${result.proposal.id}.`);
     } catch (error: unknown) {
-      setNotice(errorMessage(error));
+      if (isContextRequestCurrent(
+        proposalGate.current,
+        request,
+        currentProposalRequestKey.current,
+      )) {
+        setNotice(errorMessage(error));
+      }
     }
   }
 
@@ -230,6 +278,7 @@ export function RestylePlanReview({
   const [confirmationState, setConfirmationState] = useState<{
     contextKey: string;
     sequenceId: string;
+    planId: string;
     value: Extract<
       RestyleStartResult,
       { verdict: "warn" }
@@ -256,8 +305,11 @@ export function RestylePlanReview({
     : null;
   const draftPlan = restylePlanForContext(draftState, context);
   const confirmation = confirmationState !== null &&
-      confirmationState.contextKey === context?.key &&
-      confirmationState.sequenceId === context.sequenceId
+      restyleConfirmationMatchesContext(
+        confirmationState,
+        context,
+        acceptedPlan?.id,
+      )
     ? confirmationState.value
     : null;
   const plan = acceptedPlan ?? draftPlan;
@@ -270,6 +322,24 @@ export function RestylePlanReview({
     (maximum, chunk) => Math.max(maximum, chunk.sourceRange.endFrame),
     1,
   ) ?? 1;
+  const createGate = useRef(createContextRequestGate());
+  const startGate = useRef(createContextRequestGate());
+  const createRequestKey = context === null
+    ? null
+    : restyleMutationRequestKey(context, "create");
+  const startRequestKey = context === null || acceptedPlan === null
+    ? null
+    : restyleMutationRequestKey(context, `start:${acceptedPlan.id}`);
+  const currentCreateRequestKey = useRef(createRequestKey);
+  const currentStartRequestKey = useRef(startRequestKey);
+  if (currentCreateRequestKey.current !== createRequestKey) {
+    invalidateContextRequests(createGate.current);
+  }
+  if (currentStartRequestKey.current !== startRequestKey) {
+    invalidateContextRequests(startGate.current);
+  }
+  currentCreateRequestKey.current = createRequestKey;
+  currentStartRequestKey.current = startRequestKey;
 
   useEffect(() => {
     setDraftState(null);
@@ -280,6 +350,15 @@ export function RestylePlanReview({
   }, [context?.key]);
 
   useEffect(() => {
+    setConfirmationState(null);
+  }, [startRequestKey]);
+
+  useEffect(() => () => {
+    invalidateContextRequests(createGate.current);
+    invalidateContextRequests(startGate.current);
+  }, []);
+
+  useEffect(() => {
     let current = true;
     void window.guyditor.call<TemplateCatalogEntry[]>("RenderService", "templateCatalog", {})
       .then((entries) => { if (current) setCatalog(entries); })
@@ -288,7 +367,13 @@ export function RestylePlanReview({
   }, [snapshot?.projectPath]);
 
   async function createPlan(): Promise<void> {
-    if (deliverableId === undefined || prompt.trim().length === 0) return;
+    if (
+      deliverableId === undefined ||
+      context === null ||
+      createRequestKey === null ||
+      prompt.trim().length === 0
+    ) return;
+    const request = beginContextRequest(createGate.current, createRequestKey);
     try {
       const result = await window.guyditor.call<{
         plan: RestylePlan;
@@ -302,45 +387,84 @@ export function RestylePlanReview({
         seed: 607,
         providerSettings: {},
       });
-      if (context === null || !restylePlanMatchesContext(result.plan, context)) {
-        setNotice("Ignored a restyle plan returned for a different deliverable context.");
+      if (!isContextRequestCurrent(
+        createGate.current,
+        request,
+        currentCreateRequestKey.current,
+      )) return;
+      const contractError = restylePlanContractError(result.plan, context);
+      if (contractError !== null) {
+        setNotice(contractError);
         return;
       }
       setDraftState(keyRestylePlan(context, result.plan));
+      if (!isContextRequestCurrent(
+        createGate.current,
+        request,
+        currentCreateRequestKey.current,
+      )) return;
       await refreshProposals();
+      if (!isContextRequestCurrent(
+        createGate.current,
+        request,
+        currentCreateRequestKey.current,
+      )) return;
       setNotice(`Prepared ${String(result.plan.chunks.length)} restyle chunks in ${result.proposal.id}; accept the plan before generation.`);
     } catch (error: unknown) {
-      setNotice(errorMessage(error));
+      if (isContextRequestCurrent(
+        createGate.current,
+        request,
+        currentCreateRequestKey.current,
+      )) {
+        setNotice(errorMessage(error));
+      }
     }
   }
 
   async function start(confirmToken?: string): Promise<void> {
-    if (deliverableId === undefined || !accepted) return;
+    if (
+      deliverableId === undefined ||
+      !accepted ||
+      startRequestKey === null
+    ) return;
+    const request = beginContextRequest(startGate.current, startRequestKey);
+    const requestIsCurrent = (): boolean => isContextRequestCurrent(
+      startGate.current,
+      request,
+      currentStartRequestKey.current,
+    );
     try {
       const result = await window.guyditor.call<RestyleStartResult>(
         "DeliverableService",
         "startRestyle",
         { deliverableId, ...(confirmToken === undefined ? {} : { confirmToken }) },
       );
+      if (!requestIsCurrent()) return;
       if (result.verdict === "enqueued") {
+        if (!requestIsCurrent()) return;
         setConfirmationState(null);
+        if (!requestIsCurrent()) return;
         setNotice(`Queued ${String(result.jobs.length)} restyle chunks after the $${result.estimate.amount.toFixed(2)} whole-plan preflight.`);
       } else if (result.verdict === "warn") {
-        if (context !== null) {
-          setConfirmationState({
-            contextKey: context.key,
-            sequenceId: context.sequenceId,
-            value: result,
-          });
-        }
+        if (context === null || !requestIsCurrent()) return;
+        setConfirmationState({
+          contextKey: context.key,
+          sequenceId: context.sequenceId,
+          planId: acceptedPlan.id,
+          value: result,
+        });
+        if (!requestIsCurrent()) return;
         setNotice(result.message);
       } else {
+        if (!requestIsCurrent()) return;
         setConfirmationState(null);
+        if (!requestIsCurrent()) return;
         setNotice(result.message);
       }
+      if (!requestIsCurrent()) return;
       await refreshRestylePlan();
     } catch (error: unknown) {
-      setNotice(errorMessage(error));
+      if (requestIsCurrent()) setNotice(errorMessage(error));
     }
   }
 
@@ -401,7 +525,7 @@ export function RestylePlanReview({
           onClick={() => void createPlan()}
         >Prepare proposal</button>
       </div>
-      {plan === null ? (
+      {plan === null || context === null ? (
         <p>Plan creation snaps chunks to speech gaps, beats, and low-motion evidence.</p>
       ) : (
         <>
@@ -454,11 +578,12 @@ export function RestylePlanReview({
             <ol>
               {plan.seams.map((seam) => (
                 <SeamEditor
-                  key={`${seam.id}:${seam.status}:${seam.treatment.kind}:${String(catalog.length)}`}
+                  key={restyleSeamEditorKey(context, plan, seam, catalog)}
                   seam={seam}
                   catalog={catalog}
                   accepted={accepted}
-                  deliverableId={deliverableId}
+                  context={context}
+                  plan={plan}
                   fps={fps}
                   projectName={projectName}
                   deliverableName={deliverableName}

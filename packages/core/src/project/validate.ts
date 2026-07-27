@@ -18,6 +18,7 @@ import type {
 } from "./model.js";
 import { isId } from "./ids.js";
 import { parseAnchor } from "../anchors/parser.js";
+import { placedItemOwnershipConsistency } from "../anchors/applicability.js";
 import { storedAnchors } from "../anchors/owners.js";
 
 // TODO(part 3/4/5/7/9/11): replace the true schemas for fields owned by
@@ -202,6 +203,21 @@ function validateReferences(project: GuyditorProject): Result<GuyditorProject> |
     for (const item of layer.items ?? []) {
       if (item.sequenceId !== undefined && !sequenceIds.has(item.sequenceId)) {
         return missingReference("placed item sequence reference", item.id, item.sequenceId);
+      }
+      const ownership = placedItemOwnershipConsistency(project, item);
+      if (!ownership.consistent) {
+        return invariantFailure(
+          "placed item sequence ownership consistency",
+          [
+            item.id,
+            ...new Set([
+              ...(ownership.explicitSequenceId === undefined
+                ? []
+                : [ownership.explicitSequenceId]),
+              ...ownership.inferredSequenceIds,
+            ]),
+          ],
+        );
       }
       if (item.asset !== undefined && !assetIds.has(item.asset)) {
         return missingReference("placed item asset reference", item.id, item.asset);

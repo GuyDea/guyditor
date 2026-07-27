@@ -162,6 +162,47 @@ describe("anchor.rebind", () => {
       duration: { until: "timeline:5@24/1" },
     });
   });
+
+  it.each([
+    ["/at", "timeline:seq_bbbbbbbbbb@2"],
+    ["/duration/until", "timeline:seq_bbbbbbbbbb@5"],
+  ] as const)("rejects ownership-violating placed-item rebinds at %s without changing accepted state", async (
+    anchorPath,
+    newAnchor,
+  ) => {
+    const project = projectFixture();
+    project.sequences.push({
+      id: "seq_bbbbbbbbbb",
+      name: "sibling",
+      clips: [],
+    });
+    project.layers[0]!.items = [{
+      id: "gfx_aaaaaaaaaa",
+      sequenceId: "seq_aaaaaaaaaa",
+      at: "timeline:seq_aaaaaaaaaa@1",
+      duration: { until: "timeline:seq_aaaaaaaaaa@4" },
+    }];
+    const accepted = structuredClone(project);
+    const engine = new OperationEngine(project, { idFactory });
+
+    const result = await engine.execute([{
+      op: "anchor.rebind",
+      params: {
+        owner: "gfx_aaaaaaaaaa",
+        anchorPath,
+        newAnchor,
+      },
+    }], { baseRevision: "rev_00001", origin: "ui", dryRun: false });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: "E_GRAPHIC_SEQUENCE_CONFLICT",
+        acceptedStateChanged: false,
+      },
+    });
+    expect(engine.currentProject).toEqual(accepted);
+  });
 });
 
 describe("commit-time orphan bookkeeping", () => {

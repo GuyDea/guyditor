@@ -854,6 +854,79 @@ describe("compileRenderGraph", () => {
     }));
   });
 
+  it("compiles only owner-applicable asset and template items from shared global layers", () => {
+    const model = project();
+    model.sequences.push({
+      id: "seq_bbbbbbbbbb",
+      name: "sibling",
+      clips: [],
+    });
+    model.assets.push({
+      id: "ast_cccccccccc",
+      kind: "image",
+      path: "/tmp/owner.png",
+      sha256: "c".repeat(64),
+      probe: { width: 640, height: 360 },
+      image: { width: 640, height: 360, hasAlpha: true },
+    }, {
+      id: "ast_dddddddddd",
+      kind: "image",
+      path: "/tmp/sibling.png",
+      sha256: "d".repeat(64),
+      probe: { width: 640, height: 360 },
+      image: { width: 640, height: 360, hasAlpha: true },
+    });
+    model.layers.push({
+      id: "lyr_bbbbbbbbbb",
+      kind: "image",
+      name: "Shared frozen overlays",
+      order: 1,
+      enabled: true,
+      locked: false,
+      items: [{
+        id: "gfx_aaaaaaaaaa",
+        sequenceId: "seq_aaaaaaaaaa",
+        asset: "ast_cccccccccc",
+        at: "timeline:seq_aaaaaaaaaa@0",
+        duration: { frames: 12, fps: "30/1" },
+      }, {
+        id: "gfx_bbbbbbbbbb",
+        sequenceId: "seq_bbbbbbbbbb",
+        asset: "ast_dddddddddd",
+        at: "timeline:seq_bbbbbbbbbb@0",
+        duration: { frames: 12, fps: "30/1" },
+      }],
+    }, {
+      id: "lyr_cccccccccc",
+      kind: "animation",
+      name: "Shared template overlays",
+      order: 2,
+      enabled: true,
+      locked: false,
+      items: [{
+        id: "gfx_cccccccccc",
+        sequenceId: "seq_aaaaaaaaaa",
+        template: "tpl_a2c3d4e5f6",
+        at: "timeline:seq_aaaaaaaaaa@0",
+        duration: { frames: 12, fps: "30/1" },
+        seed: 1,
+      }, {
+        id: "gfx_dddddddddd",
+        sequenceId: "seq_bbbbbbbbbb",
+        asset: "ast_dddddddddd",
+        at: "timeline:seq_bbbbbbbbbb@0",
+        duration: { frames: 12, fps: "30/1" },
+      }],
+    });
+
+    const graph = compile(model);
+    const sourceAssetIds = graph.nodes
+      .flatMap(({ kind, params }) =>
+        kind === "source" && "assetId" in params ? [params.assetId] : []);
+    expect(sourceAssetIds).toContain("ast_cccccccccc");
+    expect(sourceAssetIds).not.toContain("ast_dddddddddd");
+  });
+
   it("rejects proposal revisions before enqueueing with Part 5 ownership", async () => {
     const queue = JobQueue.open(":memory:").queue;
     try {
