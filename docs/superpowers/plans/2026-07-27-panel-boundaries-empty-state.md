@@ -44,7 +44,7 @@ test("drag-over emphasis remains stronger than the resting frame", async () => {
     await region.dispatchEvent("dragenter");
     await expect(region).toHaveAttribute("data-drop-active", "true");
     await expect.poll(() => region.evaluate(
-      (element) => window.getComputedStyle(element, "::before").boxShadow,
+      (element) => window.getComputedStyle(element).boxShadow,
     )).toContain("rgb(242, 184, 75)");
     await expect.poll(() => region.evaluate(
       (element) => window.getComputedStyle(element, "::after").content,
@@ -68,8 +68,8 @@ pnpm --filter @guyditor/app build
 pnpm --filter @guyditor/app exec playwright test --config playwright.config.ts panel-management.spec.ts --grep "drag-over emphasis"
 ```
 
-Expected: PASS, proving the current amber shadow on the foreground pseudo layer and
-the “Dock here” overlay are covered before the resting frame changes.
+Expected: PASS, proving the legacy amber shadow on the parent `.dock-region` and
+the “Dock here” overlay are covered before any style changes.
 
 - [ ] **Step 3: Add one failing test for the structured resting frame**
 
@@ -222,6 +222,18 @@ Use `.dock-region::before` for the frame and its focus/drag precedence:
   box-shadow: inset 0 0 0 2px var(--amber), inset 0 0 34px rgb(242 184 75 / 10%);
 }
 ```
+
+After migrating the shadows, update the Task 1, Step 1 drag characterization so
+its final assertion follows the foreground layer:
+
+```typescript
+await expect.poll(() => region.evaluate(
+  (element) => window.getComputedStyle(element, "::before").boxShadow,
+)).toContain("rgb(242, 184, 75)");
+```
+
+The parent-shadow lookup is only the pre-style characterization and must not remain
+in the final test.
 
 The existing `.dock-region[data-drop-active="true"]::after` drag label remains at
 `z-index: 5`, above the frame at `z-index: 4`. The actual-pixel regression samples
