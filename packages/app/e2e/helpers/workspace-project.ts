@@ -21,6 +21,7 @@ export interface WorkspaceProjectOptions {
   queuedJob?: boolean;
   audioPost?: boolean;
   jumpCut?: boolean;
+  derivedShort?: boolean;
 }
 
 async function valueOf<Value>(result: Promise<Result<Value>>): Promise<Value> {
@@ -70,6 +71,45 @@ export async function createWorkspaceProject(
       enabled: true,
       locked: false,
       sequence: "seq_aaaaaaaaaa",
+    });
+  }
+  if (options.derivedShort === true) {
+    model.sequences.push({
+      id: "seq_bbbbbbbbbb",
+      name: "Portrait short sequence",
+      clips: [{
+        id: "clp_cccccccccc",
+        asset: "ast_aaaaaaaaaa",
+        source: {
+          in: { frames: 24, fps: "24/1" },
+          out: { frames: 36, fps: "24/1" },
+        },
+      }],
+    });
+    model.layers.push({
+      id: "lyr_cccccccccc",
+      kind: "video",
+      name: "Portrait short video",
+      order: 0,
+      enabled: true,
+      locked: false,
+      sequence: "seq_bbbbbbbbbb",
+    });
+    model.captions.push({
+      ...structuredClone(model.captions[0]!),
+      id: "cts_bbbbbbbbbb",
+      name: "Portrait short captions",
+      sourceLayerIds: ["lyr_cccccccccc"],
+    });
+    model.deliverables.push({
+      id: "dlv_bbbbbbbbbb",
+      kind: "short",
+      name: "Portrait short",
+      profile: "youtube-shorts@1.0.0",
+      sequenceId: "seq_bbbbbbbbbb",
+      captionsTrackId: "cts_bbbbbbbbbb",
+      status: "draft",
+      dependencies: [],
     });
   }
   const created = await valueOf(Promise.resolve(createProject(root, model)));

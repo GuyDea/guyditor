@@ -9,7 +9,12 @@ import type {
 import type { ExportReport } from "../../../render/src/index.js";
 import type { TranscriptSidecar } from "../../../transcript/src/index.js";
 import type { ResolvedSkill, SkillManifest } from "../../../agent/src/index.js";
-import type { JobOverview, JobStatus, ProjectSnapshot } from "../shared/ipc.js";
+import type {
+  JobOverview,
+  JobStatus,
+  LoadedProjectWorkspaceState,
+  ProjectSnapshot,
+} from "../shared/ipc.js";
 import { DockWorkspace } from "./DockWorkspace.js";
 import { GlobalProgress } from "./GlobalProgress.js";
 import { GuidedTour } from "./GuidedTour.js";
@@ -19,7 +24,14 @@ import { WorkflowPhaseTabs } from "./WorkflowPhaseTabs.js";
 import { BrollPanel } from "./panels/BrollPanel.js";
 import { GraphicsPanel } from "./panels/GraphicsPanel.js";
 import { HelpPanel } from "./panels/HelpPanel.js";
-import { errorMessage, getSnapshot, redoLast, undoLast } from "./ipc.js";
+import {
+  errorMessage,
+  getSnapshot,
+  getWorkspaceState,
+  redoLast,
+  setActiveDeliverable,
+  undoLast,
+} from "./ipc.js";
 import { InspectorPanel } from "./panels/InspectorPanel.js";
 import { MediaBrowserPanel } from "./panels/MediaBrowserPanel.js";
 import { PreviewPanel } from "./panels/PreviewPanel.js";
@@ -68,7 +80,10 @@ import type {
   KeyedRestylePlan,
   RestyleContext,
 } from "./state/restyle-context.js";
-import { resolveActiveDeliverable } from "./active-deliverable.js";
+import {
+  applyDeliverableSelection,
+  resolveActiveDeliverable,
+} from "./active-deliverable.js";
 import { phaseForShortcut } from "./workflow-phases.js";
 import { revealPanel } from "./workspace-navigation.js";
 
@@ -298,10 +313,50 @@ export function App(): React.JSX.Element {
     }
   }, [replaceOverview]);
 
-  const hydrate = useCallback(async (next: ProjectSnapshot): Promise<void> => {
+  const hydrate = useCallback(async (
+    next: ProjectSnapshot,
+  ): Promise<string | undefined> => {
     const generation = ++overviewGeneration.current;
-    useWorkspaceStore.getState().setProjectKey(next.projectPath);
-    replaceSnapshot(next);
+    const previous = useProjectMirror.getState().snapshot;
+    const projectChanged = previous?.projectPath !== next.projectPath;
+    let workspaceWarning: string | undefined;
+
+    if (projectChanged) {
+      let loaded: LoadedProjectWorkspaceState;
+      try {
+        loaded = await getWorkspaceState();
+      } catch (error: unknown) {
+        loaded = {
+          state: {
+            format: "guyditor.workspace/v1",
+            activeDeliverableId: next.master.settings.primaryDeliverable,
+          },
+          warning:
+            `Could not load workspace selection; using primary deliverable: ${errorMessage(error)}`,
+        };
+      }
+      const active = resolveActiveDeliverable(
+        next.master,
+        loaded.state.activeDeliverableId,
+      );
+      useWorkspaceStore.getState().setProjectKey(next.projectPath);
+      replaceSnapshot(next);
+      applyDeliverableSelection(next.master, active.id);
+      workspaceWarning = loaded.warning;
+    } else {
+      const currentId = useSelectionStore.getState().selectedDeliverableId;
+      const active = resolveActiveDeliverable(next.master, currentId);
+      replaceSnapshot(next);
+      if (active.id !== currentId) {
+        applyDeliverableSelection(next.master, active.id);
+        try {
+          await setActiveDeliverable(active.id);
+        } catch (error: unknown) {
+          workspaceWarning =
+            `Active deliverable was removed; using ${active.name}, but workspace autosave failed: ${errorMessage(error)}`;
+        }
+      }
+    }
     const [nextTranscripts, nextJobs, nextOverview, nextHistory] = await Promise.all([
       window.guyditor.call<TranscriptSidecar[]>("ProjectStore", "readTranscript", {})
         .catch(() => []),
@@ -331,16 +386,25 @@ export function App(): React.JSX.Element {
       refreshExportReport(),
       refreshRestylePlan(),
     ]);
+    return workspaceWarning;
   }, [applyChecklistSignal, refreshAnnotations, refreshExportReport, refreshProposals, refreshRestylePlan, refreshSkills, replaceJobs, replaceOverview, replaceSnapshot]);
 
-  const refreshProject = useCallback(async (): Promise<void> => {
+  const refreshProject = useCallback(async (
+    successNotice?: string,
+  ): Promise<void> => {
     const next = await getSnapshot();
-    await hydrate(next);
+    const warning = await hydrate(next);
+    if (warning !== undefined) setNotice(warning);
+    else if (successNotice !== undefined) setNotice(successNotice);
   }, [hydrate]);
 
   useEffect(() => {
     let active = true;
-    void getSnapshot().then((opened) => active ? hydrate(opened) : undefined).catch(() => undefined);
+    void getSnapshot().then(async (opened) => {
+      if (!active) return;
+      const warning = await hydrate(opened);
+      if (active && warning !== undefined) setNotice(warning);
+    }).catch(() => undefined);
     void window.guyditor.call<JobStatus[]>("JobQueue", "list", {}).then((initial) => {
       if (active) replaceJobs(initial);
     }).catch(() => undefined);
@@ -366,7 +430,8 @@ export function App(): React.JSX.Element {
       void refreshOverview();
     });
     const offRevision = window.guyditor.on("project.revision", (event) => {
-      void refreshProject().then(() => setNotice(`Accepted ${event.revision}`));
+      void refreshProject(`Accepted ${event.revision}`)
+        .catch((error: unknown) => setNotice(errorMessage(error)));
     });
     const offProposal = window.guyditor.on("proposal.updated", () => {
       void Promise.all([refreshProposals(), refreshOverview()]);
@@ -379,9 +444,12 @@ export function App(): React.JSX.Element {
         kind: "watcher.ingested",
         assetCount: event.assetIds.length,
       });
-      void Promise.all([refreshProject(), refreshOverview()]).then(() => {
-        setNotice(`Capture watcher ingested ${String(event.assetIds.length)} asset${event.assetIds.length === 1 ? "" : "s"}.`);
-      });
+      const successNotice =
+        `Capture watcher ingested ${String(event.assetIds.length)} asset${event.assetIds.length === 1 ? "" : "s"}.`;
+      void Promise.all([
+        refreshProject(successNotice),
+        refreshOverview(),
+      ]).catch((error: unknown) => setNotice(errorMessage(error)));
     });
     return () => {
       active = false;
@@ -449,14 +517,41 @@ export function App(): React.JSX.Element {
           void window.guyditor.call<{ frame: { frames: number; fps: string } }>(
             "OperationEngine",
             "resolveNavigation",
-            { target: { kind: "word", wordId: id } },
+            {
+              target: { kind: "word", wordId: id },
+              ...(snapshot === null
+                ? {}
+                : {
+                    scope: resolveActiveDeliverable(
+                      snapshot.master,
+                      selectedDeliverableId,
+                    ).sequenceId,
+                  }),
+            },
           ).then(({ frame }) => setPlayhead(frame)).catch(() => undefined);
         }
-      } else if (event.key.toLowerCase() === "a" && annotations.length > 0) {
+      } else if (event.key.toLowerCase() === "a") {
+        const activeDeliverable = snapshot === null
+          ? undefined
+          : resolveActiveDeliverable(snapshot.master, selectedDeliverableId);
+        const activeAnnotations = annotations.filter(
+          ({ canvasRef }) =>
+            canvasRef.sequenceId === activeDeliverable?.sequenceId,
+        );
+        if (activeAnnotations.length === 0) return;
         event.preventDefault();
         const selected = useSelectionStore.getState().selectedAnnotationId;
-        const index = Math.max(0, annotations.findIndex(({ id }) => id === selected));
-        const next = annotations[(index + (event.shiftKey ? -1 : 1) + annotations.length) % annotations.length];
+        const index = Math.max(
+          0,
+          activeAnnotations.findIndex(({ id }) => id === selected),
+        );
+        const next = activeAnnotations[
+          (
+            index +
+            (event.shiftKey ? -1 : 1) +
+            activeAnnotations.length
+          ) % activeAnnotations.length
+        ];
         if (next !== undefined) selectAnnotation(next.id);
       } else if (/^[1-9]$/u.test(event.key) &&
         !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
@@ -470,7 +565,7 @@ export function App(): React.JSX.Element {
     };
     window.addEventListener("keydown", keydown);
     return () => window.removeEventListener("keydown", keydown);
-  }, [annotations, playhead, playing, refreshProject, selectAnnotation, selectWord, setPlayhead, setPlaying, snapshot, transcripts]);
+  }, [annotations, playhead, playing, refreshProject, selectAnnotation, selectedDeliverableId, selectWord, setPlayhead, setPlaying, snapshot, transcripts]);
 
   async function openProject(): Promise<boolean> {
     setNotice("Waiting for a project directory…");
@@ -485,9 +580,8 @@ export function App(): React.JSX.Element {
         return false;
       }
       useUndoStore.getState().clear();
-      await hydrate(opened);
-      setPlayhead({ frames: 0, fps: opened.master.settings.timeline.fps });
-      setNotice(`Opened ${opened.projectPath}`);
+      const warning = await hydrate(opened);
+      setNotice(warning ?? `Opened ${opened.projectPath}`);
       return true;
     } catch (error: unknown) {
       setNotice(errorMessage(error));
@@ -508,9 +602,8 @@ export function App(): React.JSX.Element {
         return false;
       }
       useUndoStore.getState().clear();
-      await hydrate(created);
-      setPlayhead({ frames: 0, fps: created.master.settings.timeline.fps });
-      setNotice(`Created ${created.projectPath}`);
+      const warning = await hydrate(created);
+      setNotice(warning ?? `Created ${created.projectPath}`);
       return true;
     } catch (error: unknown) {
       setNotice(errorMessage(error));
