@@ -176,9 +176,16 @@ behavior is absent.
 - Modify: `packages/app/src/renderer/styles.css:471-566`
 - Test: `packages/app/e2e/panel-management.spec.ts`
 
-- [ ] **Step 1: Add the neutral resting frame to `.dock-region`**
+> **Implementation correction (2026-07-27):** The original plan placed the inset
+> highlight on `.dock-region`, where opaque panel descendants occluded it. The
+> corrected implementation paints frame, focus, and drag shadows on a foreground
+> `::before` layer. A browser regression compares the top three rendered pixels
+> before and after disabling that layer, proving actual paint rather than only a
+> computed declaration.
 
-Change the existing rule to:
+- [ ] **Step 1: Add the neutral resting frame as a foreground layer**
+
+Use `.dock-region::before` for the frame and its focus/drag precedence:
 
 ```css
 .dock-region {
@@ -191,13 +198,33 @@ Change the existing rule to:
   overflow: hidden;
   border: 1px solid var(--line-hot);
   background: var(--panel);
+  transition: background 90ms ease-out;
+}
+.dock-region::before {
+  content: "";
+  position: absolute;
+  z-index: 4;
+  inset: 0;
+  pointer-events: none;
   box-shadow: inset 0 1px rgb(232 236 234 / 6%);
-  transition: box-shadow 90ms ease-out, background 90ms ease-out;
+  transition: box-shadow 90ms ease-out;
+}
+.dock-region:focus-within::before {
+  box-shadow: inset 0 0 0 1px var(--amber-dim);
+}
+.dock-region[data-drop-active="true"] {
+  z-index: 3;
+  background: #202b30;
+}
+.dock-region[data-drop-active="true"]::before {
+  box-shadow: inset 0 0 0 2px var(--amber), inset 0 0 34px rgb(242 184 75 / 10%);
 }
 ```
 
-Do not change `.dock-region[data-drop-active="true"]`; its existing amber
-two-pixel inset and wash must continue to replace the resting inset highlight.
+The existing `.dock-region[data-drop-active="true"]::after` drag label remains at
+`z-index: 5`, above the frame at `z-index: 4`. The actual-pixel regression samples
+an occupied region only after asserting that neither `:focus-within` nor
+`[data-drop-active="true"]` applies.
 
 - [ ] **Step 2: Replace the vacant target treatment and style its prompt**
 
@@ -232,18 +259,19 @@ Replace the existing `.empty-dock-target` rule and add the direct-child prompt r
 }
 ```
 
-- [ ] **Step 3: Rebuild and run the three focused visual tests**
+- [ ] **Step 3: Rebuild and run the four focused visual tests**
 
 Run:
 
 ```bash
 pnpm --filter @guyditor/app build
-xvfb-run -a pnpm --filter @guyditor/app test:e2e -- panel-management.spec.ts --grep "structured resting frame|checkerboard only|drag-over emphasis"
+pnpm --filter @guyditor/app exec playwright test --config playwright.config.ts panel-management.spec.ts --grep "structured resting frame|paints above opaque panel content|checkerboard only|drag-over emphasis"
 ```
 
-Expected: PASS for all three tests. The computed resting frame is one-pixel solid
-`--line-hot`, the empty target has four 16-pixel gradient layers and a bordered
-prompt, and drag-over still exposes the amber shadow and overlay.
+Expected: PASS for all four tests. The computed resting frame is one-pixel solid
+`--line-hot`, its top highlight changes rendered pixels above opaque content, the
+empty target has four 16-pixel gradient layers and a bordered prompt, and
+drag-over still exposes the amber shadow and overlay.
 
 - [ ] **Step 4: Run the complete panel-management regression file**
 

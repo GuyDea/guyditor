@@ -142,6 +142,14 @@ test("resting dock highlight paints above opaque panel content", async () => {
   const launched = await launchApp({ projectTemplate: template });
   try {
     const region = launched.page.getByTestId("dock-region-center-top");
+    const restingState = await region.evaluate((element) => ({
+      dropActive: element.matches('[data-drop-active="true"]'),
+      focusWithin: element.matches(":focus-within"),
+    }));
+    expect(restingState).toEqual({
+      dropActive: false,
+      focusWithin: false,
+    });
     const bounds = await region.boundingBox();
     expect(bounds).not.toBeNull();
     if (bounds === null) throw new Error("Center-top dock region had no layout box.");
