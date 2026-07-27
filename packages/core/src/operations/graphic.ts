@@ -103,6 +103,32 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function sameJsonValue(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true;
+  if (Array.isArray(left) && Array.isArray(right)) {
+    return left.length === right.length &&
+      left.every((value, index) => sameJsonValue(value, right[index]));
+  }
+  if (!isRecord(left) || !isRecord(right)) return false;
+  const leftKeys = Object.keys(left).sort();
+  const rightKeys = Object.keys(right).sort();
+  return sameJsonValue(leftKeys, rightKeys) &&
+    leftKeys.every((key) => sameJsonValue(left[key], right[key]));
+}
+
+function graphicRestoreMatchesAddressing(
+  restored: PlacedItem,
+  addressed: PlacedItem,
+): boolean {
+  return restored.id === addressed.id &&
+    restored.sequenceId === addressed.sequenceId &&
+    restored.template === addressed.template &&
+    restored.at === addressed.at &&
+    sameJsonValue(restored.duration, addressed.duration) &&
+    sameJsonValue(restored.params, addressed.params) &&
+    restored.seed === addressed.seed;
+}
+
 function mergePatch(
   target: Record<string, unknown>,
   patch: Record<string, unknown>,
@@ -275,7 +301,18 @@ async function applyAdd(
     params: validated.value,
     seed,
   };
-  const sequenceConflict = graphicSequenceConflictAffected(project, item);
+  const restore = input.params["restore"] as PlacedItem | undefined;
+  if (restore !== undefined && !graphicRestoreMatchesAddressing(restore, item)) {
+    return graphicFailure(
+      "E_OP_CAPTURE_MISMATCH",
+      "Captured graphic payload does not match graphic.add addressing fields.",
+      [graphicId],
+    );
+  }
+  const added = restore === undefined ? item : structuredClone(restore);
+  const sequenceConflict = restore === undefined
+    ? graphicSequenceConflictAffected(project, added)
+    : undefined;
   if (sequenceConflict !== undefined) {
     return graphicFailure(
       "E_GRAPHIC_SEQUENCE_CONFLICT",
@@ -283,7 +320,7 @@ async function applyAdd(
       sequenceConflict,
     );
   }
-  const nextLayer: Layer = { ...layer, items: [...(layer.items ?? []), item] };
+  const nextLayer: Layer = { ...layer, items: [...(layer.items ?? []), added] };
   delete nextLayer.sequence;
   const layers = createdLayer === undefined
     ? project.layers.map((candidate) => candidate.id === nextLayer.id ? nextLayer : candidate)
@@ -303,10 +340,10 @@ async function applyAdd(
       fields: [{ field: "$entity", after: nextLayer }],
     }]),
     {
-      entityId: item.id,
+      entityId: added.id,
       entityType: "item",
       change: "added",
-      fields: [{ field: "$entity", after: item }],
+      fields: [{ field: "$entity", after: added }],
     },
   ];
   const title = typeof params["title"] === "string" && params["title"].length > 0
@@ -325,7 +362,7 @@ async function applyAdd(
       },
     },
     affected: mutations.map(({ entityId }) => entityId),
-    summary: `Add ${descriptor.value.name}${title} at ${item.at}`,
+    summary: `Add ${descriptor.value.name}${title} at ${added.at}`,
     mutations,
   });
 }
@@ -450,22 +487,24 @@ async function applyRemove(
   };
   const layers = project.layers.map((candidate, index) =>
     index === located.layerIndex ? layer : candidate);
-  const params = structuredClone(located.item.params ?? {});
+  const removed = structuredClone(located.item);
+  const params = structuredClone(removed.params ?? {});
   return success({
     model: { ...project, layers },
     inverse: [{
       op: "graphic.add",
       params: {
-        templateId: located.item.template!,
-        ...(located.item.sequenceId === undefined
+        templateId: removed.template!,
+        ...(removed.sequenceId === undefined
           ? {}
-          : { sequenceId: located.item.sequenceId }),
+          : { sequenceId: removed.sequenceId }),
         layerId: located.layer.id,
-        graphicId: located.item.id,
-        anchor: located.item.at,
-        duration: structuredClone(located.item.duration),
+        graphicId: removed.id,
+        anchor: removed.at,
+        duration: structuredClone(removed.duration),
         params,
-        seed: located.item.seed!,
+        seed: removed.seed!,
+        restore: removed,
       },
     }],
     affected: [graphicId],
@@ -474,7 +513,7 @@ async function applyRemove(
       entityId: graphicId,
       entityType: "item",
       change: "removed",
-      fields: [{ field: "$entity", before: structuredClone(located.item) }],
+      fields: [{ field: "$entity", before: removed }],
     }],
   });
 }

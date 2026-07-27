@@ -46,6 +46,37 @@ async function valueOf<T>(result: Promise<Result<T>>): Promise<T> {
   return settled.value;
 }
 
+function grandfatheredGraphicProject() {
+  const project = projectFixture();
+  project.sequences.push({
+    id: "seq_bbbbbbbbbb",
+    name: "sibling",
+    clips: [],
+  });
+  project.templates = {
+    [TEMPLATE_ID]: { version: descriptor.version, contentHash: descriptor.contentHash },
+  };
+  const graphic = {
+    id: "gfx_bbbbbbbbbb",
+    template: TEMPLATE_ID,
+    at: "timeline:seq_aaaaaaaaaa@4",
+    duration: { until: "timeline:seq_bbbbbbbbbb@12" },
+    params: { title: "Grandfathered" },
+    seed: 7,
+    layout: { align: "safe-title-left" },
+  };
+  project.layers.push({
+    id: "lyr_bbbbbbbbbb",
+    kind: "animation",
+    name: "Graphics",
+    order: 1,
+    enabled: true,
+    locked: false,
+    items: [graphic],
+  });
+  return { project, graphic };
+}
+
 describe("FR-600/601 graphic operation catalog", () => {
   it("keeps an unreviewed authored template out of accepted graphic placements", async () => {
     const project = projectFixture();
@@ -161,6 +192,7 @@ describe("FR-600/601 graphic operation catalog", () => {
       id: "gfx_bbbbbbbbbb",
       sequenceId: "seq_aaaaaaaaaa",
     });
+    const scopedGraphic = structuredClone(engine.currentProject.layers.at(-1)!.items![0]!);
 
     const removed = await valueOf(engine.execute([{
       op: "graphic.remove",
@@ -172,7 +204,10 @@ describe("FR-600/601 graphic operation catalog", () => {
     }));
     expect(removed.applied[0]?.inverse).toMatchObject([{
       op: "graphic.add",
-      params: { sequenceId: "seq_aaaaaaaaaa" },
+      params: {
+        sequenceId: "seq_aaaaaaaaaa",
+        restore: scopedGraphic,
+      },
     }]);
   });
 
@@ -283,6 +318,124 @@ describe("FR-600/601 graphic operation catalog", () => {
       },
     });
     expect(engine.currentProject).toEqual(accepted);
+  });
+
+  it("restores the exact captured grandfathered graphic through its remove inverse", async () => {
+    const { project, graphic } = grandfatheredGraphicProject();
+    const provider = {
+      latest: () => Promise.resolve(success(descriptor)),
+      get: () => Promise.resolve(success(descriptor)),
+    };
+    const engine = new OperationEngine(project, { templateProvider: provider });
+
+    const removed = await valueOf(engine.execute([{
+      op: "graphic.remove",
+      params: { graphicId: graphic.id },
+    }], {
+      baseRevision: project.revision,
+      origin: "ui",
+      dryRun: false,
+    }));
+    expect(engine.currentProject.layers.at(-1)!.items).toEqual([]);
+
+    await valueOf(engine.undo());
+
+    expect(removed.applied[0]!.inverse).toEqual([{
+      op: "graphic.add",
+      params: {
+        templateId: TEMPLATE_ID,
+        layerId: "lyr_bbbbbbbbbb",
+        graphicId: graphic.id,
+        anchor: graphic.at,
+        duration: graphic.duration,
+        params: graphic.params,
+        seed: graphic.seed,
+        restore: graphic,
+      },
+    }]);
+    expect(engine.currentProject.layers.at(-1)!.items).toEqual([graphic]);
+  });
+
+  it("rejects a captured graphic restore that disagrees with its addressing fields", async () => {
+    const { project, graphic } = grandfatheredGraphicProject();
+    const provider = {
+      latest: () => Promise.resolve(success(descriptor)),
+      get: () => Promise.resolve(success(descriptor)),
+    };
+    const engine = new OperationEngine(project, { templateProvider: provider });
+    const removed = await valueOf(engine.execute([{
+      op: "graphic.remove",
+      params: { graphicId: graphic.id },
+    }], {
+      baseRevision: project.revision,
+      origin: "ui",
+      dryRun: false,
+    }));
+    const accepted = structuredClone(engine.currentProject);
+    const tampered = structuredClone(removed.applied[0]!.inverse);
+    tampered[0]!.params["restore"] = {
+      ...structuredClone(graphic),
+      at: "timeline:seq_bbbbbbbbbb@4",
+    };
+
+    await expect(engine.execute(tampered, {
+      baseRevision: engine.currentProject.revision,
+      origin: "ui",
+      dryRun: false,
+    })).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "E_OP_CAPTURE_MISMATCH",
+        affected: [graphic.id],
+        acceptedStateChanged: false,
+      },
+    });
+    expect(engine.currentProject).toEqual(accepted);
+  });
+
+  it("restores a captured explicit-owner graphic with a legacy unresolved anchor", async () => {
+    const project = projectFixture();
+    project.templates = {
+      [TEMPLATE_ID]: { version: descriptor.version, contentHash: descriptor.contentHash },
+    };
+    project.layers.push({
+      id: "lyr_bbbbbbbbbb",
+      kind: "animation",
+      name: "Graphics",
+      order: 1,
+      enabled: true,
+      locked: false,
+      items: [{
+        id: "gfx_bbbbbbbbbb",
+        sequenceId: "seq_aaaaaaaaaa",
+        template: TEMPLATE_ID,
+        at: "clip:clp_dddddddddd@0",
+        duration: { frames: 12, fps: "24/1" },
+        params: { title: "Unresolved" },
+        seed: 7,
+      }],
+    });
+    const graphic = structuredClone(project.layers.at(-1)!.items![0]!);
+    const provider = {
+      latest: () => Promise.resolve(success(descriptor)),
+      get: () => Promise.resolve(success(descriptor)),
+    };
+    const engine = new OperationEngine(project, { templateProvider: provider });
+    const removed = await valueOf(engine.execute([{
+      op: "graphic.remove",
+      params: { graphicId: "gfx_bbbbbbbbbb" },
+    }], {
+      baseRevision: project.revision,
+      origin: "ui",
+      dryRun: false,
+    }));
+
+    await valueOf(engine.execute(removed.applied[0]!.inverse, {
+      baseRevision: engine.currentProject.revision,
+      origin: "ui",
+      dryRun: false,
+    }));
+    expect(engine.currentProject.layers.at(-1)!.items).toEqual([graphic]);
   });
 
   it("rejects missing sequence ownership and sequence-owned placement layers", async () => {
@@ -585,6 +738,7 @@ describe("FR-600/601 graphic operation catalog", () => {
       "Move Brand lower third to clip:clp_aaaaaaaaaa@3",
       "Retime Brand lower third",
     ]);
+    const removedGraphic = structuredClone(engine.currentProject.layers[1]!.items![0]!);
 
     const removed = await valueOf(engine.execute([{
       op: "graphic.remove",
@@ -605,6 +759,7 @@ describe("FR-600/601 graphic operation catalog", () => {
         duration: { until: "timeline:seq_aaaaaaaaaa@20" },
         params: { title: "Anchored" },
         seed: 9,
+        restore: removedGraphic,
       },
     }]);
     await valueOf(engine.execute(removed.applied[0]!.inverse, {
@@ -612,7 +767,7 @@ describe("FR-600/601 graphic operation catalog", () => {
       origin: "ui",
       dryRun: false,
     }));
-    expect(engine.currentProject.layers[1]!.items![0]!.id).toBe("gfx_bbbbbbbbbb");
+    expect(engine.currentProject.layers[1]!.items![0]).toEqual(removedGraphic);
   });
 
   it("isolates an approved project from installed upgrades until consequential template.pin", async () => {
