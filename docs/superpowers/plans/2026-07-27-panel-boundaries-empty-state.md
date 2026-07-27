@@ -165,11 +165,12 @@ pnpm --filter @guyditor/app build
 pnpm --filter @guyditor/app exec playwright test --config playwright.config.ts panel-management.spec.ts --grep "structured resting frame|checkerboard only"
 ```
 
-Expected: FAIL for the new behavior. The frame test reports the current
-`borderTopWidth` as `0px` instead of `1px` and the foreground pseudo shadow as
-`none`; the vacant-state test reports zero gradient layers instead of four. If
-either test errors for fixture or selector reasons, correct the test and rerun
-until it fails only because the approved visual behavior is absent.
+Expected: FAIL for the new behavior. The frame test stops first at the parent
+`borderTopWidth` of `0px` instead of `1px`; only after that mismatch is fixed does
+its separate foreground pseudo-shadow assertion surface `none`. The vacant-state
+test reports zero gradient layers instead of four. If either test errors for
+fixture or selector reasons, correct the test and rerun until it fails only because
+the approved visual behavior is absent.
 
 ### Task 2: Implement the structured frame and vacant checkerboard
 
@@ -185,7 +186,35 @@ until it fails only because the approved visual behavior is absent.
 > before and after disabling that layer, proving actual paint rather than only a
 > computed declaration.
 
-- [ ] **Step 1: Add the neutral resting frame as a foreground layer**
+- [ ] **Step 1: Add the rendered-pixel regression and verify the occluded-parent RED**
+
+Add a separate test named
+`resting dock highlight paints above opaque panel content` before changing CSS:
+
+- Launch the normal workspace fixture and target the occupied
+  `dock-region-center-top`.
+- Assert the region matches neither `:focus-within` nor
+  `[data-drop-active="true"]`, then get its bounding box.
+- Capture an in-memory page screenshot buffer clipped to the region's top three
+  CSS pixels with `animations: "disabled"` and device-scale output.
+- Inject a style that sets both `.dock-region { box-shadow: none !important; }`
+  and `.dock-region::before { box-shadow: none !important; }`, then capture the
+  identical clip again.
+- Assert `withHighlight.equals(withoutHighlight)` is `false`. Keep both buffers
+  in memory and close the Electron app and remove the fixture in `finally`.
+
+Build and run only this regression:
+
+```bash
+pnpm --filter @guyditor/app build
+pnpm --filter @guyditor/app exec playwright test --config playwright.config.ts panel-management.spec.ts --grep "paints above opaque panel content"
+```
+
+Expected RED: the assertion reports expected `false`, received `true`, because the
+legacy parent inset is fully occluded by opaque panel content. After Step 2 moves
+the frame to the foreground `::before`, the same pixel comparison must pass.
+
+- [ ] **Step 2: Add the neutral resting frame as a foreground layer**
 
 Use `.dock-region::before` for the frame and its focus/drag precedence:
 
@@ -240,7 +269,7 @@ The existing `.dock-region[data-drop-active="true"]::after` drag label remains a
 an occupied region only after asserting that neither `:focus-within` nor
 `[data-drop-active="true"]` applies.
 
-- [ ] **Step 2: Replace the vacant target treatment and style its prompt**
+- [ ] **Step 3: Replace the vacant target treatment and style its prompt**
 
 Replace the existing `.empty-dock-target` rule and add the direct-child prompt rule:
 
@@ -273,7 +302,7 @@ Replace the existing `.empty-dock-target` rule and add the direct-child prompt r
 }
 ```
 
-- [ ] **Step 3: Rebuild and run the four focused visual tests**
+- [ ] **Step 4: Rebuild and run the four focused visual tests**
 
 Run:
 
@@ -287,7 +316,7 @@ Expected: PASS for all four tests. The computed resting frame is one-pixel solid
 empty target has four 16-pixel gradient layers and a bordered prompt, and
 drag-over still exposes the amber shadow and overlay.
 
-- [ ] **Step 4: Run the complete panel-management regression file**
+- [ ] **Step 5: Run the complete panel-management regression file**
 
 Run:
 
@@ -298,7 +327,7 @@ pnpm --filter @guyditor/app exec playwright test --config playwright.config.ts p
 Expected: all panel-management tests PASS, including splitter persistence, docking,
 collapse/expand behavior, internal scrolling, and viewport-fit coverage.
 
-- [ ] **Step 5: Inspect and commit the cohesive implementation checkpoint**
+- [ ] **Step 6: Inspect and commit the cohesive implementation checkpoint**
 
 Run:
 
@@ -374,10 +403,11 @@ Run:
 ```bash
 git diff --check
 git status --short --branch
-git log -3 --oneline --decorate
+git log --oneline --decorate main..HEAD
 ```
 
 Expected: product and test changes are committed on
 `feat/panel-boundaries-empty-state`; only the temporary `.superpowers/` visual
-session may remain untracked. The branch contains the documentation decision commit
-and the cohesive app implementation commit.
+session may remain untracked. The feature-range log shows every commit on the
+feature branch that is not on `main`, including documentation, implementation, and
+verification/correction checkpoints.
