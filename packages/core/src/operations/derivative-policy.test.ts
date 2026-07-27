@@ -143,6 +143,17 @@ describe("derivative operation policy", () => {
       impact: "content",
       target: "annotation-conversion",
     });
+    for (const operation of [
+      "annotation.create",
+      "annotation.update",
+      "annotation.delete",
+    ] as const) {
+      expect(DERIVATIVE_OPERATION_POLICIES[operation]).toMatchObject({
+        impact: "non-editorial",
+        target: "none",
+        conditionalTarget: "annotation-conversion",
+      });
+    }
     expect(DERIVATIVE_OPERATION_POLICIES["transition.remove"].target)
       .toBe("transition-owner");
     expect(DERIVATIVE_OPERATION_POLICIES["graphic.add"].target)
@@ -459,6 +470,52 @@ describe("derivative operation policy", () => {
       },
     });
     expect(callbacks).toBe(0);
+  });
+
+  it("promotes annotation lifecycle operations only when a rendered item is targeted", () => {
+    const project = projectWithShort();
+    project.layers.push({
+      id: "lyr_cccccccccc",
+      kind: "animation",
+      name: "Shared overlays",
+      order: 2,
+      enabled: true,
+      locked: false,
+      items: [{
+        id: "gfx_bbbbbbbbbb",
+        sequenceId: "seq_bbbbbbbbbb",
+        template: "tpl_a2c3d4e5f6",
+        at: "ann:ann_aaaaaaaaaa",
+        duration: { frames: 12, fps: "24/1" },
+        params: {},
+        seed: 1,
+      }],
+    });
+
+    for (const op of [
+      "annotation.create",
+      "annotation.update",
+      "annotation.delete",
+    ]) {
+      const params = op === "annotation.create"
+        ? { annotation: { id: "ann_aaaaaaaaaa" } }
+        : { annotationId: "ann_aaaaaaaaaa" };
+      expect(touchedDerivativeIds(project, project, [{
+        op,
+        params,
+        affected: ["ann_aaaaaaaaaa", "gfx_bbbbbbbbbb"],
+      }]), op).toEqual(["dlv_bbbbbbbbbb"]);
+      expect(touchedDerivativeIds(project, project, [{
+        op,
+        params,
+        affected: ["ann_aaaaaaaaaa"],
+      }]), op).toEqual([]);
+      expect(touchedDerivativeIds(project, project, [{
+        op,
+        params,
+        affected: ["clp_cccccccccc"],
+      }]), `${op} normal clip`).toEqual([]);
+    }
   });
 
   it("does not treat an unselected caption track as rendered short content", async () => {

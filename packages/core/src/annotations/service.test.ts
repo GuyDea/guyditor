@@ -21,6 +21,7 @@ import type {
   OperationInput,
   ProjectStore,
   Result,
+  TransactionRecord,
 } from "../index.js";
 import { projectFixture } from "../project/test-fixtures.js";
 
@@ -182,6 +183,53 @@ function serviceApi(): AnnotationServiceConstructor | undefined {
   return candidate;
 }
 
+async function transactionJournal(store: ProjectStore): Promise<TransactionRecord[]> {
+  return (await readFile(join(store.root, "history/transactions.jsonl"), "utf8"))
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line) as TransactionRecord);
+}
+
+async function convertedShortFixture(
+  Service: AnnotationServiceConstructor,
+): Promise<{
+  converted: OperationBatchResult;
+  service: AnnotationServiceInstance;
+  store: ProjectStore;
+}> {
+  const idFactory = ids();
+  const store = await fixtureStore(idFactory);
+  addShortWorkspace(store);
+  const service = new Service({ idFactory, now: () => NOW });
+  await valueOf(service.execute(store, [{
+    op: "annotation.create",
+    params: {
+      annotation: annotation({
+        anchor: {
+          kind: "clip",
+          clipId: "clp_cccccccccc",
+          assetId: "ast_aaaaaaaaaa",
+          sourceFrame: { frames: 6, fps: "24/1" },
+        },
+        canvasRef: { sequenceId: "seq_bbbbbbbbbb", aspect: "9:16" },
+      }),
+    },
+  }]));
+  const converted = await valueOf(service.execute(store, [{
+    op: "annotation.convert",
+    params: {
+      annotationId: "ann_aaaaaaaaaa",
+      layerId: "lyr_cccccccccc",
+      templateId: "tpl_aaaaaaaaaa",
+    },
+  }], {
+    origin: "ui",
+    dryRun: false,
+    divergence: "graphics",
+  }));
+  return { converted, service, store };
+}
+
 describe("AnnotationService", () => {
   it("preflights short annotation conversion before allocating an overlay", async () => {
     const Service = serviceApi();
@@ -281,6 +329,341 @@ describe("AnnotationService", () => {
     });
     expect(graphicIds).toBe(beforeConversionIds);
     expect(store.currentProject.layers[2]?.items).toBeUndefined();
+  });
+
+  it.each([
+    ["anchor update", {
+      op: "annotation.update",
+      params: {
+        annotationId: "ann_aaaaaaaaaa",
+        patch: {
+          anchor: {
+            kind: "timeline",
+            sequenceId: "seq_bbbbbbbbbb",
+            frame: { frames: 8, fps: "24/1" },
+          },
+        },
+      },
+    }],
+    ["canvas ownership update", {
+      op: "annotation.update",
+      params: {
+        annotationId: "ann_aaaaaaaaaa",
+        patch: {
+          canvasRef: { sequenceId: "seq_aaaaaaaaaa", aspect: "16:9" },
+        },
+      },
+    }],
+    ["delete", {
+      op: "annotation.delete",
+      params: { annotationId: "ann_aaaaaaaaaa" },
+    }],
+  ] as const)(
+    "preflights a converted short annotation %s before sidecar or project effects",
+    async (_name, operation) => {
+      const Service = serviceApi();
+      if (Service === undefined) return;
+      const { service, store } = await convertedShortFixture(Service);
+      const beforeProject = structuredClone(store.currentProject);
+      const beforeSidecar = await readFile(
+        join(store.root, "sidecars/annotations.yaml"),
+        "utf8",
+      );
+
+      const result = await service.execute(store, [structuredClone(operation)]);
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: {
+          code: "E_DIVERGENCE_REQUIRED",
+          affected: ["dlv_bbbbbbbbbb"],
+        },
+      });
+      expect(store.currentProject).toEqual(beforeProject);
+      expect(await readFile(join(store.root, "sidecars/annotations.yaml"), "utf8"))
+        .toBe(beforeSidecar);
+    },
+  );
+
+  it("records converted short anchor updates and their inverse as graphics divergence", async () => {
+    const Service = serviceApi();
+    if (Service === undefined) return;
+    const { service, store } = await convertedShortFixture(Service);
+    const originalAnchor = (await valueOf(service.get(store, "ann_aaaaaaaaaa")))!.anchor;
+
+    const updated = await valueOf(service.execute(store, [{
+      op: "annotation.update",
+      params: {
+        annotationId: "ann_aaaaaaaaaa",
+        patch: {
+          anchor: {
+            kind: "timeline",
+            sequenceId: "seq_bbbbbbbbbb",
+            frame: { frames: 8, fps: "24/1" },
+          },
+        },
+      },
+    }], {
+      origin: "ui",
+      dryRun: false,
+      divergence: "graphics",
+    }));
+    expect(updated.applied[0]!.affected).toEqual([
+      "ann_aaaaaaaaaa",
+      "gfx_aaaaaaaaaa",
+    ]);
+    if (updated.transactionId === undefined) throw new Error("Missing update transaction ID.");
+    expect((await valueOf(service.get(store, "ann_aaaaaaaaaa")))?.anchor)
+      .toMatchObject({ kind: "timeline", frame: { frames: 8 } });
+
+    const undone = await valueOf(service.execute(store, updated.applied[0]!.inverse, {
+      origin: "ui",
+      dryRun: false,
+      divergence: "graphics",
+      undoOf: updated.transactionId,
+    }));
+
+    expect((await valueOf(service.get(store, "ann_aaaaaaaaaa")))?.anchor)
+      .toEqual(originalAnchor);
+    expect((await transactionJournal(store)).slice(-2).map((transaction) => ({
+      divergence: transaction.divergence,
+      undoOf: transaction.undoOf,
+    }))).toEqual([
+      { divergence: "graphics", undoOf: undefined },
+      { divergence: "graphics", undoOf: updated.transactionId },
+    ]);
+    expect(store.currentProject.deliverables[1]?.divergences?.[0]?.transactionIds)
+      .toEqual(expect.arrayContaining([updated.transactionId, undone.transactionId]));
+  });
+
+  it("records converted short canvas ownership updates as graphics divergence", async () => {
+    const Service = serviceApi();
+    if (Service === undefined) return;
+    const { service, store } = await convertedShortFixture(Service);
+
+    const updated = await valueOf(service.execute(store, [{
+      op: "annotation.update",
+      params: {
+        annotationId: "ann_aaaaaaaaaa",
+        patch: {
+          canvasRef: { sequenceId: "seq_aaaaaaaaaa", aspect: "16:9" },
+        },
+      },
+    }], {
+      origin: "ui",
+      dryRun: false,
+      divergence: "graphics",
+    }));
+
+    expect(updated.applied[0]!.affected).toEqual([
+      "ann_aaaaaaaaaa",
+      "gfx_aaaaaaaaaa",
+    ]);
+    expect((await transactionJournal(store)).at(-1)?.divergence).toBe("graphics");
+  });
+
+  it("records converted short deletion and inverse restoration as graphics divergence", async () => {
+    const Service = serviceApi();
+    if (Service === undefined) return;
+    const { service, store } = await convertedShortFixture(Service);
+
+    const deleted = await valueOf(service.execute(store, [{
+      op: "annotation.delete",
+      params: { annotationId: "ann_aaaaaaaaaa" },
+    }], {
+      origin: "ui",
+      dryRun: false,
+      divergence: "graphics",
+    }));
+    expect(deleted.applied[0]!.affected).toEqual([
+      "ann_aaaaaaaaaa",
+      "gfx_aaaaaaaaaa",
+    ]);
+    if (deleted.transactionId === undefined) throw new Error("Missing delete transaction ID.");
+    expect(await valueOf(service.get(store, "ann_aaaaaaaaaa"))).toBeUndefined();
+
+    const restored = await valueOf(service.execute(store, deleted.applied[0]!.inverse, {
+      origin: "ui",
+      dryRun: false,
+      divergence: "graphics",
+      undoOf: deleted.transactionId,
+    }));
+
+    expect(restored.applied[0]!.affected).toEqual([
+      "ann_aaaaaaaaaa",
+      "gfx_aaaaaaaaaa",
+    ]);
+    expect(await valueOf(service.get(store, "ann_aaaaaaaaaa"))).toMatchObject({
+      convertedTo: { itemId: "gfx_aaaaaaaaaa" },
+    });
+    expect((await transactionJournal(store)).slice(-2).map((transaction) => ({
+      divergence: transaction.divergence,
+      undoOf: transaction.undoOf,
+    }))).toEqual([
+      { divergence: "graphics", undoOf: undefined },
+      { divergence: "graphics", undoOf: deleted.transactionId },
+    ]);
+  });
+
+  it("retains a pending conversion item target for a later update in the same batch", async () => {
+    const Service = serviceApi();
+    if (Service === undefined) return;
+    const idFactory = ids();
+    const store = await fixtureStore(idFactory);
+    addShortWorkspace(store);
+    const service = new Service({ idFactory, now: () => NOW });
+    await valueOf(service.execute(store, [{
+      op: "annotation.create",
+      params: {
+        annotation: annotation({
+          anchor: {
+            kind: "clip",
+            clipId: "clp_cccccccccc",
+            assetId: "ast_aaaaaaaaaa",
+            sourceFrame: { frames: 6, fps: "24/1" },
+          },
+          canvasRef: { sequenceId: "seq_bbbbbbbbbb", aspect: "9:16" },
+        }),
+      },
+    }]));
+
+    const converted = await valueOf(service.execute(store, [{
+      op: "annotation.convert",
+      params: {
+        annotationId: "ann_aaaaaaaaaa",
+        layerId: "lyr_cccccccccc",
+        templateId: "tpl_aaaaaaaaaa",
+      },
+    }, {
+      op: "annotation.update",
+      params: {
+        annotationId: "ann_aaaaaaaaaa",
+        patch: {
+          anchor: {
+            kind: "timeline",
+            sequenceId: "seq_bbbbbbbbbb",
+            frame: { frames: 8, fps: "24/1" },
+          },
+        },
+      },
+    }], {
+      origin: "ui",
+      dryRun: false,
+      divergence: "graphics",
+    }));
+
+    expect(converted.applied[1]!.affected).toEqual([
+      "ann_aaaaaaaaaa",
+      "gfx_aaaaaaaaaa",
+    ]);
+    expect(await valueOf(service.get(store, "ann_aaaaaaaaaa"))).toMatchObject({
+      anchor: { kind: "timeline", frame: { frames: 8 } },
+      convertedTo: { itemId: "gfx_aaaaaaaaaa" },
+    });
+  });
+
+  it("keeps unconverted short annotation movement non-editorial", async () => {
+    const Service = serviceApi();
+    if (Service === undefined) return;
+    const idFactory = ids();
+    const store = await fixtureStore(idFactory);
+    addShortWorkspace(store);
+    const service = new Service({ idFactory, now: () => NOW });
+    await valueOf(service.execute(store, [{
+      op: "annotation.create",
+      params: {
+        annotation: annotation({
+          anchor: {
+            kind: "clip",
+            clipId: "clp_cccccccccc",
+            assetId: "ast_aaaaaaaaaa",
+            sourceFrame: { frames: 6, fps: "24/1" },
+          },
+          canvasRef: { sequenceId: "seq_bbbbbbbbbb", aspect: "9:16" },
+        }),
+      },
+    }]));
+
+    const result = await service.execute(store, [{
+      op: "annotation.update",
+      params: {
+        annotationId: "ann_aaaaaaaaaa",
+        patch: {
+          anchor: {
+            kind: "timeline",
+            sequenceId: "seq_bbbbbbbbbb",
+            frame: { frames: 8, fps: "24/1" },
+          },
+        },
+      },
+    }]);
+
+    expect(result).toMatchObject({ ok: true });
+    expect((await transactionJournal(store)).at(-1)?.divergence).toBeUndefined();
+  });
+
+  it("keeps converted long-form annotation movement outside short divergence", async () => {
+    const Service = serviceApi();
+    if (Service === undefined) return;
+    const idFactory = ids();
+    const store = await fixtureStore(idFactory);
+    addShortWorkspace(store);
+    const service = new Service({ idFactory, now: () => NOW });
+    await valueOf(service.execute(store, [{
+      op: "annotation.create",
+      params: { annotation: annotation() },
+    }]));
+    await valueOf(service.execute(store, [{
+      op: "annotation.convert",
+      params: {
+        annotationId: "ann_aaaaaaaaaa",
+        layerId: "lyr_cccccccccc",
+        templateId: "tpl_aaaaaaaaaa",
+      },
+    }]));
+
+    const result = await service.execute(store, [{
+      op: "annotation.update",
+      params: {
+        annotationId: "ann_aaaaaaaaaa",
+        patch: {
+          anchor: {
+            kind: "timeline",
+            sequenceId: "seq_aaaaaaaaaa",
+            frame: { frames: 8, fps: "24/1" },
+          },
+          canvasRef: { sequenceId: "seq_aaaaaaaaaa", aspect: "16:9" },
+        },
+      },
+    }]);
+
+    expect(result).toMatchObject({ ok: true });
+    expect((await transactionJournal(store)).at(-1)?.divergence).toBeUndefined();
+    expect(store.currentProject.deliverables[1]?.divergences).toBeUndefined();
+  });
+
+  it("keeps converted short body and style feedback non-editorial and frozen", async () => {
+    const Service = serviceApi();
+    if (Service === undefined) return;
+    const { service, store } = await convertedShortFixture(Service);
+    const renderedParams = structuredClone(
+      store.currentProject.layers[2]!.items![0]!.params,
+    );
+
+    const result = await service.execute(store, [{
+      op: "annotation.update",
+      params: {
+        annotationId: "ann_aaaaaaaaaa",
+        patch: {
+          body: "Updated reviewer feedback",
+          style: { color: "#0055ff", strokeWidth: 0.008 },
+        },
+      },
+    }]);
+
+    expect(result).toMatchObject({ ok: true });
+    expect((await transactionJournal(store)).at(-1)?.divergence).toBeUndefined();
+    expect(store.currentProject.layers[2]!.items![0]!.params).toEqual(renderedParams);
   });
 
   it("keeps sidecar bytes, registry hash, summary, and transaction history consistent", async () => {

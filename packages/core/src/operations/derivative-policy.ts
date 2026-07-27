@@ -14,6 +14,7 @@ export type DerivativeTargetResolver =
 export interface DerivativeOperationPolicy {
   impact: DerivativeImpact;
   target: DerivativeTargetResolver;
+  conditionalTarget?: Exclude<DerivativeTargetResolver, "none">;
 }
 
 export interface DerivativeTargetOperation {
@@ -28,6 +29,13 @@ const content = (
 const nonEditorial = (): DerivativeOperationPolicy => ({
   impact: "non-editorial",
   target: "none",
+});
+const conditionalContent = (
+  target: Exclude<DerivativeTargetResolver, "none">,
+): DerivativeOperationPolicy => ({
+  impact: "non-editorial",
+  target: "none",
+  conditionalTarget: target,
 });
 const baseline = (): DerivativeOperationPolicy => ({
   impact: "baseline",
@@ -120,9 +128,9 @@ export const DERIVATIVE_OPERATION_POLICIES = Object.freeze({
   "caption.cue.retime": content(),
   "caption.preset.upgrade": content(),
   "anchor.rebind": content(),
-  "annotation.create": nonEditorial(),
-  "annotation.update": nonEditorial(),
-  "annotation.delete": nonEditorial(),
+  "annotation.create": conditionalContent("annotation-conversion"),
+  "annotation.update": conditionalContent("annotation-conversion"),
+  "annotation.delete": conditionalContent("annotation-conversion"),
   "annotation.resolve": nonEditorial(),
   "annotation.reject": nonEditorial(),
   "annotation.reopen": nonEditorial(),
@@ -231,6 +239,22 @@ function annotationConversionTargets(
   ];
 }
 
+function annotationRenderedItemTargets(
+  project: GuyditorProject,
+  operation: DerivativeTargetOperation,
+): string[] {
+  const annotationId = typeof operation.params["annotationId"] === "string"
+    ? operation.params["annotationId"]
+    : targetValues(operation.params["annotation"], ["id"])[0];
+  if (annotationId === undefined) return [];
+  const affected = new Set(operation.affected ?? []);
+  const anchor = `ann:${annotationId}`;
+  return project.layers.flatMap((layer) =>
+    (layer.items ?? [])
+      .filter((item) => affected.has(item.id) && item.at === anchor)
+      .map(({ id }) => id));
+}
+
 function newGraphicTargets(
   project: GuyditorProject,
   operation: DerivativeTargetOperation,
@@ -268,17 +292,20 @@ function newGraphicTargets(
 function targetStrings(
   project: GuyditorProject,
   operation: DerivativeTargetOperation,
-  policy: DerivativeOperationPolicy,
+  target: DerivativeTargetResolver,
+  conditional: boolean,
 ): string[] {
-  if (policy.target === "none") return [];
-  if (policy.target === "transition-owner") {
+  if (target === "none") return [];
+  if (target === "transition-owner") {
     return transitionOwnerTargets(project, operation);
   }
-  if (policy.target === "annotation-conversion") {
-    return annotationConversionTargets(operation);
+  if (target === "annotation-conversion") {
+    return conditional
+      ? annotationRenderedItemTargets(project, operation)
+      : annotationConversionTargets(operation);
   }
-  if (policy.target === "new-graphic") return newGraphicTargets(project, operation);
-  if (policy.target === "template-uses") {
+  if (target === "new-graphic") return newGraphicTargets(project, operation);
+  if (target === "template-uses") {
     const templateId = operation.params["templateId"];
     return [
       ...(operation.affected ?? []),
@@ -317,13 +344,17 @@ export function touchedDerivativeIds(
   operations: readonly DerivativeTargetOperation[],
 ): string[] {
   const targetSets = operations.flatMap((operation) => {
-    const policy = DERIVATIVE_OPERATION_POLICIES[
+    const policy: DerivativeOperationPolicy | undefined = DERIVATIVE_OPERATION_POLICIES[
       operation.op as CataloguedOperationName
     ];
-    if (policy?.impact !== "content") return [];
+    const target = policy?.impact === "content"
+      ? policy.target
+      : policy?.conditionalTarget;
+    if (target === undefined) return [];
+    const conditional = policy?.impact !== "content";
     return [{
-      before: targetStrings(before, operation, policy),
-      after: targetStrings(after, operation, policy),
+      before: targetStrings(before, operation, target, conditional),
+      after: targetStrings(after, operation, target, conditional),
     }];
   });
   if (targetSets.length === 0) return [];

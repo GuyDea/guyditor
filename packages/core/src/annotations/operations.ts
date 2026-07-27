@@ -82,6 +82,12 @@ export function annotationSummary(
   return summary(sidecar);
 }
 
+export function annotationPatchAffectsRenderedItem(
+  patch: Readonly<Record<string, unknown>>,
+): boolean {
+  return Object.hasOwn(patch, "anchor") || Object.hasOwn(patch, "canvasRef");
+}
+
 export function refreshAnnotationIndex(
   project: GuyditorProject,
   sidecar: AnnotationSidecar,
@@ -172,6 +178,15 @@ function application(
   return refreshed.ok ? success({ ...details, model: refreshed.value }) : refreshed;
 }
 
+function convertedItemId(
+  workspace: AnnotationWorkspace,
+  annotation: Annotation,
+): string | undefined {
+  return annotation.convertedTo?.itemId ??
+    workspace.pendingConversions.find(({ annotationId }) =>
+      annotationId === annotation.id)?.itemId;
+}
+
 function createAnnotation(
   project: GuyditorProject,
   workspace: AnnotationWorkspace,
@@ -194,10 +209,14 @@ function createAnnotation(
     );
   }
   workspace.current.annotations.push(annotation);
+  const itemId = convertedItemId(workspace, annotation);
   return application(project, workspace, {
     inverse: [{ op: "annotation.delete", params: { annotationId: annotation.id } }],
     redo: { op: "annotation.create", params: { annotation: structuredClone(annotation) } },
-    affected: [annotation.id],
+    affected: [
+      annotation.id,
+      ...(itemId === undefined ? [] : [itemId]),
+    ],
     summary: `Added ${annotation.shape} annotation ${annotation.id} at ${anchorDescription(annotation)}`,
   });
 }
@@ -234,10 +253,16 @@ function updateAnnotation(
   }
   workspace.current.annotations[found.value.index] = updated;
   const changedFields = Object.keys(patch).sort();
+  const itemId = annotationPatchAffectsRenderedItem(patch)
+    ? convertedItemId(workspace, found.value.annotation)
+    : undefined;
   return application(project, workspace, {
     inverse: [{ op: "annotation.update", params: { annotationId, patch: inversePatch } }],
     redo: { op: "annotation.update", params: { annotationId, patch: structuredClone(patch) } },
-    affected: [annotationId],
+    affected: [
+      annotationId,
+      ...(itemId === undefined ? [] : [itemId]),
+    ],
     summary: `Edited annotation ${annotationId} (${changedFields.join(", ")})`,
   });
 }
@@ -250,13 +275,17 @@ function deleteAnnotation(
   const annotationId = input.params["annotationId"] as string;
   const found = locate(workspace, annotationId);
   if (!found.ok) return found;
+  const itemId = convertedItemId(workspace, found.value.annotation);
   workspace.current.annotations.splice(found.value.index, 1);
   return application(project, workspace, {
     inverse: [{
       op: "annotation.create",
       params: { annotation: structuredClone(found.value.annotation) },
     }],
-    affected: [annotationId],
+    affected: [
+      annotationId,
+      ...(itemId === undefined ? [] : [itemId]),
+    ],
     summary: `Deleted annotation ${annotationId}`,
   });
 }

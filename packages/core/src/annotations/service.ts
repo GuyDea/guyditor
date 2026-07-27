@@ -31,6 +31,7 @@ import type {
   TransactionRecord,
 } from "../store/index.js";
 import {
+  annotationPatchAffectsRenderedItem,
   annotationSummary,
   createAnnotationDispatcher,
   refreshAnnotationIndex,
@@ -67,6 +68,12 @@ interface LoadedWorkspace {
   reference: SidecarRef;
   text: string;
   workspace: AnnotationWorkspace;
+}
+
+interface AnnotationDerivativeState {
+  converted: boolean;
+  itemId: string | undefined;
+  sequenceId: string;
 }
 
 function annotationFailure(
@@ -400,12 +407,18 @@ export class AnnotationService {
   ): Promise<Result<OperationBatchResult>> {
     const loaded = await loadWorkspace(project);
     if (!loaded.ok) return loaded;
-    const annotationSequences = new Map(
+    const annotationStates = new Map<string, AnnotationDerivativeState>(
       loaded.value.workspace.current.annotations.map((candidate) => [
         candidate.id,
-        candidate.canvasRef.sequenceId,
+        {
+          converted: candidate.convertedTo !== undefined,
+          itemId: candidate.convertedTo?.itemId,
+          sequenceId: candidate.canvasRef.sequenceId,
+        },
       ]),
     );
+    const renderedTargets = (state: AnnotationDerivativeState | undefined): string[] =>
+      state?.converted === true ? [state.itemId ?? state.sequenceId] : [];
     const engine = new OperationEngine(project.currentProject, {
       appVersion: this.#appVersion,
       committer: new AnnotationCommitter(
@@ -428,7 +441,13 @@ export class AnnotationService {
             typeof candidate?.id === "string" &&
             typeof candidate.canvasRef?.sequenceId === "string"
           ) {
-            annotationSequences.set(candidate.id, candidate.canvasRef.sequenceId);
+            const state: AnnotationDerivativeState = {
+              converted: candidate.convertedTo !== undefined,
+              itemId: candidate.convertedTo?.itemId,
+              sequenceId: candidate.canvasRef.sequenceId,
+            };
+            annotationStates.set(candidate.id, state);
+            return renderedTargets(state);
           }
           return [];
         }
@@ -436,21 +455,40 @@ export class AnnotationService {
         if (typeof annotationId !== "string") return [];
         if (input.op === "annotation.update") {
           const patch = input.params["patch"] as Readonly<Record<string, unknown>>;
+          const state = annotationStates.get(annotationId);
+          const targets = annotationPatchAffectsRenderedItem(patch)
+            ? renderedTargets(state)
+            : [];
           const canvasRef = patch["canvasRef"] as
             | Readonly<{ sequenceId?: unknown }>
             | undefined;
-          if (typeof canvasRef?.sequenceId === "string") {
-            annotationSequences.set(annotationId, canvasRef.sequenceId);
+          if (state !== undefined && typeof canvasRef?.sequenceId === "string") {
+            state.sequenceId = canvasRef.sequenceId;
           }
-          return [];
+          return targets;
         }
         if (input.op === "annotation.delete") {
-          annotationSequences.delete(annotationId);
-          return [];
+          const targets = renderedTargets(annotationStates.get(annotationId));
+          annotationStates.delete(annotationId);
+          return targets;
         }
         if (input.op !== "annotation.convert") return [];
-        const sequenceId = annotationSequences.get(annotationId);
-        return sequenceId === undefined ? [] : [sequenceId];
+        const state = annotationStates.get(annotationId);
+        const revert = input.params["revert"] as
+          | Readonly<{ itemId?: unknown }>
+          | undefined;
+        if (typeof revert?.itemId === "string") {
+          if (state !== undefined) {
+            state.converted = false;
+            state.itemId = undefined;
+          }
+          return [revert.itemId];
+        }
+        if (state === undefined) return [];
+        const itemId = input.params["itemId"];
+        state.converted = true;
+        state.itemId = typeof itemId === "string" ? itemId : undefined;
+        return [state.sequenceId];
       },
       anchorResolvers: {
         ...this.#resolverDependencies,
