@@ -478,12 +478,25 @@ small { color: var(--muted); }
   overflow: hidden;
   border: 1px solid var(--line-hot);
   background: var(--panel);
+  transition: background 90ms ease-out;
+}
+.dock-region::before {
+  content: "";
+  position: absolute;
+  z-index: 4;
+  inset: 0;
+  pointer-events: none;
   box-shadow: inset 0 1px rgb(232 236 234 / 6%);
-  transition: box-shadow 90ms ease-out, background 90ms ease-out;
+  transition: box-shadow 90ms ease-out;
+}
+.dock-region:focus-within::before {
+  box-shadow: inset 0 0 0 1px var(--amber-dim);
 }
 .dock-region[data-drop-active="true"] {
   z-index: 3;
   background: #202b30;
+}
+.dock-region[data-drop-active="true"]::before {
   box-shadow: inset 0 0 0 2px var(--amber), inset 0 0 34px rgb(242 184 75 / 10%);
 }
 .dock-region[data-drop-active="true"]::after {

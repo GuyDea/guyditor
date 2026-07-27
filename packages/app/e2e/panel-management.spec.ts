@@ -103,11 +103,18 @@ test("docking regions show a structured resting frame", async () => {
       .getByTestId("dock-region-center-top")
       .evaluate((element) => {
         const style = window.getComputedStyle(element);
+        const frameStyle = window.getComputedStyle(element, "::before");
         return {
           borderTopColor: style.borderTopColor,
           borderTopStyle: style.borderTopStyle,
           borderTopWidth: style.borderTopWidth,
-          boxShadow: style.boxShadow,
+          frame: {
+            boxShadow: frameStyle.boxShadow,
+            content: frameStyle.content,
+            pointerEvents: frameStyle.pointerEvents,
+            position: frameStyle.position,
+            zIndex: frameStyle.zIndex,
+          },
         };
       });
 
@@ -115,9 +122,52 @@ test("docking regions show a structured resting frame", async () => {
       borderTopColor: "rgb(85, 99, 107)",
       borderTopStyle: "solid",
       borderTopWidth: "1px",
+      frame: {
+        content: "\"\"",
+        pointerEvents: "none",
+        position: "absolute",
+        zIndex: "4",
+      },
     });
-    expect(appearance.boxShadow).not.toBe("none");
-    expect(appearance.boxShadow).toContain("inset");
+    expect(appearance.frame.boxShadow).not.toBe("none");
+    expect(appearance.frame.boxShadow).toContain("inset");
+  } finally {
+    await launched.electronApp.close();
+    await rm(template, { recursive: true, force: true });
+  }
+});
+
+test("resting dock highlight paints above opaque panel content", async () => {
+  const template = await createWorkspaceProject();
+  const launched = await launchApp({ projectTemplate: template });
+  try {
+    const region = launched.page.getByTestId("dock-region-center-top");
+    const bounds = await region.boundingBox();
+    expect(bounds).not.toBeNull();
+    if (bounds === null) throw new Error("Center-top dock region had no layout box.");
+    const clip = {
+      x: bounds.x,
+      y: bounds.y,
+      width: bounds.width,
+      height: 3,
+    };
+
+    const withHighlight = await launched.page.screenshot({
+      animations: "disabled",
+      clip,
+    });
+    await launched.page.addStyleTag({
+      content: `
+        .dock-region { box-shadow: none !important; }
+        .dock-region::before { box-shadow: none !important; }
+      `,
+    });
+    const withoutHighlight = await launched.page.screenshot({
+      animations: "disabled",
+      clip,
+    });
+
+    expect(withHighlight.equals(withoutHighlight)).toBe(false);
   } finally {
     await launched.electronApp.close();
     await rm(template, { recursive: true, force: true });
@@ -173,10 +223,15 @@ test("drag-over emphasis remains stronger than the resting frame", async () => {
   try {
     const region = launched.page.getByTestId("dock-region-center-top");
 
+    await launched.page.getByTestId("preview-panel-toggle").focus();
+    await expect.poll(() => region.evaluate(
+      (element) => window.getComputedStyle(element, "::before").boxShadow,
+    )).toContain("rgb(114, 84, 39)");
+
     await region.dispatchEvent("dragenter");
     await expect(region).toHaveAttribute("data-drop-active", "true");
     await expect.poll(() => region.evaluate(
-      (element) => window.getComputedStyle(element).boxShadow,
+      (element) => window.getComputedStyle(element, "::before").boxShadow,
     )).toContain("rgb(242, 184, 75)");
     await expect.poll(() => region.evaluate(
       (element) => window.getComputedStyle(element, "::after").content,
