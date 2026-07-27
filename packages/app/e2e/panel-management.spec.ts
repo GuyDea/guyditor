@@ -95,6 +95,100 @@ test("reset layout restores the section 10.1 regions and splitter defaults", asy
   }
 });
 
+test("docking regions show a structured resting frame", async () => {
+  const template = await createWorkspaceProject();
+  const launched = await launchApp({ projectTemplate: template });
+  try {
+    const appearance = await launched.page
+      .getByTestId("dock-region-center-top")
+      .evaluate((element) => {
+        const style = window.getComputedStyle(element);
+        return {
+          borderTopColor: style.borderTopColor,
+          borderTopStyle: style.borderTopStyle,
+          borderTopWidth: style.borderTopWidth,
+          boxShadow: style.boxShadow,
+        };
+      });
+
+    expect(appearance).toMatchObject({
+      borderTopColor: "rgb(85, 99, 107)",
+      borderTopStyle: "solid",
+      borderTopWidth: "1px",
+    });
+    expect(appearance.boxShadow).not.toBe("none");
+  } finally {
+    await launched.electronApp.close();
+    await rm(template, { recursive: true, force: true });
+  }
+});
+
+test("vacant docking regions show a checkerboard only while empty", async () => {
+  const template = await createWorkspaceProject();
+  const launched = await launchApp({ projectTemplate: template });
+  try {
+    const region = launched.page.getByTestId("dock-region-center-top");
+    await expect(region.locator(".empty-dock-target")).toHaveCount(0);
+
+    await launched.page.getByTestId("tool-rail-entry-preview").click();
+    const target = region.locator(".empty-dock-target");
+    await expect(target).toBeVisible();
+    await expect(target).toContainText("Drop a panel here");
+
+    const appearance = await target.evaluate((element) => {
+      const style = window.getComputedStyle(element);
+      const prompt = element.querySelector("span");
+      if (prompt === null) throw new Error("Empty dock prompt is missing.");
+      const promptStyle = window.getComputedStyle(prompt);
+      return {
+        backgroundLayers: style.backgroundImage.match(/linear-gradient/gmu)?.length ?? 0,
+        backgroundSizes: style.backgroundSize.split(",").map((value) => value.trim()),
+        borderTopStyle: style.borderTopStyle,
+        promptBackgroundColor: promptStyle.backgroundColor,
+        promptBorderTopStyle: promptStyle.borderTopStyle,
+      };
+    });
+
+    expect(appearance).toMatchObject({
+      backgroundLayers: 4,
+      borderTopStyle: "none",
+      promptBorderTopStyle: "solid",
+    });
+    expect(appearance.backgroundSizes).not.toHaveLength(0);
+    expect(appearance.backgroundSizes.every((size) => size === "16px 16px")).toBe(true);
+    expect(appearance.promptBackgroundColor).not.toBe("rgba(0, 0, 0, 0)");
+
+    await launched.page.getByTestId("tool-rail-entry-preview").click();
+    await expect(region.locator(".empty-dock-target")).toHaveCount(0);
+  } finally {
+    await launched.electronApp.close();
+    await rm(template, { recursive: true, force: true });
+  }
+});
+
+test("drag-over emphasis remains stronger than the resting frame", async () => {
+  const template = await createWorkspaceProject();
+  const launched = await launchApp({ projectTemplate: template });
+  try {
+    const region = launched.page.getByTestId("dock-region-center-top");
+
+    await region.dispatchEvent("dragenter");
+    await expect(region).toHaveAttribute("data-drop-active", "true");
+    await expect.poll(() => region.evaluate(
+      (element) => window.getComputedStyle(element).boxShadow,
+    )).toContain("rgb(242, 184, 75)");
+    await expect.poll(() => region.evaluate(
+      (element) => window.getComputedStyle(element, "::after").content,
+    )).toBe("\"Dock here\"");
+
+    await region.dispatchEvent("dragleave");
+    await expect(region).toHaveAttribute("data-drop-active", "false");
+  } finally {
+    await launched.electronApp.close();
+    await rm(template, { recursive: true, force: true });
+  }
+});
+
 test("the master rail toggles, flashes, reports three states, and collapses sequentially", async () => {
   const template = await createWorkspaceProject();
   const launched = await launchApp({ projectTemplate: template });
