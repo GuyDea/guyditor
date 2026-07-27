@@ -13,6 +13,7 @@ import type {
 import { resolveActiveDeliverable } from "../active-deliverable.js";
 import { errorMessage, executeDirect } from "../ipc.js";
 import { usePreviewStore, useSelectionStore } from "../state/view-state.js";
+import { directEditDivergence } from "./direct-edit-divergence.js";
 import type { WorkspacePanelProps } from "./types.js";
 
 const ANCHORS: readonly AnchorName[] = [
@@ -75,7 +76,13 @@ export function PipInspector({
 
   async function run(operations: Parameters<typeof executeDirect>[0], label: string): Promise<void> {
     try {
-      await executeDirect(operations, label);
+      await executeDirect(
+        operations,
+        label,
+        snapshot === null
+          ? undefined
+          : directEditDivergence(snapshot.master, operations),
+      );
       await refreshProject();
       setNotice(label);
     } catch (error: unknown) {

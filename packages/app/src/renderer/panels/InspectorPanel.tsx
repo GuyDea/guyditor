@@ -96,6 +96,7 @@ export function InspectorPanel({
       </div>
       <AudioInspector
         layer={layer}
+        project={snapshot?.master}
         timelineFps={snapshot?.master.settings.timeline.fps ?? "24/1"}
         refreshProject={refreshProject}
         setNotice={setNotice}

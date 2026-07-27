@@ -11,6 +11,7 @@ import type { JobStatus } from "../../shared/ipc.js";
 import { resolveActiveDeliverable } from "../active-deliverable.js";
 import { errorMessage, executeDirect } from "../ipc.js";
 import { usePreviewStore, useSelectionStore, useTranscriptViewStore } from "../state/view-state.js";
+import { directEditDivergence } from "./direct-edit-divergence.js";
 import { Panel } from "./Panel.js";
 import type { WorkspacePanelProps } from "./types.js";
 
@@ -129,7 +130,13 @@ export function TranscriptPanel({
     label: string,
   ): Promise<void> {
     try {
-      await executeDirect([operation], label);
+      await executeDirect(
+        [operation],
+        label,
+        snapshot === null
+          ? undefined
+          : directEditDivergence(snapshot.master, [operation]),
+      );
       await refreshProject();
       setNotice(`${label}.`);
     } catch (error: unknown) {
@@ -208,7 +215,13 @@ export function TranscriptPanel({
       return;
     }
     try {
-      await executeDirect([operation], `${kind === "remove" ? "Remove" : "Create clip from"} transcript range`);
+      await executeDirect(
+        [operation],
+        `${kind === "remove" ? "Remove" : "Create clip from"} transcript range`,
+        snapshot === null
+          ? undefined
+          : directEditDivergence(snapshot.master, [operation]),
+      );
       await refreshProject();
       setNotice(kind === "remove" ? "Removed transcript range." : "Created clip from transcript range.");
     } catch (error: unknown) {
@@ -219,10 +232,17 @@ export function TranscriptPanel({
   async function correctWord(): Promise<void> {
     if (selected === undefined || correctionDraft.trim() === "") return;
     try {
-      await executeDirect([{
+      const operation = {
         op: "transcript.word.correct",
         params: { wordId: selected.id, text: correctionDraft.trim() },
-      }], `Correct ${selected.id}`);
+      };
+      await executeDirect(
+        [operation],
+        `Correct ${selected.id}`,
+        snapshot === null
+          ? undefined
+          : directEditDivergence(snapshot.master, [operation]),
+      );
       await refreshProject();
       setEditing(false);
       setNotice(`Corrected ${selected.id}.`);

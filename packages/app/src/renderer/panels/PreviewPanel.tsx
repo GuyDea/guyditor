@@ -42,6 +42,7 @@ import {
   nudgeFrameCenterSeconds,
 } from "../preview-controller.js";
 import { usePreviewStore, useSelectionStore } from "../state/view-state.js";
+import { directEditDivergence } from "./direct-edit-divergence.js";
 import { Panel } from "./Panel.js";
 import { LoudnessMeter } from "./LoudnessMeter.js";
 import type { WorkspacePanelProps } from "./types.js";
@@ -622,7 +623,15 @@ export function PreviewPanel({
       history: [],
     };
     try {
-      await executeDirect([{ op: "annotation.create", params: { annotation } }], `Add ${tool} annotation`);
+      const operations = [{
+        op: "annotation.create",
+        params: { annotation },
+      }];
+      await executeDirect(
+        operations,
+        `Add ${tool} annotation`,
+        directEditDivergence(snapshot.master, operations),
+      );
       setBody("");
       selectAnnotation(annotation.id);
       await refreshAnnotations();
@@ -638,7 +647,7 @@ export function PreviewPanel({
       framingFrame === null || cropDraft === null
     ) return;
     try {
-      await executeDirect([{
+      const operations = [{
         op: "deliverable.framing.override",
         params: {
           deliverableId: deliverable.id,
@@ -654,7 +663,12 @@ export function PreviewPanel({
             note: "Manual shot crop from the vertical preview",
           },
         },
-      }], `Correct ${framingFrame.decisionId} crop`);
+      }];
+      await executeDirect(
+        operations,
+        `Correct ${framingFrame.decisionId} crop`,
+        directEditDivergence(snapshot.master, operations),
+      );
       await refreshProject();
       setNotice(`Saved the manual crop for ${framingFrame.decisionId}.`);
     } catch (error: unknown) {
@@ -664,10 +678,17 @@ export function PreviewPanel({
 
   async function lifecycle(annotation: Annotation, action: "resolve" | "reject" | "reopen"): Promise<void> {
     try {
-      await executeDirect([{
+      const operations = [{
         op: `annotation.${action}`,
         params: { annotationId: annotation.id, reason: `${action} from preview` },
-      }], `${action} ${annotation.id}`);
+      }];
+      await executeDirect(
+        operations,
+        `${action} ${annotation.id}`,
+        snapshot === null
+          ? undefined
+          : directEditDivergence(snapshot.master, operations),
+      );
       await refreshAnnotations();
       setNotice(`${action}d annotation ${annotation.id}.`);
     } catch (error: unknown) {
@@ -807,9 +828,13 @@ export function PreviewPanel({
             }}
             onPlace={async (placement) => {
               try {
+                const operations = [
+                  pipPlaceOperation(selectedPipLayer.id, placement),
+                ];
                 await executeDirect(
-                  [pipPlaceOperation(selectedPipLayer.id, placement)],
+                  operations,
                   `Drag ${selectedPipLayer.name} PiP`,
+                  directEditDivergence(snapshot.master, operations),
                 );
                 await refreshProject();
                 setNotice(`Placed ${selectedPipLayer.name} with semantic constraints.`);

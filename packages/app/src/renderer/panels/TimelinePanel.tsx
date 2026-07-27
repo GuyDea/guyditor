@@ -8,6 +8,7 @@ import type { PeaksFile } from "../../../../media/src/index.js";
 import { resolveActiveDeliverable } from "../active-deliverable.js";
 import { errorMessage, executeDirect } from "../ipc.js";
 import { usePreviewStore, useSelectionStore, useTimelineViewStore } from "../state/view-state.js";
+import { directEditDivergence } from "./direct-edit-divergence.js";
 import { Panel } from "./Panel.js";
 import type { WorkspacePanelProps } from "./types.js";
 
@@ -114,7 +115,13 @@ export function TimelinePanel({
     success: string,
   ): Promise<void> {
     try {
-      await executeDirect(operations, label);
+      await executeDirect(
+        operations,
+        label,
+        snapshot === null
+          ? undefined
+          : directEditDivergence(snapshot.master, operations),
+      );
       await refreshProject();
       setNotice(success);
     } catch (error: unknown) {

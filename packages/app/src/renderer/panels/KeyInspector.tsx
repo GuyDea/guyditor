@@ -13,6 +13,7 @@ import {
   usePreviewStore,
   useSelectionStore,
 } from "../state/view-state.js";
+import { directEditDivergence } from "./direct-edit-divergence.js";
 import type { WorkspacePanelProps } from "./types.js";
 
 const DEFAULT_KEY: KeySettings = {
@@ -180,7 +181,15 @@ export function KeyInspector({
   async function commit(next: KeySettings | null, label: string): Promise<void> {
     if (clip === undefined) return;
     try {
-      await executeDirect([{ op: "clip.key.set", params: { clipId: clip.id, settings: next } }], label);
+      const operations = [{
+        op: "clip.key.set",
+        params: { clipId: clip.id, settings: next },
+      }];
+      await executeDirect(
+        operations,
+        label,
+        directEditDivergence(projectSnapshot.master, operations),
+      );
       await refreshProject();
       setNotice(label);
     } catch (error: unknown) {
@@ -217,7 +226,15 @@ export function KeyInspector({
 
   async function runQc(): Promise<void> {
     try {
-      await executeDirect([{ op: "key.qc.run", params: { clipId: selectedClip.id } }], `Run key QC for ${selectedClip.id}`);
+      const operations = [{
+        op: "key.qc.run",
+        params: { clipId: selectedClip.id },
+      }];
+      await executeDirect(
+        operations,
+        `Run key QC for ${selectedClip.id}`,
+        directEditDivergence(projectSnapshot.master, operations),
+      );
       await refreshProject();
       setNotice(`Queued key quality analysis for ${selectedClip.id}.`);
     } catch (error: unknown) {
@@ -230,10 +247,15 @@ export function KeyInspector({
     const candidateParams = structuredClone(neural);
     delete candidateParams.matteAssetId;
     try {
-      await executeDirect([{
+      const operations = [{
         op: "key.matte.generate",
         params: { clipId: selectedClip.id, neural: candidateParams },
-      }], `Generate neural matte for ${selectedClip.id}`);
+      }];
+      await executeDirect(
+        operations,
+        `Generate neural matte for ${selectedClip.id}`,
+        directEditDivergence(projectSnapshot.master, operations),
+      );
       setNotice(`Queued neural matte generation for ${selectedClip.id}.`);
     } catch (error: unknown) {
       setNotice(errorMessage(error));
@@ -276,10 +298,15 @@ export function KeyInspector({
   async function applyArrangement(): Promise<void> {
     if (deliverable === undefined) return;
     try {
-      await executeDirect([{
+      const operations = [{
         op: "composition.arrange",
         params: { sequenceId: deliverable.sequenceId, arrangementRef: arrangementId, assignments },
-      }], `Apply ${arrangementId}`);
+      }];
+      await executeDirect(
+        operations,
+        `Apply ${arrangementId}`,
+        directEditDivergence(projectSnapshot.master, operations),
+      );
       await refreshProject();
     } catch (error: unknown) {
       setNotice(errorMessage(error));

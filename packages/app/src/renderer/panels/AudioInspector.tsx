@@ -1,7 +1,12 @@
 import { useEffect, useState } from "react";
 
-import type { DuckingConfig, Layer } from "../../../../core/src/index.js";
+import type {
+  DuckingConfig,
+  GuyditorProject,
+  Layer,
+} from "../../../../core/src/index.js";
 import { errorMessage, executeDirect } from "../ipc.js";
+import { directEditDivergence } from "./direct-edit-divergence.js";
 
 const AUDIO_ROLES = new Set<Layer["kind"]>(["audio", "music", "ambience", "sfx"]);
 const DEFAULT_CONFIG: DuckingConfig = {
@@ -16,6 +21,7 @@ const DEFAULT_CONFIG: DuckingConfig = {
 
 interface AudioInspectorProps {
   layer: Layer | undefined;
+  project: GuyditorProject | undefined;
   timelineFps: string;
   refreshProject(): Promise<void>;
   setNotice(message: string): void;
@@ -23,6 +29,7 @@ interface AudioInspectorProps {
 
 export function AudioInspector({
   layer,
+  project,
   timelineFps,
   refreshProject,
   setNotice,
@@ -45,7 +52,13 @@ export function AudioInspector({
     success: string,
   ): Promise<void> {
     try {
-      await executeDirect(operations, label);
+      await executeDirect(
+        operations,
+        label,
+        project === undefined
+          ? undefined
+          : directEditDivergence(project, operations),
+      );
       await refreshProject();
       setNotice(success);
     } catch (error: unknown) {
