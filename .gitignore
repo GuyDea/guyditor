@@ -5,6 +5,8 @@ dist/
 *.tsbuildinfo
 *.log
 .guyditor-demo/
+.superpowers/
+.worktrees/
 packages/render/assets/fonts/Inconsolata.otf
 workers/mlworker/.venv/
 workers/mlworker/.uv-cache/
