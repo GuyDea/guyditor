@@ -1,7 +1,10 @@
 import { Ajv2020 } from "ajv/dist/2020.js";
 import type { ErrorObject } from "ajv";
 
-import { placedItemAppliesToSequence } from "../anchors/index.js";
+import {
+  placedItemAppliesToSequence,
+  placedItemOwnershipConsistency,
+} from "../anchors/index.js";
 import { failure, makeGuyditorError, success } from "../errors.js";
 import type { Result } from "../errors.js";
 import type { GuyditorProject, Layer, PlacedItem } from "../project/index.js";
@@ -17,6 +20,24 @@ function graphicFailure(
   affected: readonly string[] = [],
 ): ReturnType<typeof failure> {
   return failure(makeGuyditorError(code, message, { affected }));
+}
+
+function graphicSequenceConflictAffected(
+  project: GuyditorProject,
+  item: PlacedItem,
+): string[] | undefined {
+  const ownership = placedItemOwnershipConsistency(project, item);
+  const explicitSequenceId = item.sequenceId;
+  const explicitOwnerApplies = explicitSequenceId === undefined ||
+    placedItemAppliesToSequence(project, item, explicitSequenceId);
+  if (ownership.consistent && explicitOwnerApplies) return undefined;
+  return [
+    item.id,
+    ...new Set([
+      ...(explicitSequenceId === undefined ? [] : [explicitSequenceId]),
+      ...ownership.inferredSequenceIds,
+    ]),
+  ];
 }
 
 export async function resolveTemplateDescriptor(
@@ -254,14 +275,12 @@ async function applyAdd(
     params: validated.value,
     seed,
   };
-  if (
-    sequenceId !== undefined &&
-    !placedItemAppliesToSequence(project, item, sequenceId)
-  ) {
+  const sequenceConflict = graphicSequenceConflictAffected(project, item);
+  if (sequenceConflict !== undefined) {
     return graphicFailure(
       "E_GRAPHIC_SEQUENCE_CONFLICT",
-      `Graphic ${graphicId} has anchors that conflict with sequence ${sequenceId}.`,
-      [graphicId, sequenceId],
+      `Graphic ${graphicId} has contradictory or unresolved sequence-qualified anchors.`,
+      sequenceConflict,
     );
   }
   const nextLayer: Layer = { ...layer, items: [...(layer.items ?? []), item] };
@@ -378,14 +397,12 @@ async function applyItemField(
   const parameter = field === "at" ? "anchor" : "duration";
   const after = structuredClone(input.params[parameter] as PlacedItem[typeof field]);
   const item = { ...located.item, [field]: after };
-  if (
-    item.sequenceId !== undefined &&
-    !placedItemAppliesToSequence(project, item, item.sequenceId)
-  ) {
+  const sequenceConflict = graphicSequenceConflictAffected(project, item);
+  if (sequenceConflict !== undefined) {
     return graphicFailure(
       "E_GRAPHIC_SEQUENCE_CONFLICT",
-      `Graphic ${graphicId} has anchors that conflict with sequence ${item.sequenceId}.`,
-      [graphicId, item.sequenceId],
+      `Graphic ${graphicId} has contradictory or unresolved sequence-qualified anchors.`,
+      sequenceConflict,
     );
   }
   const layer = {

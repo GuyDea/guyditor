@@ -176,7 +176,7 @@ describe("FR-600/601 graphic operation catalog", () => {
     }]);
   });
 
-  it("rejects a newly added graphic whose anchor conflicts with explicit ownership", async () => {
+  it("rejects a newly added graphic whose anchor conflicts with or cannot resolve for explicit ownership", async () => {
     const project = projectFixture();
     project.sequences.push({
       id: "seq_bbbbbbbbbb",
@@ -197,6 +197,7 @@ describe("FR-600/601 graphic operation catalog", () => {
       op: "graphic.add",
       params: {
         templateId: TEMPLATE_ID,
+        graphicId: "gfx_bbbbbbbbbb",
         sequenceId: "seq_aaaaaaaaaa",
         anchor: "timeline:seq_bbbbbbbbbb@4",
         duration: { frames: 12, fps: "24/1" },
@@ -210,6 +211,74 @@ describe("FR-600/601 graphic operation catalog", () => {
       ok: false,
       error: {
         code: "E_GRAPHIC_SEQUENCE_CONFLICT",
+        acceptedStateChanged: false,
+      },
+    });
+
+    await expect(engine.execute([{
+      op: "graphic.add",
+      params: {
+        templateId: TEMPLATE_ID,
+        graphicId: "gfx_bbbbbbbbbb",
+        sequenceId: "seq_aaaaaaaaaa",
+        anchor: "clip:clp_dddddddddd@0",
+        duration: { frames: 12, fps: "24/1" },
+        params: { title: "Unresolved" },
+      },
+    }], {
+      baseRevision: project.revision,
+      origin: "ui",
+      dryRun: false,
+    })).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "E_GRAPHIC_SEQUENCE_CONFLICT",
+        affected: ["gfx_bbbbbbbbbb", "seq_aaaaaaaaaa"],
+        acceptedStateChanged: false,
+      },
+    });
+    expect(engine.currentProject).toEqual(accepted);
+  });
+
+  it("rejects a newly added legacy-shaped graphic with contradictory inferred scopes", async () => {
+    const project = projectFixture();
+    project.sequences.push({
+      id: "seq_bbbbbbbbbb",
+      name: "sibling",
+      clips: [],
+    });
+    const provider = {
+      latest: () => Promise.resolve(success(descriptor)),
+      get: () => Promise.resolve(success(descriptor)),
+    };
+    const engine = new OperationEngine(project, {
+      templateProvider: provider,
+      seedFactory: () => 7,
+    });
+    const accepted = structuredClone(project);
+
+    await expect(engine.execute([{
+      op: "graphic.add",
+      params: {
+        templateId: TEMPLATE_ID,
+        graphicId: "gfx_bbbbbbbbbb",
+        anchor: "timeline:seq_aaaaaaaaaa@4",
+        duration: { until: "timeline:seq_bbbbbbbbbb@12" },
+        params: { title: "Ambiguous" },
+      },
+    }], {
+      baseRevision: project.revision,
+      origin: "ui",
+      dryRun: false,
+    })).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "E_GRAPHIC_SEQUENCE_CONFLICT",
+        affected: [
+          "gfx_bbbbbbbbbb",
+          "seq_aaaaaaaaaa",
+          "seq_bbbbbbbbbb",
+        ],
         acceptedStateChanged: false,
       },
     });
@@ -323,6 +392,12 @@ describe("FR-600/601 graphic operation catalog", () => {
         graphicId: "gfx_bbbbbbbbbb",
         duration: { until: "timeline:seq_bbbbbbbbbb@12" },
       },
+    }, {
+      op: "graphic.anchor.set",
+      params: {
+        graphicId: "gfx_bbbbbbbbbb",
+        anchor: "clip:clp_dddddddddd@0",
+      },
     }]) {
       await expect(engine.execute([operation], {
         baseRevision: project.revision,
@@ -333,6 +408,70 @@ describe("FR-600/601 graphic operation catalog", () => {
         error: { code: "E_GRAPHIC_SEQUENCE_CONFLICT" },
       });
     }
+  });
+
+  it.each([
+    ["graphic.anchor.set", {
+      graphicId: "gfx_bbbbbbbbbb",
+      anchor: "timeline:seq_bbbbbbbbbb@4",
+    }],
+    ["graphic.retime", {
+      graphicId: "gfx_bbbbbbbbbb",
+      duration: { until: "timeline:seq_bbbbbbbbbb@12" },
+    }],
+  ] as const)("rejects %s when it creates contradictory inferred scopes on a legacy item", async (
+    op,
+    params,
+  ) => {
+    const project = projectFixture();
+    project.sequences.push({
+      id: "seq_bbbbbbbbbb",
+      name: "sibling",
+      clips: [],
+    });
+    project.templates = {
+      [TEMPLATE_ID]: { version: descriptor.version, contentHash: descriptor.contentHash },
+    };
+    project.layers.push({
+      id: "lyr_bbbbbbbbbb",
+      kind: "animation",
+      name: "Graphics",
+      order: 1,
+      enabled: true,
+      locked: false,
+      items: [{
+        id: "gfx_bbbbbbbbbb",
+        template: TEMPLATE_ID,
+        at: "timeline:seq_aaaaaaaaaa@4",
+        duration: { until: "timeline:seq_aaaaaaaaaa@12" },
+        params: { title: "Legacy" },
+        seed: 7,
+      }],
+    });
+    const provider = {
+      latest: () => Promise.resolve(success(descriptor)),
+      get: () => Promise.resolve(success(descriptor)),
+    };
+    const engine = new OperationEngine(project, { templateProvider: provider });
+    const accepted = structuredClone(project);
+
+    await expect(engine.execute([{ op, params }], {
+      baseRevision: project.revision,
+      origin: "ui",
+      dryRun: false,
+    })).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "E_GRAPHIC_SEQUENCE_CONFLICT",
+        affected: [
+          "gfx_bbbbbbbbbb",
+          "seq_aaaaaaaaaa",
+          "seq_bbbbbbbbbb",
+        ],
+        acceptedStateChanged: false,
+      },
+    });
+    expect(engine.currentProject).toEqual(accepted);
   });
 
   it("applies RFC 7386 parameter patches and records a reversible semantic update", async () => {
