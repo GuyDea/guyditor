@@ -117,6 +117,7 @@ test("docking regions show a structured resting frame", async () => {
       borderTopWidth: "1px",
     });
     expect(appearance.boxShadow).not.toBe("none");
+    expect(appearance.boxShadow).toContain("inset");
   } finally {
     await launched.electronApp.close();
     await rm(template, { recursive: true, force: true });
