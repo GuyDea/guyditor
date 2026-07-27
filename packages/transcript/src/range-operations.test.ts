@@ -182,6 +182,23 @@ function expectDerivativeProvenance(
   }]);
 }
 
+function expectLocalJoinedDerivative(project: GuyditorProject): void {
+  expect.soft(
+    project.sequences.find(({ id }) => id === "seq_bbbbbbbbbb")?.clips,
+  ).toEqual([{
+    id: "clp_dddddddddd",
+    asset: "ast_aaaaaaaaaa",
+    origin: "local",
+    source: {
+      in: { frames: 24, fps: "24/1" },
+      out: { frames: 72, fps: "24/1" },
+    },
+  }]);
+  expect.soft(
+    project.deliverables.find(({ id }) => id === "dlv_bbbbbbbbbb")?.dependencies,
+  ).toEqual([]);
+}
+
 describe("transcript range operations", () => {
   it("records range.remove as one semantic operation and its inverse restores the project", async () => {
     const { store, engine } = await fixture();
@@ -381,6 +398,146 @@ describe("transcript range operations", () => {
       48,
       72,
     );
+  });
+
+  it("retains a range in an explicitly targeted derivative across inverse and redo", async () => {
+    const { store, engine } = await fixture();
+    await valueOf(engine.execute(store, [{
+      op: "transcript.range.shortCandidate",
+      params: {
+        wordRange: { fromWord: "w000002", toWord: "w000003" },
+        title: "Targeted short",
+      },
+    }]));
+    const primaryBefore = structuredClone(
+      store.currentProject.sequences.find(({ id }) => id === "seq_aaaaaaaaaa"),
+    );
+    const cuts = { origin: "ui" as const, dryRun: false, divergence: "cuts" as const };
+
+    const retained = await valueOf(engine.execute(
+      store,
+      [{
+        op: "transcript.range.retain",
+        params: {
+          scope: { sequenceId: "seq_bbbbbbbbbb" },
+          wordRanges: [{ fromWord: "w000003", toWord: "w000003" }],
+        },
+      }],
+      cuts,
+    ));
+    const normalizedRetain = {
+      op: retained.applied[0]!.op,
+      params: retained.applied[0]!.params,
+    };
+
+    expect.soft(normalizedRetain).toMatchObject({
+      op: "transcript.range.retain",
+      params: {
+        scope: { sequenceId: "seq_bbbbbbbbbb" },
+        compiledSplits: [{ newClipId: "clp_dddddddddd" }],
+      },
+    });
+    expect.soft(
+      store.currentProject.sequences.find(({ id }) => id === "seq_aaaaaaaaaa"),
+    ).toEqual(primaryBefore);
+    expectDerivativeProvenance(
+      store.currentProject,
+      "clp_dddddddddd",
+      60,
+      72,
+    );
+
+    await valueOf(engine.execute(store, retained.applied[0]!.inverse, cuts));
+
+    expect.soft(
+      store.currentProject.sequences.find(({ id }) => id === "seq_aaaaaaaaaa"),
+    ).toEqual(primaryBefore);
+    expectDerivativeProvenance(
+      store.currentProject,
+      "clp_cccccccccc",
+      36,
+      72,
+    );
+
+    await valueOf(engine.execute(store, [normalizedRetain], cuts));
+
+    expect.soft(
+      store.currentProject.sequences.find(({ id }) => id === "seq_aaaaaaaaaa"),
+    ).toEqual(primaryBefore);
+    expectDerivativeProvenance(
+      store.currentProject,
+      "clp_dddddddddd",
+      60,
+      72,
+    );
+  });
+
+  it("keeps a local-first derivative join local across separate transactions", async () => {
+    const { store, engine } = await fixture();
+    await valueOf(engine.execute(store, [{
+      op: "transcript.range.shortCandidate",
+      params: {
+        wordRange: { fromWord: "w000002", toWord: "w000003" },
+        title: "Targeted short",
+      },
+    }]));
+    const cuts = { origin: "ui" as const, dryRun: false, divergence: "cuts" as const };
+    await valueOf(engine.execute(store, [{
+      op: "clip.insert",
+      params: {
+        sequenceId: "seq_bbbbbbbbbb",
+        layerId: "lyr_bbbbbbbbbb",
+        index: 0,
+        clipId: "clp_dddddddddd",
+        source: {
+          assetId: "ast_aaaaaaaaaa",
+          in: { frames: 24, fps: "24/1" },
+          out: { frames: 36, fps: "24/1" },
+        },
+      },
+    }], cuts));
+
+    await valueOf(engine.execute(store, [{
+      op: "clip.join",
+      params: { clipIds: ["clp_dddddddddd", "clp_cccccccccc"] },
+    }], cuts));
+
+    expectLocalJoinedDerivative(store.currentProject);
+  });
+
+  it("keeps a same-batch inserted local-first derivative join local", async () => {
+    const { store, engine } = await fixture();
+    await valueOf(engine.execute(store, [{
+      op: "transcript.range.shortCandidate",
+      params: {
+        wordRange: { fromWord: "w000002", toWord: "w000003" },
+        title: "Targeted short",
+      },
+    }]));
+    const cuts = { origin: "ui" as const, dryRun: false, divergence: "cuts" as const };
+
+    await valueOf(engine.execute(store, [
+      {
+        op: "clip.insert",
+        params: {
+          sequenceId: "seq_bbbbbbbbbb",
+          layerId: "lyr_bbbbbbbbbb",
+          index: 0,
+          clipId: "clp_dddddddddd",
+          source: {
+            assetId: "ast_aaaaaaaaaa",
+            in: { frames: 24, fps: "24/1" },
+            out: { frames: 36, fps: "24/1" },
+          },
+        },
+      },
+      {
+        op: "clip.join",
+        params: { clipIds: ["clp_dddddddddd", "clp_cccccccccc"] },
+      },
+    ], cuts));
+
+    expectLocalJoinedDerivative(store.currentProject);
   });
 
   it("rejects an explicitly targeted sequence that does not exist", async () => {

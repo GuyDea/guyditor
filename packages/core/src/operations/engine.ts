@@ -732,7 +732,27 @@ function splitClipIds(operation: AppliedOperation): string[] {
   ];
 }
 
+function capturedRestoreClipIds(applied: readonly AppliedOperation[]): ReadonlySet<string> {
+  const restored = new Set<string>();
+  for (const operation of applied) {
+    if (operation.op !== "clip.insert") continue;
+    const clipId = operation.params["clipId"];
+    const restore = operation.params["restore"];
+    if (
+      !isId("clp", clipId) ||
+      typeof restore !== "object" ||
+      restore === null ||
+      Array.isArray(restore)
+    ) {
+      continue;
+    }
+    if ((restore as Record<string, unknown>)["id"] === clipId) restored.add(clipId);
+  }
+  return restored;
+}
+
 function joinedClipParents(applied: readonly AppliedOperation[]): ReadonlyMap<string, readonly string[]> {
+  const restored = capturedRestoreClipIds(applied);
   const parents = new Map<string, string[]>();
   for (const operation of applied) {
     const clipIds = operation.op === "clip.join"
@@ -745,6 +765,7 @@ function joinedClipParents(applied: readonly AppliedOperation[]): ReadonlyMap<st
       continue;
     }
     const survivor = clipIds[0]!;
+    if (!restored.has(survivor)) continue;
     parents.set(survivor, [
       ...(parents.get(survivor) ?? []),
       ...clipIds.slice(1),
@@ -792,10 +813,12 @@ function synchronizeDerivativeDependencies(
             sourceRangesOverlap(dependency.source.range, range) &&
             rangeContains(dependency.source.range, range))
         : undefined;
-      const joinedParent = joinedParents.get(clip.id)
-        ?.map((clipId) => byClip.get(clipId))
-        .find((dependency) =>
-          dependency !== undefined && dependency.source.assetId === clip.asset);
+      const joinedParent = clip.origin === "local"
+        ? undefined
+        : joinedParents.get(clip.id)
+          ?.map((clipId) => byClip.get(clipId))
+          .find((dependency) =>
+            dependency !== undefined && dependency.source.assetId === clip.asset);
       const inherited = parent ?? joinedParent;
       if (inherited !== undefined) {
         delete clip.origin;
