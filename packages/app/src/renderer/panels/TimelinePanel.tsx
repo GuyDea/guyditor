@@ -5,17 +5,21 @@ import { convertTimeRounding } from "../../../../core/src/time/index.js";
 import { findJumpCutWarnings } from "../../../../core/src/assist/jumpcuts.js";
 import type { Clip, Layer } from "../../../../core/src/index.js";
 import type { PeaksFile } from "../../../../media/src/index.js";
+import { resolveActiveDeliverable } from "../active-deliverable.js";
 import { errorMessage, executeDirect } from "../ipc.js";
 import { usePreviewStore, useSelectionStore, useTimelineViewStore } from "../state/view-state.js";
 import { Panel } from "./Panel.js";
 import type { WorkspacePanelProps } from "./types.js";
 
-function sequenceFor(snapshot: NonNullable<WorkspacePanelProps["snapshot"]>) {
-  const deliverable = snapshot.master.deliverables.find(
-    ({ id }) => id === snapshot.master.settings.primaryDeliverable,
-  );
-  return snapshot.master.sequences.find(({ id }) => id === deliverable?.sequenceId) ??
-    snapshot.master.sequences[0];
+export function synchronizeTimelineScroll(
+  viewport: { scrollLeft: number },
+  scrollOffsetFrames: number,
+  zoomPixelsPerFrame: number,
+): void {
+  const expected = scrollOffsetFrames * zoomPixelsPerFrame;
+  if (Math.abs(viewport.scrollLeft - expected) > 0.5) {
+    viewport.scrollLeft = expected;
+  }
 }
 
 function clipDuration(clip: Clip): number {
@@ -41,13 +45,21 @@ export function TimelinePanel({
   const setZoom = useTimelineViewStore((state) => state.setZoom);
   const setScrollOffset = useTimelineViewStore((state) => state.setScrollOffset);
   const setViewportWidth = useTimelineViewStore((state) => state.setViewportWidth);
+  const selectedDeliverableId = useSelectionStore(
+    (state) => state.selectedDeliverableId,
+  );
   const selectedClipId = useSelectionStore((state) => state.selectedClipId);
   const selectedLayerId = useSelectionStore((state) => state.selectedLayerId);
   const selectClip = useSelectionStore((state) => state.selectClip);
   const selectLayer = useSelectionStore((state) => state.selectLayer);
   const playhead = usePreviewStore((state) => state.playhead);
   const setPlayhead = usePreviewStore((state) => state.setPlayhead);
-  const sequence = snapshot === null ? undefined : sequenceFor(snapshot);
+  const deliverable = snapshot === null
+    ? undefined
+    : resolveActiveDeliverable(snapshot.master, selectedDeliverableId);
+  const sequence = snapshot?.master.sequences.find(
+    ({ id }) => id === deliverable?.sequenceId,
+  );
   const derivedResult = snapshot === null || sequence === undefined
     ? undefined
     : deriveTimeline(snapshot.master, sequence.id);
@@ -77,6 +89,12 @@ export function TimelinePanel({
     observer.observe(viewport);
     return () => observer.disconnect();
   }, [setViewportWidth]);
+
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    if (viewport === null) return;
+    synchronizeTimelineScroll(viewport, scrollOffset, zoom);
+  }, [scrollOffset, sequence?.id, zoom]);
 
   useEffect(() => {
     let current = true;

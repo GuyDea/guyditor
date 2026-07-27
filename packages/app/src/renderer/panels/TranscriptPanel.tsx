@@ -1,8 +1,14 @@
 import { useMemo, useState } from "react";
 
-import type { FrameTime } from "../../../../core/src/index.js";
+import type {
+  Deliverable,
+  FrameTime,
+  Layer,
+  Sequence,
+} from "../../../../core/src/index.js";
 import type { CaptionFrameSpec, TranscriptWord } from "../../../../transcript/src/index.js";
 import type { JobStatus } from "../../shared/ipc.js";
+import { resolveActiveDeliverable } from "../active-deliverable.js";
 import { errorMessage, executeDirect } from "../ipc.js";
 import { usePreviewStore, useSelectionStore, useTranscriptViewStore } from "../state/view-state.js";
 import { Panel } from "./Panel.js";
@@ -25,6 +31,53 @@ function displayWords(transcripts: WorkspacePanelProps["transcripts"]): DisplayW
     })));
 }
 
+type WordRange = { fromWord: string; toWord: string };
+
+export function transcriptNavigationRequest(
+  wordId: string,
+  deliverable: Deliverable | undefined,
+): Record<string, unknown> {
+  return {
+    target: { kind: "word", wordId },
+    ...(deliverable === undefined ? {} : { scope: deliverable.sequenceId }),
+  };
+}
+
+export function transcriptRangeOperation(
+  kind: "remove" | "createClip",
+  wordRange: WordRange,
+  deliverable: Deliverable | undefined,
+  sequence: Sequence | undefined,
+  layer: Layer | undefined,
+): { op: string; params: Record<string, unknown> } | undefined {
+  if (
+    deliverable === undefined ||
+    sequence === undefined ||
+    sequence.id !== deliverable.sequenceId
+  ) return undefined;
+  if (kind === "remove") {
+    return {
+      op: "transcript.range.remove",
+      params: {
+        sequenceId: deliverable.sequenceId,
+        wordRange,
+        paddingMs: 0,
+        snapPolicy: "none",
+      },
+    };
+  }
+  return layer === undefined || layer.sequence !== sequence.id
+    ? undefined
+    : {
+        op: "transcript.range.createClip",
+        params: {
+          wordRange,
+          targetLayerId: layer.id,
+          targetIndex: sequence.clips.length,
+        },
+      };
+}
+
 export function TranscriptPanel({
   snapshot,
   transcripts,
@@ -32,6 +85,9 @@ export function TranscriptPanel({
   setNotice,
 }: WorkspacePanelProps): React.JSX.Element {
   const allWords = useMemo(() => displayWords(transcripts), [transcripts]);
+  const selectedDeliverableId = useSelectionStore(
+    (state) => state.selectedDeliverableId,
+  );
   const selectedWordId = useSelectionStore((state) => state.selectedWordId);
   const wordRange = useSelectionStore((state) => state.wordRange);
   const selectWord = useSelectionStore((state) => state.selectWord);
@@ -48,12 +104,18 @@ export function TranscriptPanel({
   const first = Math.max(0, Math.floor(scrollTop / 28) * estimatedWordsPerRow - 160);
   const visible = allWords.slice(first, first + 720);
   const selected = allWords.find(({ id }) => id === selectedWordId);
-  const deliverable = snapshot?.master.deliverables.find(
-    ({ id }) => id === snapshot.master.settings.primaryDeliverable,
-  );
+  const deliverable = snapshot === null
+    ? undefined
+    : resolveActiveDeliverable(snapshot.master, selectedDeliverableId);
   const captionTrack = snapshot?.master.captions.find(
     ({ id }) => id === deliverable?.captionsTrackId,
-  ) ?? snapshot?.master.captions[0];
+  );
+  const sequence = snapshot?.master.sequences.find(
+    ({ id }) => id === deliverable?.sequenceId,
+  );
+  const layer = snapshot?.master.layers.find(
+    ({ sequence: sequenceId }) => sequenceId === sequence?.id,
+  );
   const captionPresets = snapshot?.master.presets.filter(({ kind }) => kind === "caption") ?? [];
   const selectedBreak = captionTrack?.breakOverrides.find(
     ({ afterWordId }) => afterWordId === selectedWordId,
@@ -122,7 +184,7 @@ export function TranscriptPanel({
       const position = await window.guyditor.call<{ frame: FrameTime }>(
         "OperationEngine",
         "resolveNavigation",
-        { target: { kind: "word", wordId: id } },
+        transcriptNavigationRequest(id, deliverable),
       );
       setPlayhead(position.frame);
     } catch (error: unknown) {
@@ -131,29 +193,18 @@ export function TranscriptPanel({
   }
 
   async function rangeOperation(kind: "remove" | "createClip"): Promise<void> {
-    if (wordRange === null || snapshot === null) return;
-    const sequence = snapshot.master.sequences.find(({ id }) =>
-      snapshot.master.deliverables.find(
-        ({ id: deliverableId }) => deliverableId === snapshot.master.settings.primaryDeliverable,
-      )?.sequenceId === id) ?? snapshot.master.sequences[0];
-    const layer = snapshot.master.layers.find(({ sequence: sequenceId }) => sequenceId === sequence?.id);
-    const operation = kind === "remove"
-      ? {
-          op: "transcript.range.remove",
-          params: { wordRange, paddingMs: 0, snapPolicy: "none" },
-        }
-      : layer === undefined || sequence === undefined
-        ? undefined
-        : {
-            op: "transcript.range.createClip",
-            params: {
-              wordRange,
-              targetLayerId: layer.id,
-              targetIndex: sequence.clips.length,
-            },
-          };
+    if (wordRange === null) return;
+    const operation = transcriptRangeOperation(
+      kind,
+      wordRange,
+      deliverable,
+      sequence,
+      layer,
+    );
     if (operation === undefined) {
-      setNotice("A target sequence layer is required to create a clip.");
+      setNotice(kind === "createClip"
+        ? "An active deliverable sequence layer is required to create a clip."
+        : "An active deliverable sequence is required to remove a range.");
       return;
     }
     try {
@@ -208,8 +259,18 @@ export function TranscriptPanel({
         <span data-testid="transcript-selection-readout">
           {wordRange === null ? "No range" : `${wordRange.fromWord} → ${wordRange.toWord}`}
         </span>
-        <button type="button" data-testid="transcript-range-remove" disabled={wordRange === null} onClick={() => void rangeOperation("remove")}>Remove range</button>
-        <button type="button" data-testid="transcript-range-create-clip" disabled={wordRange === null} onClick={() => void rangeOperation("createClip")}>Create clip</button>
+        <button
+          type="button"
+          data-testid="transcript-range-remove"
+          disabled={wordRange === null || deliverable === undefined || sequence === undefined}
+          onClick={() => void rangeOperation("remove")}
+        >Remove range</button>
+        <button
+          type="button"
+          data-testid="transcript-range-create-clip"
+          disabled={wordRange === null || deliverable === undefined || sequence === undefined || layer === undefined}
+          onClick={() => void rangeOperation("createClip")}
+        >Create clip</button>
         <button
           type="button"
           data-testid="transcript-correction-edit"

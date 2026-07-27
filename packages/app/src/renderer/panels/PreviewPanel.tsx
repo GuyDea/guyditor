@@ -7,8 +7,10 @@ import type {
   AnnotationGeometry,
   AnnotationShape,
   Clip,
+  Deliverable,
   FrameTime,
   FramingRect,
+  GuyditorProject,
   KeySettings,
 } from "../../../../core/src/index.js";
 import captionFontUrl from "../../../../render/assets/fonts/Inconsolata.otf?url";
@@ -33,6 +35,7 @@ import {
   errorMessage,
   executeDirect,
 } from "../ipc.js";
+import { resolveActiveDeliverable } from "../active-deliverable.js";
 import {
   formatTimecode,
   frameCenterSeconds,
@@ -84,11 +87,9 @@ function fpsNumber(fps: string): number {
 
 function activeClip(
   snapshot: NonNullable<WorkspacePanelProps["snapshot"]>,
+  deliverable: Deliverable,
   frame: number,
 ): { clip: Clip; timelineStart: number; timelineDuration: number } | undefined {
-  const deliverable = snapshot.master.deliverables.find(
-    ({ id }) => id === snapshot.master.settings.primaryDeliverable,
-  );
   const sequence = snapshot.master.sequences.find(({ id }) => id === deliverable?.sequenceId);
   if (sequence === undefined) return undefined;
   const derived = deriveTimeline(snapshot.master, sequence.id);
@@ -101,18 +102,32 @@ function activeClip(
     : { clip, timelineStart: timed.start.frames, timelineDuration: timed.duration.frames };
 }
 
-function totalFrames(snapshot: WorkspacePanelProps["snapshot"]): number {
-  if (snapshot === null) return 0;
-  const deliverable = snapshot.master.deliverables.find(
-    ({ id }) => id === snapshot.master.settings.primaryDeliverable,
-  );
-  if (deliverable === undefined) return 0;
+function totalFrames(
+  snapshot: WorkspacePanelProps["snapshot"],
+  deliverable: Deliverable | undefined,
+): number {
+  if (snapshot === null || deliverable === undefined) return 0;
   const derived = deriveTimeline(snapshot.master, deliverable.sequenceId);
   if (!derived.ok) return 0;
   const [durationNumerator = 0, durationDenominator = 1] = derived.value.duration.split("/").map(Number);
   return Math.max(0, Math.round(
     durationNumerator / durationDenominator * fpsNumber(snapshot.master.settings.timeline.fps),
   ));
+}
+
+export function previewOutputSize(
+  project: GuyditorProject | undefined,
+  deliverable: Deliverable | undefined,
+  framingOutput?: { width: number; height: number },
+): { width: number; height: number } {
+  const defaultWidth = project?.settings.timeline.width ?? 1920;
+  const defaultHeight = project?.settings.timeline.height ?? 1080;
+  return {
+    width: framingOutput?.width ??
+      (deliverable?.kind === "short" ? 1080 : defaultWidth),
+    height: framingOutput?.height ??
+      (deliverable?.kind === "short" ? 1920 : defaultHeight),
+  };
 }
 
 function sourceFrame(
@@ -179,7 +194,10 @@ export function PreviewPanel({
   const captionCanvasRef = useRef<HTMLCanvasElement>(null);
   const [proxy, setProxy] = useState<ProxyResolution | null>(null);
   const [captionFrame, setCaptionFrame] = useState<CaptionFrameSpec | null>(null);
-  const [framingFrame, setFramingFrame] = useState<FramingPreviewSpec | null>(null);
+  const [framingResult, setFramingResult] = useState<{
+    deliverableId: string;
+    frame: FramingPreviewSpec;
+  } | null>(null);
   const [cropDraft, setCropDraft] = useState<FramingRect | null>(null);
   const [graphicsFrame, setGraphicsFrame] = useState<string | null>(null);
   const [captionFontReady, setCaptionFontReady] = useState(false);
@@ -203,24 +221,45 @@ export function PreviewPanel({
   const selectAnnotation = useSelectionStore((state) => state.selectAnnotation);
   const selectWord = useSelectionStore((state) => state.selectWord);
   const selectedLayerId = useSelectionStore((state) => state.selectedLayerId);
+  const selectedDeliverableId = useSelectionStore(
+    (state) => state.selectedDeliverableId,
+  );
+  const deliverable = snapshot === null
+    ? undefined
+    : resolveActiveDeliverable(snapshot.master, selectedDeliverableId);
   const fps = snapshot?.master.settings.timeline.fps ?? playhead.fps;
-  const duration = totalFrames(snapshot);
-  const active = snapshot === null ? undefined : activeClip(snapshot, playhead.frames);
+  const duration = totalFrames(snapshot, deliverable);
+  const active = snapshot === null || deliverable === undefined
+    ? undefined
+    : activeClip(snapshot, deliverable, playhead.frames);
   const currentSourceFrame = active === undefined
     ? undefined
     : sourceFrame(active.clip, playhead.frames, active.timelineStart, fps);
-  const deliverable = snapshot?.master.deliverables.find(
-    ({ id }) => id === snapshot.master.settings.primaryDeliverable,
-  );
   const vertical = deliverable?.kind === "short";
+  const framingFrame = framingResult !== null &&
+    framingResult.deliverableId === deliverable?.id
+    ? framingResult.frame
+    : null;
+  const { width: outputWidth, height: outputHeight } = previewOutputSize(
+    snapshot?.master,
+    deliverable,
+    framingFrame?.output,
+  );
+  const annotationViewBoxHeight = outputHeight / outputWidth * 100;
   const persistedKeySettings = active?.clip.effects?.find(({ kind }) => kind === "key")
     ?.params as unknown as KeySettings | undefined;
   const keySettings = previewKeySettings ?? persistedKeySettings ?? null;
   const keyPreviewActive = keySettings?.mode === "chroma" && chromaAvailable;
   const selectedPipLayer = snapshot?.master.layers.find((candidate) =>
-    candidate.id === selectedLayerId && candidate.pip !== undefined);
+    candidate.id === selectedLayerId &&
+    (candidate.sequence === undefined ||
+      candidate.sequence === deliverable?.sequenceId) &&
+    candidate.pip !== undefined);
   const selectedPip = selectedPipLayer?.pip;
   const sequence = snapshot?.master.sequences.find(({ id }) => id === deliverable?.sequenceId);
+  const activeAnnotations = annotations.filter(
+    ({ canvasRef }) => canvasRef.sequenceId === deliverable?.sequenceId,
+  );
   const loudnessTarget: LoudnessTargetOverlay = {
     integratedLufs: sequence?.audio?.targetLufs ?? -14,
     toleranceLu: 1,
@@ -355,18 +394,21 @@ export function PreviewPanel({
   useEffect(() => {
     let current = true;
     if (snapshot === null || deliverable === undefined || !vertical) {
-      setFramingFrame(null);
+      setFramingResult(null);
       return () => { current = false; };
     }
+    const deliverableId = deliverable.id;
     void window.guyditor.call<FramingPreviewSpec | null>("RenderService", "framingFrame", {
-      deliverableId: deliverable.id,
+      deliverableId,
       revision: snapshot.revision,
       frame: playhead.frames,
     }).then((frame) => {
-      if (current) setFramingFrame(frame);
+      if (current) {
+        setFramingResult(frame === null ? null : { deliverableId, frame });
+      }
     }).catch((error: unknown) => {
       if (current) {
-        setFramingFrame(null);
+        setFramingResult(null);
         setNotice(errorMessage(error));
       }
     });
@@ -401,22 +443,20 @@ export function PreviewPanel({
   useEffect(() => {
     const canvas = captionCanvasRef.current;
     if (canvas === null || snapshot === null) return;
-    const width = framingFrame?.output.width ?? snapshot.master.settings.timeline.width;
-    const height = framingFrame?.output.height ?? snapshot.master.settings.timeline.height;
-    if (canvas.width !== width) canvas.width = width;
-    if (canvas.height !== height) canvas.height = height;
+    if (canvas.width !== outputWidth) canvas.width = outputWidth;
+    if (canvas.height !== outputHeight) canvas.height = outputHeight;
     const context = canvas.getContext("2d");
     if (context === null) return;
-    context.clearRect(0, 0, width, height);
+    context.clearRect(0, 0, outputWidth, outputHeight);
     if (captionFrame !== null && captionFontReady) {
       paintCaptionFrame(
         context as unknown as CaptionPaintContext,
         captionFrame,
-        width,
-        height,
+        outputWidth,
+        outputHeight,
       );
     }
-  }, [captionFontReady, captionFrame, framingFrame?.output.height, framingFrame?.output.width, snapshot]);
+  }, [captionFontReady, captionFrame, outputHeight, outputWidth, snapshot]);
 
   useEffect(() => {
     let current = true;
@@ -483,12 +523,8 @@ export function PreviewPanel({
   }, [playing, proxy, setPlaying]);
 
   async function createAnnotation(): Promise<void> {
-    if (snapshot === null || playing || !settled) return;
-    const deliverable = snapshot.master.deliverables.find(
-      ({ id }) => id === snapshot.master.settings.primaryDeliverable,
-    );
-    const sequenceId = deliverable?.sequenceId ?? snapshot.master.sequences[0]?.id;
-    if (sequenceId === undefined) return;
+    if (snapshot === null || deliverable === undefined || playing || !settled) return;
+    const sequenceId = deliverable.sequenceId;
     const annotation: Annotation = {
       id: annotationId(),
       shape: tool,
@@ -501,8 +537,8 @@ export function PreviewPanel({
       extent: { frames: tool === "range" ? Math.max(1, Math.round(fpsNumber(fps))) : 0, fps },
       canvasRef: {
         sequenceId,
-        ...(deliverable === undefined ? {} : { deliverableId: deliverable.id }),
-        aspect: `${String(snapshot.master.settings.timeline.width)}:${String(snapshot.master.settings.timeline.height)}`,
+        deliverableId: deliverable.id,
+        aspect: `${String(outputWidth)}:${String(outputHeight)}`,
       },
       state: "open",
       blocking: false,
@@ -586,6 +622,7 @@ export function PreviewPanel({
         className="preview-surface"
         data-testid="preview-surface"
         data-aspect={vertical ? "portrait" : "landscape"}
+        data-active-clip={active?.clip.id ?? "gap"}
         data-framing-mode={framingFrame?.mode ?? "none"}
         data-settled={settled}
         data-diagnostic={diagnosticBackground}
@@ -690,8 +727,8 @@ export function PreviewPanel({
             frame={playhead.frames}
             anchorFrames={pipAnchorFrames}
             composition={{
-              width: framingFrame?.output.width ?? snapshot.master.settings.timeline.width,
-              height: framingFrame?.output.height ?? snapshot.master.settings.timeline.height,
+              width: outputWidth,
+              height: outputHeight,
             }}
             onPlace={async (placement) => {
               try {
@@ -717,6 +754,8 @@ export function PreviewPanel({
         )}
         <canvas
           ref={captionCanvasRef}
+          width={outputWidth}
+          height={outputHeight}
           className="caption-overlay"
           data-testid="preview-caption-overlay"
           data-relayout={vertical ? "short" : "canonical"}
@@ -735,11 +774,15 @@ export function PreviewPanel({
         />
         <svg
           className="annotation-overlay"
-          viewBox={vertical ? "0 0 100 177.7778" : "0 0 100 56.25"}
+          viewBox={`0 0 100 ${String(annotationViewBoxHeight)}`}
           aria-label="Annotation overlay"
         >
-          {annotations.filter(({ state }) => state === "open" || state === "reopened").map((annotation) => (
-            <AnnotationMark key={annotation.id} annotation={annotation} />
+          {activeAnnotations.filter(({ state }) => state === "open" || state === "reopened").map((annotation) => (
+            <AnnotationMark
+              key={annotation.id}
+              annotation={annotation}
+              viewBoxHeight={annotationViewBoxHeight}
+            />
           ))}
         </svg>
         <div className="settled-badge" data-state={warning === null ? (settled ? "done" : "running") : "warning"}>
@@ -863,14 +906,14 @@ export function PreviewPanel({
         <button
           type="button"
           data-testid="annotation-create-center"
-          disabled={playing || !settled || snapshot === null}
+          disabled={playing || !settled || snapshot === null || deliverable === undefined}
           onClick={() => void createAnnotation()}
         >
           Add at center
         </button>
       </div>
       <ol className="annotation-list" data-testid="annotation-list">
-        {annotations.map((annotation, index) => (
+        {activeAnnotations.map((annotation, index) => (
           <li key={annotation.id} data-testid={`annotation-${annotation.id}`}>
             <button
               type="button"
@@ -903,7 +946,7 @@ export function PreviewPanel({
             </div>
           </li>
         ))}
-        {annotations.length === 0 ? <li className="empty-copy">No annotations.</li> : null}
+        {activeAnnotations.length === 0 ? <li className="empty-copy">No annotations.</li> : null}
       </ol>
       {context === null ? null : <pre className="context-json" data-testid="annotation-context-json">{JSON.stringify(context, null, 2)}</pre>}
       <small className="m2-note">Proxy playback uses the normative BT.709 chroma-distance formula in WebGL; HQ diagnostics use the FFmpeg render path.</small>
@@ -911,20 +954,26 @@ export function PreviewPanel({
   );
 }
 
-function AnnotationMark({ annotation }: { annotation: Annotation }): React.JSX.Element | null {
+function AnnotationMark({
+  annotation,
+  viewBoxHeight,
+}: {
+  annotation: Annotation;
+  viewBoxHeight: number;
+}): React.JSX.Element | null {
   const geometry = annotation.geometry;
   if (geometry === null) return null;
   if (geometry.kind === "pin") {
-    return <circle cx={geometry.at.x * 100} cy={geometry.at.y * 56.25} r="1.4" />;
+    return <circle cx={geometry.at.x * 100} cy={geometry.at.y * viewBoxHeight} r="1.4" />;
   }
   if (geometry.kind === "rect") {
-    return <rect x={geometry.origin.x * 100} y={geometry.origin.y * 56.25} width={geometry.size.x * 100} height={geometry.size.y * 56.25} />;
+    return <rect x={geometry.origin.x * 100} y={geometry.origin.y * viewBoxHeight} width={geometry.size.x * 100} height={geometry.size.y * viewBoxHeight} />;
   }
   if (geometry.kind === "ellipse") {
-    return <ellipse cx={geometry.center.x * 100} cy={geometry.center.y * 56.25} rx={geometry.radii.x * 100} ry={geometry.radii.y * 56.25} />;
+    return <ellipse cx={geometry.center.x * 100} cy={geometry.center.y * viewBoxHeight} rx={geometry.radii.x * 100} ry={geometry.radii.y * viewBoxHeight} />;
   }
   if (geometry.kind === "arrow") {
-    return <line x1={geometry.from.x * 100} y1={geometry.from.y * 56.25} x2={geometry.to.x * 100} y2={geometry.to.y * 56.25} />;
+    return <line x1={geometry.from.x * 100} y1={geometry.from.y * viewBoxHeight} x2={geometry.to.x * 100} y2={geometry.to.y * viewBoxHeight} />;
   }
   return null;
 }
