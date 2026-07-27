@@ -138,8 +138,13 @@ import { ProjectWorkspaceStateStore } from "./project-workspace-state.js";
 import type { ProjectServices } from "./project-services.js";
 import { createProjectDialog } from "./project-creation.js";
 import { history, transcriptSidecars } from "./project-readers.js";
-import { groupJumpCutProposalOperations } from "./jump-cut-proposal-operations.js";
+import {
+  groupJumpCutProposalOperations,
+  jumpCutProposalEvidence,
+} from "./jump-cut-proposal-operations.js";
 import { MatteService } from "./matte-service.js";
+import type { MatteProjectGuard } from "./matte-service.js";
+import { prepareMatteCommit } from "./matte-prepared-commit.js";
 import { OtioService } from "./otio-service.js";
 import {
   createProjectTemplateServices,
@@ -177,6 +182,7 @@ export interface WindowServiceHostOptions {
   chooseTemplate?: () => Promise<string | undefined>;
   revealPath?: (path: string) => void;
   openPath?: (path: string) => Promise<string>;
+  afterMattePrepare?: (guard: MatteProjectGuard) => Promise<void>;
 }
 
 function resultValue<Value>(result: Result<Value>): Value {
@@ -583,6 +589,7 @@ export class WindowServiceHost {
   readonly #chooseTemplate: (() => Promise<string | undefined>) | undefined;
   readonly #revealPath: ((path: string) => void) | undefined;
   readonly #openPath: ((path: string) => Promise<string>) | undefined;
+  readonly #afterMattePrepare: WindowServiceHostOptions["afterMattePrepare"];
   #project: ProjectServices | undefined;
   #closed = false;
 
@@ -595,6 +602,7 @@ export class WindowServiceHost {
     this.#chooseTemplate = options.chooseTemplate;
     this.#revealPath = options.revealPath;
     this.#openPath = options.openPath;
+    this.#afterMattePrepare = options.afterMattePrepare;
   }
 
   public async openProject(
@@ -886,8 +894,23 @@ export class WindowServiceHost {
       store,
       jobs,
       mlworker: this.#app.mlworker,
-      preflight: (request) => this.#preflight(request),
-      execute: (request) => this.#execute(request),
+      prepare: (request, guard) => {
+        const project = this.#requireProject();
+        return prepareMatteCommit({
+          request,
+          guard,
+          project,
+          activeProject: () => this.#project,
+          createEngine: (committer) => this.#coreEngine(project, undefined, committer),
+          onAccepted: (revision) => {
+            project.backupScheduler?.acceptedRevision();
+            this.publisher.publish({ kind: "project.revision", revision });
+          },
+        });
+      },
+      ...(this.#afterMattePrepare === undefined
+        ? {}
+        : { afterPrepare: this.#afterMattePrepare }),
     });
     const compositor = new CompositorModel({
       onKeyQcRun: matte.onKeyQcRun,
@@ -1919,18 +1942,6 @@ export class WindowServiceHost {
     return { txnId, revision, inverse: inverseOperations(result) };
   }
 
-  async #preflight(request: ExecuteRequest): Promise<void> {
-    const project = this.#requireProject();
-    resultValue(await this.#coreEngine(project).execute(request.operations, {
-      baseRevision: project.store.currentProject.revision,
-      origin: "ui",
-      dryRun: true,
-      recordUndo: false,
-      instruction: { kind: "ui-direct", text: request.label },
-      ...(request.divergence === undefined ? {} : { divergence: request.divergence }),
-    }));
-  }
-
   #coreEngine(
     project: ProjectServices,
     anchorResolvers?: AnchorResolverRegistry,
@@ -1957,7 +1968,11 @@ export class WindowServiceHost {
       current.baseRevision !== project.store.currentProject.revision &&
       current.operations.length > 0 &&
       current.operations.every(({ op }) =>
-        op === "restyle.segment.approve" || op === "clip.split" || op === "clip.punchin.set")
+        op === "restyle.segment.approve" ||
+        op === "clip.split" ||
+        op === "clip.punchin.set" ||
+        op === "clip.source.switch" ||
+        op === "transition.set")
     ) {
       const rebased = resultValue(await this.#coreEngine(project).supersedeProposal(
         current.id,
@@ -1967,10 +1982,13 @@ export class WindowServiceHost {
           actor: structuredClone(current.actor),
           ...(current.sessionId === undefined ? {} : { sessionId: current.sessionId }),
           reason: {
-            text: `${current.reason.text} Rebased over independently approved restyle chunks.`,
+            text: `${current.reason.text} Rebased over independently approved proposal edits.`,
             sources: [...current.reason.sources],
           },
           addresses: [...current.addresses],
+          ...(current.warnings === undefined
+            ? {}
+            : { warnings: structuredClone(current.warnings) }),
           ...(current.divergence === undefined ? {} : { divergence: current.divergence }),
         },
       ));
@@ -2079,7 +2097,7 @@ export class WindowServiceHost {
       project.store.currentProject,
       plan.operations,
     )) {
-      const operationIndexes = new Set(group.operationIndexes);
+      const evidence = jumpCutProposalEvidence(group, plan.reasons, warnings);
       const proposal = resultValue(await this.#coreEngine(project).createProposal({
         operations: group.operations,
         instruction: {
@@ -2089,21 +2107,20 @@ export class WindowServiceHost {
         actor: { kind: "tool", id: "assist.jumpcuts.conceal" },
         reason: {
           text: "Conceal flagged same-source jump cuts without silently changing the accepted timeline.",
-          sources: plan.reasons
-            .filter(({ operationIndex }) => operationIndexes.has(operationIndex))
-            .map(({ evidence }) => ({
-              kind: "media-evidence" as const,
-              ref: evidence,
-            })),
+          sources: evidence.sources,
         },
         addresses: [],
-        warnings,
+        warnings: evidence.warnings,
         ...(group.divergence === undefined ? {} : { divergence: group.divergence }),
       }));
       proposals.push(proposal);
       this.publisher.publish({ kind: "proposal.updated", proposalId: proposal.id });
     }
-    return { ...plan, proposal: proposals[0], proposals };
+    return {
+      ...plan,
+      ...(proposals.length === 1 ? { proposal: proposals[0] } : {}),
+      proposals,
+    };
   }
 
   async #proposePickup(params: {

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { createReadStream, readFileSync } from "node:fs";
+import { constants, createReadStream, readFileSync } from "node:fs";
 import { chmod, copyFile, mkdir, stat, unlink, writeFile } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 
@@ -37,12 +37,23 @@ export interface MatteCandidate extends MlworkerMatteResult {
   jobId: string;
 }
 
+export interface MatteProjectGuard {
+  projectPath: string;
+  projectId: string;
+  revision: string;
+}
+
+export type PreparedMatteCommit = () => Promise<ExecuteResult>;
+
 export interface MatteServiceOptions {
   store: ProjectStore;
   jobs: JobQueue;
   mlworker: Pick<MlworkerSupervisor, "hello">;
-  preflight: (request: ExecuteRequest) => Promise<void>;
-  execute: (request: ExecuteRequest) => Promise<ExecuteResult>;
+  prepare: (
+    request: ExecuteRequest,
+    guard: MatteProjectGuard,
+  ) => Promise<PreparedMatteCommit>;
+  afterPrepare?: (guard: MatteProjectGuard) => Promise<void>;
 }
 
 function jsonRecord(value: unknown): Record<string, unknown> | undefined {
@@ -55,6 +66,11 @@ async function sha256File(path: string): Promise<string> {
   const hash = createHash("sha256");
   for await (const chunk of createReadStream(path)) hash.update(chunk);
   return hash.digest("hex");
+}
+
+async function removeMaterializedFile(path: string): Promise<void> {
+  await chmod(path, 0o644).catch(() => undefined);
+  await unlink(path);
 }
 
 function sceneBoundariesForAsset(
@@ -149,15 +165,15 @@ export class MatteService {
   readonly #store: ProjectStore;
   readonly #jobs: JobQueue;
   readonly #mlworker: Pick<MlworkerSupervisor, "hello">;
-  readonly #preflight: MatteServiceOptions["preflight"];
-  readonly #execute: MatteServiceOptions["execute"];
+  readonly #prepare: MatteServiceOptions["prepare"];
+  readonly #afterPrepare: MatteServiceOptions["afterPrepare"];
 
   public constructor(options: MatteServiceOptions) {
     this.#store = options.store;
     this.#jobs = options.jobs;
     this.#mlworker = options.mlworker;
-    this.#preflight = options.preflight;
-    this.#execute = options.execute;
+    this.#prepare = options.prepare;
+    this.#afterPrepare = options.afterPrepare;
   }
 
   public readonly onKeyQcRun: NonNullable<CompositorModelOptions["onKeyQcRun"]> = ({
@@ -275,6 +291,11 @@ export class MatteService {
       throw new Error(`Completed matte candidate ${jobId} for ${clipId} does not exist.`);
     }
     const current = this.#store.currentProject;
+    const guard: MatteProjectGuard = {
+      projectPath: this.#store.root,
+      projectId: current.project.id,
+      revision: current.revision,
+    };
     const clip = current.sequences.flatMap(({ clips }) => clips).find(({ id }) => id === clipId);
     const sourceAsset = current.assets.find(({ id }) => id === candidate.sourceAssetId);
     if (clip === undefined || sourceAsset === undefined || clip.asset !== sourceAsset.id ||
@@ -336,8 +357,9 @@ export class MatteService {
         label: `Accept neural matte ${jobId} for ${clipId}`,
         ...(divergence === undefined ? {} : { divergence }),
       };
-      await this.#preflight(request);
-      const accepted = await this.#execute(request);
+      const commit = await this.#prepare(request, guard);
+      await this.#afterPrepare?.(guard);
+      const accepted = await commit();
       return { assetId: reused.id, path: reused.path, revision: accepted.revision };
     }
 
@@ -417,19 +439,27 @@ export class MatteService {
       label: `Freeze and accept neural matte ${jobId} for ${clipId}`,
       ...(divergence === undefined ? {} : { divergence }),
     };
-    await this.#preflight(request);
+    const commit = await this.#prepare(request, guard);
+    await this.#afterPrepare?.(guard);
+    let matteWritten = false;
+    let sidecarWritten = false;
     try {
       await Promise.all([
         mkdir(join(this.#store.root, "assets", "mattes"), { recursive: true }),
         mkdir(join(this.#store.root, "sidecars", "provenance"), { recursive: true }),
       ]);
-      await copyFile(candidatePath, mattePath);
+      await copyFile(candidatePath, mattePath, constants.COPYFILE_EXCL);
+      matteWritten = true;
       await chmod(mattePath, 0o444);
-      await writeFile(sidecarPath, provenanceText, "utf8");
-      const accepted = await this.#execute(request);
+      await writeFile(sidecarPath, provenanceText, { encoding: "utf8", flag: "wx" });
+      sidecarWritten = true;
+      const accepted = await commit();
       return { assetId: matteAssetId, path: matteRelativePath, revision: accepted.revision };
     } catch (error: unknown) {
-      await Promise.allSettled([unlink(mattePath), unlink(sidecarPath)]);
+      await Promise.allSettled([
+        ...(matteWritten ? [removeMaterializedFile(mattePath)] : []),
+        ...(sidecarWritten ? [removeMaterializedFile(sidecarPath)] : []),
+      ]);
       throw error;
     }
   }

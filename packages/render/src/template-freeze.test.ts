@@ -17,17 +17,18 @@ import {
   createProject,
   deriveTimeline,
   JobQueue,
+  OperationEngine,
 } from "../../core/src/index.js";
+import type { ProjectStore } from "../../core/src/index.js";
 import { projectFixture } from "../../core/src/project/test-fixtures.js";
 import {
   RenderService,
   TemplateAuthoringService,
   TemplateRegistry,
-  loadTemplateRuntime,
-  renderTemplatePng,
 } from "./index.js";
 
 const temporaryDirectories: string[] = [];
+type FreezePhase = "rendered" | "exact-preflighted" | "published";
 
 afterEach(async () => {
   await Promise.all(temporaryDirectories.splice(0).map((directory) =>
@@ -70,6 +71,47 @@ async function fixtureProfiles(root: string): Promise<string> {
     "utf8",
   );
   return profiles;
+}
+
+async function entriesOrEmpty(path: string): Promise<string[]> {
+  try {
+    return await readdir(path);
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+}
+
+async function expectNoFreezeArtifacts(
+  projectRoot: string,
+  store: ProjectStore,
+): Promise<void> {
+  expect(await entriesOrEmpty(join(projectRoot, "media/programmatic"))).toEqual([]);
+  expect(await entriesOrEmpty(join(projectRoot, "sidecars/programmatic"))).toEqual([]);
+  expect(await entriesOrEmpty(
+    join(projectRoot, ".guyditor/cache/render/template-freeze"),
+  )).toEqual([]);
+  expect(store.currentProject.assets).toHaveLength(0);
+  expect(store.currentProject.sidecars).not.toEqual(expect.arrayContaining([
+    expect.objectContaining({ schema: "guyditor.programmatic-provenance/v1" }),
+  ]));
+}
+
+async function acceptFixtureEdit(store: ProjectStore): Promise<void> {
+  const layer = store.currentProject.layers[0];
+  if (layer === undefined) throw new Error("Freeze fixture has no layer.");
+  const result = await new OperationEngine(store.currentProject, {
+    committer: store,
+  }).execute([{
+    op: layer.locked ? "layer.unlock" : "layer.lock",
+    params: { layerId: layer.id },
+  }], {
+    baseRevision: store.currentProject.revision,
+    origin: "ui",
+    dryRun: false,
+    recordUndo: false,
+  });
+  if (!result.ok) throw result.error;
 }
 
 describe("template freeze service", () => {
@@ -204,41 +246,11 @@ describe("template freeze service", () => {
       expect(sidecarBytes.toString("utf8")).toContain(
         '"primitives": "primitives/v1@1"',
       );
-      const descriptor = await registry.latest("tpl_k2m3n4p5q6");
-      if (!descriptor.ok) throw descriptor.error;
-      const pkg = await registry.package(
-        descriptor.value.id,
-        descriptor.value.version,
-        descriptor.value.contentHash,
-      );
-      if (!pkg.ok) throw pkg.error;
-      const runtime = await loadTemplateRuntime(pkg.value);
-      if (!runtime.ok) throw runtime.error;
-      const expectedFrame = renderTemplatePng(runtime.value, {
-        params: {
-          accent: "#7C3AED",
-          surface: "#111827",
-          ink: "#F8FAFC",
-        },
-        seed: 20260723,
-        frame: 1,
-        totalFrames: 3,
-        fps: "30/1",
-        width: 64,
-        height: 36,
-        safeArea: { top: 2, right: 3, bottom: 2, left: 3 },
-        brand: { palette: {} },
-        timeline: { frames: 1, fps: "30/1" },
-      });
-      if (!expectedFrame.ok) throw expectedFrame.error;
       const freezeRoot = join(
         projectRoot,
         ".guyditor/cache/render/template-freeze",
       );
-      const freezeKeys = await readdir(freezeRoot);
-      expect(freezeKeys).toHaveLength(1);
-      expect(await readFile(join(freezeRoot, freezeKeys[0]!, "00000001.png")))
-        .toEqual(expectedFrame.value);
+      expect(await entriesOrEmpty(freezeRoot)).toEqual([]);
       const output = await stat(result.outputPath);
       expect(output.size).toBeGreaterThan(0);
       expect(output.mode & 0o222).toBe(0);
@@ -257,6 +269,94 @@ describe("template freeze service", () => {
       queue.close();
     }
   }, 30_000);
+
+  it.each<FreezePhase>(["rendered", "exact-preflighted", "published"])(
+    "cleans every temporary and published artifact when the %s phase fails",
+    async (failedPhase) => {
+      const root = await mkdtemp(join(tmpdir(), `guyditor-template-freeze-${failedPhase}-`));
+      temporaryDirectories.push(root);
+      const projectRoot = join(root, "project");
+      const profilesRoot = await fixtureProfiles(root);
+      const storeResult = await createProject(projectRoot, {
+        name: `Freeze failure at ${failedPhase}`,
+        primaryOutputFormat: "youtube-longform@1.0.0",
+      }, { profilesDirectory: profilesRoot });
+      if (!storeResult.ok) throw storeResult.error;
+      const { queue } = JobQueue.open(":memory:", { concurrency: 1 });
+      const service = new RenderService({
+        projectRoot,
+        profilesRoot,
+        store: storeResult.value,
+        jobQueue: queue,
+        templateRegistry: new TemplateRegistry({
+          builtinsRoot: resolve("templates"),
+          userRoot: join(root, "user-templates"),
+          projectRoot: join(projectRoot, "templates"),
+        }),
+        onTemplateFreezePhase: async (phase) => {
+          if (phase === failedPhase) throw new Error(`Injected ${phase} failure.`);
+        },
+      });
+      try {
+        await expect(service.templateFreeze({
+          revision: storeResult.value.currentProject.revision,
+          templateId: "tpl_k2m3n4p5q6",
+          durationFrames: 2,
+        })).rejects.toThrow(`Injected ${failedPhase} failure.`);
+        await expectNoFreezeArtifacts(projectRoot, storeResult.value);
+      } finally {
+        queue.close();
+      }
+    },
+    30_000,
+  );
+
+  it.each<FreezePhase>(["rendered", "published"])(
+    "rejects a revision race at the %s phase without leaking freeze artifacts",
+    async (racePhase) => {
+      const root = await mkdtemp(join(tmpdir(), `guyditor-template-freeze-race-${racePhase}-`));
+      temporaryDirectories.push(root);
+      const projectRoot = join(root, "project");
+      const profilesRoot = await fixtureProfiles(root);
+      const storeResult = await createProject(projectRoot, {
+        name: `Freeze race at ${racePhase}`,
+        primaryOutputFormat: "youtube-longform@1.0.0",
+      }, { profilesDirectory: profilesRoot });
+      if (!storeResult.ok) throw storeResult.error;
+      const { queue } = JobQueue.open(":memory:", { concurrency: 1 });
+      let raced = false;
+      const service = new RenderService({
+        projectRoot,
+        profilesRoot,
+        store: storeResult.value,
+        jobQueue: queue,
+        templateRegistry: new TemplateRegistry({
+          builtinsRoot: resolve("templates"),
+          userRoot: join(root, "user-templates"),
+          projectRoot: join(projectRoot, "templates"),
+        }),
+        onTemplateFreezePhase: async (phase) => {
+          if (phase !== racePhase || raced) return;
+          raced = true;
+          await acceptFixtureEdit(storeResult.value);
+        },
+      });
+      try {
+        await expect(service.templateFreeze({
+          revision: storeResult.value.currentProject.revision,
+          templateId: "tpl_k2m3n4p5q6",
+          durationFrames: 2,
+        })).rejects.toMatchObject({
+          code: expect.stringMatching(/STALE/u),
+        });
+        expect(raced).toBe(true);
+        await expectNoFreezeArtifacts(projectRoot, storeResult.value);
+      } finally {
+        queue.close();
+      }
+    },
+    30_000,
+  );
 
   it("preflights and classifies a freeze placed into a short", async () => {
     const root = await mkdtemp(join(tmpdir(), "guyditor-template-freeze-short-"));

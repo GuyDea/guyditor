@@ -18,6 +18,7 @@ import {
 import type {
   IdPrefix,
   JobRecord,
+  JsonValue,
   RestylePlan,
   Result,
 } from "../../core/src/index.js";
@@ -257,6 +258,29 @@ function jobResult(job: JobRecord): Record<string, unknown> {
   return job.payload;
 }
 
+function enqueueLegacyRestyle(
+  run: Harness,
+  context: {
+    sessionId: string;
+    projectId: string;
+    taskId: string;
+    initiator: "creator" | "agent";
+  },
+  divergence?: "graphics",
+): JobRecord {
+  return run.queue.enqueue({
+    kind: "restyle.generate",
+    title: "Legacy restyle job",
+    cancellable: true,
+    payload: {
+      plan: structuredClone(run.plan) as unknown as JsonValue,
+      chunkId: run.plan.chunks[0]!.id,
+      context,
+      ...(divergence === undefined ? {} : { divergence }),
+    },
+  });
+}
+
 describe("FR-607/608 restyle execution", () => {
   it("executes the Kling stub, exposes external progress, proposes approval, and freezes on acceptance", async () => {
     const run = await harness(NO_BUDGETS);
@@ -328,7 +352,7 @@ describe("FR-607/608 restyle execution", () => {
     run.meter.close();
   }, 30_000);
 
-  it("classifies accepted short pixels before enqueueing and preserves it through approval", async () => {
+  it("reclassifies a pre-upgrade short job with no stored divergence", async () => {
     const run = await harness(NO_BUDGETS, true);
     const context = {
       sessionId: "ses_aaaaaaaaaa",
@@ -337,20 +361,41 @@ describe("FR-607/608 restyle execution", () => {
       initiator: "creator" as const,
     };
 
-    const started = run.service.startPlan({ plan: run.plan, context });
-    expect(started).toMatchObject({ verdict: "enqueued" });
-    if (started.verdict !== "enqueued") throw new Error("Restyle plan was not enqueued.");
-    expect(started.jobs).toHaveLength(1);
-    expect(started.jobs[0]!.payload).toMatchObject({ divergence: "graphics" });
+    const queued = enqueueLegacyRestyle(run, context);
+    expect(queued.payload).not.toHaveProperty("divergence");
     await waitFor(() => {
-      const state = run.queue.get(started.jobs[0]!.jobId)?.state;
+      const state = run.queue.get(queued.jobId)?.state;
       return state === "done" || state === "failed" || state === "cancelled";
     });
-    const done = run.queue.get(started.jobs[0]!.jobId)!;
+    const done = run.queue.get(queued.jobId)!;
     expect(done, done.error?.message).toMatchObject({ state: "done" });
     const proposalId = String(jobResult(done)["proposalId"]);
     const accepted = await valueOf(run.engine.acceptProposal(proposalId, "creator"));
     expect(accepted.divergence).toBe("graphics");
+    run.queue.close();
+    run.meter.close();
+  }, 30_000);
+
+  it("discards a stale graphics payload when the accepted target is longform", async () => {
+    const run = await harness(NO_BUDGETS);
+    const context = {
+      sessionId: "ses_aaaaaaaaaa",
+      projectId: "prj_aaaaaaaaaa",
+      taskId: run.plan.id,
+      initiator: "creator" as const,
+    };
+
+    const queued = enqueueLegacyRestyle(run, context, "graphics");
+    expect(queued.payload).toMatchObject({ divergence: "graphics" });
+    await waitFor(() => {
+      const state = run.queue.get(queued.jobId)?.state;
+      return state === "done" || state === "failed" || state === "cancelled";
+    });
+    const done = run.queue.get(queued.jobId)!;
+    expect(done, done.error?.message).toMatchObject({ state: "done" });
+    const proposalId = String(jobResult(done)["proposalId"]);
+    const accepted = await valueOf(run.engine.acceptProposal(proposalId, "creator"));
+    expect(accepted.divergence).toBeUndefined();
     run.queue.close();
     run.meter.close();
   }, 30_000);

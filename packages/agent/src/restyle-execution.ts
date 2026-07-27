@@ -72,7 +72,6 @@ interface RestyleJobPayload {
   plan: RestylePlan;
   chunkId: string;
   context: CostContext;
-  divergence?: "graphics";
 }
 
 interface ActiveExternalCall {
@@ -138,6 +137,15 @@ function extensionFor(mime: string, filePath: string): string {
   return existing.length > 0 ? existing : ".bin";
 }
 
+function restyleDivergence(
+  project: ProjectStore["currentProject"],
+  operations: ReadonlyArray<{ op: string; params: Record<string, unknown> }>,
+): "graphics" | undefined {
+  return touchedDerivativeIds(project, project, operations).length > 0
+    ? "graphics"
+    : undefined;
+}
+
 function jobPayload(job: JobRecord): RestyleJobPayload {
   const payload = asRecord(job.payload);
   if (payload === undefined || typeof payload["chunkId"] !== "string") {
@@ -152,7 +160,6 @@ function jobPayload(job: JobRecord): RestyleJobPayload {
     !parsed.ok || typeof context !== "object" || context === null || Array.isArray(context) ||
     typeof context["sessionId"] !== "string" || typeof context["projectId"] !== "string" ||
     typeof context["taskId"] !== "string" ||
-    (payload["divergence"] !== undefined && payload["divergence"] !== "graphics") ||
     (context["initiator"] !== "creator" && context["initiator"] !== "agent")
   ) {
     throw makeGuyditorError("E_RESTYLE_JOB_PAYLOAD", "Restyle job payload is invalid.", {
@@ -169,7 +176,6 @@ function jobPayload(job: JobRecord): RestyleJobPayload {
       taskId: context["taskId"],
       initiator: context["initiator"],
     },
-    ...(payload["divergence"] === undefined ? {} : { divergence: payload["divergence"] }),
   };
 }
 
@@ -223,16 +229,6 @@ export class RestyleExecutionService {
       const preflight = this.#costMeter.preflight(estimate, input.context);
       if (preflight.verdict !== "proceed") return { ...preflight, estimate };
     }
-    const project = this.#projectStore.currentProject;
-    const divergence = touchedDerivativeIds(project, project, [{
-      op: "restyle.segment.approve",
-      params: {
-        deliverableId: input.plan.deliverableId,
-        plan: input.plan,
-      },
-    }]).length > 0
-      ? "graphics" as const
-      : undefined;
     const jobs = input.plan.chunks.map((chunk) => this.#jobs.enqueue({
       kind: "restyle.generate",
       title: `Restyle chunk ${String(chunk.index + 1)}/${String(input.plan.chunks.length)}`,
@@ -241,7 +237,6 @@ export class RestyleExecutionService {
         plan: input.plan,
         chunkId: chunk.id,
         context: input.context,
-        ...(divergence === undefined ? {} : { divergence }),
       }),
     }));
     return { verdict: "enqueued", estimate, jobs };
@@ -316,6 +311,16 @@ export class RestyleExecutionService {
         retry: "none",
       });
     }
+    const preflightProject = this.#projectStore.currentProject;
+    const preflightRevision = preflightProject.revision;
+    const preflightDivergence = restyleDivergence(preflightProject, [{
+      op: "restyle.segment.approve",
+      params: {
+        deliverableId: payload.plan.deliverableId,
+        plan: payload.plan,
+        chunkId: chunk.id,
+      },
+    }]);
     const release = await this.#acquire(adapter, signal);
     let handle: AdapterJobHandle | undefined;
     let externalKey: string | undefined;
@@ -536,25 +541,38 @@ export class RestyleExecutionService {
         rights,
         contentHash: `sha256:${contentHash}`,
       };
-      const proposal = await this.#operationEngine.createProposal({
-        operations: [
-          {
-            op: "restyle.segment.approve",
-            params: {
-              deliverableId: payload.plan.deliverableId,
-              plan: updatedPlan,
-              chunkId: chunk.id,
-              cachedPath: result.output.filePath,
-              layerId: this.#idFactory("lyr"),
-              itemId: this.#idFactory("gfx"),
-              asset,
-              provenance,
-              ...(seamPlacements.length === 0 ? {} : { seamPlacements }),
-              ...(chunkPunchIn === undefined ? {} : { chunkPunchIn }),
-            },
+      const operations = [
+        {
+          op: "restyle.segment.approve",
+          params: {
+            deliverableId: payload.plan.deliverableId,
+            plan: updatedPlan,
+            chunkId: chunk.id,
+            cachedPath: result.output.filePath,
+            layerId: this.#idFactory("lyr"),
+            itemId: this.#idFactory("gfx"),
+            asset,
+            provenance,
+            ...(seamPlacements.length === 0 ? {} : { seamPlacements }),
+            ...(chunkPunchIn === undefined ? {} : { chunkPunchIn }),
           },
-          ...seamOperations,
-        ],
+        },
+        ...seamOperations,
+      ];
+      const proposalProject = this.#projectStore.currentProject;
+      const divergence = restyleDivergence(proposalProject, operations);
+      if (
+        proposalProject.revision === preflightRevision &&
+        divergence !== preflightDivergence
+      ) {
+        throw makeGuyditorError(
+          "E_RESTYLE_JOB_PAYLOAD",
+          `Restyle target ownership changed without a project revision for ${chunk.id}.`,
+          { affected: [payload.plan.deliverableId, chunk.id], retry: "safe" },
+        );
+      }
+      const proposal = await this.#operationEngine.createProposal({
+        operations,
         instruction: { kind: "skill-policy", text: `Review restyle chunk ${chunk.id}` },
         actor: {
           kind: "agent",
@@ -567,7 +585,7 @@ export class RestyleExecutionService {
           sources: [{ kind: "media-evidence", ref: result.rawResponseRef }],
         },
         addresses: [],
-        ...(payload.divergence === undefined ? {} : { divergence: payload.divergence }),
+        ...(divergence === undefined ? {} : { divergence }),
       });
       if (!proposal.ok) throw proposal.error;
       reportProgress(1, 0);

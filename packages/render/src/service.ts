@@ -3,7 +3,9 @@ import { createReadStream } from "node:fs";
 import {
   access,
   chmod,
+  link,
   mkdir,
+  mkdtemp,
   readFile,
   rename,
   rm,
@@ -240,7 +242,10 @@ export interface RenderServiceOptions {
   profilesRoot?: string | URL;
   templateRegistry?: TemplateRegistry;
   brandDefaults?: () => Promise<TemplateBrandDefaults | undefined>;
+  onTemplateFreezePhase?: (phase: TemplateFreezePhase) => Promise<void>;
 }
+
+export type TemplateFreezePhase = "rendered" | "exact-preflighted" | "published";
 
 export interface TemplateFreezeRequest {
   revision: string;
@@ -381,6 +386,11 @@ async function exists(path: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+async function removePublishedFile(path: string): Promise<void> {
+  await chmod(path, 0o644).catch(() => undefined);
+  await rm(path, { force: true });
 }
 
 const COVER_ANALYSIS_WIDTH = 160;
@@ -601,6 +611,7 @@ export class RenderService {
   readonly #profilesRoot: string | URL;
   readonly #templateRegistry: TemplateRegistry;
   readonly #brandDefaults: () => Promise<TemplateBrandDefaults | undefined>;
+  readonly #onTemplateFreezePhase: RenderServiceOptions["onTemplateFreezePhase"];
   readonly #prepared = new Map<string, PreparedExport>();
 
   public constructor(options: RenderServiceOptions) {
@@ -612,6 +623,7 @@ export class RenderService {
       projectRoot: join(this.#projectRoot, "templates"),
     });
     this.#brandDefaults = options.brandDefaults ?? (() => Promise.resolve(undefined));
+    this.#onTemplateFreezePhase = options.onTemplateFreezePhase;
     this.#jobQueue.registerExecutor("render.export", async (job, context) => {
       const prepared = this.#prepared.get(job.jobId);
       if (prepared === undefined) {
@@ -1079,11 +1091,11 @@ export class RenderService {
     const divergence = touchedDerivativeIds(project, project, [preflightOperation]).length > 0
       ? "graphics" as const
       : undefined;
-    const engine = new OperationEngine(this.#store.currentProject, {
+    const preflightEngine = new OperationEngine(this.#store.currentProject, {
       committer: this.#store,
       templateProvider: this.#templateRegistry,
     });
-    const preflight = await engine.execute([preflightOperation], {
+    const preflight = await preflightEngine.execute([preflightOperation], {
       baseRevision: request.revision,
       origin: "ui",
       dryRun: true,
@@ -1114,119 +1126,176 @@ export class RenderService {
       canvas: TEMPLATE_CANVAS_VERSION,
       brand: brand.templateDefaults ?? null,
     })).digest("hex");
-    const frameDirectory = join(
+    const cacheDirectory = join(
       this.#projectRoot,
       ".guyditor/cache/render/template-freeze",
-      freezeKey,
     );
-    await mkdir(frameDirectory, { recursive: true });
-    for (let frame = 0; frame < frames; frame += 1) {
-      const png = renderTemplatePng(runtime.value, {
+    await mkdir(cacheDirectory, { recursive: true });
+    const temporaryDirectory = await mkdtemp(
+      join(cacheDirectory, `.tmp-${freezeKey.slice(0, 12)}-`),
+    );
+    const frameDirectory = join(temporaryDirectory, "frames");
+    const temporaryOutputPath = join(temporaryDirectory, `asset.${profile.container}`);
+    const temporaryProvenancePath = join(temporaryDirectory, "provenance.json");
+    let outputPublished = false;
+    let provenancePublished = false;
+    let provenancePath: string | undefined;
+    try {
+      await mkdir(frameDirectory);
+      for (let frame = 0; frame < frames; frame += 1) {
+        const png = renderTemplatePng(runtime.value, {
+          params,
+          seed,
+          frame,
+          totalFrames: frames,
+          fps,
+          width,
+          height,
+          safeArea,
+          brand,
+          timeline: { frames: frame, fps },
+        });
+        if (!png.ok) throw png.error;
+        await writeFile(
+          join(frameDirectory, `${String(frame).padStart(8, "0")}.png`),
+          png.value,
+        );
+      }
+      await runFfmpeg([
+        "-hide_banner", "-loglevel", "error", "-nostdin", "-n",
+        "-framerate", fps,
+        "-start_number", "0",
+        "-i", join(frameDirectory, "%08d.png"),
+        "-frames:v", String(frames),
+        "-an",
+        "-c:v", profile.video.codec,
+        "-preset", "medium",
+        "-crf", String(profile.video.crf),
+        "-pix_fmt", profile.video.pixelFormat,
+        "-r", fps,
+        "-threads", "1",
+        "-fflags", "+bitexact",
+        "-flags:v", "+bitexact",
+        "-map_metadata", "-1",
+        "-metadata", "creation_time=2000-01-01T00:00:00.000Z",
+        ...(profile.container === "mp4" ? ["-movflags", "+faststart"] : []),
+        temporaryOutputPath,
+      ]);
+      await this.#onTemplateFreezePhase?.("rendered");
+      const toolchain = await toolchainManifest();
+      const materialized = await materializeProgrammaticAnimationArtifact({
+        projectRoot: this.#projectRoot,
+        outputPath: temporaryOutputPath,
+        assetId,
+        template: {
+          id: descriptor.value.id,
+          version: descriptor.value.version,
+          contentHash: descriptor.value.contentHash,
+        },
         params,
         seed,
-        frame,
-        totalFrames: frames,
+        renderer: {
+          template: TEMPLATE_RENDERER_VERSION,
+          primitives: PRIMITIVES_V1_VERSION,
+          canvas: TEMPLATE_CANVAS_VERSION,
+          toolchainHash: `sha256:${createHash("sha256")
+            .update(canonicalJson(toolchain))
+            .digest("hex")}`,
+          fontHashes: Object.fromEntries(
+            Object.entries(runtime.value.fonts).map(([family, font]) =>
+              [family, font.sha256]),
+          ),
+        },
+        expected: { frames, fps, width, height },
+        ingestedAt: new Date().toISOString(),
+      });
+      const artifact = {
+        ...materialized,
+        asset: {
+          ...materialized.asset,
+          path: `media/programmatic/${assetId}.${profile.container}`,
+        },
+      };
+      const operation = {
+        op: "template.freeze",
+        params: {
+          asset: artifact.asset,
+          provenance: artifact.provenance,
+          sidecar: artifact.sidecar,
+          ...(placement === undefined ? {} : { placement }),
+        },
+      };
+      const exactProject = this.#store.currentProject;
+      const exactDivergence = touchedDerivativeIds(
+        exactProject,
+        exactProject,
+        [operation],
+      ).length > 0
+        ? "graphics" as const
+        : undefined;
+      const exactEngine = new OperationEngine(exactProject, {
+        committer: this.#store,
+        templateProvider: this.#templateRegistry,
+      });
+      const exactContext = {
+        baseRevision: request.revision,
+        origin: "ui" as const,
+        recordUndo: false,
+        ...(exactDivergence === undefined ? {} : { divergence: exactDivergence }),
+      };
+      const exactPreflight = await exactEngine.execute([operation], {
+        ...exactContext,
+        dryRun: true,
+      });
+      if (!exactPreflight.ok) throw exactPreflight.error;
+      await writeFile(temporaryProvenancePath, artifact.serialized, "utf8");
+      await this.#onTemplateFreezePhase?.("exact-preflighted");
+
+      provenancePath = join(this.#projectRoot, artifact.sidecar.path);
+      await Promise.all([
+        mkdir(outputDirectory, { recursive: true }),
+        mkdir(dirname(provenancePath), { recursive: true }),
+      ]);
+      await link(temporaryOutputPath, outputPath);
+      outputPublished = true;
+      await link(temporaryProvenancePath, provenancePath);
+      provenancePublished = true;
+      await Promise.all([
+        chmod(outputPath, 0o444),
+        chmod(provenancePath, 0o444),
+      ]);
+      await this.#onTemplateFreezePhase?.("published");
+
+      const committed = await exactEngine.execute([operation], {
+        ...exactContext,
+        dryRun: false,
+      });
+      if (!committed.ok) throw committed.error;
+      const result = {
+        assetId,
+        ...(clipId === undefined ? {} : { clipId }),
+        sequenceId: deliverable.sequenceId,
+        outputPath,
+        provenancePath,
+        frames,
         fps,
         width,
         height,
-        safeArea,
-        brand,
-        timeline: { frames: frame, fps },
-      });
-      if (!png.ok) throw png.error;
-      await writeFile(
-        join(frameDirectory, `${String(frame).padStart(8, "0")}.png`),
-        png.value,
-      );
-    }
-    await mkdir(outputDirectory, { recursive: true });
-    await runFfmpeg([
-      "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
-      "-framerate", fps,
-      "-start_number", "0",
-      "-i", join(frameDirectory, "%08d.png"),
-      "-frames:v", String(frames),
-      "-an",
-      "-c:v", profile.video.codec,
-      "-preset", "medium",
-      "-crf", String(profile.video.crf),
-      "-pix_fmt", profile.video.pixelFormat,
-      "-r", fps,
-      "-threads", "1",
-      "-fflags", "+bitexact",
-      "-flags:v", "+bitexact",
-      "-map_metadata", "-1",
-      "-metadata", "creation_time=2000-01-01T00:00:00.000Z",
-      ...(profile.container === "mp4" ? ["-movflags", "+faststart"] : []),
-      outputPath,
-    ]);
-    const toolchain = await toolchainManifest();
-    const artifact = await materializeProgrammaticAnimationArtifact({
-      projectRoot: this.#projectRoot,
-      outputPath,
-      assetId,
-      template: {
-        id: descriptor.value.id,
-        version: descriptor.value.version,
-        contentHash: descriptor.value.contentHash,
-      },
-      params,
-      seed,
-      renderer: {
-        template: TEMPLATE_RENDERER_VERSION,
-        primitives: PRIMITIVES_V1_VERSION,
-        canvas: TEMPLATE_CANVAS_VERSION,
-        toolchainHash: `sha256:${createHash("sha256")
-          .update(canonicalJson(toolchain))
-          .digest("hex")}`,
-        fontHashes: Object.fromEntries(
-          Object.entries(runtime.value.fonts).map(([family, font]) =>
-            [family, font.sha256]),
-        ),
-      },
-      expected: { frames, fps, width, height },
-      ingestedAt: new Date().toISOString(),
-    });
-    const provenancePath = join(this.#projectRoot, artifact.sidecar.path);
-    await mkdir(dirname(provenancePath), { recursive: true });
-    await writeFile(provenancePath, artifact.serialized, "utf8");
-    await Promise.all([
-      chmod(outputPath, 0o444),
-      chmod(provenancePath, 0o444),
-    ]);
-    const committed = await engine.execute([{
-      op: "template.freeze",
-      params: {
-        asset: artifact.asset,
-        provenance: artifact.provenance,
-        sidecar: artifact.sidecar,
-        ...(placement === undefined ? {} : { placement }),
-      },
-    }], {
-      baseRevision: request.revision,
-      origin: "ui",
-      dryRun: false,
-      ...(divergence === undefined ? {} : { divergence }),
-    });
-    if (!committed.ok) {
-      await Promise.all([
-        chmod(outputPath, 0o644).then(() => rm(outputPath, { force: true })),
-        chmod(provenancePath, 0o644).then(() => rm(provenancePath, { force: true })),
+        revision: this.#store.currentProject.revision,
+      };
+      await rm(temporaryDirectory, { recursive: true, force: true })
+        .catch(() => undefined);
+      return result;
+    } catch (error: unknown) {
+      await Promise.allSettled([
+        ...(outputPublished ? [removePublishedFile(outputPath)] : []),
+        ...(provenancePublished && provenancePath !== undefined
+          ? [removePublishedFile(provenancePath)]
+          : []),
+        rm(temporaryDirectory, { recursive: true, force: true }),
       ]);
-      throw committed.error;
+      throw error;
     }
-    return {
-      assetId,
-      ...(clipId === undefined ? {} : { clipId }),
-      sequenceId: deliverable.sequenceId,
-      outputPath,
-      provenancePath,
-      frames,
-      fps,
-      width,
-      height,
-      revision: this.#store.currentProject.revision,
-    };
   }
 
   public async graphicsFrame(request: {

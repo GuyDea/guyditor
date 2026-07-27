@@ -23,6 +23,22 @@ export function synchronizeTimelineScroll(
   }
 }
 
+export function jumpCutProposalNotice(result: {
+  report: string;
+  proposals: Array<{ id: string }>;
+}): string {
+  if (result.proposals.length === 0) return result.report;
+  if (result.proposals.length === 1) {
+    return `Prepared review proposal ${result.proposals[0]!.id} for the flagged cut.`;
+  }
+  const ids = result.proposals.map(({ id }) => id);
+  const last = ids.pop()!;
+  const list = ids.length === 1
+    ? `${ids[0]} and ${last}`
+    : `${ids.join(", ")}, and ${last}`;
+  return `Prepared ${String(result.proposals.length)} review proposals ${list} for the flagged cut.`;
+}
+
 function clipDuration(clip: Clip): number {
   return clip.source.out.frames - clip.source.in.frames;
 }
@@ -195,16 +211,17 @@ export function TimelinePanel({
     try {
       const result = await window.guyditor.call<{
         kind: "proposal" | "no-proposal";
-        proposal?: { id: string };
+        proposals?: Array<{ id: string }>;
         report: string;
       }>("OperationEngine", "proposeJumpCutConcealment", {
         sequenceId: sequence.id,
         beforeClipId,
       });
       await refreshProposals();
-      setNotice(result.proposal === undefined
-        ? result.report
-        : `Prepared review proposal ${result.proposal.id} for the flagged cut.`);
+      setNotice(jumpCutProposalNotice({
+        report: result.report,
+        proposals: result.proposals ?? [],
+      }));
     } catch (error: unknown) {
       setNotice(errorMessage(error));
     }

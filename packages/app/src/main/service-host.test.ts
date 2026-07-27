@@ -1,5 +1,14 @@
 import { createHash } from "node:crypto";
-import { access, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import {
+  access,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -20,6 +29,26 @@ import { groupJumpCutProposalOperations } from "./jump-cut-proposal-operations.j
 import {
   AppServiceHost,
 } from "./service-host.js";
+
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolvePromise: (() => void) | undefined;
+  const promise = new Promise<void>((resolve) => {
+    resolvePromise = resolve;
+  });
+  return {
+    promise,
+    resolve: () => resolvePromise?.(),
+  };
+}
+
+async function entriesOrEmpty(path: string): Promise<string[]> {
+  try {
+    return await readdir(path);
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+}
 
 describe("AppServiceHost", () => {
   it("exposes creator review for authored-template drafts and audits immutable publication", async () => {
@@ -88,8 +117,9 @@ describe("AppServiceHost", () => {
     await appHost.close();
   });
 
-  it("freezes an accepted matte candidate as a read-only generated asset with provenance", async () => {
+  it("guards matte acceptance across intervening edits and project switches", async () => {
     const root = await mkdtemp(join(tmpdir(), "guyditor-host-matte-"));
+    const otherRoot = await mkdtemp(join(tmpdir(), "guyditor-host-matte-other-"));
     const userDirectory = await mkdtemp(join(tmpdir(), "guyditor-host-matte-user-"));
     const model = projectFixture();
     model.sequences.push({
@@ -134,6 +164,11 @@ describe("AppServiceHost", () => {
     });
     const created = await createProject(root, model);
     if (!created.ok) throw created.error;
+    const otherModel = projectFixture();
+    otherModel.project.id = "prj_bbbbbbbbbb";
+    otherModel.project.name = "Other project";
+    const otherCreated = await createProject(otherRoot, otherModel);
+    if (!otherCreated.ok) throw otherCreated.error;
     const candidatePath = join(root, ".guyditor", "cache", "mattes", "candidate.mkv");
     await mkdir(join(root, ".guyditor", "cache", "mattes"), { recursive: true });
     const candidateBytes = Buffer.from("deterministic frozen matte fixture");
@@ -180,8 +215,22 @@ describe("AppServiceHost", () => {
     queue.close();
 
     const appHost = testAppHost(userDirectory);
+    const editGate = { prepared: deferred(), release: deferred() };
+    const switchGate = { prepared: deferred(), release: deferred() };
+    const matteGates = [editGate, switchGate];
+    let throwMatteRevisionNotification = false;
     const windowHost = appHost.createWindowHost({
-      publisher: new WindowEventPublisher(() => undefined),
+      publisher: new WindowEventPublisher((_channel, event) => {
+        if (throwMatteRevisionNotification && event.kind === "project.revision") {
+          throw new Error("Injected revision notification failure.");
+        }
+      }),
+      afterMattePrepare: async () => {
+        const gate = matteGates.shift();
+        if (gate === undefined) return;
+        gate.prepared.resolve();
+        await gate.release.promise;
+      },
     });
     await windowHost.openProject(root);
     const execute = windowHost.resolveService("OperationEngine")?.["execute"];
@@ -209,7 +258,53 @@ describe("AppServiceHost", () => {
     }
     expect(Reflect.apply(candidates, service, [{ clipId: "clp_cccccccccc" }]))
       .toMatchObject([{ jobId: queued.jobId, alpha: { maximum: 255 } }]);
-    const accepted = await Reflect.apply(accept, service, [{
+    const editRacedAcceptance = Reflect.apply(accept, service, [{
+      clipId: "clp_cccccccccc",
+      jobId: queued.jobId,
+    }]) as Promise<{ assetId: string; path: string }>;
+    await editGate.prepared.promise;
+    await Reflect.apply(execute, undefined, [{
+      operations: [{ op: "layer.lock", params: { layerId: "lyr_aaaaaaaaaa" } }],
+      intent: "direct",
+      label: "Concurrent accepted edit",
+    }]);
+    editGate.release.resolve();
+    await expect(editRacedAcceptance).rejects.toMatchObject({
+      code: "E_PROJECT_CONTEXT_STALE",
+      retry: "safe",
+    });
+    expect(await entriesOrEmpty(join(root, "assets/mattes"))).toEqual([]);
+    expect(await entriesOrEmpty(join(root, "sidecars/provenance"))).toEqual([]);
+    await Reflect.apply(execute, undefined, [{
+      operations: [{ op: "layer.unlock", params: { layerId: "lyr_aaaaaaaaaa" } }],
+      intent: "direct",
+      label: "Restore layer after race",
+    }]);
+
+    const switchRacedAcceptance = Reflect.apply(accept, service, [{
+      clipId: "clp_cccccccccc",
+      jobId: queued.jobId,
+    }]) as Promise<{ assetId: string; path: string }>;
+    await switchGate.prepared.promise;
+    await windowHost.openProject(otherRoot);
+    switchGate.release.resolve();
+    await expect(switchRacedAcceptance).rejects.toMatchObject({
+      code: "E_PROJECT_CONTEXT_STALE",
+      retry: "safe",
+    });
+    expect(await entriesOrEmpty(join(root, "assets/mattes"))).toEqual([]);
+    expect(await entriesOrEmpty(join(root, "sidecars/provenance"))).toEqual([]);
+    expect(windowHost.snapshot().master.project.id).toBe("prj_bbbbbbbbbb");
+    expect(windowHost.snapshot().master.assets).toHaveLength(1);
+
+    await windowHost.openProject(root);
+    const reopenedService = windowHost.resolveService("CompositorModel");
+    const reopenedAccept = reopenedService?.["acceptMatteCandidate"];
+    if (typeof reopenedAccept !== "function") {
+      throw new Error("Reopened matte candidate service is unavailable.");
+    }
+    throwMatteRevisionNotification = true;
+    const accepted = await Reflect.apply(reopenedAccept, reopenedService, [{
       clipId: "clp_cccccccccc",
       jobId: queued.jobId,
     }]) as { assetId: string; path: string };
@@ -243,6 +338,11 @@ describe("AppServiceHost", () => {
 
     await windowHost.close();
     await appHost.close();
+    await Promise.all([
+      rm(root, { recursive: true, force: true }),
+      rm(otherRoot, { recursive: true, force: true }),
+      rm(userDirectory, { recursive: true, force: true }),
+    ]);
   });
 
   it("exposes storage scan and plan-then-execute cleanup through BackupService", async () => {
@@ -615,8 +715,12 @@ describe("AppServiceHost", () => {
       path: "presets/pre_smoothcut2@1.yaml",
       sha256: "b".repeat(64),
     });
+    const emptyAnnotations = "format: guyditor.annotations/v1\nannotations: []\n";
+    model.sidecars[0]!.inputs = [];
+    model.sidecars[0]!.sha256 = createHash("sha256").update(emptyAnnotations).digest("hex");
     const created = await createProject(root, model);
     if (!created.ok) throw created.error;
+    await writeFile(join(root, "sidecars/annotations.yaml"), emptyAnnotations, "utf8");
     const appHost = testAppHost(userDirectory);
     const windowHost = appHost.createWindowHost({
       publisher: new WindowEventPublisher(() => undefined),
@@ -631,18 +735,23 @@ describe("AppServiceHost", () => {
     }]) as { kind: string; proposal?: Proposal; proposals?: Proposal[] };
 
     expect(planned.kind).toBe("proposal");
-    expect(planned.proposal).toMatchObject({
-      status: "ready",
-      divergence: "framing",
-      operations: [{
-        op: "clip.punchin.set",
-        params: { clipId: "clp_dddddddddd", level: 1.12, anchor: "face-track" },
-      }],
-    });
+    expect(planned.proposal).toBeUndefined();
     expect(planned.proposals).toMatchObject([
       {
         divergence: "framing",
-        operations: [{ op: "clip.punchin.set" }],
+        operations: [{
+          op: "clip.punchin.set",
+          params: { clipId: "clp_dddddddddd", level: 1.12, anchor: "face-track" },
+        }],
+        reason: {
+          sources: [{ kind: "media-evidence" }],
+        },
+        warnings: [{
+          boundary: {
+            beforeClip: "clp_cccccccccc",
+            afterClip: "clp_dddddddddd",
+          },
+        }],
       },
       {
         divergence: "cuts",
@@ -653,6 +762,15 @@ describe("AppServiceHost", () => {
               beforeClipId: "clp_dddddddddd",
               afterClipId: "clp_eeeeeeeeee",
             },
+          },
+        }],
+        reason: {
+          sources: [{ kind: "media-evidence" }],
+        },
+        warnings: [{
+          boundary: {
+            beforeClip: "clp_dddddddddd",
+            afterClip: "clp_eeeeeeeeee",
           },
         }],
       },
@@ -674,16 +792,41 @@ describe("AppServiceHost", () => {
       { divergence: "framing", operationIndexes: [0] },
       { divergence: "cuts", operationIndexes: [1] },
     ]);
-    const supersede = windowHost.resolveService("OperationEngine")?.["supersedeProposal"];
-    if (typeof supersede !== "function" || planned.proposal === undefined) {
-      throw new Error("proposal supersede service is unavailable");
+    const accept = windowHost.resolveService("OperationEngine")?.["acceptProposal"];
+    const [framingProposal, cutsProposal] = planned.proposals ?? [];
+    if (
+      typeof accept !== "function" ||
+      framingProposal === undefined ||
+      cutsProposal === undefined
+    ) {
+      throw new Error("split proposal acceptance is unavailable");
     }
-    await expect(Reflect.apply(supersede, undefined, [{
-      proposalId: planned.proposal.id,
-      instruction: "Keep the punch restrained.",
-    }])).resolves.toMatchObject({ divergence: "framing" });
-    expect(windowHost.snapshot().revision).toBe("rev_00001");
-    expect(windowHost.snapshot().master.sequences[1]!.clips[1]!.punchIn).toBeUndefined();
+    await expect(Reflect.apply(accept, undefined, [{
+      proposalId: framingProposal.id,
+    }])).resolves.toMatchObject({
+      id: framingProposal.id,
+      status: "accepted",
+      divergence: "framing",
+    });
+    await expect(Reflect.apply(accept, undefined, [{
+      proposalId: cutsProposal.id,
+    }])).resolves.toMatchObject({
+      id: expect.not.stringMatching(new RegExp(`^${cutsProposal.id}$`, "u")),
+      status: "accepted",
+      divergence: "cuts",
+      operations: [{ op: "transition.set" }],
+      warnings: [{
+        boundary: {
+          beforeClip: "clp_dddddddddd",
+          afterClip: "clp_eeeeeeeeee",
+        },
+      }],
+    });
+    expect(windowHost.snapshot().revision).toBe("rev_00003");
+    expect(windowHost.snapshot().master.sequences[1]!.clips[1]).toMatchObject({
+      punchIn: { level: 1.12, anchor: "face-track" },
+      transitionAfter: { preset: "pre_smoothcut2" },
+    });
 
     await windowHost.close();
     await appHost.close();
