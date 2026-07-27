@@ -1102,6 +1102,7 @@
       "required": ["id", "at", "duration"],
       "properties": {
         "id": { "type": "string", "pattern": "^(clp|gfx)_[a-z2-7]{10}$" },
+        "sequenceId": { "type": "string", "pattern": "^seq_[a-z2-7]{10}$" },
         "asset": { "type": "string", "pattern": "^ast_[a-z2-7]{10}$" },
         "template": {
           "type": "string",

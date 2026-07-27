@@ -9,6 +9,7 @@ import {
   convertTime,
   deriveTimeline,
   makeGuyditorError,
+  placedItemAppliesToSequence,
 } from "../../core/src/index.js";
 import type {
   Asset,
@@ -467,12 +468,23 @@ function restyleSourceRange(
 
 function visualLayers(project: GuyditorProject, sequenceId?: string): Layer[] {
   return project.layers
-    .filter(({ enabled, kind, sequence }) =>
-      enabled && (sequenceId === undefined || sequence === undefined || sequence === sequenceId) && (
-      kind === "video" || kind === "image" || kind === "matte" ||
-      kind === "text" || kind === "animation" || kind === "caption" ||
-      kind === "adjustment"
-    ))
+    .filter((layer) => {
+      const { enabled, kind, sequence } = layer;
+      const hasApplicableItems = sequenceId === undefined ||
+        layer.items === undefined ||
+        layer.items.some((item) =>
+          placedItemAppliesToSequence(project, item, sequenceId));
+      return (
+        enabled &&
+        (sequenceId === undefined || sequence === undefined || sequence === sequenceId) &&
+        (
+          kind === "video" || kind === "image" || kind === "matte" ||
+          kind === "text" || kind === "animation" || kind === "caption" ||
+          kind === "adjustment"
+        ) &&
+        hasApplicableItems
+      );
+    })
     .sort((left, right) => left.order - right.order || left.id.localeCompare(right.id));
 }
 
@@ -503,7 +515,9 @@ function assertSupportedSubset(
   }
   for (const layer of visualLayers(project, deliverable.sequenceId)) {
     if (layer.kind === "text" || layer.kind === "animation") {
-      const templatesOnly = layer.items?.every((item) => item.template !== undefined) ?? true;
+      const templatesOnly = layer.items?.filter((item) =>
+        placedItemAppliesToSequence(project, item, deliverable.sequenceId))
+        .every((item) => item.template !== undefined) ?? true;
       if (!templatesOnly) unsupported(`overlay items layer ${layer.id}`, "Part 7", [layer.id]);
     }
     if (layer.kind === "caption") continue;
@@ -628,7 +642,9 @@ export function compileRenderGraph(options: CompileRenderGraphOptions): RenderGr
 
   function layerSourceSize(layer: Layer): { width: number; height: number } {
     const layerSequence = project.sequences.find(({ id }) => id === layer.sequence);
-    const assetId = layerSequence?.clips[0]?.asset ?? layer.items?.find(({ asset }) => asset !== undefined)?.asset;
+    const assetId = layerSequence?.clips[0]?.asset ?? layer.items?.find((item) =>
+      item.asset !== undefined &&
+      placedItemAppliesToSequence(project, item, sequence.id))?.asset;
     const asset = project.assets.find(({ id }) => id === assetId);
     return {
       width: asset?.video?.width ?? asset?.probe.width ?? project.settings.timeline.width,
@@ -915,6 +931,7 @@ export function compileRenderGraph(options: CompileRenderGraphOptions): RenderGr
   function compileItemsLayer(layer: Layer): { root: RenderNode; durationFrames: number } {
     const inputs: VisualInput[] = [];
     for (const item of layer.items ?? []) {
+      if (!placedItemAppliesToSequence(project, item, sequence.id)) continue;
       if (item.template !== undefined) continue;
       if (item.asset === undefined) graphInvalid(`Placed item ${item.id} has no asset.`, [item.id]);
       const asset = project.assets.find(({ id }) => id === item.asset);

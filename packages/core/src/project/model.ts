@@ -432,6 +432,7 @@ export interface Layer {
 
 export interface PlacedItem {
   id: string;
+  sequenceId?: string;
   asset?: string;
   template?: string;
   at: SemanticAnchor;

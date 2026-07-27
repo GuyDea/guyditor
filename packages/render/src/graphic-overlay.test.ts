@@ -21,6 +21,76 @@ function digest(bytes: Uint8Array): string {
 }
 
 describe("FR-601 anchored graphic overlay painter", () => {
+  it("ignores a sibling-owned item in a shared global graphics layer", async () => {
+    const project = projectFixture();
+    project.sequences.push({
+      id: "seq_bbbbbbbbbb",
+      name: "short",
+      clips: [{
+        id: "clp_cccccccccc",
+        asset: "ast_aaaaaaaaaa",
+        source: {
+          in: { frames: 0, fps: "24/1" },
+          out: { frames: 12, fps: "24/1" },
+        },
+      }],
+    });
+    const registry = new TemplateRegistry({
+      builtinsRoot: resolve(process.cwd(), "templates"),
+      userRoot: await mkdtemp(join(tmpdir(), "guyditor-empty-template-library-")),
+    });
+    const descriptor = await registry.latest(TEMPLATE_ID);
+    expect(descriptor.ok).toBe(true);
+    if (!descriptor.ok) return;
+    project.templates = {
+      [TEMPLATE_ID]: {
+        version: descriptor.value.version,
+        contentHash: descriptor.value.contentHash,
+      },
+    };
+    project.layers.push({
+      id: "lyr_bbbbbbbbbb",
+      kind: "animation",
+      name: "Shared graphics",
+      order: 2,
+      enabled: true,
+      locked: false,
+      items: [{
+        id: "gfx_bbbbbbbbbb",
+        sequenceId: "seq_aaaaaaaaaa",
+        template: TEMPLATE_ID,
+        at: "timeline:seq_aaaaaaaaaa@0",
+        duration: { frames: 12, fps: "24/1" },
+        params: {
+          title: "Primary",
+          subtitle: "Applicable",
+          accent: "#77E7C4",
+          position: "left",
+        },
+        seed: 42,
+      }, {
+        id: "gfx_cccccccccc",
+        sequenceId: "seq_bbbbbbbbbb",
+        template: "tpl_b2c3d4e5f6",
+        at: "word:w000001",
+        duration: { frames: 12, fps: "24/1" },
+        params: {},
+        seed: 7,
+      }],
+    });
+
+    await expect(renderGraphicFrame({
+      project,
+      sequenceId: "seq_aaaaaaaaaa",
+      registry,
+      width: 640,
+      height: 360,
+      fps: "24/1",
+      frame: 0,
+      brand: { palette: {} },
+    })).resolves.toBeInstanceOf(Uint8Array);
+  });
+
   it("resolves a word anchor and renders byte-identical cached frame sequences", async () => {
     const project = projectFixture();
     const registry = new TemplateRegistry({

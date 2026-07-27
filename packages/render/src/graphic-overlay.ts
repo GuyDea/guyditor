@@ -10,6 +10,7 @@ import {
   deriveTimeline,
   makeGuyditorError,
   parseAnchor,
+  placedItemAppliesToSequence,
   resolveBrandTemplateParams,
   resolveAnchor,
 } from "../../core/src/index.js";
@@ -289,6 +290,7 @@ async function resolvedGraphics(options: GraphicOverlayOptions): Promise<Resolve
     .sort((left, right) => left.order - right.order || left.id.localeCompare(right.id));
   for (const layer of layers) {
     for (const [itemOrder, item] of (layer.items ?? []).entries()) {
+      if (!placedItemAppliesToSequence(options.project, item, options.sequenceId)) continue;
       if (item.template === undefined || !/^gfx_[a-z2-7]{10}$/u.test(item.id)) continue;
       const pin = options.project.templates?.[item.template];
       if (pin === undefined) {

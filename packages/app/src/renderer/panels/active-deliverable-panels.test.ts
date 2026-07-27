@@ -35,6 +35,7 @@ import {
   useWorkspaceStore,
 } from "../state/view-state.js";
 import * as InspectorPanelModule from "./InspectorPanel.js";
+import * as GraphicsPanelModule from "./GraphicsPanel.js";
 import * as PreviewPanelModule from "./PreviewPanel.js";
 import * as TimelinePanelModule from "./TimelinePanel.js";
 import * as TranscriptPanelModule from "./TranscriptPanel.js";
@@ -405,6 +406,48 @@ describe("active deliverable panels", () => {
     expect(html).not.toContain("clp_aaaaaaaaaa");
     expect(html).not.toContain("lyr_aaaaaaaaaa");
     expect(html).toContain("Select a clip, layer, word, or annotation.");
+  });
+
+  it("lists only graphics applicable to the selected short", () => {
+    const project = projectWithShort();
+    project.templates = {
+      tpl_a2c3d4e5f6: { version: "1.0.0", contentHash: "a".repeat(64) },
+    };
+    project.layers.push({
+      id: "lyr_cccccccccc",
+      kind: "animation",
+      name: "Shared graphics",
+      order: 2,
+      enabled: true,
+      locked: false,
+      items: [{
+        id: "gfx_aaaaaaaaaa",
+        sequenceId: "seq_aaaaaaaaaa",
+        template: "tpl_a2c3d4e5f6",
+        at: "word:w000001",
+        duration: { frames: 12, fps: "24/1" },
+        params: { title: "Primary graphic leak" },
+        seed: 1,
+      }, {
+        id: "gfx_bbbbbbbbbb",
+        sequenceId: "seq_bbbbbbbbbb",
+        template: "tpl_a2c3d4e5f6",
+        at: "word:w000001",
+        duration: { frames: 12, fps: "24/1" },
+        params: { title: "Short graphic" },
+        seed: 2,
+      }],
+    });
+    expect(validateProject(project).ok).toBe(true);
+    setServerSelection({ selectedDeliverableId: "dlv_bbbbbbbbbb" });
+
+    const html = renderToStaticMarkup(createElement(
+      GraphicsPanelModule.GraphicsPanel,
+      panelProps(project),
+    ));
+
+    expect(html).toContain("Short graphic");
+    expect(html).not.toContain("Primary graphic leak");
   });
 
   it("shows async overlay results only for an exact current request key", () => {

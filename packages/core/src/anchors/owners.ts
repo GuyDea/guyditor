@@ -78,12 +78,13 @@ export function storedAnchors(project: GuyditorProject): StoredAnchorReference[]
       ));
     }
     for (const item of layer.items ?? []) {
+      const scope = item.sequenceId ?? layer.sequence;
       anchors.push(reference(
         item,
         item.at,
         "/at",
         `/layers/${layer.id}/items/${item.id}/at`,
-        layer.sequence,
+        scope,
       ));
       if (typeof item.duration === "object" && "until" in item.duration) {
         anchors.push(reference(
@@ -91,7 +92,7 @@ export function storedAnchors(project: GuyditorProject): StoredAnchorReference[]
           item.duration.until,
           "/duration/until",
           `/layers/${layer.id}/items/${item.id}/duration/until`,
-          layer.sequence,
+          scope,
         ));
       }
     }

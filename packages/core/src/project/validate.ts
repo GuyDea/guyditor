@@ -200,6 +200,9 @@ function validateReferences(project: GuyditorProject): Result<GuyditorProject> |
       return missingReference("PiP avoid motion preset reference", layer.id, avoidPreset);
     }
     for (const item of layer.items ?? []) {
+      if (item.sequenceId !== undefined && !sequenceIds.has(item.sequenceId)) {
+        return missingReference("placed item sequence reference", item.id, item.sequenceId);
+      }
       if (item.asset !== undefined && !assetIds.has(item.asset)) {
         return missingReference("placed item asset reference", item.id, item.asset);
       }

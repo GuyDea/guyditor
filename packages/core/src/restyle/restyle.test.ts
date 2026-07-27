@@ -499,6 +499,7 @@ describe("FR-607/608 restyle core contract", () => {
       locked: false,
       items: [{
         id: "gfx_cccccccccc",
+        sequenceId: "seq_aaaaaaaaaa",
         template: "tpl_d2e3f4g5h6",
         at: "timeline:seq_aaaaaaaaaa@48",
         duration: { frames: 24, fps: "24/1" },

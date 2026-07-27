@@ -122,6 +122,179 @@ describe("FR-600/601 graphic operation catalog", () => {
     });
   });
 
+  it("stores explicit sequence ownership and preserves it through redo and remove undo", async () => {
+    const project = projectFixture();
+    const provider = {
+      latest: () => Promise.resolve(success(descriptor)),
+      get: () => Promise.resolve(success(descriptor)),
+    };
+    const engine = new OperationEngine(project, {
+      idFactory: ids,
+      templateProvider: provider,
+      seedFactory: () => 7,
+    });
+
+    const added = await valueOf(engine.execute([{
+      op: "graphic.add",
+      params: {
+        templateId: TEMPLATE_ID,
+        sequenceId: "seq_aaaaaaaaaa",
+        anchor: "word:w000001",
+        duration: { frames: 12, fps: "24/1" },
+        params: { title: "Scoped" },
+      },
+    }], {
+      baseRevision: project.revision,
+      origin: "ui",
+      dryRun: false,
+    }));
+
+    expect(engine.currentProject.layers.at(-1)?.items?.[0]).toMatchObject({
+      id: "gfx_bbbbbbbbbb",
+      sequenceId: "seq_aaaaaaaaaa",
+    });
+    expect(added.applied[0]).toBeDefined();
+    await valueOf(engine.undo());
+    expect(engine.currentProject.layers.at(-1)?.items).toEqual([]);
+    await valueOf(engine.redo());
+    expect(engine.currentProject.layers.at(-1)?.items?.[0]).toMatchObject({
+      id: "gfx_bbbbbbbbbb",
+      sequenceId: "seq_aaaaaaaaaa",
+    });
+
+    const removed = await valueOf(engine.execute([{
+      op: "graphic.remove",
+      params: { graphicId: "gfx_bbbbbbbbbb" },
+    }], {
+      baseRevision: engine.currentProject.revision,
+      origin: "ui",
+      dryRun: false,
+    }));
+    expect(removed.applied[0]?.inverse).toMatchObject([{
+      op: "graphic.add",
+      params: { sequenceId: "seq_aaaaaaaaaa" },
+    }]);
+  });
+
+  it("rejects missing sequence ownership and sequence-owned placement layers", async () => {
+    const project = projectFixture();
+    project.layers.push({
+      id: "lyr_bbbbbbbbbb",
+      kind: "animation",
+      name: "Scoped graphics",
+      order: 1,
+      enabled: true,
+      locked: false,
+      sequence: "seq_aaaaaaaaaa",
+    });
+    const provider = {
+      latest: () => Promise.resolve(success(descriptor)),
+      get: () => Promise.resolve(success(descriptor)),
+    };
+    const missing = new OperationEngine(project, { templateProvider: provider });
+    await expect(missing.execute([{
+      op: "graphic.add",
+      params: {
+        templateId: TEMPLATE_ID,
+        sequenceId: "seq_bbbbbbbbbb",
+        anchor: "word:w000001",
+        duration: { frames: 12, fps: "24/1" },
+        params: { title: "Missing" },
+      },
+    }], {
+      baseRevision: project.revision,
+      origin: "ui",
+      dryRun: false,
+    })).resolves.toMatchObject({
+      ok: false,
+      error: { code: "E_OP_NOT_FOUND" },
+    });
+
+    const ownedLayer = new OperationEngine(project, { templateProvider: provider });
+    await expect(ownedLayer.execute([{
+      op: "graphic.add",
+      params: {
+        templateId: TEMPLATE_ID,
+        sequenceId: "seq_aaaaaaaaaa",
+        layerId: "lyr_bbbbbbbbbb",
+        anchor: "word:w000001",
+        duration: { frames: 12, fps: "24/1" },
+        params: { title: "Do not detach" },
+      },
+    }], {
+      baseRevision: project.revision,
+      origin: "ui",
+      dryRun: false,
+    })).resolves.toMatchObject({
+      ok: false,
+      error: { code: "E_GRAPHIC_LAYER_SCOPE" },
+    });
+  });
+
+  it("rejects reanchor and retime edits that conflict with explicit sequence ownership", async () => {
+    const project = projectFixture();
+    project.sequences.push({
+      id: "seq_bbbbbbbbbb",
+      name: "short",
+      clips: [{
+        id: "clp_cccccccccc",
+        asset: "ast_aaaaaaaaaa",
+        source: {
+          in: { frames: 0, fps: "24/1" },
+          out: { frames: 12, fps: "24/1" },
+        },
+      }],
+    });
+    project.templates = {
+      [TEMPLATE_ID]: { version: descriptor.version, contentHash: descriptor.contentHash },
+    };
+    project.layers.push({
+      id: "lyr_bbbbbbbbbb",
+      kind: "animation",
+      name: "Graphics",
+      order: 1,
+      enabled: true,
+      locked: false,
+      items: [{
+        id: "gfx_bbbbbbbbbb",
+        sequenceId: "seq_aaaaaaaaaa",
+        template: TEMPLATE_ID,
+        at: "word:w000001",
+        duration: { frames: 12, fps: "24/1" },
+        params: { title: "Scoped" },
+        seed: 7,
+      }],
+    });
+    const provider = {
+      latest: () => Promise.resolve(success(descriptor)),
+      get: () => Promise.resolve(success(descriptor)),
+    };
+    const engine = new OperationEngine(project, { templateProvider: provider });
+
+    for (const operation of [{
+      op: "graphic.anchor.set",
+      params: {
+        graphicId: "gfx_bbbbbbbbbb",
+        anchor: "timeline:seq_bbbbbbbbbb@4",
+      },
+    }, {
+      op: "graphic.retime",
+      params: {
+        graphicId: "gfx_bbbbbbbbbb",
+        duration: { until: "timeline:seq_bbbbbbbbbb@12" },
+      },
+    }]) {
+      await expect(engine.execute([operation], {
+        baseRevision: project.revision,
+        origin: "ui",
+        dryRun: false,
+      })).resolves.toMatchObject({
+        ok: false,
+        error: { code: "E_GRAPHIC_SEQUENCE_CONFLICT" },
+      });
+    }
+  });
+
   it("applies RFC 7386 parameter patches and records a reversible semantic update", async () => {
     const project = projectFixture();
     project.templates = {

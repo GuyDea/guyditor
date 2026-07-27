@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 
+import { placedItemAppliesToSequence } from "../../../../core/src/index.js";
 import type { PlacedItem } from "../../../../core/src/index.js";
 import type {
   TemplateCatalogEntry,
@@ -101,12 +102,24 @@ export function GraphicsPanel({
   const required = new Set(schema.required?.filter((value): value is string => typeof value === "string") ?? []);
   const graphicLayers = snapshot?.master.layers.filter((layer) =>
     (layer.kind === "text" || layer.kind === "animation") &&
-    (layer.sequence === undefined || layer.sequence === deliverable?.sequenceId)) ?? [];
-  const instances = useMemo(() => graphicLayers.flatMap((layer) =>
-    (layer.items ?? []).flatMap((item) => item.template === undefined
-      ? []
-      : [{ item, layerId: layer.id, layerName: layer.name, layerOrder: layer.order }])),
-  [graphicLayers]);
+    layer.sequence === undefined) ?? [];
+  const instances = useMemo(() => {
+    if (snapshot === null || deliverable === undefined) return [];
+    return snapshot.master.layers.flatMap((layer) =>
+      (layer.kind === "text" || layer.kind === "animation") &&
+      (layer.sequence === undefined || layer.sequence === deliverable.sequenceId)
+        ? (layer.items ?? []).flatMap((item) =>
+            item.template !== undefined &&
+            placedItemAppliesToSequence(snapshot.master, item, deliverable.sequenceId)
+              ? [{
+                  item,
+                  layerId: layer.id,
+                  layerName: layer.name,
+                  layerOrder: layer.order,
+                }]
+              : [])
+        : []);
+  }, [deliverable, snapshot]);
   const selectedInstance = instances.find(({ item }) => item.id === selectedGraphicId);
 
   useEffect(() => {
@@ -272,7 +285,12 @@ export function GraphicsPanel({
   async function addGraphic(): Promise<void> {
     const placement = anchor();
     const placedDuration = duration();
-    if (selectedTemplate === undefined || placement === undefined || placedDuration === undefined) {
+    if (
+      selectedTemplate === undefined ||
+      deliverable === undefined ||
+      placement === undefined ||
+      placedDuration === undefined
+    ) {
       setNotice(anchorMode === "word" ? "Select a transcript word before placing this graphic." : "Open a deliverable before placing graphics.");
       return;
     }
@@ -281,6 +299,7 @@ export function GraphicsPanel({
         op: "graphic.add",
         params: {
           templateId: selectedTemplate.id,
+          sequenceId: deliverable.sequenceId,
           ...(layerId === "auto" ? {} : { layerId }),
           anchor: placement,
           duration: placedDuration,

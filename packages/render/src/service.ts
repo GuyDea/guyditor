@@ -18,6 +18,7 @@ import {
   deriveTimeline,
   makeId,
   makeGuyditorError,
+  placedItemAppliesToSequence,
   OperationEngine,
   parseProjectYaml,
   resolveBrandTemplateParams,
@@ -1445,7 +1446,9 @@ export class RenderService {
       layer.enabled &&
       (layer.sequence === undefined || layer.sequence === deliverable.sequenceId) &&
       (layer.kind === "text" || layer.kind === "animation")
-        ? (layer.items ?? []).filter(({ template }) => template !== undefined)
+        ? (layer.items ?? []).filter((item) =>
+            item.template !== undefined &&
+            placedItemAppliesToSequence(project, item, deliverable.sequenceId))
         : []);
     if (graphics.length > 0) {
       try {
@@ -2004,15 +2007,23 @@ export class RenderService {
         durationFrames: Math.max(1, clip.source.out.frames - clip.source.in.frames),
         effects: clip.effects ?? [],
       })),
-      ...project.layers.flatMap((layer) => (layer.items ?? []).flatMap((item) => {
-        if (item.asset === undefined) return [];
-        const durationFrames = typeof item.duration === "object" && "frames" in item.duration
-          ? item.duration.frames
-          : item.source !== undefined && "in" in item.source
-            ? item.source.out.frames - item.source.in.frames
-            : 1;
-        return [{ assetId: item.asset, durationFrames: Math.max(1, durationFrames), effects: item.effects ?? [] }];
-      })),
+      ...project.layers.flatMap((layer) =>
+        layer.sequence !== undefined && layer.sequence !== deliverable.sequenceId
+          ? []
+          : (layer.items ?? []).flatMap((item) => {
+              if (!placedItemAppliesToSequence(project, item, deliverable.sequenceId)) return [];
+              if (item.asset === undefined) return [];
+              const durationFrames = typeof item.duration === "object" && "frames" in item.duration
+                ? item.duration.frames
+                : item.source !== undefined && "in" in item.source
+                  ? item.source.out.frames - item.source.in.frames
+                  : 1;
+              return [{
+                assetId: item.asset,
+                durationFrames: Math.max(1, durationFrames),
+                effects: item.effects ?? [],
+              }];
+            })),
     ];
     const result: Record<string, { path: string; sha256: string; animated?: boolean }> = {};
     for (const candidate of candidates) {

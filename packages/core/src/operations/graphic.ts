@@ -1,6 +1,7 @@
 import { Ajv2020 } from "ajv/dist/2020.js";
 import type { ErrorObject } from "ajv";
 
+import { placedItemAppliesToSequence } from "../anchors/index.js";
 import { failure, makeGuyditorError, success } from "../errors.js";
 import type { Result } from "../errors.js";
 import type { GuyditorProject, Layer, PlacedItem } from "../project/index.js";
@@ -176,6 +177,17 @@ async function applyAdd(
   seedFactory: () => number,
 ): Promise<Result<ClipApplication>> {
   const templateId = input.params["templateId"] as string;
+  const sequenceId = input.params["sequenceId"] as string | undefined;
+  if (
+    sequenceId !== undefined &&
+    !project.sequences.some(({ id }) => id === sequenceId)
+  ) {
+    return graphicFailure(
+      "E_OP_NOT_FOUND",
+      `Sequence ${sequenceId} does not exist.`,
+      [sequenceId],
+    );
+  }
   const descriptor = await resolveTemplateDescriptor(project, templateId, provider);
   if (!descriptor.ok) return descriptor;
   const params = structuredClone(input.params["params"] as Record<string, unknown>);
@@ -200,6 +212,13 @@ async function applyAdd(
       "E_GRAPHIC_LAYER_KIND",
       `Layer ${layer.id} must be a text or animation layer for template graphics.`,
       [layer.id],
+    );
+  }
+  if (layer?.sequence !== undefined) {
+    return graphicFailure(
+      "E_GRAPHIC_LAYER_SCOPE",
+      `Layer ${layer.id} is sequence-owned and cannot hold independently scoped graphics.`,
+      [layer.id, layer.sequence],
     );
   }
   if (layer?.locked === true) {
@@ -228,12 +247,23 @@ async function applyAdd(
   }
   const item: PlacedItem = {
     id: graphicId,
+    ...(sequenceId === undefined ? {} : { sequenceId }),
     template: templateId,
     at: input.params["anchor"] as string,
     duration: structuredClone(input.params["duration"] as PlacedItem["duration"]),
     params: validated.value,
     seed,
   };
+  if (
+    sequenceId !== undefined &&
+    !placedItemAppliesToSequence(project, item, sequenceId)
+  ) {
+    return graphicFailure(
+      "E_GRAPHIC_SEQUENCE_CONFLICT",
+      `Graphic ${graphicId} has anchors that conflict with sequence ${sequenceId}.`,
+      [graphicId, sequenceId],
+    );
+  }
   const nextLayer: Layer = { ...layer, items: [...(layer.items ?? []), item] };
   delete nextLayer.sequence;
   const layers = createdLayer === undefined
@@ -348,6 +378,16 @@ async function applyItemField(
   const parameter = field === "at" ? "anchor" : "duration";
   const after = structuredClone(input.params[parameter] as PlacedItem[typeof field]);
   const item = { ...located.item, [field]: after };
+  if (
+    item.sequenceId !== undefined &&
+    !placedItemAppliesToSequence(project, item, item.sequenceId)
+  ) {
+    return graphicFailure(
+      "E_GRAPHIC_SEQUENCE_CONFLICT",
+      `Graphic ${graphicId} has anchors that conflict with sequence ${item.sequenceId}.`,
+      [graphicId, item.sequenceId],
+    );
+  }
   const layer = {
     ...located.layer,
     items: located.layer.items!.map((candidate, index) =>
@@ -400,6 +440,9 @@ async function applyRemove(
       op: "graphic.add",
       params: {
         templateId: located.item.template!,
+        ...(located.item.sequenceId === undefined
+          ? {}
+          : { sequenceId: located.item.sequenceId }),
         layerId: located.layer.id,
         graphicId: located.item.id,
         anchor: located.item.at,

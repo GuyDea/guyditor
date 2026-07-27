@@ -1,4 +1,5 @@
 export { ANCHOR_PATTERN, parseAnchor } from "./parser.js";
+export { placedItemAppliesToSequence } from "./applicability.js";
 export { AnchorResolverRegistry } from "./registry.js";
 export { resolveAnchor, resolveAnchorRange } from "./resolver.js";
 export { resolveNavigationTarget } from "./navigation.js";

@@ -1,6 +1,7 @@
 import {
   convertTime,
   makeGuyditorError,
+  placedItemAppliesToSequence,
 } from "../../core/src/index.js";
 import type {
   GuyditorProject,
@@ -77,6 +78,7 @@ export function restyleTimelineInsertions(
   for (const layer of project.layers) {
     if (!layer.enabled || (layer.sequence !== undefined && layer.sequence !== sequenceId)) continue;
     for (const item of layer.items ?? []) {
+      if (!placedItemAppliesToSequence(project, item, sequenceId)) continue;
       const insertion = restyleTimelineInsertionForItem(item);
       if (insertion === undefined) continue;
       if (item.template === undefined) {

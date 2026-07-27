@@ -259,6 +259,28 @@ describe("project validation", () => {
       },
     },
     {
+      name: "placed item sequence",
+      invariant: "placed item sequence reference",
+      affected: ["gfx_aaaaaaaaaa", "seq_bbbbbbbbbb"],
+      mutate(project: GuyditorProject): void {
+        project.layers.push({
+          id: "lyr_bbbbbbbbbb",
+          kind: "animation",
+          name: "graphics",
+          order: 1,
+          enabled: true,
+          locked: false,
+          items: [{
+            id: "gfx_aaaaaaaaaa",
+            sequenceId: "seq_bbbbbbbbbb",
+            template: "tpl_callout_text",
+            at: "word:w000001",
+            duration: { frames: 12, fps: "24/1" },
+          }],
+        });
+      },
+    },
+    {
       name: "deliverable sequence",
       invariant: "deliverable sequence reference",
       affected: ["dlv_aaaaaaaaaa", "seq_bbbbbbbbbb"],

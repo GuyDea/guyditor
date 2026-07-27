@@ -354,6 +354,7 @@ function segmentApprove(
   }
   const item: PlacedItem = {
     id: itemId,
+    sequenceId: plan.sequenceId,
     asset: asset.id,
     at: `timeline:${plan.sequenceId}@${String(chunk.sourceRange.startFrame)}`,
     duration: { frames: durationFrames, fps },
@@ -441,6 +442,7 @@ function segmentApprove(
       locked: false,
       items: [{
         id: placement.itemId,
+        sequenceId: plan.sequenceId,
         template: treatment.templateId,
         at: `timeline:${plan.sequenceId}@${String(seam.frame)}`,
         duration: { frames: treatment.durationFrames, fps },
