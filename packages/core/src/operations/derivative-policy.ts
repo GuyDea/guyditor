@@ -1,6 +1,7 @@
 import { placedItemAppliesToSequence } from "../anchors/applicability.js";
-import { isId } from "../project/ids.js";
 import type { GuyditorProject, PlacedItem } from "../project/model.js";
+
+const ANNOTATION_OR_LAYER_ID_PATTERN = /^(?:ann|lyr)_[a-z2-7]{10}$/u;
 
 export type DerivativeImpact = "content" | "non-editorial" | "baseline";
 export type DerivativeTargetResolver =
@@ -232,7 +233,7 @@ function annotationConversionTargets(
 ): string[] {
   return [
     ...(operation.affected ?? []).filter((target) =>
-      !isId("ann", target) && !isId("lyr", target)),
+      !ANNOTATION_OR_LAYER_ID_PATTERN.test(target)),
     ...targetValues(operation.params, ["sequenceId", "itemId"]),
     ...targetValues(operation.params["revert"], ["itemId"]),
     ...targetValues(operation.params["forward"], ["sequenceId", "itemId"]),
