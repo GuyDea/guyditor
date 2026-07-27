@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 import {
   AnnotationService,
@@ -12,6 +12,11 @@ import {
 import type { ProjectStore, Result } from "../../../core/src/index.js";
 import { projectFixture } from "../../../core/src/project/test-fixtures.js";
 import { TranscriptEngine } from "../../../transcript/src/index.js";
+import {
+  framingSidecarReference,
+  serializeFramingSidecar,
+} from "../../../deliver/src/index.js";
+import type { FramingSidecar } from "../../../deliver/src/index.js";
 
 const EMPTY_ANNOTATIONS = "format: guyditor.annotations/v1\nannotations: []\n";
 
@@ -22,6 +27,8 @@ export interface WorkspaceProjectOptions {
   audioPost?: boolean;
   jumpCut?: boolean;
   derivedShort?: boolean;
+  framing?: boolean;
+  shortAnnotation?: boolean;
 }
 
 async function valueOf<Value>(result: Promise<Result<Value>>): Promise<Value> {
@@ -35,6 +42,14 @@ export async function createWorkspaceProject(
 ): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "guyditor-workspace-template-"));
   const model = projectFixture();
+  const captionPresetPath = resolve(
+    import.meta.dirname,
+    "../../../../.fixtures/projects/ac003/presets/pre_aaaaaaaaaa@1.yaml",
+  );
+  const captionPresetBytes = await readFile(captionPresetPath);
+  model.presets[0]!.sha256 = createHash("sha256")
+    .update(captionPresetBytes)
+    .digest("hex");
   model.project.name = "Workspace e2e";
   model.assets[0]!.path = resolve(import.meta.dirname, "../../../../.fixtures/bars-1080p30-10s.mp4");
   model.assets[0]!.audio = [{
@@ -111,11 +126,74 @@ export async function createWorkspaceProject(
       status: "draft",
       dependencies: [],
     });
+    if (options.audioPost === true) {
+      model.layers.push({
+        id: "lyr_dddddddddd",
+        kind: "music",
+        name: "Portrait short music",
+        order: 1,
+        enabled: true,
+        locked: false,
+        sequence: "seq_bbbbbbbbbb",
+      });
+    }
+  }
+  let framing: FramingSidecar | undefined;
+  if (options.framing === true) {
+    if (options.derivedShort !== true) {
+      throw new Error("The framing fixture requires a derived short.");
+    }
+    framing = {
+      format: "guyditor.framing/v1",
+      deliverableId: "dlv_bbbbbbbbbb",
+      profile: "youtube-shorts@1.0.0",
+      sourceRevision: model.revision,
+      aspect: "9:16",
+      requiredTrackAssets: [],
+      decisions: [{
+        decisionId: "fd_0001",
+        shot: {
+          clipId: "clp_cccccccccc",
+          source: {
+            start: { frames: 24, fps: "24/1" },
+            end: { frames: 36, fps: "24/1" },
+          },
+        },
+        mode: "crop",
+        crop: {
+          keyframes: [{
+            at: { frames: 24, fps: "24/1" },
+            rect: { x: 0.341796875, y: 0, w: 0.31640625, h: 1 },
+          }],
+        },
+        subjects: [],
+        confidence: 0,
+        warnings: [],
+      }],
+    };
+    model.sidecars.push(framingSidecarReference(framing, []));
   }
   const created = await valueOf(Promise.resolve(createProject(root, model)));
   await writeFile(join(root, "sidecars/annotations.yaml"), EMPTY_ANNOTATIONS, "utf8");
+  await mkdir(join(root, "presets"), { recursive: true });
+  await writeFile(
+    join(root, "presets/pre_aaaaaaaaaa@1.yaml"),
+    captionPresetBytes,
+  );
+  if (framing !== undefined) {
+    const reference = framingSidecarReference(framing, []);
+    const path = join(root, reference.path);
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, serializeFramingSidecar(framing), "utf8");
+  }
 
   if (options.transcript === true) await addTranscript(created);
+  if (options.shortAnnotation === true) {
+    if (options.derivedShort !== true) {
+      throw new Error("The short-annotation fixture requires a derived short.");
+    }
+    await addShortAnnotation(created);
+  }
   if (options.proposal === true) await addProposal(created);
   if (options.queuedJob === true) {
     const { queue } = JobQueue.open(join(root, ".guyditor/jobs.sqlite"));
@@ -128,6 +206,38 @@ export async function createWorkspaceProject(
     queue.close();
   }
   return root;
+}
+
+async function addShortAnnotation(store: ProjectStore): Promise<void> {
+  const annotations = new AnnotationService({ appVersion: "0.0.0-e2e" });
+  await valueOf(annotations.execute(store, [{
+    op: "annotation.create",
+    params: {
+      annotation: {
+        id: "ann_cccccccccc",
+        shape: "pin",
+        body: "Check this short frame",
+        style: { color: "#f2b84b", strokeWidth: 0.004 },
+        geometry: { kind: "pin", at: { x: 0.5, y: 0.5 } },
+        anchor: {
+          kind: "timeline",
+          sequenceId: "seq_bbbbbbbbbb",
+          frame: { frames: 0, fps: "24/1" },
+        },
+        extent: { frames: 0, fps: "24/1" },
+        canvasRef: {
+          sequenceId: "seq_bbbbbbbbbb",
+          deliverableId: "dlv_bbbbbbbbbb",
+          aspect: "9:16",
+        },
+        state: "open",
+        blocking: false,
+        author: { kind: "human", id: "fixture" },
+        createdAt: "2026-07-19T00:00:00.000Z",
+        history: [],
+      },
+    },
+  }]));
 }
 
 async function addTranscript(store: ProjectStore): Promise<void> {

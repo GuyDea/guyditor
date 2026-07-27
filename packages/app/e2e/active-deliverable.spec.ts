@@ -12,6 +12,9 @@ test("one project-portable active short drives every phase and edit target", asy
   const template = await createWorkspaceProject({
     transcript: true,
     derivedShort: true,
+    audioPost: true,
+    framing: true,
+    shortAnnotation: true,
   });
   const first = await launchApp({ projectTemplate: template });
   let second: Awaited<ReturnType<typeof launchApp>> | null = null;
@@ -51,7 +54,33 @@ test("one project-portable active short drives every phase and edit target", asy
     await expect(first.page.getByTestId("caption-track-panel"))
       .toContainText("cts_bbbbbbbbbb");
 
+    await first.page.getByTestId("timeline-clip-clp_cccccccccc").click();
+    await first.page.getByTestId("timeline-trim-value").fill("1");
+    await first.page.getByTestId("timeline-trim-tail").click();
+    await first.page.getByTestId("timeline-trim-submit").click();
+    await expect(first.page.getByTestId("shell-status"))
+      .toContainText("Trimmed tail of clp_cccccccccc");
+
+    const captionSize = first.page.getByTestId("caption-style-size");
+    await captionSize.fill("5.4");
+    await captionSize.press("Tab");
+    await expect(first.page.getByTestId("shell-status"))
+      .toContainText("Updated caption style");
+
+    await first.page.getByTestId("layer-select-lyr_dddddddddd").click();
     await first.page.getByTestId("phase-tab-polish").click();
+    await expect(first.page.getByTestId("audio-inspector")).toBeVisible();
+    await first.page.getByTestId("duck-enabled").check();
+    await first.page.getByTestId("duck-save").click();
+    await expect(first.page.getByTestId("shell-status"))
+      .toContainText("Saved auto ducking");
+
+    await expect(first.page.getByTestId("save-shot-crop")).toBeEnabled();
+    await first.page.getByLabel("Crop x").fill("0.3");
+    await first.page.getByTestId("save-shot-crop").click();
+    await expect(first.page.getByTestId("shell-status"))
+      .toContainText("Saved the manual crop");
+
     await first.page.getByTestId("template-lower-third").click();
     await first.page.getByLabel("title *", { exact: true })
       .fill("Short-only title");
@@ -59,6 +88,12 @@ test("one project-portable active short drives every phase and edit target", asy
     await first.page.getByTestId("graphic-add").click();
     await expect(first.page.getByTestId("graphic-instance-list"))
       .toContainText("Short-only title");
+
+    await first.page.getByTestId("annotation-resolve-first").click();
+    await expect(first.page.getByTestId(
+      "annotation-reopen-ann_cccccccccc",
+    )).toBeVisible();
+
     await expect.poll(async () => {
       const journal = await readFile(
         join(first.projectPath!, "history/transactions.jsonl"),
@@ -68,11 +103,23 @@ test("one project-portable active short drives every phase and edit target", asy
         JSON.parse(line) as {
           id?: string;
           divergence?: string;
-          operations?: Array<{ params?: { anchor?: string } }>;
+          operations?: Array<{
+            op?: string;
+            params?: { anchor?: string };
+          }>;
         });
-      const graphicTransaction = records.find(({ operations }) =>
-        operations?.some(({ params }) =>
-          params?.anchor === "timeline:seq_bbbbbbbbbb@0"));
+      const byOperation = (op: string) => records.find(({ operations }) =>
+        operations?.some((operation) => operation.op === op));
+      const transactions = {
+        cuts: byOperation("clip.trim"),
+        captions: byOperation("caption.style.set"),
+        audio: byOperation("layer.ducking.set"),
+        framing: byOperation("deliverable.framing.override"),
+        graphics: records.find(({ operations }) =>
+          operations?.some(({ params }) =>
+            params?.anchor === "timeline:seq_bbbbbbbbbb@0")),
+        annotation: byOperation("annotation.resolve"),
+      };
       const master = parseYaml(await readFile(
         join(first.projectPath!, "episode.guyditor.yaml"),
         "utf8",
@@ -85,19 +132,49 @@ test("one project-portable active short drives every phase and edit target", asy
           }>;
         }>;
       };
-      const recorded = master.deliverables
+      const shortDivergences = master.deliverables
         ?.find(({ id }) => id === "dlv_bbbbbbbbbb")
-        ?.divergences
-        ?.find(({ class: divergence }) => divergence === "graphics")
-        ?.transactionIds
-        ?.includes(graphicTransaction?.id ?? "") ?? false;
+        ?.divergences ?? [];
+      const linked = (divergence: string, transactionId?: string) =>
+        shortDivergences
+          .find(({ class: recordedClass }) => recordedClass === divergence)
+          ?.transactionIds
+          ?.includes(transactionId ?? "") ?? false;
+      const annotationLinked = shortDivergences.some(({ transactionIds }) =>
+        transactionIds?.includes(transactions.annotation?.id ?? ""));
       return {
-        journal: graphicTransaction?.divergence,
-        deliverable: recorded,
+        cuts: [
+          transactions.cuts?.divergence,
+          linked("cuts", transactions.cuts?.id),
+        ],
+        captions: [
+          transactions.captions?.divergence,
+          linked("captions", transactions.captions?.id),
+        ],
+        audio: [
+          transactions.audio?.divergence,
+          linked("audio", transactions.audio?.id),
+        ],
+        framing: [
+          transactions.framing?.divergence,
+          linked("framing", transactions.framing?.id),
+        ],
+        graphics: [
+          transactions.graphics?.divergence,
+          linked("graphics", transactions.graphics?.id),
+        ],
+        annotation: [
+          transactions.annotation?.divergence ?? null,
+          annotationLinked,
+        ],
       };
     }).toEqual({
-      journal: "graphics",
-      deliverable: true,
+      cuts: ["cuts", true],
+      captions: ["captions", true],
+      audio: ["audio", true],
+      framing: ["framing", true],
+      graphics: ["graphics", true],
+      annotation: [null, false],
     });
 
     await first.electronApp.close();
