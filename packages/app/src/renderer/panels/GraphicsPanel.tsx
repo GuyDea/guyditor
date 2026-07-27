@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 
-import { placedItemAppliesToSequence } from "../../../../core/src/index.js";
+import { placedItemAppliesToSequence } from "../../../../core/src/anchors/applicability.js";
 import type { PlacedItem } from "../../../../core/src/index.js";
 import type {
   TemplateCatalogEntry,
