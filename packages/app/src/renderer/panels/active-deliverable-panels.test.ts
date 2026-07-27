@@ -1,6 +1,23 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+const selectionHookMock = vi.hoisted(() => ({
+  serverSnapshot: undefined as unknown,
+}));
+
+vi.mock("../state/view-state.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../state/view-state.js")>();
+  type SelectionSnapshot = ReturnType<typeof actual.useSelectionStore.getState>;
+  const useSelectionStore = Object.assign(
+    <T>(selector: (state: SelectionSnapshot) => T): T => selector(
+      (selectionHookMock.serverSnapshot ??
+        actual.useSelectionStore.getState()) as SelectionSnapshot,
+    ),
+    actual.useSelectionStore,
+  );
+  return { ...actual, useSelectionStore };
+});
 
 import type {
   Annotation,
@@ -28,6 +45,27 @@ interface PreviewPanelTestApi {
     deliverable: Deliverable | undefined,
     framingOutput?: { width: number; height: number },
   ): { width: number; height: number };
+  previewRequestKey(
+    deliverableId: string,
+    revision: string,
+    frame: number,
+  ): PreviewRequestKey;
+  currentPreviewResult<T>(
+    result: KeyedPreviewResult<T> | null,
+    currentKey: PreviewRequestKey | null,
+  ): T | null;
+  annotationNavigationRequest(annotation: Annotation): Record<string, unknown>;
+}
+
+interface PreviewRequestKey {
+  deliverableId: string;
+  revision: string;
+  frame: number;
+}
+
+interface KeyedPreviewResult<T> {
+  key: PreviewRequestKey;
+  value: T;
 }
 
 interface TimelinePanelTestApi {
@@ -52,8 +90,16 @@ interface TranscriptPanelTestApi {
   ): { op: string; params: Record<string, unknown> } | undefined;
 }
 
-const INITIAL_SELECTION = useSelectionStore.getInitialState();
 const INITIAL_WORKSPACE = useWorkspaceStore.getInitialState();
+
+type SelectionSnapshot = ReturnType<typeof useSelectionStore.getState>;
+
+function setServerSelection(overrides: Partial<SelectionSnapshot>): void {
+  selectionHookMock.serverSnapshot = {
+    ...useSelectionStore.getState(),
+    ...overrides,
+  };
+}
 
 function annotation(
   id: string,
@@ -172,9 +218,11 @@ function panelProps(project: GuyditorProject): WorkspacePanelProps {
 }
 
 afterEach(() => {
-  INITIAL_SELECTION.selectedDeliverableId = null;
-  INITIAL_SELECTION.selectedLayerId = null;
-  useSelectionStore.setState(INITIAL_SELECTION);
+  selectionHookMock.serverSnapshot = undefined;
+  useSelectionStore.setState({
+    selectedDeliverableId: null,
+    selectedLayerId: null,
+  });
   useWorkspaceStore.setState(INITIAL_WORKSPACE);
 });
 
@@ -186,9 +234,10 @@ describe("active deliverable panels", () => {
       selectedDeliverableId: "dlv_bbbbbbbbbb",
       selectedLayerId: "lyr_aaaaaaaaaa",
     });
-    // React's server renderer reads Zustand's initial snapshot.
-    INITIAL_SELECTION.selectedDeliverableId = "dlv_bbbbbbbbbb";
-    INITIAL_SELECTION.selectedLayerId = "lyr_aaaaaaaaaa";
+    setServerSelection({
+      selectedDeliverableId: "dlv_bbbbbbbbbb",
+      selectedLayerId: "lyr_aaaaaaaaaa",
+    });
     useWorkspaceStore.getState().setPhase("cut");
     useWorkspaceStore.getState().resetLayout();
     const props = panelProps(project);
@@ -203,6 +252,8 @@ describe("active deliverable panels", () => {
       createElement(TranscriptPanelModule.TranscriptPanel, props),
     );
 
+    expect(useSelectionStore.getInitialState().selectedDeliverableId).toBeNull();
+    expect(useSelectionStore.getInitialState().selectedLayerId).toBeNull();
     expect(preview).toContain('data-aspect="portrait"');
     expect(preview).toContain('data-active-clip="clp_cccccccccc"');
     expect(preview).toContain('type="range" min="0" max="11"');
@@ -313,5 +364,72 @@ describe("active deliverable panels", () => {
       sequence,
       undefined,
     )).toBeUndefined();
+  });
+
+  it("shows async overlay results only for an exact current request key", () => {
+    const previewApi = PreviewPanelModule as unknown as Partial<PreviewPanelTestApi>;
+    expect(typeof previewApi.previewRequestKey).toBe("function");
+    expect(typeof previewApi.currentPreviewResult).toBe("function");
+    if (
+      previewApi.previewRequestKey === undefined ||
+      previewApi.currentPreviewResult === undefined
+    ) return;
+
+    const keyA = previewApi.previewRequestKey(
+      "dlv_aaaaaaaaaa",
+      "rev_00001",
+      12,
+    );
+    const keyB = previewApi.previewRequestKey(
+      "dlv_bbbbbbbbbb",
+      "rev_00001",
+      12,
+    );
+    const captionA = { key: keyA, value: "caption A" };
+    const graphicsA = { key: keyA, value: "graphics A" };
+    const framingA = { key: keyA, value: "framing A" };
+
+    expect(previewApi.currentPreviewResult(captionA, keyA)).toBe("caption A");
+    expect(previewApi.currentPreviewResult(graphicsA, keyA)).toBe("graphics A");
+    expect(previewApi.currentPreviewResult(framingA, keyA)).toBe("framing A");
+    expect(previewApi.currentPreviewResult(captionA, keyB)).toBeNull();
+    expect(previewApi.currentPreviewResult(graphicsA, keyB)).toBeNull();
+    expect(previewApi.currentPreviewResult(framingA, keyB)).toBeNull();
+
+    const lateA = { key: keyA, value: "late A" };
+    expect(previewApi.currentPreviewResult(lateA, keyB)).toBeNull();
+    const framingB = { key: keyB, value: "framing B" };
+    expect(previewApi.currentPreviewResult(framingB, keyB)).toBe("framing B");
+    expect(previewApi.currentPreviewResult(framingB, keyA)).toBeNull();
+    expect(previewApi.currentPreviewResult(
+      framingB,
+      previewApi.previewRequestKey("dlv_bbbbbbbbbb", "rev_00001", 13),
+    )).toBeNull();
+    expect(previewApi.currentPreviewResult(
+      framingB,
+      previewApi.previewRequestKey("dlv_bbbbbbbbbb", "rev_00002", 12),
+    )).toBeNull();
+  });
+
+  it("scopes annotation navigation to the selected short sequence", () => {
+    const project = projectWithShort();
+    const shortAnnotation = panelProps(project).annotations.find(
+      ({ id }) => id === "ann_bbbbbbbbbb",
+    );
+    const previewApi = PreviewPanelModule as unknown as Partial<PreviewPanelTestApi>;
+    expect(shortAnnotation).toBeDefined();
+    expect(typeof previewApi.annotationNavigationRequest).toBe("function");
+    if (
+      shortAnnotation === undefined ||
+      previewApi.annotationNavigationRequest === undefined
+    ) return;
+
+    expect(previewApi.annotationNavigationRequest(shortAnnotation)).toEqual({
+      target: {
+        kind: "annotation",
+        annotationId: "ann_bbbbbbbbbb",
+      },
+      scope: "seq_bbbbbbbbbb",
+    });
   });
 });

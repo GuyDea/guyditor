@@ -130,6 +130,46 @@ export function previewOutputSize(
   };
 }
 
+export interface PreviewRequestKey {
+  deliverableId: string;
+  revision: string;
+  frame: number;
+}
+
+export interface KeyedPreviewResult<T> {
+  key: PreviewRequestKey;
+  value: T;
+}
+
+export function previewRequestKey(
+  deliverableId: string,
+  revision: string,
+  frame: number,
+): PreviewRequestKey {
+  return { deliverableId, revision, frame };
+}
+
+export function currentPreviewResult<T>(
+  result: KeyedPreviewResult<T> | null,
+  currentKey: PreviewRequestKey | null,
+): T | null {
+  if (result === null || currentKey === null) return null;
+  return result.key.deliverableId === currentKey.deliverableId &&
+    result.key.revision === currentKey.revision &&
+    result.key.frame === currentKey.frame
+    ? result.value
+    : null;
+}
+
+export function annotationNavigationRequest(
+  annotation: Annotation,
+): Record<string, unknown> {
+  return {
+    target: { kind: "annotation", annotationId: annotation.id },
+    scope: annotation.canvasRef.sequenceId,
+  };
+}
+
 function sourceFrame(
   clip: Clip,
   timelineFrame: number,
@@ -193,13 +233,14 @@ export function PreviewPanel({
   const loudnessFrameSinkRef = useRef<(frame: LoudnessFrame) => void>(() => undefined);
   const captionCanvasRef = useRef<HTMLCanvasElement>(null);
   const [proxy, setProxy] = useState<ProxyResolution | null>(null);
-  const [captionFrame, setCaptionFrame] = useState<CaptionFrameSpec | null>(null);
-  const [framingResult, setFramingResult] = useState<{
-    deliverableId: string;
-    frame: FramingPreviewSpec;
-  } | null>(null);
-  const [cropDraft, setCropDraft] = useState<FramingRect | null>(null);
-  const [graphicsFrame, setGraphicsFrame] = useState<string | null>(null);
+  const [captionResult, setCaptionResult] =
+    useState<KeyedPreviewResult<CaptionFrameSpec> | null>(null);
+  const [framingResult, setFramingResult] =
+    useState<KeyedPreviewResult<FramingPreviewSpec | null> | null>(null);
+  const [cropDraftResult, setCropDraftResult] =
+    useState<KeyedPreviewResult<FramingRect> | null>(null);
+  const [graphicsResult, setGraphicsResult] =
+    useState<KeyedPreviewResult<string> | null>(null);
   const [captionFontReady, setCaptionFontReady] = useState(false);
   const [tool, setTool] = useState<AnnotationShape>("pin");
   const [body, setBody] = useState("");
@@ -227,6 +268,16 @@ export function PreviewPanel({
   const deliverable = snapshot === null
     ? undefined
     : resolveActiveDeliverable(snapshot.master, selectedDeliverableId);
+  const requestKey = snapshot === null || deliverable === undefined
+    ? null
+    : previewRequestKey(deliverable.id, snapshot.revision, playhead.frames);
+  const requestIdentity = requestKey === null
+    ? "no-preview-request"
+    : `${requestKey.deliverableId}:${requestKey.revision}:${String(requestKey.frame)}`;
+  const captionFrame = currentPreviewResult(captionResult, requestKey);
+  const framingFrame = currentPreviewResult(framingResult, requestKey);
+  const cropDraft = currentPreviewResult(cropDraftResult, requestKey);
+  const graphicsFrame = currentPreviewResult(graphicsResult, requestKey);
   const fps = snapshot?.master.settings.timeline.fps ?? playhead.fps;
   const duration = totalFrames(snapshot, deliverable);
   const active = snapshot === null || deliverable === undefined
@@ -236,10 +287,6 @@ export function PreviewPanel({
     ? undefined
     : sourceFrame(active.clip, playhead.frames, active.timelineStart, fps);
   const vertical = deliverable?.kind === "short";
-  const framingFrame = framingResult !== null &&
-    framingResult.deliverableId === deliverable?.id
-    ? framingResult.frame
-    : null;
   const { width: outputWidth, height: outputHeight } = previewOutputSize(
     snapshot?.master,
     deliverable,
@@ -372,39 +419,45 @@ export function PreviewPanel({
 
   useEffect(() => {
     let current = true;
-    if (snapshot === null || deliverable === undefined) {
-      setCaptionFrame(null);
+    if (requestKey === null) {
+      setCaptionResult(null);
       return () => { current = false; };
     }
-    void window.guyditor.call<CaptionFrameSpec>("RenderService", "captionFrame", {
-      deliverableId: deliverable.id,
-      revision: snapshot.revision,
-      frame: playhead.frames,
-    }).then((frame) => {
-      if (current) setCaptionFrame(frame);
+    const key = requestKey;
+    void window.guyditor.call<CaptionFrameSpec>(
+      "RenderService",
+      "captionFrame",
+      key,
+    ).then((frame) => {
+      if (current) setCaptionResult({ key, value: frame });
     }).catch((error: unknown) => {
       if (current) {
-        setCaptionFrame(null);
+        setCaptionResult(null);
         setNotice(errorMessage(error));
       }
     });
     return () => { current = false; };
-  }, [deliverable?.id, playhead.frames, setNotice, snapshot?.revision]);
+  }, [
+    requestKey?.deliverableId,
+    requestKey?.frame,
+    requestKey?.revision,
+    setNotice,
+  ]);
 
   useEffect(() => {
     let current = true;
-    if (snapshot === null || deliverable === undefined || !vertical) {
+    if (requestKey === null || !vertical) {
       setFramingResult(null);
       return () => { current = false; };
     }
-    const deliverableId = deliverable.id;
-    void window.guyditor.call<FramingPreviewSpec | null>("RenderService", "framingFrame", {
-      deliverableId,
-      revision: snapshot.revision,
-      frame: playhead.frames,
-    }).then((frame) => {
+    const key = requestKey;
+    void window.guyditor.call<FramingPreviewSpec | null>(
+      "RenderService",
+      "framingFrame",
+      key,
+    ).then((frame) => {
       if (current) {
-        setFramingResult(frame === null ? null : { deliverableId, frame });
+        setFramingResult({ key, value: frame });
       }
     }).catch((error: unknown) => {
       if (current) {
@@ -413,32 +466,54 @@ export function PreviewPanel({
       }
     });
     return () => { current = false; };
-  }, [deliverable?.id, playhead.frames, setNotice, snapshot?.revision, vertical]);
+  }, [
+    requestKey?.deliverableId,
+    requestKey?.frame,
+    requestKey?.revision,
+    setNotice,
+    vertical,
+  ]);
 
   useEffect(() => {
-    setCropDraft(framingFrame?.crop === undefined ? null : { ...framingFrame.crop });
-  }, [framingFrame?.crop, framingFrame?.decisionId]);
+    if (requestKey === null || framingFrame?.crop === undefined) {
+      setCropDraftResult(null);
+      return;
+    }
+    setCropDraftResult({ key: requestKey, value: { ...framingFrame.crop } });
+  }, [
+    framingFrame?.crop,
+    framingFrame?.decisionId,
+    requestKey?.deliverableId,
+    requestKey?.frame,
+    requestKey?.revision,
+  ]);
 
   useEffect(() => {
     let current = true;
-    if (snapshot === null || deliverable === undefined) {
-      setGraphicsFrame(null);
+    if (requestKey === null) {
+      setGraphicsResult(null);
       return () => { current = false; };
     }
-    void window.guyditor.call<{ dataUrl: string }>("RenderService", "graphicsFrame", {
-      deliverableId: deliverable.id,
-      revision: snapshot.revision,
-      frame: playhead.frames,
-    }).then(({ dataUrl }) => {
-      if (current) setGraphicsFrame(dataUrl);
+    const key = requestKey;
+    void window.guyditor.call<{ dataUrl: string }>(
+      "RenderService",
+      "graphicsFrame",
+      key,
+    ).then(({ dataUrl }) => {
+      if (current) setGraphicsResult({ key, value: dataUrl });
     }).catch((error: unknown) => {
       if (current) {
-        setGraphicsFrame(null);
+        setGraphicsResult(null);
         setNotice(errorMessage(error));
       }
     });
     return () => { current = false; };
-  }, [deliverable?.id, playhead.frames, setNotice, snapshot?.revision]);
+  }, [
+    requestKey?.deliverableId,
+    requestKey?.frame,
+    requestKey?.revision,
+    setNotice,
+  ]);
 
   useEffect(() => {
     const canvas = captionCanvasRef.current;
@@ -753,6 +828,7 @@ export function PreviewPanel({
           />
         )}
         <canvas
+          key={requestIdentity}
           ref={captionCanvasRef}
           width={outputWidth}
           height={outputHeight}
@@ -812,10 +888,17 @@ export function PreviewPanel({
                     step="0.001"
                     value={cropDraft[key]}
                     aria-label={`Crop ${key}`}
-                    onChange={(event) => setCropDraft(clampCrop({
-                      ...cropDraft,
-                      [key]: event.target.valueAsNumber || 0,
-                    }))}
+                    onChange={(event) => {
+                      if (requestKey !== null) {
+                        setCropDraftResult({
+                          key: requestKey,
+                          value: clampCrop({
+                            ...cropDraft,
+                            [key]: event.target.valueAsNumber || 0,
+                          }),
+                        });
+                      }
+                    }}
                   />
                 </label>
               ))}
@@ -921,9 +1004,12 @@ export function PreviewPanel({
               data-testid={`annotation-seek-${annotation.id}`}
               onClick={() => {
                 selectAnnotation(annotation.id);
-                void window.guyditor.call<{ frame: FrameTime }>("OperationEngine", "resolveNavigation", {
-                  target: { kind: "annotation", annotationId: annotation.id },
-                }).then(({ frame }) => setPlayhead(frame)).catch((error: unknown) => setNotice(errorMessage(error)));
+                void window.guyditor.call<{ frame: FrameTime }>(
+                  "OperationEngine",
+                  "resolveNavigation",
+                  annotationNavigationRequest(annotation),
+                ).then(({ frame }) => setPlayhead(frame))
+                  .catch((error: unknown) => setNotice(errorMessage(error)));
               }}
             >
               <strong>{annotation.body || annotation.shape}</strong>
