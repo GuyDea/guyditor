@@ -10,7 +10,11 @@ import {
   activateDeliverable,
   resolveActiveDeliverable,
 } from "../active-deliverable.js";
-import { errorMessage, executeDirect } from "../ipc.js";
+import {
+  errorMessage,
+  executeDirect,
+  setActiveDeliverable,
+} from "../ipc.js";
 import { useJobsStore } from "../state/jobs.js";
 import { useSelectionStore } from "../state/view-state.js";
 import { Panel } from "./Panel.js";
@@ -245,6 +249,10 @@ export function StatusStripPanel({
                         snapshot.master,
                         deliverable.id,
                         setNotice,
+                        (deliverableId) => setActiveDeliverable(
+                          snapshot.projectPath,
+                          deliverableId,
+                        ),
                       )}
                 >
                   <span><strong>{deliverable.name}</strong><small>{deliverable.profile}</small></span>

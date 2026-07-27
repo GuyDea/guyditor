@@ -14,6 +14,21 @@ describe("workspace IPC surfaces", () => {
     expect(executeSchema?.properties?.divergence?.enum).toEqual(DIVERGENCE_CLASSES);
   });
 
+  it("requires workspace reads and writes to identify the open project", () => {
+    const projectSurface = IPC_SURFACES.find(({ service }) =>
+      service === "ProjectStore");
+    const getSchema = projectSurface?.methods["getWorkspaceState"]
+      ?.paramsSchema as { required?: unknown } | undefined;
+    const setSchema = projectSurface?.methods["setActiveDeliverable"]
+      ?.paramsSchema as { required?: unknown } | undefined;
+
+    expect(getSchema?.required).toEqual(["projectPath"]);
+    expect(setSchema?.required).toEqual([
+      "projectPath",
+      "deliverableId",
+    ]);
+  });
+
   it("exposes every M1 workspace read and action with an async budget", () => {
     const methods = new Map(IPC_SURFACES.map(({ service, methods: entries }) => [
       service,

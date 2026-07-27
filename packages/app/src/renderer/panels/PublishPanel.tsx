@@ -6,7 +6,7 @@ import {
   activateDeliverable,
   resolveActiveDeliverable,
 } from "../active-deliverable.js";
-import { errorMessage } from "../ipc.js";
+import { errorMessage, setActiveDeliverable } from "../ipc.js";
 import type { ContextRequest } from "../state/async-context.js";
 import { useSelectionStore } from "../state/view-state.js";
 import { Panel } from "./Panel.js";
@@ -234,6 +234,10 @@ export function PublishPanel({ snapshot, refreshProject, refreshExportReport, se
                 snapshot.master,
                 event.target.value,
                 setNotice,
+                (deliverableId) => setActiveDeliverable(
+                  snapshot.projectPath,
+                  deliverableId,
+                ),
               );
             }
           }}>

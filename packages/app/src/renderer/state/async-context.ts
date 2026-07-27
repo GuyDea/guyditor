@@ -1,4 +1,5 @@
 export interface ContextRequestGate {
+  contextKey: string | null;
   generation: number;
 }
 
@@ -15,7 +16,7 @@ export function deliverableContextKey(
 }
 
 export function createContextRequestGate(): ContextRequestGate {
-  return { generation: 0 };
+  return { contextKey: null, generation: 0 };
 }
 
 export function beginContextRequest(
@@ -23,11 +24,13 @@ export function beginContextRequest(
   contextKey: string,
 ): ContextRequest {
   gate.generation += 1;
+  gate.contextKey = contextKey;
   return { contextKey, generation: gate.generation };
 }
 
 export function invalidateContextRequests(gate: ContextRequestGate): void {
   gate.generation += 1;
+  gate.contextKey = null;
 }
 
 export function isContextRequestCurrent(
@@ -44,4 +47,15 @@ export function isContextRequestLatest(
   request: ContextRequest,
 ): boolean {
   return request.generation === gate.generation;
+}
+
+export function claimContextResponse(
+  gate: ContextRequestGate,
+  request: ContextRequest,
+  contextKey: string,
+): boolean {
+  if (isContextRequestCurrent(gate, request, contextKey)) return true;
+  if (gate.contextKey === contextKey) return false;
+  beginContextRequest(gate, contextKey);
+  return true;
 }

@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import type {
   EvidenceRef,
@@ -6,10 +6,11 @@ import type {
   SemanticDiffEntry,
 } from "../../../../core/src/index.js";
 import { activateDeliverable } from "../active-deliverable.js";
-import { errorMessage } from "../ipc.js";
+import { errorMessage, setActiveDeliverable } from "../ipc.js";
 import {
   beginContextRequest,
   createContextRequestGate,
+  invalidateContextRequests,
   isContextRequestCurrent,
   isContextRequestLatest,
 } from "../state/async-context.js";
@@ -18,6 +19,8 @@ import {
   usePreviewStore,
   useSelectionStore,
 } from "../state/view-state.js";
+import { useProjectMirror } from "../state/project-mirror.js";
+import { projectDeliverableContextKey } from "../state/project-context.js";
 import { Panel } from "./Panel.js";
 import { RestylePlanReview } from "./RestylePlan.js";
 import type { WorkspacePanelProps } from "./types.js";
@@ -57,15 +60,20 @@ export function ProposalPanel({
   const selectAnnotation = useSelectionStore((state) => state.selectAnnotation);
   const evidenceGate = useRef(createContextRequestGate());
 
+  useEffect(() => () => {
+    invalidateContextRequests(evidenceGate.current);
+  }, []);
+
   async function jumpToEvidence(evidence: EvidenceRef): Promise<void> {
+    const requestSnapshot = useProjectMirror.getState().snapshot;
     const selectedBefore = useSelectionStore.getState().selectedDeliverableId;
     const targetDeliverableId = evidence.deliverableId ?? selectedBefore;
     const request = beginContextRequest(
       evidenceGate.current,
-      targetDeliverableId ?? "no-deliverable",
+      projectDeliverableContextKey(requestSnapshot, targetDeliverableId),
     );
     if (evidence.deliverableId !== undefined) {
-      if (snapshot === null) {
+      if (requestSnapshot === null) {
         if (isContextRequestLatest(evidenceGate.current, request)) {
           setNotice(
             `Evidence target is unavailable: open a project containing ${evidence.deliverableId}.`,
@@ -75,21 +83,38 @@ export function ProposalPanel({
       }
       try {
         await activateDeliverable(
-          snapshot.master,
+          requestSnapshot.master,
           evidence.deliverableId,
           setNotice,
+          (deliverableId) => setActiveDeliverable(
+            requestSnapshot.projectPath,
+            deliverableId,
+          ),
         );
       } catch (error: unknown) {
-        if (isContextRequestLatest(evidenceGate.current, request)) {
+        if (isContextRequestCurrent(
+          evidenceGate.current,
+          request,
+          projectDeliverableContextKey(
+            useProjectMirror.getState().snapshot,
+            targetDeliverableId,
+          ),
+        )) {
           setNotice(`Evidence target is unavailable: ${errorMessage(error)}`);
         }
         return;
       }
+      const currentSnapshot = useProjectMirror.getState().snapshot;
+      const currentDeliverableId =
+        useSelectionStore.getState().selectedDeliverableId;
       if (!isContextRequestCurrent(
         evidenceGate.current,
         request,
-        useSelectionStore.getState().selectedDeliverableId,
-      )) return;
+        projectDeliverableContextKey(
+          currentSnapshot,
+          currentDeliverableId,
+        ),
+      ) || currentDeliverableId !== targetDeliverableId) return;
     } else if (!isContextRequestLatest(evidenceGate.current, request)) {
       return;
     }

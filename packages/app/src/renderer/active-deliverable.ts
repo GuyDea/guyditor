@@ -3,7 +3,7 @@ import type {
   GuyditorProject,
 } from "../../../core/src/index.js";
 
-import { errorMessage, setActiveDeliverable } from "./ipc.js";
+import { errorMessage } from "./ipc.js";
 import {
   usePreviewStore,
   useSelectionStore,
@@ -74,7 +74,7 @@ export async function activateDeliverable(
   project: GuyditorProject,
   deliverableId: string,
   setNotice: (message: string) => void,
-  persist: PersistSelection = setActiveDeliverable,
+  persist: PersistSelection,
 ): Promise<void> {
   const deliverable = requireDeliverable(project, deliverableId);
   const current = useSelectionStore.getState().selectedDeliverableId;

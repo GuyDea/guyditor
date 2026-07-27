@@ -1204,12 +1204,15 @@ export class WindowServiceHost {
           pickTemplatePackage: async () => await this.#chooseTemplate?.() ?? null,
           open: ({ path }: { path: string }) => this.openProject(path),
           getSnapshot: () => this.snapshot(),
-          getWorkspaceState: () => {
-            const current = this.#requireProject();
+          getWorkspaceState: ({ projectPath }: { projectPath: string }) => {
+            const current = this.#requireProjectContext(projectPath);
             return current.workspace.load(current.store.currentProject);
           },
-          setActiveDeliverable: ({ deliverableId }: { deliverableId: string }) => {
-            const current = this.#requireProject();
+          setActiveDeliverable: ({ projectPath, deliverableId }: {
+            projectPath: string;
+            deliverableId: string;
+          }) => {
+            const current = this.#requireProjectContext(projectPath);
             return current.workspace.setActiveDeliverable(
               current.store.currentProject,
               deliverableId,
@@ -2459,6 +2462,21 @@ export class WindowServiceHost {
       };
     }
     return this.#project;
+  }
+
+  #requireProjectContext(projectPath: string): ProjectServices {
+    const project = this.#requireProject();
+    if (resolve(project.store.root) !== resolve(projectPath)) {
+      throw {
+        code: "E_PROJECT_CONTEXT_STALE",
+        message:
+          `The requested project context ${projectPath} is no longer open.`,
+        affected: [projectPath],
+        acceptedStateChanged: false,
+        retry: "safe",
+      };
+    }
+    return project;
   }
 
   #closeProject(): void {

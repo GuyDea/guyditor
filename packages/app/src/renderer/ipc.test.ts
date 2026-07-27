@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   executeDirect,
+  getWorkspaceState,
   redoLast,
+  setActiveDeliverable,
   undoLast,
 } from "./ipc.js";
 import { useUndoStore } from "./state/undo.js";
@@ -119,5 +121,44 @@ describe("renderer operation divergence", () => {
 
     expect(call.mock.calls[0]?.[2]).not.toHaveProperty("divergence");
     expect(useUndoStore.getState().undo[0]).not.toHaveProperty("divergence");
+  });
+});
+
+describe("project-scoped workspace IPC", () => {
+  it("binds workspace reads and autosaves to the expected project", async () => {
+    const call = vi.fn()
+      .mockResolvedValueOnce({
+        state: {
+          format: "guyditor.workspace/v1",
+          activeDeliverableId: "dlv_aaaaaaaaaa",
+        },
+      })
+      .mockResolvedValueOnce({
+        format: "guyditor.workspace/v1",
+        activeDeliverableId: "dlv_bbbbbbbbbb",
+      });
+    vi.stubGlobal("window", { guyditor: { call } });
+
+    await getWorkspaceState("/projects/alpha");
+    await setActiveDeliverable(
+      "/projects/alpha",
+      "dlv_bbbbbbbbbb",
+    );
+
+    expect(call.mock.calls).toEqual([
+      [
+        "ProjectStore",
+        "getWorkspaceState",
+        { projectPath: "/projects/alpha" },
+      ],
+      [
+        "ProjectStore",
+        "setActiveDeliverable",
+        {
+          projectPath: "/projects/alpha",
+          deliverableId: "dlv_bbbbbbbbbb",
+        },
+      ],
+    ]);
   });
 });

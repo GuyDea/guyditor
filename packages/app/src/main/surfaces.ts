@@ -42,6 +42,21 @@ const deliverableIdParams: JsonSchema = {
   properties: { deliverableId: { type: "string", pattern: "^dlv_[a-z2-7]{10}$" } },
   additionalProperties: false,
 };
+const projectPathParams: JsonSchema = {
+  type: "object",
+  required: ["projectPath"],
+  properties: { projectPath: { type: "string", minLength: 1 } },
+  additionalProperties: false,
+};
+const projectDeliverableParams: JsonSchema = {
+  type: "object",
+  required: ["projectPath", "deliverableId"],
+  properties: {
+    projectPath: { type: "string", minLength: 1 },
+    deliverableId: { type: "string", pattern: "^dlv_[a-z2-7]{10}$" },
+  },
+  additionalProperties: false,
+};
 const candidateIdParams: JsonSchema = {
   type: "object",
   required: ["candidateId"],
@@ -119,12 +134,12 @@ export const IPC_SURFACES: readonly IpcSurface[] = Object.freeze([
       },
       getSnapshot: { paramsSchema: emptyParams, resultSchema: anyResult, budgetMs: 20 },
       getWorkspaceState: {
-        paramsSchema: emptyParams,
+        paramsSchema: projectPathParams,
         resultSchema: anyResult,
         budgetMs: 20,
       },
       setActiveDeliverable: {
-        paramsSchema: deliverableIdParams,
+        paramsSchema: projectDeliverableParams,
         resultSchema: anyResult,
         budgetMs: 20,
       },

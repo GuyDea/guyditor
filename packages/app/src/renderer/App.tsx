@@ -66,10 +66,18 @@ import type { PanelId } from "./state/view-state.js";
 import type { DockPanelId } from "./state/layout-state.js";
 import {
   beginContextRequest,
+  claimContextResponse,
   createContextRequestGate,
   invalidateContextRequests,
   isContextRequestCurrent,
+  isContextRequestLatest,
 } from "./state/async-context.js";
+import type { ContextRequest } from "./state/async-context.js";
+import {
+  deliverableNavigationContextKey,
+  nextCycledId,
+  projectSnapshotContextKey,
+} from "./state/project-context.js";
 import {
   createRestyleContext,
   keyRestylePlan,
@@ -94,6 +102,11 @@ function isTypingTarget(target: EventTarget | null): boolean {
 }
 
 const OVERVIEW_CONFIRMATION_POLL_MS = 2_000;
+
+interface HydrationResult {
+  applied: boolean;
+  warning?: string;
+}
 
 function activeRestyleContext(
   snapshot: ProjectSnapshot | null,
@@ -136,9 +149,15 @@ export function App(): React.JSX.Element {
     useState<KeyedRestylePlan | null>(null);
   const [exportReport, setExportReport] = useState<ExportReport | null>(null);
   const [notice, setNotice] = useState("Open a project directory to connect the edit journal.");
-  const overviewGeneration = useRef(0);
-  const annotationGeneration = useRef(0);
+  const projectLoadGate = useRef(createContextRequestGate());
+  const jobsGate = useRef(createContextRequestGate());
+  const overviewGate = useRef(createContextRequestGate());
+  const annotationGate = useRef(createContextRequestGate());
+  const proposalGate = useRef(createContextRequestGate());
+  const skillGate = useRef(createContextRequestGate());
+  const exportReportGate = useRef(createContextRequestGate());
   const restylePlanGate = useRef(createContextRequestGate());
+  const wordNavigationGate = useRef(createContextRequestGate());
   const replaceJobs = useJobsStore((state) => state.replace);
   const replaceOverview = useJobsStore((state) => state.replaceOverview);
   const applyJobEvent = useJobsStore((state) => state.applyEvent);
@@ -162,6 +181,18 @@ export function App(): React.JSX.Element {
     invalidateContextRequests(restylePlanGate.current);
   }
   currentRestyleContextKey.current = restyleContext?.key ?? null;
+
+  const beginProjectLoad = useCallback((): ContextRequest => {
+    invalidateContextRequests(jobsGate.current);
+    invalidateContextRequests(overviewGate.current);
+    invalidateContextRequests(annotationGate.current);
+    invalidateContextRequests(proposalGate.current);
+    invalidateContextRequests(skillGate.current);
+    invalidateContextRequests(exportReportGate.current);
+    invalidateContextRequests(restylePlanGate.current);
+    invalidateContextRequests(wordNavigationGate.current);
+    return beginContextRequest(projectLoadGate.current, "project-load");
+  }, []);
 
   const applyChecklistSignal = useCallback((signal: OnboardingSignal): void => {
     setOnboarding((current) => {
@@ -200,51 +231,141 @@ export function App(): React.JSX.Element {
   }, []);
 
   const refreshAnnotations = useCallback(async (): Promise<void> => {
-    const generation = ++annotationGeneration.current;
+    const contextKey = projectSnapshotContextKey(
+      useProjectMirror.getState().snapshot,
+    );
+    if (contextKey === null) {
+      invalidateContextRequests(annotationGate.current);
+      setAnnotations([]);
+      return;
+    }
+    const request = beginContextRequest(annotationGate.current, contextKey);
     try {
       const next = await window.guyditor.call<Annotation[]>("AnnotationService", "list", {});
-      if (generation === annotationGeneration.current) setAnnotations(next);
+      if (isContextRequestCurrent(
+        annotationGate.current,
+        request,
+        projectSnapshotContextKey(useProjectMirror.getState().snapshot),
+      )) {
+        setAnnotations(next);
+      }
     } catch {
-      if (generation === annotationGeneration.current) setAnnotations([]);
+      if (isContextRequestCurrent(
+        annotationGate.current,
+        request,
+        projectSnapshotContextKey(useProjectMirror.getState().snapshot),
+      )) {
+        setAnnotations([]);
+      }
     }
   }, []);
 
   const refreshProposals = useCallback(async (): Promise<void> => {
-    try {
-      setProposals(await window.guyditor.call<Proposal[]>("ProjectStore", "listProposals", {}));
-    } catch {
+    const contextKey = projectSnapshotContextKey(
+      useProjectMirror.getState().snapshot,
+    );
+    if (contextKey === null) {
+      invalidateContextRequests(proposalGate.current);
       setProposals([]);
+      return;
+    }
+    const request = beginContextRequest(proposalGate.current, contextKey);
+    try {
+      const next = await window.guyditor.call<Proposal[]>(
+        "ProjectStore",
+        "listProposals",
+        {},
+      );
+      if (isContextRequestCurrent(
+        proposalGate.current,
+        request,
+        projectSnapshotContextKey(useProjectMirror.getState().snapshot),
+      )) {
+        setProposals(next);
+      }
+    } catch {
+      if (isContextRequestCurrent(
+        proposalGate.current,
+        request,
+        projectSnapshotContextKey(useProjectMirror.getState().snapshot),
+      )) {
+        setProposals([]);
+      }
     }
   }, []);
 
   const refreshSkills = useCallback(async (): Promise<void> => {
+    const contextKey = projectSnapshotContextKey(
+      useProjectMirror.getState().snapshot,
+    );
+    if (contextKey === null) {
+      invalidateContextRequests(skillGate.current);
+      setSkills([]);
+      setPinnedSkills([]);
+      setSkillDrafts([]);
+      return;
+    }
+    const request = beginContextRequest(skillGate.current, contextKey);
     try {
       const [library, pinned, drafts] = await Promise.all([
         window.guyditor.call<SkillManifest[]>("SkillRegistry", "list", { scope: "global" }),
         window.guyditor.call<ResolvedSkill[]>("SkillRegistry", "pinned", {}),
         window.guyditor.call<ResolvedSkill[]>("SkillRegistry", "drafts", {}),
       ]);
-      setSkills(library);
-      setPinnedSkills(pinned);
-      setSkillDrafts(drafts);
+      if (isContextRequestCurrent(
+        skillGate.current,
+        request,
+        projectSnapshotContextKey(useProjectMirror.getState().snapshot),
+      )) {
+        setSkills(library);
+        setPinnedSkills(pinned);
+        setSkillDrafts(drafts);
+      }
     } catch {
-      setSkills([]);
-      setPinnedSkills([]);
-      setSkillDrafts([]);
+      if (isContextRequestCurrent(
+        skillGate.current,
+        request,
+        projectSnapshotContextKey(useProjectMirror.getState().snapshot),
+      )) {
+        setSkills([]);
+        setPinnedSkills([]);
+        setSkillDrafts([]);
+      }
     }
   }, []);
 
   const refreshExportReport = useCallback(async (): Promise<void> => {
+    const contextKey = projectSnapshotContextKey(
+      useProjectMirror.getState().snapshot,
+    );
+    if (contextKey === null) {
+      invalidateContextRequests(exportReportGate.current);
+      setExportReport(null);
+      return;
+    }
+    const request = beginContextRequest(exportReportGate.current, contextKey);
     try {
       const report = await window.guyditor.call<ExportReport | null>(
         "RenderService",
         "exportReport",
         {},
       );
-      setExportReport(report);
-      applyChecklistSignal({ kind: "export.report", exists: report !== null });
+      if (isContextRequestCurrent(
+        exportReportGate.current,
+        request,
+        projectSnapshotContextKey(useProjectMirror.getState().snapshot),
+      )) {
+        setExportReport(report);
+        applyChecklistSignal({ kind: "export.report", exists: report !== null });
+      }
     } catch {
-      setExportReport(null);
+      if (isContextRequestCurrent(
+        exportReportGate.current,
+        request,
+        projectSnapshotContextKey(useProjectMirror.getState().snapshot),
+      )) {
+        setExportReport(null);
+      }
     }
   }, [applyChecklistSignal]);
 
@@ -304,111 +425,356 @@ export function App(): React.JSX.Element {
   }, []);
 
   const refreshOverview = useCallback(async (): Promise<void> => {
-    const generation = ++overviewGeneration.current;
+    const contextKey = projectSnapshotContextKey(
+      useProjectMirror.getState().snapshot,
+    );
+    if (contextKey === null) {
+      invalidateContextRequests(overviewGate.current);
+      return;
+    }
+    const request = beginContextRequest(overviewGate.current, contextKey);
     try {
       const next = await window.guyditor.call<JobOverview>("JobQueue", "overview", {});
-      if (generation === overviewGeneration.current) replaceOverview(next);
+      if (isContextRequestCurrent(
+        overviewGate.current,
+        request,
+        projectSnapshotContextKey(useProjectMirror.getState().snapshot),
+      )) {
+        replaceOverview(next);
+      }
     } catch {
       // Keep the most recent re-queryable snapshot during project transitions.
     }
   }, [replaceOverview]);
 
   const hydrate = useCallback(async (
-    next: ProjectSnapshot,
-  ): Promise<string | undefined> => {
-    const generation = ++overviewGeneration.current;
-    const previous = useProjectMirror.getState().snapshot;
-    const projectChanged = previous?.projectPath !== next.projectPath;
-    let workspaceWarning: string | undefined;
+    initial: ProjectSnapshot,
+    loadRequest: ContextRequest,
+  ): Promise<HydrationResult> => {
+    let next = initial;
+    let retainedWarning: string | undefined;
 
-    if (projectChanged) {
-      let loaded: LoadedProjectWorkspaceState;
-      try {
-        loaded = await getWorkspaceState();
-      } catch (error: unknown) {
-        loaded = {
-          state: {
-            format: "guyditor.workspace/v1",
-            activeDeliverableId: next.master.settings.primaryDeliverable,
-          },
-          warning:
-            `Could not load workspace selection; using primary deliverable: ${errorMessage(error)}`,
-        };
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      if (!isContextRequestLatest(projectLoadGate.current, loadRequest)) {
+        return { applied: false };
       }
+
+      const previous = useProjectMirror.getState().snapshot;
+      const projectChanged = previous?.projectPath !== next.projectPath;
+      let requestedDeliverableId =
+        useSelectionStore.getState().selectedDeliverableId;
+
+      if (projectChanged) {
+        let loaded: LoadedProjectWorkspaceState;
+        try {
+          loaded = await getWorkspaceState(next.projectPath);
+        } catch (error: unknown) {
+          loaded = {
+            state: {
+              format: "guyditor.workspace/v1",
+              activeDeliverableId: next.master.settings.primaryDeliverable,
+            },
+            warning:
+              `Could not load workspace selection; using primary deliverable: ${errorMessage(error)}`,
+          };
+        }
+        if (!isContextRequestLatest(projectLoadGate.current, loadRequest)) {
+          return { applied: false };
+        }
+
+        const confirmed = await getSnapshot();
+        if (!isContextRequestLatest(projectLoadGate.current, loadRequest) ||
+            confirmed.projectPath !== next.projectPath) {
+          return { applied: false };
+        }
+        next = confirmed;
+        requestedDeliverableId = loaded.state.activeDeliverableId;
+        retainedWarning = loaded.warning ?? retainedWarning;
+      }
+
       const active = resolveActiveDeliverable(
         next.master,
-        loaded.state.activeDeliverableId,
+        requestedDeliverableId,
       );
-      useWorkspaceStore.getState().setProjectKey(next.projectPath);
-      replaceSnapshot(next);
-      applyDeliverableSelection(next.master, active.id);
-      workspaceWarning = loaded.warning;
-    } else {
-      const currentId = useSelectionStore.getState().selectedDeliverableId;
-      const active = resolveActiveDeliverable(next.master, currentId);
-      replaceSnapshot(next);
-      if (active.id !== currentId) {
-        applyDeliverableSelection(next.master, active.id);
+      if (!isContextRequestLatest(projectLoadGate.current, loadRequest)) {
+        return { applied: false };
+      }
+
+      const contextKey = projectSnapshotContextKey(next);
+      if (contextKey === null) return { applied: false };
+      const planContext = activeRestyleContext(next, active.id);
+      const jobsRequest = beginContextRequest(jobsGate.current, contextKey);
+      const overviewRequest = beginContextRequest(
+        overviewGate.current,
+        contextKey,
+      );
+      const annotationRequest = beginContextRequest(
+        annotationGate.current,
+        contextKey,
+      );
+      const proposalRequest = beginContextRequest(
+        proposalGate.current,
+        contextKey,
+      );
+      const skillRequest = beginContextRequest(skillGate.current, contextKey);
+      const exportRequest = beginContextRequest(
+        exportReportGate.current,
+        contextKey,
+      );
+      const planRequest = planContext === null
+        ? null
+        : beginContextRequest(restylePlanGate.current, planContext.key);
+
+      const [
+        nextTranscripts,
+        nextJobs,
+        nextOverview,
+        nextHistory,
+        nextAnnotations,
+        nextProposals,
+        nextSkills,
+        nextExportReport,
+        nextRestylePlan,
+      ] = await Promise.all([
+        window.guyditor.call<TranscriptSidecar[]>(
+          "ProjectStore",
+          "readTranscript",
+          {},
+        ).catch(() => []),
+        window.guyditor.call<JobStatus[]>("JobQueue", "list", {})
+          .catch(() => []),
+        window.guyditor.call<JobOverview>("JobQueue", "overview", {})
+          .catch(() => null),
+        window.guyditor.call<TransactionRecord[]>(
+          "ProjectStore",
+          "listHistory",
+          {},
+        ).catch(() => []),
+        window.guyditor.call<Annotation[]>(
+          "AnnotationService",
+          "list",
+          {},
+        ).catch(() => []),
+        window.guyditor.call<Proposal[]>(
+          "ProjectStore",
+          "listProposals",
+          {},
+        ).catch(() => []),
+        Promise.all([
+          window.guyditor.call<SkillManifest[]>(
+            "SkillRegistry",
+            "list",
+            { scope: "global" },
+          ),
+          window.guyditor.call<ResolvedSkill[]>(
+            "SkillRegistry",
+            "pinned",
+            {},
+          ),
+          window.guyditor.call<ResolvedSkill[]>(
+            "SkillRegistry",
+            "drafts",
+            {},
+          ),
+        ]).then(([library, pinned, drafts]) => ({ library, pinned, drafts }))
+          .catch(() => ({
+            library: [] as SkillManifest[],
+            pinned: [] as ResolvedSkill[],
+            drafts: [] as ResolvedSkill[],
+          })),
+        window.guyditor.call<ExportReport | null>(
+          "RenderService",
+          "exportReport",
+          {},
+        ).catch(() => null),
+        planContext === null
+          ? Promise.resolve(null)
+          : window.guyditor.call<RestylePlan | null>(
+              "DeliverableService",
+              "restylePlan",
+              { deliverableId: planContext.deliverableId },
+            ).catch(() => null),
+      ]);
+
+      if (!isContextRequestLatest(projectLoadGate.current, loadRequest)) {
+        return { applied: false };
+      }
+      const confirmed = await getSnapshot();
+      if (!isContextRequestLatest(projectLoadGate.current, loadRequest)) {
+        return { applied: false };
+      }
+      if (confirmed.projectPath !== next.projectPath) {
+        return { applied: false };
+      }
+      if (projectSnapshotContextKey(confirmed) !== contextKey) {
+        next = confirmed;
+        continue;
+      }
+
+      if (!projectChanged && active.id !== requestedDeliverableId) {
         try {
-          await setActiveDeliverable(active.id);
+          await setActiveDeliverable(next.projectPath, active.id);
         } catch (error: unknown) {
-          workspaceWarning =
+          retainedWarning =
             `Active deliverable was removed; using ${active.name}, but workspace autosave failed: ${errorMessage(error)}`;
         }
+        if (!isContextRequestLatest(projectLoadGate.current, loadRequest)) {
+          return { applied: false };
+        }
+        const afterAutosave = await getSnapshot();
+        if (!isContextRequestLatest(projectLoadGate.current, loadRequest) ||
+            afterAutosave.projectPath !== next.projectPath) {
+          return { applied: false };
+        }
+        if (projectSnapshotContextKey(afterAutosave) !== contextKey) {
+          next = afterAutosave;
+          continue;
+        }
       }
+
+      if (projectChanged) {
+        useWorkspaceStore.getState().setProjectKey(next.projectPath);
+      }
+      replaceSnapshot(next);
+      if (projectChanged || active.id !== requestedDeliverableId) {
+        applyDeliverableSelection(next.master, active.id);
+      }
+
+      setTranscripts(nextTranscripts);
+      if (claimContextResponse(
+        jobsGate.current,
+        jobsRequest,
+        contextKey,
+      )) {
+        replaceJobs(nextJobs);
+      }
+      applyChecklistSignal({ kind: "project.opened" });
+      applyChecklistSignal({
+        kind: "transcript.registered",
+        count: nextTranscripts.length,
+      });
+      applyChecklistSignal({
+        kind: "project.history",
+        transactions: nextHistory,
+      });
+      if (nextOverview !== null && claimContextResponse(
+        overviewGate.current,
+        overviewRequest,
+        contextKey,
+      )) {
+        replaceOverview(nextOverview);
+      }
+      if (claimContextResponse(
+        annotationGate.current,
+        annotationRequest,
+        contextKey,
+      )) {
+        setAnnotations(nextAnnotations);
+      }
+      if (claimContextResponse(
+        proposalGate.current,
+        proposalRequest,
+        contextKey,
+      )) {
+        setProposals(nextProposals);
+      }
+      if (claimContextResponse(
+        skillGate.current,
+        skillRequest,
+        contextKey,
+      )) {
+        setSkills(nextSkills.library);
+        setPinnedSkills(nextSkills.pinned);
+        setSkillDrafts(nextSkills.drafts);
+      }
+      if (claimContextResponse(
+        exportReportGate.current,
+        exportRequest,
+        contextKey,
+      )) {
+        setExportReport(nextExportReport);
+        applyChecklistSignal({
+          kind: "export.report",
+          exists: nextExportReport !== null,
+        });
+      }
+      if (planContext !== null && planRequest !== null &&
+          activeRestyleContext(
+            useProjectMirror.getState().snapshot,
+            useSelectionStore.getState().selectedDeliverableId,
+          )?.key === planContext.key &&
+          claimContextResponse(
+            restylePlanGate.current,
+            planRequest,
+            planContext.key,
+          )) {
+        if (nextRestylePlan !== null) {
+          const contractError = restylePlanContractError(
+            nextRestylePlan,
+            planContext,
+          );
+          if (contractError !== null) {
+            setRestylePlanState(keyRestylePlan(planContext, null));
+            retainedWarning ??= contractError;
+          } else {
+            setRestylePlanState(keyRestylePlan(
+              planContext,
+              nextRestylePlan,
+            ));
+          }
+        } else {
+          setRestylePlanState(keyRestylePlan(planContext, null));
+        }
+      }
+      return {
+        applied: true,
+        ...(retainedWarning === undefined
+          ? {}
+          : { warning: retainedWarning }),
+      };
     }
-    const [nextTranscripts, nextJobs, nextOverview, nextHistory] = await Promise.all([
-      window.guyditor.call<TranscriptSidecar[]>("ProjectStore", "readTranscript", {})
-        .catch(() => []),
-      window.guyditor.call<JobStatus[]>("JobQueue", "list", {}).catch(() => []),
-      window.guyditor.call<JobOverview>("JobQueue", "overview", {}).catch(() => null),
-      window.guyditor.call<TransactionRecord[]>("ProjectStore", "listHistory", {})
-        .catch(() => []),
-    ]);
-    setTranscripts(nextTranscripts);
-    replaceJobs(nextJobs);
-    applyChecklistSignal({ kind: "project.opened" });
-    applyChecklistSignal({
-      kind: "transcript.registered",
-      count: nextTranscripts.length,
-    });
-    applyChecklistSignal({
-      kind: "project.history",
-      transactions: nextHistory,
-    });
-    if (nextOverview !== null && generation === overviewGeneration.current) {
-      replaceOverview(nextOverview);
-    }
-    await Promise.all([
-      refreshAnnotations(),
-      refreshProposals(),
-      refreshSkills(),
-      refreshExportReport(),
-      refreshRestylePlan(),
-    ]);
-    return workspaceWarning;
-  }, [applyChecklistSignal, refreshAnnotations, refreshExportReport, refreshProposals, refreshRestylePlan, refreshSkills, replaceJobs, replaceOverview, replaceSnapshot]);
+
+    return { applied: false };
+  }, [applyChecklistSignal, replaceJobs, replaceOverview, replaceSnapshot]);
 
   const refreshProject = useCallback(async (
     successNotice?: string,
   ): Promise<void> => {
-    const next = await getSnapshot();
-    const warning = await hydrate(next);
-    if (warning !== undefined) setNotice(warning);
-    else if (successNotice !== undefined) setNotice(successNotice);
-  }, [hydrate]);
+    const request = beginProjectLoad();
+    try {
+      const next = await getSnapshot();
+      if (!isContextRequestLatest(projectLoadGate.current, request)) return;
+      const result = await hydrate(next, request);
+      if (!result.applied) return;
+      if (result.warning !== undefined) setNotice(result.warning);
+      else if (successNotice !== undefined) setNotice(successNotice);
+    } catch (error: unknown) {
+      if (isContextRequestLatest(projectLoadGate.current, request)) {
+        throw error;
+      }
+    }
+  }, [beginProjectLoad, hydrate]);
 
   useEffect(() => {
     let active = true;
+    const request = beginProjectLoad();
     void getSnapshot().then(async (opened) => {
-      if (!active) return;
-      const warning = await hydrate(opened);
-      if (active && warning !== undefined) setNotice(warning);
-    }).catch(() => undefined);
-    void window.guyditor.call<JobStatus[]>("JobQueue", "list", {}).then((initial) => {
-      if (active) replaceJobs(initial);
+      if (!active ||
+          !isContextRequestLatest(projectLoadGate.current, request)) {
+        return;
+      }
+      const result = await hydrate(opened, request);
+      if (active && result.applied && result.warning !== undefined) {
+        setNotice(result.warning);
+      }
     }).catch(() => undefined);
     const offState = window.guyditor.on("job.state", (event) => {
+      const contextKey = projectSnapshotContextKey(
+        useProjectMirror.getState().snapshot,
+      );
+      if (contextKey !== null) {
+        beginContextRequest(jobsGate.current, contextKey);
+      }
       applyJobEvent(event);
       void refreshOverview();
       if (event.job.state === "done" && event.job.kind === "render.export") {
@@ -426,6 +792,12 @@ export function App(): React.JSX.Element {
       }
     });
     const offProgress = window.guyditor.on("job.progress", (event) => {
+      const contextKey = projectSnapshotContextKey(
+        useProjectMirror.getState().snapshot,
+      );
+      if (contextKey !== null) {
+        beginContextRequest(jobsGate.current, contextKey);
+      }
       applyJobEvent(event);
       void refreshOverview();
     });
@@ -453,6 +825,14 @@ export function App(): React.JSX.Element {
     });
     return () => {
       active = false;
+      invalidateContextRequests(projectLoadGate.current);
+      invalidateContextRequests(jobsGate.current);
+      invalidateContextRequests(overviewGate.current);
+      invalidateContextRequests(annotationGate.current);
+      invalidateContextRequests(proposalGate.current);
+      invalidateContextRequests(skillGate.current);
+      invalidateContextRequests(exportReportGate.current);
+      invalidateContextRequests(wordNavigationGate.current);
       offState();
       offProgress();
       offRevision();
@@ -460,7 +840,7 @@ export function App(): React.JSX.Element {
       offAnnotation();
       offWatcher();
     };
-  }, [applyChecklistSignal, applyJobEvent, hydrate, refreshAnnotations, refreshExportReport, refreshOverview, refreshProject, refreshProposals, refreshRestylePlan, replaceJobs]);
+  }, [applyChecklistSignal, applyJobEvent, beginProjectLoad, hydrate, refreshAnnotations, refreshExportReport, refreshOverview, refreshProject, refreshProposals, refreshRestylePlan]);
 
   useEffect(() => {
     if (snapshot === null) return undefined;
@@ -512,23 +892,58 @@ export function App(): React.JSX.Element {
         const selected = useSelectionStore.getState().selectedWordId;
         const index = Math.max(0, words.indexOf(selected ?? words[0] ?? ""));
         const id = words[Math.max(0, Math.min(words.length - 1, index + (event.key === "ArrowLeft" ? -1 : 1)))];
-        if (id !== undefined) {
-          selectWord(id);
-          void window.guyditor.call<{ frame: { frames: number; fps: string } }>(
+        const currentSnapshot = useProjectMirror.getState().snapshot;
+        const activeDeliverable = currentSnapshot === null
+          ? null
+          : resolveActiveDeliverable(
+              currentSnapshot.master,
+              useSelectionStore.getState().selectedDeliverableId,
+            );
+        if (id !== undefined &&
+            currentSnapshot !== null &&
+            activeDeliverable !== null) {
+          const contextKey = deliverableNavigationContextKey(
+            currentSnapshot,
+            activeDeliverable.id,
+            activeDeliverable.sequenceId,
+            selected,
+          );
+          const request = beginContextRequest(
+            wordNavigationGate.current,
+            contextKey,
+          );
+          void window.guyditor.call<{
+            frame: { frames: number; fps: string };
+          }>(
             "OperationEngine",
             "resolveNavigation",
             {
               target: { kind: "word", wordId: id },
-              ...(snapshot === null
-                ? {}
-                : {
-                    scope: resolveActiveDeliverable(
-                      snapshot.master,
-                      selectedDeliverableId,
-                    ).sequenceId,
-                  }),
+              scope: activeDeliverable.sequenceId,
             },
-          ).then(({ frame }) => setPlayhead(frame)).catch(() => undefined);
+          ).then(({ frame }) => {
+            const latestSnapshot = useProjectMirror.getState().snapshot;
+            if (latestSnapshot === null) return;
+            const latestDeliverable = resolveActiveDeliverable(
+              latestSnapshot.master,
+              useSelectionStore.getState().selectedDeliverableId,
+            );
+            const latestContextKey = deliverableNavigationContextKey(
+              latestSnapshot,
+              latestDeliverable.id,
+              latestDeliverable.sequenceId,
+              useSelectionStore.getState().selectedWordId,
+            );
+            if (!isContextRequestCurrent(
+              wordNavigationGate.current,
+              request,
+              latestContextKey,
+            )) {
+              return;
+            }
+            selectWord(id);
+            setPlayhead(frame);
+          }).catch(() => undefined);
         }
       } else if (event.key.toLowerCase() === "a") {
         const activeDeliverable = snapshot === null
@@ -541,18 +956,12 @@ export function App(): React.JSX.Element {
         if (activeAnnotations.length === 0) return;
         event.preventDefault();
         const selected = useSelectionStore.getState().selectedAnnotationId;
-        const index = Math.max(
-          0,
-          activeAnnotations.findIndex(({ id }) => id === selected),
+        const nextId = nextCycledId(
+          activeAnnotations.map(({ id }) => id),
+          selected,
+          event.shiftKey ? -1 : 1,
         );
-        const next = activeAnnotations[
-          (
-            index +
-            (event.shiftKey ? -1 : 1) +
-            activeAnnotations.length
-          ) % activeAnnotations.length
-        ];
-        if (next !== undefined) selectAnnotation(next.id);
+        if (nextId !== undefined) selectAnnotation(nextId);
       } else if (/^[1-9]$/u.test(event.key) &&
         !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
         const id = (["media", "preview", "transcript", "inspector", "agent", "timeline", "status", "graphics", "publish"] as PanelId[])[Number(event.key) - 1];
@@ -568,6 +977,7 @@ export function App(): React.JSX.Element {
   }, [annotations, playhead, playing, refreshProject, selectAnnotation, selectedDeliverableId, selectWord, setPlayhead, setPlaying, snapshot, transcripts]);
 
   async function openProject(): Promise<boolean> {
+    let request = beginProjectLoad();
     setNotice("Waiting for a project directory…");
     try {
       const opened = await window.guyditor.call<ProjectSnapshot | null>(
@@ -576,20 +986,27 @@ export function App(): React.JSX.Element {
         {},
       );
       if (opened === null) {
-        setNotice("Project open cancelled.");
+        if (isContextRequestLatest(projectLoadGate.current, request)) {
+          setNotice("Project open cancelled.");
+        }
         return false;
       }
+      request = beginProjectLoad();
       useUndoStore.getState().clear();
-      const warning = await hydrate(opened);
-      setNotice(warning ?? `Opened ${opened.projectPath}`);
-      return true;
+      const result = await hydrate(opened, request);
+      if (!result.applied) return false;
+      setNotice(result.warning ?? `Opened ${opened.projectPath}`);
+      return result.applied;
     } catch (error: unknown) {
-      setNotice(errorMessage(error));
+      if (isContextRequestLatest(projectLoadGate.current, request)) {
+        setNotice(errorMessage(error));
+      }
       return false;
     }
   }
 
   async function createProject(): Promise<boolean> {
+    let request = beginProjectLoad();
     setNotice("Choose an empty directory for the new project…");
     try {
       const created = await window.guyditor.call<ProjectSnapshot | null>(
@@ -598,15 +1015,21 @@ export function App(): React.JSX.Element {
         {},
       );
       if (created === null) {
-        setNotice("Project creation cancelled.");
+        if (isContextRequestLatest(projectLoadGate.current, request)) {
+          setNotice("Project creation cancelled.");
+        }
         return false;
       }
+      request = beginProjectLoad();
       useUndoStore.getState().clear();
-      const warning = await hydrate(created);
-      setNotice(warning ?? `Created ${created.projectPath}`);
-      return true;
+      const result = await hydrate(created, request);
+      if (!result.applied) return false;
+      setNotice(result.warning ?? `Created ${created.projectPath}`);
+      return result.applied;
     } catch (error: unknown) {
-      setNotice(errorMessage(error));
+      if (isContextRequestLatest(projectLoadGate.current, request)) {
+        setNotice(errorMessage(error));
+      }
       return false;
     }
   }

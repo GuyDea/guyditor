@@ -919,13 +919,16 @@ describe("AppServiceHost", () => {
       }
 
       await expect(Reflect.apply(setActive, projectService, [{
+        projectPath: root,
         deliverableId: "dlv_bbbbbbbbbb",
       }])).resolves.toEqual({
         format: "guyditor.workspace/v1",
         activeDeliverableId: "dlv_bbbbbbbbbb",
       });
       expect(events.filter(({ kind }) => kind === "project.revision")).toHaveLength(0);
-      await expect(Reflect.apply(getWorkspace, projectService, []))
+      await expect(Reflect.apply(getWorkspace, projectService, [{
+        projectPath: root,
+      }]))
         .resolves.toEqual({
           state: {
             format: "guyditor.workspace/v1",
@@ -933,6 +936,7 @@ describe("AppServiceHost", () => {
           },
         });
       await expect(Reflect.apply(setActive, projectService, [{
+        projectPath: root,
         deliverableId: "dlv_cccccccccc",
       }])).rejects.toMatchObject({
         code: "E_WORKSPACE_DELIVERABLE_NOT_FOUND",
@@ -1029,13 +1033,38 @@ describe("AppServiceHost", () => {
       await expect(access(join(rootB, "workspace.guyditor.yaml")))
         .rejects.toMatchObject({ code: "ENOENT" });
 
+      await expect(Promise.resolve().then(() =>
+        Reflect.apply(setActive, projectService, [{
+          projectPath: rootA,
+          deliverableId: "dlv_bbbbbbbbbb",
+        }]),
+      )).rejects.toMatchObject({
+        code: "E_PROJECT_CONTEXT_STALE",
+        acceptedStateChanged: false,
+        retry: "safe",
+      });
+      await expect(Promise.resolve().then(() =>
+        Reflect.apply(getWorkspace, projectService, [{
+          projectPath: rootA,
+        }]),
+      )).rejects.toMatchObject({
+        code: "E_PROJECT_CONTEXT_STALE",
+        acceptedStateChanged: false,
+        retry: "safe",
+      });
+      await expect(access(join(rootB, "workspace.guyditor.yaml")))
+        .rejects.toMatchObject({ code: "ENOENT" });
+
       await expect(Reflect.apply(setActive, projectService, [{
+        projectPath: rootB,
         deliverableId: "dlv_bbbbbbbbbb",
       }])).resolves.toEqual({
         format: "guyditor.workspace/v1",
         activeDeliverableId: "dlv_bbbbbbbbbb",
       });
-      await expect(Reflect.apply(getWorkspace, projectService, []))
+      await expect(Reflect.apply(getWorkspace, projectService, [{
+        projectPath: rootB,
+      }]))
         .resolves.toEqual({
           state: {
             format: "guyditor.workspace/v1",

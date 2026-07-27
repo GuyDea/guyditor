@@ -66,4 +66,39 @@ describe("createRpcDispatcher", () => {
       result: [{ params: { state: "running" } }],
     });
   });
+
+  it("preserves a structured stale-project error from a service", async () => {
+    const dispatch = createRpcDispatcher([surface], () => ({
+      list: () => {
+        throw {
+          code: "E_PROJECT_CONTEXT_STALE",
+          message: "The requested project is no longer open.",
+          affected: ["/projects/alpha"],
+          acceptedStateChanged: false,
+          retry: "safe",
+        };
+      },
+    }));
+
+    const response = await dispatch({
+      v: 1,
+      requestId: "req_cccccccccc",
+      service: "JobQueue",
+      method: "list",
+      params: {},
+    });
+
+    expect(response).toEqual({
+      v: 1,
+      requestId: "req_cccccccccc",
+      ok: false,
+      error: {
+        code: "E_PROJECT_CONTEXT_STALE",
+        message: "The requested project is no longer open.",
+        affected: ["/projects/alpha"],
+        acceptedStateChanged: false,
+        retry: "safe",
+      },
+    });
+  });
 });
