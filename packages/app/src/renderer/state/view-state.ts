@@ -41,8 +41,6 @@ interface SelectionState {
   selectWord: (id: string | null) => void;
   selectAnnotation: (id: string | null) => void;
   activateDeliverable: (id: string) => void;
-  // Temporary compatibility for panels migrated in the next implementation task.
-  selectDeliverable: (id: string | null) => void;
   setWordRange: (range: SelectionState["wordRange"]) => void;
 }
 
@@ -149,7 +147,6 @@ export const useSelectionStore = create<SelectionState>((set) => ({
     selectedAnnotationId: null,
     wordRange: null,
   }),
-  selectDeliverable: (selectedDeliverableId) => set({ selectedDeliverableId }),
   setWordRange: (wordRange) => set({ wordRange }),
 }));
 

@@ -1,8 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
 
-import type { Proposal } from "../../../../core/src/index.js";
+import type {
+  GuyditorProject,
+  Proposal,
+} from "../../../../core/src/index.js";
 import type { PlatformProfile, ShortCandidate } from "../../../../deliver/src/index.js";
 import type { JobStatus } from "../../shared/ipc.js";
+import {
+  activateDeliverable,
+  resolveActiveDeliverable,
+} from "../active-deliverable.js";
 import { errorMessage, executeDirect } from "../ipc.js";
 import { useJobsStore } from "../state/jobs.js";
 import { useSelectionStore } from "../state/view-state.js";
@@ -23,6 +30,25 @@ function operationDeliverableId(proposal: Proposal): string | undefined {
   return typeof id === "string" ? id : undefined;
 }
 
+export function primaryTimelineSelection(
+  project: GuyditorProject,
+  startFrames: number,
+  endFrames: number,
+): Record<string, unknown> | undefined {
+  const primary = project.deliverables.find(
+    ({ id }) => id === project.settings.primaryDeliverable,
+  );
+  return primary === undefined || endFrames <= startFrames
+    ? undefined
+    : {
+        timelineRange: {
+          sequenceId: primary.sequenceId,
+          start: { frames: startFrames, fps: project.settings.timeline.fps },
+          end: { frames: endFrames, fps: project.settings.timeline.fps },
+        },
+      };
+}
+
 export function StatusStripPanel({
   snapshot,
   proposals,
@@ -34,7 +60,9 @@ export function StatusStripPanel({
 }: WorkspacePanelProps): React.JSX.Element {
   const jobs = useJobsStore((state) => state.jobs);
   const applyJobEvent = useJobsStore((state) => state.applyEvent);
-  const selectDeliverable = useSelectionStore((state) => state.selectDeliverable);
+  const selectedDeliverableId = useSelectionStore(
+    (state) => state.selectedDeliverableId,
+  );
   const selectedWordId = useSelectionStore((state) => state.selectedWordId);
   const wordRange = useSelectionStore((state) => state.wordRange);
   const [deriveOpen, setDeriveOpen] = useState(false);
@@ -51,6 +79,9 @@ export function StatusStripPanel({
   const primary = snapshot?.master.deliverables.find(
     ({ id }) => id === snapshot.master.settings.primaryDeliverable,
   );
+  const activeDeliverable = snapshot === null
+    ? undefined
+    : resolveActiveDeliverable(snapshot.master, selectedDeliverableId);
   const selectedProfile = profiles.find((profile) => pin(profile) === profilePin);
   const shortProfiles = profiles.filter(({ kind }) => kind === "short");
   const newestByKind = new Map<string, JobStatus>();
@@ -133,15 +164,9 @@ export function StatusStripPanel({
       const beats = beatIds.split(/[\s,]+/u).filter(Boolean);
       return beats.length === 0 ? undefined : { beats };
     }
-    return primary === undefined || snapshot === null || timelineEnd <= timelineStart
+    return snapshot === null
       ? undefined
-      : {
-          timelineRange: {
-            sequenceId: primary.sequenceId,
-            start: { frames: timelineStart, fps: snapshot.master.settings.timeline.fps },
-            end: { frames: timelineEnd, fps: snapshot.master.settings.timeline.fps },
-          },
-        };
+      : primaryTimelineSelection(snapshot.master, timelineStart, timelineEnd);
   }
 
   async function derive(): Promise<void> {
@@ -212,7 +237,15 @@ export function StatusStripPanel({
                   type="button"
                   data-testid={`deliverable-${deliverable.id}`}
                   data-state={deliverable.status}
-                  onClick={() => selectDeliverable(deliverable.id)}
+                  data-active={deliverable.id === activeDeliverable?.id}
+                  aria-pressed={deliverable.id === activeDeliverable?.id}
+                  onClick={() => snapshot === null
+                    ? undefined
+                    : void activateDeliverable(
+                        snapshot.master,
+                        deliverable.id,
+                        setNotice,
+                      )}
                 >
                   <span><strong>{deliverable.name}</strong><small>{deliverable.profile}</small></span>
                   <span className="state-chip" data-testid={deliverable.status === "stale" ? "stale-badge" : undefined} data-state={deliverable.status}>{deliverable.status}</span>

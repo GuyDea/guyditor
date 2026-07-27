@@ -7,8 +7,10 @@ import type {
 } from "../../../../core/src/index.js";
 import type { RestyleStartResult } from "../../../../agent/src/index.js";
 import type { TemplateCatalogEntry } from "../../../../render/src/index.js";
+import { resolveActiveDeliverable } from "../active-deliverable.js";
 import { errorMessage } from "../ipc.js";
 import { useJobsStore } from "../state/jobs.js";
+import { useSelectionStore } from "../state/view-state.js";
 import type { WorkspacePanelProps } from "./types.js";
 
 type RestylePlanProps = Pick<
@@ -223,16 +225,30 @@ export function RestylePlanReview({
     { verdict: "warn" }
   > | null>(null);
   const jobs = useJobsStore((state) => state.jobs);
+  const selectedDeliverableId = useSelectionStore(
+    (state) => state.selectedDeliverableId,
+  );
   const plan = restylePlan ?? draft;
   const accepted = restylePlan !== null;
-  const deliverableId = snapshot?.master.settings.primaryDeliverable;
+  const deliverable = snapshot === null
+    ? undefined
+    : resolveActiveDeliverable(snapshot.master, selectedDeliverableId);
+  const deliverableId = deliverable?.id;
   const fps = snapshot?.master.settings.timeline.fps ?? "24/1";
   const projectName = snapshot?.master.project.name ?? "Episode";
-  const deliverableName = snapshot?.master.deliverables.find(({ id }) => id === deliverableId)?.name ?? "Episode";
+  const deliverableName = deliverable?.name ?? "Episode";
   const planExtent = plan?.chunks.reduce(
     (maximum, chunk) => Math.max(maximum, chunk.sourceRange.endFrame),
     1,
   ) ?? 1;
+
+  useEffect(() => {
+    setDraft(null);
+    setConfirmation(null);
+    setCoverageMode("full");
+    setStartFrame(0);
+    setEndFrame(300);
+  }, [deliverableId]);
 
   useEffect(() => {
     let current = true;

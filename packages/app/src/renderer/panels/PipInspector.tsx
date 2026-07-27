@@ -10,6 +10,7 @@ import type {
   PipStyle,
   PlacementConstraints,
 } from "../../../../core/src/index.js";
+import { resolveActiveDeliverable } from "../active-deliverable.js";
 import { errorMessage, executeDirect } from "../ipc.js";
 import { usePreviewStore, useSelectionStore } from "../state/view-state.js";
 import type { WorkspacePanelProps } from "./types.js";
@@ -31,10 +32,18 @@ export function PipInspector({
   refreshProject,
   setNotice,
 }: Pick<WorkspacePanelProps, "snapshot" | "refreshProject" | "setNotice">): React.JSX.Element | null {
+  const selectedDeliverableId = useSelectionStore(
+    (state) => state.selectedDeliverableId,
+  );
   const selectedLayerId = useSelectionStore((state) => state.selectedLayerId);
   const selectedWordId = useSelectionStore((state) => state.selectedWordId);
   const playhead = usePreviewStore((state) => state.playhead);
-  const layer = snapshot?.master.layers.find(({ id }) => id === selectedLayerId);
+  const deliverable = snapshot === null
+    ? undefined
+    : resolveActiveDeliverable(snapshot.master, selectedDeliverableId);
+  const layer = snapshot?.master.layers.find(({ id, sequence }) =>
+    id === selectedLayerId &&
+    (sequence === undefined || sequence === deliverable?.sequenceId));
   const visual = layer?.kind === "video" || layer?.kind === "image" || layer?.kind === "animation";
   const placement = layer?.pip?.placement.base;
   const [anchor, setAnchor] = useState<AnchorName>(placement?.anchor ?? "bottom_right");
@@ -43,8 +52,7 @@ export function PipInspector({
   const [shape, setShape] = useState<PipStyle["mask"]["shape"]>(layer?.pip?.style.mask.shape ?? "rounded");
   const [presetId, setPresetId] = useState("pre_pipsmoothm");
   const [durationFrames, setDurationFrames] = useState(18);
-  const sequenceId = snapshot?.master.deliverables.find(({ id }) =>
-    id === snapshot.master.settings.primaryDeliverable)?.sequenceId;
+  const sequenceId = deliverable?.sequenceId;
   const reviewAnchor = selectedWordId === null
     ? (sequenceId === undefined ? "" : `timeline:${sequenceId}@${String(playhead.frames)}`)
     : `word:${selectedWordId}`;

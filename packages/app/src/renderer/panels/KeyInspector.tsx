@@ -6,6 +6,7 @@ import type {
   CaptureGuidanceReport,
   KeyQcReport,
 } from "../../../../media/src/index.js";
+import { resolveActiveDeliverable } from "../active-deliverable.js";
 import { errorMessage, executeDirect } from "../ipc.js";
 import { useJobsStore } from "../state/jobs.js";
 import {
@@ -69,13 +70,25 @@ export function KeyInspector({
   refreshProject,
   setNotice,
 }: Pick<WorkspacePanelProps, "snapshot" | "refreshProject" | "setNotice">): React.JSX.Element | null {
+  const selectedDeliverableId = useSelectionStore(
+    (state) => state.selectedDeliverableId,
+  );
   const selectedClipId = useSelectionStore((state) => state.selectedClipId);
   const jobs = useJobsStore((state) => state.jobs);
   const diagnosticBackground = usePreviewStore((state) => state.diagnosticBackground);
   const setDiagnosticBackground = usePreviewStore((state) => state.setDiagnosticBackground);
   const setPreviewKeySettings = usePreviewStore((state) => state.setPreviewKeySettings);
-  const clip = snapshot?.master.sequences.flatMap(({ clips }) => clips)
-    .find(({ id }) => id === selectedClipId);
+  const deliverable = snapshot === null
+    ? undefined
+    : resolveActiveDeliverable(snapshot.master, selectedDeliverableId);
+  const sequence = snapshot?.master.sequences.find(
+    ({ id }) => id === deliverable?.sequenceId,
+  );
+  const clip = sequence?.clips.find(({ id }) => id === selectedClipId);
+  const activeLayers = useMemo(() => snapshot?.master.layers.filter(
+    ({ sequence: owner }) =>
+      owner === undefined || owner === deliverable?.sequenceId,
+  ) ?? [], [deliverable?.sequenceId, snapshot?.master.layers]);
   const asset = snapshot?.master.assets.find(({ id }) => id === clip?.asset);
   const [settings, setSettings] = useState<KeySettings | null>(null);
   const [report, setReport] = useState<KeyQcReport | null>(null);
@@ -133,23 +146,30 @@ export function KeyInspector({
   }, [clip?.id, matteJobSignature]);
 
   useEffect(() => {
+    setAssignments({});
+  }, [deliverable?.id]);
+
+  useEffect(() => {
     const arrangement = arrangements.find(({ id, name }) =>
       arrangementId === id || arrangementId === name);
     if (arrangement === undefined || snapshot === null) return;
     const next: Record<string, string> = {};
     for (const role of arrangement.roles) {
-      const matchingLayer = snapshot.master.layers.find(({ kind }) => kind === role.kind);
+      const matchingLayer = activeLayers.find(({ kind, sequence: owner }) =>
+        kind === role.kind && owner === deliverable?.sequenceId) ??
+        activeLayers.find(({ kind }) => kind === role.kind);
       const matchingAsset = snapshot.master.assets.find(({ kind }) =>
         role.kind === "video" ? kind === "video" : role.kind === "image" ? kind === "image" : false);
       const assignment = role.role === "presenter" && clip !== undefined
-        ? snapshot.master.layers.find(({ sequence }) => sequence === snapshot.master.sequences.find(
-            ({ clips }) => clips.some(({ id }) => id === clip.id),
-          )?.id)?.id ?? matchingLayer?.id ?? matchingAsset?.id
+        ? activeLayers.find(({ sequence: owner }) =>
+            owner === deliverable?.sequenceId)?.id ??
+          matchingLayer?.id ??
+          matchingAsset?.id
         : matchingLayer?.id ?? matchingAsset?.id;
       if (assignment !== undefined) next[role.role] = assignment;
     }
     setAssignments(next);
-  }, [arrangementId, arrangements, clip, snapshot]);
+  }, [activeLayers, arrangementId, arrangements, clip, deliverable?.sequenceId, snapshot]);
 
   if (clip === undefined || snapshot === null) return null;
   const selectedClip = clip;
@@ -235,12 +255,9 @@ export function KeyInspector({
 
   async function renderDiagnostic(): Promise<void> {
     if (diagnosticBackground === "none") return;
-    const deliverable = projectSnapshot.master.deliverables.find(
-      ({ id }) => id === projectSnapshot.master.settings.primaryDeliverable,
-    );
-    const layer = projectSnapshot.master.layers.find(({ sequence }) =>
-      sequence !== undefined && projectSnapshot.master.sequences.find(({ id }) => id === sequence)
-        ?.clips.some(({ id }) => id === selectedClip.id));
+    const layer = activeLayers.find(
+      ({ sequence: owner }) => owner === deliverable?.sequenceId,
+    ) ?? activeLayers.find(({ sequence: owner }) => owner === undefined);
     if (deliverable === undefined || layer === undefined) return;
     try {
       await window.guyditor.call("RenderService", "renderDiagnostic", {
@@ -257,9 +274,6 @@ export function KeyInspector({
   }
 
   async function applyArrangement(): Promise<void> {
-    const deliverable = projectSnapshot.master.deliverables.find(
-      ({ id }) => id === projectSnapshot.master.settings.primaryDeliverable,
-    );
     if (deliverable === undefined) return;
     try {
       await executeDirect([{
@@ -363,7 +377,7 @@ export function KeyInspector({
         </select></label>
         {selectedArrangement?.roles.map((role) => <label key={role.role}>{role.role}<select value={assignments[role.role] ?? ""} onChange={(event) => setAssignments((current) => ({ ...current, [role.role]: event.currentTarget.value }))}>
           <option value="">Choose…</option>
-          {snapshot.master.layers.map((layer) => <option key={layer.id} value={layer.id}>{layer.name} · {layer.kind}</option>)}
+          {activeLayers.map((layer) => <option key={layer.id} value={layer.id}>{layer.name} · {layer.kind}</option>)}
           {snapshot.master.assets.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.path} · {candidate.kind}</option>)}
         </select></label>)}
         <button type="button" data-testid="arrangement-apply" disabled={selectedArrangement?.roles.some(({ role }) => assignments[role] === undefined) ?? true} onClick={() => void applyArrangement()}>Apply arrangement</button>

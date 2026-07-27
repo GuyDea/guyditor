@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 
 import type { TransactionRecord } from "../../../../core/src/index.js";
+import { resolveActiveDeliverable } from "../active-deliverable.js";
 import { errorMessage } from "../ipc.js";
 import { useSelectionStore } from "../state/view-state.js";
 import { Panel } from "./Panel.js";
@@ -20,6 +21,9 @@ export function InspectorPanel({
   refreshProject,
   setNotice,
 }: WorkspacePanelProps): React.JSX.Element {
+  const selectedDeliverableId = useSelectionStore(
+    (state) => state.selectedDeliverableId,
+  );
   const selectedClipId = useSelectionStore((state) => state.selectedClipId);
   const selectedLayerId = useSelectionStore((state) => state.selectedLayerId);
   const selectedWordId = useSelectionStore((state) => state.selectedWordId);
@@ -28,9 +32,16 @@ export function InspectorPanel({
   const [entityFilter, setEntityFilter] = useState("");
   const [actorFilter, setActorFilter] = useState("");
   const [revisionFilter, setRevisionFilter] = useState("");
-  const clip = snapshot?.master.sequences.flatMap(({ clips }) => clips)
-    .find(({ id }) => id === selectedClipId);
-  const layer = snapshot?.master.layers.find(({ id }) => id === selectedLayerId);
+  const deliverable = snapshot === null
+    ? undefined
+    : resolveActiveDeliverable(snapshot.master, selectedDeliverableId);
+  const sequence = snapshot?.master.sequences.find(
+    ({ id }) => id === deliverable?.sequenceId,
+  );
+  const clip = sequence?.clips.find(({ id }) => id === selectedClipId);
+  const layer = snapshot?.master.layers.find(({ id, sequence: owner }) =>
+    id === selectedLayerId &&
+    (owner === undefined || owner === sequence?.id));
   const annotation = annotations.find(({ id }) => id === selectedAnnotationId);
   const word = transcripts.flatMap((sidecar) => Object.entries(sidecar.words))
     .find(([id]) => id === selectedWordId);

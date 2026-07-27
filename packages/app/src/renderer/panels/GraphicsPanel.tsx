@@ -5,6 +5,7 @@ import type {
   TemplateCatalogEntry,
   TemplateFreezeResult,
 } from "../../../../render/src/index.js";
+import { resolveActiveDeliverable } from "../active-deliverable.js";
 import { errorMessage, executeDirect } from "../ipc.js";
 import { usePreviewStore, useSelectionStore } from "../state/view-state.js";
 import { Panel } from "./Panel.js";
@@ -87,19 +88,31 @@ export function GraphicsPanel({
   const [freezing, setFreezing] = useState(false);
   const [reviewReason, setReviewReason] = useState("");
   const playhead = usePreviewStore((state) => state.playhead);
+  const selectedDeliverableId = useSelectionStore(
+    (state) => state.selectedDeliverableId,
+  );
   const selectedWordId = useSelectionStore((state) => state.selectedWordId);
   const selectLayer = useSelectionStore((state) => state.selectLayer);
+  const deliverable = snapshot === null
+    ? undefined
+    : resolveActiveDeliverable(snapshot.master, selectedDeliverableId);
   const selectedTemplate = catalog.find((entry) => catalogKey(entry) === templateKey);
   const schema = schemaOf(selectedTemplate);
   const required = new Set(schema.required?.filter((value): value is string => typeof value === "string") ?? []);
   const graphicLayers = snapshot?.master.layers.filter((layer) =>
-    layer.kind === "text" || layer.kind === "animation") ?? [];
+    (layer.kind === "text" || layer.kind === "animation") &&
+    (layer.sequence === undefined || layer.sequence === deliverable?.sequenceId)) ?? [];
   const instances = useMemo(() => graphicLayers.flatMap((layer) =>
     (layer.items ?? []).flatMap((item) => item.template === undefined
       ? []
       : [{ item, layerId: layer.id, layerName: layer.name, layerOrder: layer.order }])),
   [graphicLayers]);
   const selectedInstance = instances.find(({ item }) => item.id === selectedGraphicId);
+
+  useEffect(() => {
+    setSelectedGraphicId(null);
+    setLayerId("auto");
+  }, [deliverable?.id]);
 
   useEffect(() => {
     let current = true;
@@ -241,9 +254,6 @@ export function GraphicsPanel({
     if (anchorMode === "word") {
       return selectedWordId === null ? undefined : `word:${selectedWordId}`;
     }
-    const deliverable = snapshot?.master.deliverables.find(
-      ({ id }) => id === snapshot.master.settings.primaryDeliverable,
-    );
     return deliverable === undefined
       ? undefined
       : `timeline:${deliverable.sequenceId}@${String(playhead.frames)}`;
@@ -254,9 +264,6 @@ export function GraphicsPanel({
     if (durationMode === "fixed") {
       return { frames: Math.max(1, durationFrames), fps: playhead.fps };
     }
-    const deliverable = snapshot?.master.deliverables.find(
-      ({ id }) => id === snapshot.master.settings.primaryDeliverable,
-    );
     return deliverable === undefined
       ? undefined
       : { until: `timeline:${deliverable.sequenceId}@${String(playhead.frames + Math.max(1, durationFrames))}` };
@@ -302,7 +309,7 @@ export function GraphicsPanel({
   }
 
   async function freezeTemplate(): Promise<void> {
-    if (snapshot === null || selectedTemplate === undefined) return;
+    if (snapshot === null || deliverable === undefined || selectedTemplate === undefined) return;
     setFreezing(true);
     try {
       const result = await window.guyditor.call<TemplateFreezeResult>(
@@ -310,7 +317,7 @@ export function GraphicsPanel({
         "templateFreeze",
         {
           revision: snapshot.master.revision,
-          deliverableId: snapshot.master.settings.primaryDeliverable,
+          deliverableId: deliverable.id,
           templateId: selectedTemplate.id,
           params,
           ...(durationMode === "intrinsic"

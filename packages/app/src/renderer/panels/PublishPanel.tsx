@@ -1,7 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { Deliverable, PublishMetadataDocument } from "../../../../core/src/index.js";
 import type { OtioLoss, PlatformProfile } from "../../../../deliver/src/index.js";
+import {
+  activateDeliverable,
+  resolveActiveDeliverable,
+} from "../active-deliverable.js";
 import { errorMessage } from "../ipc.js";
 import { useSelectionStore } from "../state/view-state.js";
 import { Panel } from "./Panel.js";
@@ -24,11 +28,10 @@ function outputContents(deliverable: Deliverable): string[] {
 
 export function PublishPanel({ snapshot, refreshProject, refreshExportReport, setNotice }: WorkspacePanelProps): React.JSX.Element {
   const selectedId = useSelectionStore((state) => state.selectedDeliverableId);
-  const selectDeliverable = useSelectionStore((state) => state.selectDeliverable);
   const deliverables = snapshot?.master.deliverables ?? [];
-  const deliverable = deliverables.find(({ id }) => id === selectedId) ??
-    deliverables.find(({ id }) => id === snapshot?.master.settings.primaryDeliverable) ??
-    deliverables[0];
+  const deliverable = snapshot === null
+    ? undefined
+    : resolveActiveDeliverable(snapshot.master, selectedId);
   const [profiles, setProfiles] = useState<PlatformProfile[]>([]);
   const [metadata, setMetadata] = useState<PublishMetadataDocument | null>(
     deliverable?.publish?.metadata ?? null,
@@ -40,6 +43,7 @@ export function PublishPanel({ snapshot, refreshProject, refreshExportReport, se
   const [otioLosses, setOtioLosses] = useState<OtioLoss[] | null>(null);
   const [otioMediaPaths, setOtioMediaPaths] = useState<"absolute" | "relative">("relative");
   const [otioAnnotations, setOtioAnnotations] = useState(false);
+  const metadataDeliverableId = useRef(deliverable?.id);
   const profile = profiles.find(({ id, version }) => `${id}@${version}` === deliverable?.profile);
 
   useEffect(() => {
@@ -49,8 +53,11 @@ export function PublishPanel({ snapshot, refreshProject, refreshExportReport, se
   }, []);
 
   useEffect(() => {
+    if (metadataDeliverableId.current === deliverable?.id) return;
+    metadataDeliverableId.current = deliverable?.id;
     setMetadata(deliverable?.publish?.metadata ?? null);
-  }, [deliverable]);
+    setOtioLosses(null);
+  }, [deliverable?.id, deliverable?.publish?.metadata]);
 
   const counts = useMemo(() => ({
     title: codePoints(metadata?.title ?? ""),
@@ -108,7 +115,15 @@ export function PublishPanel({ snapshot, refreshProject, refreshExportReport, se
       <div className="publish-workspace">
         <label className="publish-deliverable">
           Deliverable
-          <select value={deliverable.id} onChange={(event) => selectDeliverable(event.target.value)}>
+          <select value={deliverable.id} onChange={(event) => {
+            if (snapshot !== null) {
+              void activateDeliverable(
+                snapshot.master,
+                event.target.value,
+                setNotice,
+              );
+            }
+          }}>
             {deliverables.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.profile}</option>)}
           </select>
         </label>

@@ -5,6 +5,7 @@ import type {
   Proposal,
   SemanticDiffEntry,
 } from "../../../../core/src/index.js";
+import { activateDeliverable } from "../active-deliverable.js";
 import { errorMessage } from "../ipc.js";
 import {
   useAgentPanelStore,
@@ -48,9 +49,26 @@ export function ProposalPanel({
   const selectWord = useSelectionStore((state) => state.selectWord);
   const setWordRange = useSelectionStore((state) => state.setWordRange);
   const selectAnnotation = useSelectionStore((state) => state.selectAnnotation);
-  const selectDeliverable = useSelectionStore((state) => state.selectDeliverable);
 
-  function jumpToEvidence(evidence: EvidenceRef): void {
+  async function jumpToEvidence(evidence: EvidenceRef): Promise<void> {
+    if (evidence.deliverableId !== undefined) {
+      if (snapshot === null) {
+        setNotice(
+          `Evidence target is unavailable: open a project containing ${evidence.deliverableId}.`,
+        );
+        return;
+      }
+      try {
+        await activateDeliverable(
+          snapshot.master,
+          evidence.deliverableId,
+          setNotice,
+        );
+      } catch (error: unknown) {
+        setNotice(`Evidence target is unavailable: ${errorMessage(error)}`);
+        return;
+      }
+    }
     if (evidence.sourceRange !== undefined) setPlayhead(evidence.sourceRange.start);
     if (evidence.wordRange !== undefined) {
       selectWord(evidence.wordRange.from);
@@ -60,7 +78,6 @@ export function ProposalPanel({
       });
     }
     if (evidence.annotationId !== undefined) selectAnnotation(evidence.annotationId);
-    if (evidence.deliverableId !== undefined) selectDeliverable(evidence.deliverableId);
   }
 
   function evidenceLabel(evidence: EvidenceRef): string {
@@ -236,7 +253,7 @@ export function ProposalPanel({
                           <button
                             type="button"
                             className="evidence-jump"
-                            onClick={() => jumpToEvidence(subject.ref)}
+                            onClick={() => void jumpToEvidence(subject.ref)}
                           >Jump to {evidenceLabel(subject.ref)}</button>
                           <h4>Observed</h4>
                           {subject.observations.map((observation) => (
@@ -248,7 +265,7 @@ export function ProposalPanel({
                                     type="button"
                                     className="entity-chip evidence-jump"
                                     key={`${observation.id}-${String(evidenceIndex)}`}
-                                    onClick={() => jumpToEvidence(evidence)}
+                                    onClick={() => void jumpToEvidence(evidence)}
                                   >{evidenceLabel(evidence)}</button>
                                 ))}
                               </div>

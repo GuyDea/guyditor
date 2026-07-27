@@ -17,9 +17,14 @@ import type {
   GenerationRequest,
   GenerationStartResult,
 } from "../../../../agent/src/index.js";
+import { resolveActiveDeliverable } from "../active-deliverable.js";
 import { errorMessage } from "../ipc.js";
 import { useJobsStore } from "../state/jobs.js";
-import { usePreviewStore, useWorkspaceStore } from "../state/view-state.js";
+import {
+  usePreviewStore,
+  useSelectionStore,
+  useWorkspaceStore,
+} from "../state/view-state.js";
 import { Panel } from "./Panel.js";
 import type { WorkspacePanelProps } from "./types.js";
 
@@ -183,7 +188,13 @@ export function BrollPanel({
   const [rightsPolicy, setRightsPolicy] = useState<RightsPolicy>({ requirementLevel: "warn" });
   const jobs = useJobsStore((state) => state.jobs);
   const playhead = usePreviewStore((state) => state.playhead);
+  const selectedDeliverableId = useSelectionStore(
+    (state) => state.selectedDeliverableId,
+  );
   const focusPanel = useWorkspaceStore((state) => state.focusPanel);
+  const deliverable = snapshot === null
+    ? undefined
+    : resolveActiveDeliverable(snapshot.master, selectedDeliverableId);
   const selectedAdapter = adapters.find(({ descriptor }) => descriptor.adapterId === adapterId) ??
     FALLBACK_ADAPTERS[0]!;
   const selectedModel = selectedAdapter.descriptor.models.find(({ id }) => id === model) ??
@@ -408,10 +419,8 @@ export function BrollPanel({
 
   async function acceptCandidate(): Promise<void> {
     if (selectedCandidate === undefined || snapshot === null) return;
-    const deliverable = snapshot.master.deliverables.find(({ id }) =>
-      id === snapshot.master.settings.primaryDeliverable);
     if (deliverable === undefined) {
-      setNotice("Open a primary deliverable before placing generated B-roll.");
+      setNotice("Open an active deliverable before placing generated B-roll.");
       return;
     }
     const placedFrames = selectedCandidate.request.durationFrames ?? durationFrames;

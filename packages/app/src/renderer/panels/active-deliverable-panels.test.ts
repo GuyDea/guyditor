@@ -34,6 +34,7 @@ import {
   useSelectionStore,
   useWorkspaceStore,
 } from "../state/view-state.js";
+import * as InspectorPanelModule from "./InspectorPanel.js";
 import * as PreviewPanelModule from "./PreviewPanel.js";
 import * as TimelinePanelModule from "./TimelinePanel.js";
 import * as TranscriptPanelModule from "./TranscriptPanel.js";
@@ -220,6 +221,7 @@ function panelProps(project: GuyditorProject): WorkspacePanelProps {
 afterEach(() => {
   selectionHookMock.serverSnapshot = undefined;
   useSelectionStore.setState({
+    selectedClipId: null,
     selectedDeliverableId: null,
     selectedLayerId: null,
   });
@@ -364,6 +366,45 @@ describe("active deliverable panels", () => {
       sequence,
       undefined,
     )).toBeUndefined();
+  });
+
+  it("keeps inspector clip, layer, key, and PiP details in the active sequence", () => {
+    const project = projectWithShort();
+    setServerSelection({
+      selectedDeliverableId: "dlv_bbbbbbbbbb",
+      selectedClipId: "clp_cccccccccc",
+      selectedLayerId: "lyr_bbbbbbbbbb",
+      selectedWordId: null,
+    });
+
+    const html = renderToStaticMarkup(createElement(
+      InspectorPanelModule.InspectorPanel,
+      panelProps(project),
+    ));
+
+    expect(html).toContain("clp_cccccccccc");
+    expect(html).toContain("timeline:seq_bbbbbbbbbb@0");
+    expect(html).not.toContain("timeline:seq_aaaaaaaaaa@0");
+  });
+
+  it("hides inspector selections owned by another deliverable", () => {
+    const project = projectWithShort();
+    setServerSelection({
+      selectedDeliverableId: "dlv_bbbbbbbbbb",
+      selectedClipId: "clp_aaaaaaaaaa",
+      selectedLayerId: "lyr_aaaaaaaaaa",
+    });
+
+    const html = renderToStaticMarkup(createElement(
+      InspectorPanelModule.InspectorPanel,
+      panelProps(project),
+    ));
+
+    expect(html).not.toContain('data-testid="key-inspector"');
+    expect(html).not.toContain('data-testid="pip-inspector"');
+    expect(html).not.toContain("clp_aaaaaaaaaa");
+    expect(html).not.toContain("lyr_aaaaaaaaaa");
+    expect(html).toContain("Select a clip, layer, word, or annotation.");
   });
 
   it("shows async overlay results only for an exact current request key", () => {
