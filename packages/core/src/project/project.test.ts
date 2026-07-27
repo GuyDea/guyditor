@@ -14,6 +14,7 @@ import {
   parseProjectYaml,
   parseRevision,
   parseWordId,
+  placedItemAppliesToSequence,
   validateProject,
 } from "../index.js";
 import type { GuyditorProject, Result } from "../index.js";
@@ -348,7 +349,7 @@ describe("project validation", () => {
     expectInvariant(project, "globally unique IDs", ["ast_aaaaaaaaaa"]);
   });
 
-  it("rejects placed-item ownership conflicts while keeping unqualified anchors orphanable", () => {
+  it("rejects explicit ownership conflicts while preserving non-applicable legacy conflicts", () => {
     const explicitConflict = projectFixture();
     explicitConflict.sequences.push({
       id: "seq_bbbbbbbbbb",
@@ -382,11 +383,20 @@ describe("project validation", () => {
     inferredConflict.layers[1]!.items![0]!.duration = {
       until: "timeline:seq_bbbbbbbbbb@8",
     };
-    expectInvariant(
+    expect(valueOf(validateProject(inferredConflict))).toEqual(inferredConflict);
+    expect(valueOf(parseProjectYaml(canonicalizeYaml(inferredConflict))))
+      .toEqual(inferredConflict);
+    const legacyItem = inferredConflict.layers[1]!.items![0]!;
+    expect(placedItemAppliesToSequence(
       inferredConflict,
-      "placed item sequence ownership consistency",
-      ["gfx_aaaaaaaaaa", "seq_aaaaaaaaaa", "seq_bbbbbbbbbb"],
-    );
+      legacyItem,
+      "seq_aaaaaaaaaa",
+    )).toBe(false);
+    expect(placedItemAppliesToSequence(
+      inferredConflict,
+      legacyItem,
+      "seq_bbbbbbbbbb",
+    )).toBe(false);
 
     const orphanable = structuredClone(explicitConflict);
     orphanable.layers[1]!.items![0]!.at = "ann:ann_bbbbbbbbbb";

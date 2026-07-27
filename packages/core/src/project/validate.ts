@@ -205,7 +205,7 @@ function validateReferences(project: GuyditorProject): Result<GuyditorProject> |
         return missingReference("placed item sequence reference", item.id, item.sequenceId);
       }
       const ownership = placedItemOwnershipConsistency(project, item);
-      if (!ownership.consistent) {
+      if (item.sequenceId !== undefined && !ownership.consistent) {
         return invariantFailure(
           "placed item sequence ownership consistency",
           [

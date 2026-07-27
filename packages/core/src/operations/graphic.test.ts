@@ -176,6 +176,46 @@ describe("FR-600/601 graphic operation catalog", () => {
     }]);
   });
 
+  it("rejects a newly added graphic whose anchor conflicts with explicit ownership", async () => {
+    const project = projectFixture();
+    project.sequences.push({
+      id: "seq_bbbbbbbbbb",
+      name: "sibling",
+      clips: [],
+    });
+    const provider = {
+      latest: () => Promise.resolve(success(descriptor)),
+      get: () => Promise.resolve(success(descriptor)),
+    };
+    const engine = new OperationEngine(project, {
+      templateProvider: provider,
+      seedFactory: () => 7,
+    });
+    const accepted = structuredClone(project);
+
+    await expect(engine.execute([{
+      op: "graphic.add",
+      params: {
+        templateId: TEMPLATE_ID,
+        sequenceId: "seq_aaaaaaaaaa",
+        anchor: "timeline:seq_bbbbbbbbbb@4",
+        duration: { frames: 12, fps: "24/1" },
+        params: { title: "Conflicting" },
+      },
+    }], {
+      baseRevision: project.revision,
+      origin: "ui",
+      dryRun: false,
+    })).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "E_GRAPHIC_SEQUENCE_CONFLICT",
+        acceptedStateChanged: false,
+      },
+    });
+    expect(engine.currentProject).toEqual(accepted);
+  });
+
   it("rejects missing sequence ownership and sequence-owned placement layers", async () => {
     const project = projectFixture();
     project.layers.push({
