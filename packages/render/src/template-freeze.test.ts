@@ -18,6 +18,7 @@ import {
   deriveTimeline,
   JobQueue,
 } from "../../core/src/index.js";
+import { projectFixture } from "../../core/src/project/test-fixtures.js";
 import {
   RenderService,
   TemplateAuthoringService,
@@ -52,6 +53,20 @@ async function fixtureProfiles(root: string): Promise<string> {
         "- { width: 3840, height: 2160 }",
         "- { width: 64, height: 36 }",
       ),
+    "utf8",
+  );
+  const shortsDestination = join(profiles, "youtube-shorts", "1.0.0.yaml");
+  await mkdir(join(shortsDestination, ".."), { recursive: true });
+  const shortsSource = await readFile(
+    resolve("profiles/youtube-shorts/1.0.0.yaml"),
+    "utf8",
+  );
+  await writeFile(
+    shortsDestination,
+    shortsSource.replace(
+      "resolution: { width: 1080, height: 1920 }",
+      "resolution: { width: 36, height: 64 }",
+    ),
     "utf8",
   );
   return profiles;
@@ -238,6 +253,106 @@ describe("template freeze service", () => {
           }],
         },
       });
+    } finally {
+      queue.close();
+    }
+  }, 30_000);
+
+  it("preflights and classifies a freeze placed into a short", async () => {
+    const root = await mkdtemp(join(tmpdir(), "guyditor-template-freeze-short-"));
+    temporaryDirectories.push(root);
+    const projectRoot = join(root, "project");
+    const profilesRoot = await fixtureProfiles(root);
+    const model = projectFixture();
+    model.sequences.push({
+      id: "seq_bbbbbbbbbb",
+      name: "short",
+      clips: [{
+        id: "clp_cccccccccc",
+        asset: "ast_aaaaaaaaaa",
+        source: {
+          in: { frames: 0, fps: "24/1" },
+          out: { frames: 12, fps: "24/1" },
+        },
+      }],
+    });
+    model.layers.push({
+      id: "lyr_bbbbbbbbbb",
+      kind: "video",
+      name: "short",
+      order: 1,
+      enabled: true,
+      locked: false,
+      sequence: "seq_bbbbbbbbbb",
+    });
+    model.deliverables.push({
+      id: "dlv_bbbbbbbbbb",
+      kind: "short",
+      name: "Short",
+      profile: "youtube-shorts@1.0.0",
+      sequenceId: "seq_bbbbbbbbbb",
+      status: "draft",
+      dependencies: [{
+        derivativeClipId: "clp_cccccccccc",
+        source: {
+          assetId: "ast_aaaaaaaaaa",
+          range: {
+            start: { frames: 0, fps: "24/1" },
+            end: { frames: 12, fps: "24/1" },
+          },
+          longformClipId: "clp_aaaaaaaaaa",
+        },
+      }],
+    });
+    const storeResult = await createProject(projectRoot, model, {
+      profilesDirectory: profilesRoot,
+    });
+    if (!storeResult.ok) throw storeResult.error;
+    const { queue } = JobQueue.open(":memory:", { concurrency: 1 });
+    const service = new RenderService({
+      projectRoot,
+      profilesRoot,
+      store: storeResult.value,
+      jobQueue: queue,
+      templateRegistry: new TemplateRegistry({
+        builtinsRoot: resolve("templates"),
+        userRoot: join(root, "user-templates"),
+        projectRoot: join(projectRoot, "templates"),
+      }),
+    });
+    try {
+      await expect(service.templateFreeze({
+        revision: storeResult.value.currentProject.revision,
+        deliverableId: "dlv_bbbbbbbbbb",
+        templateId: "tpl_k2m3n4p5q6",
+        durationFrames: 2,
+        placeAsClip: true,
+        clipIndex: 99,
+      })).rejects.toMatchObject({ code: "E_OP_RANGE_OUT_OF_BOUNDS" });
+      await expect(stat(join(projectRoot, ".guyditor/cache/render/template-freeze")))
+        .rejects.toMatchObject({ code: "ENOENT" });
+
+      const result = await service.templateFreeze({
+        revision: storeResult.value.currentProject.revision,
+        deliverableId: "dlv_bbbbbbbbbb",
+        templateId: "tpl_k2m3n4p5q6",
+        params: {
+          accent: "#7C3AED",
+          surface: "#111827",
+          ink: "#F8FAFC",
+        },
+        durationFrames: 2,
+        placeAsClip: true,
+      });
+
+      expect(result).toMatchObject({
+        sequenceId: "seq_bbbbbbbbbb",
+        frames: 2,
+        width: 36,
+        height: 64,
+      });
+      expect(await readFile(join(projectRoot, "history/transactions.jsonl"), "utf8"))
+        .toContain('"divergence":"graphics"');
     } finally {
       queue.close();
     }

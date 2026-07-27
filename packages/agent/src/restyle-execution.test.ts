@@ -121,12 +121,54 @@ interface Harness {
   audit: AuditLog;
 }
 
-async function harness(budgets: BudgetConfig): Promise<Harness> {
+async function harness(budgets: BudgetConfig, withShort = false): Promise<Harness> {
   const projectRoot = await directory("guyditor-restyle-project-");
   const userDir = await directory("guyditor-restyle-user-");
   const parsed = parseProjectYaml(await readFile(FIXTURE_PROJECT, "utf8"));
   expect(parsed.ok).toBe(true);
   if (!parsed.ok) throw new Error(parsed.error.message);
+  if (withShort) {
+    parsed.value.sequences.push({
+      id: "seq_llllllllll",
+      name: "short",
+      clips: [{
+        id: "clp_llllllllll",
+        asset: "ast_aaaaaaaaaa",
+        source: {
+          in: { frames: 0, fps: "30/1" },
+          out: { frames: 30, fps: "30/1" },
+        },
+      }],
+    });
+    parsed.value.layers.push({
+      id: "lyr_kkkkkkkkkk",
+      kind: "video",
+      name: "short",
+      order: 3,
+      enabled: true,
+      locked: false,
+      sequence: "seq_llllllllll",
+    });
+    parsed.value.deliverables.push({
+      id: "dlv_llllllllll",
+      kind: "short",
+      name: "Short",
+      profile: "youtube-shorts@1.0.0",
+      sequenceId: "seq_llllllllll",
+      status: "draft",
+      dependencies: [{
+        derivativeClipId: "clp_llllllllll",
+        source: {
+          assetId: "ast_aaaaaaaaaa",
+          range: {
+            start: { frames: 0, fps: "30/1" },
+            end: { frames: 30, fps: "30/1" },
+          },
+          longformClipId: "clp_aaaaaaaaaa",
+        },
+      }],
+    });
+  }
   const store = await valueOf(createProject(projectRoot, parsed.value, {
     idFactory: () => "txn_zzzzzzzzzz",
     now: () => NOW,
@@ -140,7 +182,7 @@ async function harness(budgets: BudgetConfig): Promise<Harness> {
   });
   const planned = createRestylePlan({
     project: store.currentProject,
-    deliverableId: "dlv_aaaaaaaaaa",
+    deliverableId: withShort ? "dlv_llllllllll" : "dlv_aaaaaaaaaa",
     coverage: [{ startFrame: 0, endFrame: 30 }],
     adapterId: "adp_klingaaaaa",
     model: "kling-video-o1",
@@ -173,6 +215,7 @@ async function harness(budgets: BudgetConfig): Promise<Harness> {
     },
     addresses: [],
   }));
+  expect(proposal.divergence).toBeUndefined();
   await valueOf(engine.acceptProposal(proposal.id, "creator"));
 
   const credentials = new FileCredentialStore({ userDir });
@@ -228,6 +271,7 @@ describe("FR-607/608 restyle execution", () => {
     expect(started).toMatchObject({ verdict: "enqueued", estimate: { amount: 0.14 } });
     if (started.verdict !== "enqueued") throw new Error("Restyle plan was not enqueued.");
     expect(started.jobs).toHaveLength(1);
+    expect(started.jobs[0]!.payload).not.toHaveProperty("divergence");
     let sawExternal = false;
     await waitFor(async () => {
       const overview = await run.queue.overview();
@@ -280,6 +324,33 @@ describe("FR-607/608 restyle execution", () => {
       taskUsd: 0,
       estimated: { taskUsd: 0.14 },
     });
+    run.queue.close();
+    run.meter.close();
+  }, 30_000);
+
+  it("classifies accepted short pixels before enqueueing and preserves it through approval", async () => {
+    const run = await harness(NO_BUDGETS, true);
+    const context = {
+      sessionId: "ses_aaaaaaaaaa",
+      projectId: "prj_aaaaaaaaaa",
+      taskId: run.plan.id,
+      initiator: "creator" as const,
+    };
+
+    const started = run.service.startPlan({ plan: run.plan, context });
+    expect(started).toMatchObject({ verdict: "enqueued" });
+    if (started.verdict !== "enqueued") throw new Error("Restyle plan was not enqueued.");
+    expect(started.jobs).toHaveLength(1);
+    expect(started.jobs[0]!.payload).toMatchObject({ divergence: "graphics" });
+    await waitFor(() => {
+      const state = run.queue.get(started.jobs[0]!.jobId)?.state;
+      return state === "done" || state === "failed" || state === "cancelled";
+    });
+    const done = run.queue.get(started.jobs[0]!.jobId)!;
+    expect(done, done.error?.message).toMatchObject({ state: "done" });
+    const proposalId = String(jobResult(done)["proposalId"]);
+    const accepted = await valueOf(run.engine.acceptProposal(proposalId, "creator"));
+    expect(accepted.divergence).toBe("graphics");
     run.queue.close();
     run.meter.close();
   }, 30_000);

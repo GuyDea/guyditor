@@ -16,7 +16,10 @@ import { describe, expect, it } from "vitest";
 
 import type { GdEvent } from "../shared/ipc.js";
 import { WindowEventPublisher } from "./events.js";
-import { AppServiceHost } from "./service-host.js";
+import {
+  AppServiceHost,
+  groupJumpCutProposalOperations,
+} from "./service-host.js";
 
 describe("AppServiceHost", () => {
   it("exposes creator review for authored-template drafts and audits immutable publication", async () => {
@@ -89,6 +92,46 @@ describe("AppServiceHost", () => {
     const root = await mkdtemp(join(tmpdir(), "guyditor-host-matte-"));
     const userDirectory = await mkdtemp(join(tmpdir(), "guyditor-host-matte-user-"));
     const model = projectFixture();
+    model.sequences.push({
+      id: "seq_bbbbbbbbbb",
+      name: "short",
+      clips: [{
+        id: "clp_cccccccccc",
+        asset: "ast_aaaaaaaaaa",
+        source: {
+          in: { frames: 0, fps: "24/1" },
+          out: { frames: 24, fps: "24/1" },
+        },
+      }],
+    });
+    model.layers.push({
+      id: "lyr_bbbbbbbbbb",
+      kind: "video",
+      name: "short",
+      order: 1,
+      enabled: true,
+      locked: false,
+      sequence: "seq_bbbbbbbbbb",
+    });
+    model.deliverables.push({
+      id: "dlv_bbbbbbbbbb",
+      kind: "short",
+      name: "Short",
+      profile: "youtube-shorts@1.0.0",
+      sequenceId: "seq_bbbbbbbbbb",
+      status: "draft",
+      dependencies: [{
+        derivativeClipId: "clp_cccccccccc",
+        source: {
+          assetId: "ast_aaaaaaaaaa",
+          range: {
+            start: { frames: 0, fps: "24/1" },
+            end: { frames: 24, fps: "24/1" },
+          },
+          longformClipId: "clp_aaaaaaaaaa",
+        },
+      }],
+    });
     const created = await createProject(root, model);
     if (!created.ok) throw created.error;
     const candidatePath = join(root, ".guyditor", "cache", "mattes", "candidate.mkv");
@@ -98,7 +141,7 @@ describe("AppServiceHost", () => {
     const candidateSha = createHash("sha256").update(candidateBytes).digest("hex");
     const { queue } = JobQueue.open(join(root, ".guyditor", "jobs.sqlite"));
     queue.registerExecutor("matte", async (job) => ({
-      clipId: "clp_aaaaaaaaaa",
+      clipId: "clp_cccccccccc",
       sourceAssetId: "ast_aaaaaaaaaa",
       jobId: job.jobId,
       schema: "guyditor.matte/v1",
@@ -125,9 +168,9 @@ describe("AppServiceHost", () => {
     }));
     const queued = queue.enqueue({
       kind: "matte",
-      title: "Generate neural matte for clp_aaaaaaaaaa",
+      title: "Generate neural matte for clp_cccccccccc",
       cancellable: true,
-      payload: { clipId: "clp_aaaaaaaaaa" },
+      payload: { clipId: "clp_cccccccccc" },
     });
     const deadline = Date.now() + 2_000;
     while (queue.get(queued.jobId)?.state !== "done") {
@@ -164,10 +207,10 @@ describe("AppServiceHost", () => {
     if (typeof candidates !== "function" || typeof accept !== "function") {
       throw new Error("Matte candidate service is unavailable.");
     }
-    expect(Reflect.apply(candidates, service, [{ clipId: "clp_aaaaaaaaaa" }]))
+    expect(Reflect.apply(candidates, service, [{ clipId: "clp_cccccccccc" }]))
       .toMatchObject([{ jobId: queued.jobId, alpha: { maximum: 255 } }]);
     const accepted = await Reflect.apply(accept, service, [{
-      clipId: "clp_aaaaaaaaaa",
+      clipId: "clp_cccccccccc",
       jobId: queued.jobId,
     }]) as { assetId: string; path: string };
     const snapshot = windowHost.snapshot().master;
@@ -178,7 +221,10 @@ describe("AppServiceHost", () => {
       provenance: { sidecar: `provenance-${accepted.assetId}` },
       analyses: { matte: { sourceFrames: { from: 0, to: 23 } } },
     });
-    expect(snapshot.sequences[0]!.clips[0]!.effects).toContainEqual(expect.objectContaining({
+    const shortClip = snapshot.sequences
+      .flatMap(({ clips }) => clips)
+      .find(({ id }) => id === "clp_cccccccccc");
+    expect(shortClip?.effects).toContainEqual(expect.objectContaining({
       kind: "key",
       params: expect.objectContaining({
         mode: "neural",
@@ -193,6 +239,7 @@ describe("AppServiceHost", () => {
     expect(historyText).toContain('"op":"sidecar.register"');
     expect(historyText).toContain('"op":"asset.ingest"');
     expect(historyText).toContain('"op":"clip.key.set"');
+    expect(historyText).toContain('"divergence":"graphics"');
 
     await windowHost.close();
     await appHost.close();
@@ -471,8 +518,103 @@ describe("AppServiceHost", () => {
     };
     model.sequences[0]!.clips[1]!.source = {
       in: { frames: 48, fps: "24/1" },
-      out: { frames: 72, fps: "24/1" },
+      out: { frames: 120, fps: "24/1" },
     };
+    model.sequences.push({
+      id: "seq_bbbbbbbbbb",
+      name: "short",
+      clips: [
+        {
+          id: "clp_cccccccccc",
+          asset: "ast_aaaaaaaaaa",
+          source: {
+            in: { frames: 0, fps: "24/1" },
+            out: { frames: 24, fps: "24/1" },
+          },
+        },
+        {
+          id: "clp_dddddddddd",
+          asset: "ast_aaaaaaaaaa",
+          source: {
+            in: { frames: 48, fps: "24/1" },
+            out: { frames: 72, fps: "24/1" },
+          },
+        },
+        {
+          id: "clp_eeeeeeeeee",
+          asset: "ast_aaaaaaaaaa",
+          source: {
+            in: { frames: 96, fps: "24/1" },
+            out: { frames: 120, fps: "24/1" },
+          },
+          effects: [{
+            id: "fx_aaaaaaaaaa",
+            kind: "transform",
+            params: { scale: 1.05 },
+          }],
+        },
+      ],
+    });
+    model.layers.push({
+      id: "lyr_bbbbbbbbbb",
+      kind: "video",
+      name: "short",
+      order: 1,
+      enabled: true,
+      locked: false,
+      sequence: "seq_bbbbbbbbbb",
+    });
+    model.deliverables.push({
+      id: "dlv_bbbbbbbbbb",
+      kind: "short",
+      name: "Short",
+      profile: "youtube-shorts@1.0.0",
+      sequenceId: "seq_bbbbbbbbbb",
+      status: "draft",
+      dependencies: [
+        {
+          derivativeClipId: "clp_cccccccccc",
+          source: {
+            assetId: "ast_aaaaaaaaaa",
+            range: {
+              start: { frames: 0, fps: "24/1" },
+              end: { frames: 24, fps: "24/1" },
+            },
+            longformClipId: "clp_aaaaaaaaaa",
+          },
+        },
+        {
+          derivativeClipId: "clp_dddddddddd",
+          source: {
+            assetId: "ast_aaaaaaaaaa",
+            range: {
+              start: { frames: 48, fps: "24/1" },
+              end: { frames: 72, fps: "24/1" },
+            },
+            longformClipId: "clp_bbbbbbbbbb",
+          },
+        },
+        {
+          derivativeClipId: "clp_eeeeeeeeee",
+          source: {
+            assetId: "ast_aaaaaaaaaa",
+            range: {
+              start: { frames: 96, fps: "24/1" },
+              end: { frames: 120, fps: "24/1" },
+            },
+            longformClipId: "clp_bbbbbbbbbb",
+          },
+        },
+      ],
+    });
+    model.presets.push({
+      id: "pre_smoothcut2",
+      name: "smooth-cut",
+      kind: "transition",
+      version: 1,
+      path: "presets/pre_smoothcut2@1.yaml",
+      sha256: "b".repeat(64),
+    });
     const created = await createProject(root, model);
     if (!created.ok) throw created.error;
     const appHost = testAppHost(userDirectory);
@@ -484,20 +626,64 @@ describe("AppServiceHost", () => {
     if (typeof propose !== "function") throw new Error("concealment proposal service is unavailable");
 
     const planned = await Reflect.apply(propose, undefined, [{
-      sequenceId: "seq_aaaaaaaaaa",
+      sequenceId: "seq_bbbbbbbbbb",
       faceTracks: { ast_aaaaaaaaaa: { usable: true, framingStatic: true } },
-    }]) as { kind: string; proposal?: Proposal };
+    }]) as { kind: string; proposal?: Proposal; proposals?: Proposal[] };
 
     expect(planned.kind).toBe("proposal");
     expect(planned.proposal).toMatchObject({
       status: "ready",
+      divergence: "framing",
       operations: [{
         op: "clip.punchin.set",
-        params: { clipId: "clp_bbbbbbbbbb", level: 1.12, anchor: "face-track" },
+        params: { clipId: "clp_dddddddddd", level: 1.12, anchor: "face-track" },
       }],
     });
+    expect(planned.proposals).toMatchObject([
+      {
+        divergence: "framing",
+        operations: [{ op: "clip.punchin.set" }],
+      },
+      {
+        divergence: "cuts",
+        operations: [{
+          op: "transition.set",
+          params: {
+            boundary: {
+              beforeClipId: "clp_dddddddddd",
+              afterClipId: "clp_eeeeeeeeee",
+            },
+          },
+        }],
+      },
+    ]);
+    expect(groupJumpCutProposalOperations(model, [
+      {
+        op: "clip.punchin.set",
+        params: { clipId: "clp_dddddddddd", level: 1.12, anchor: "face-track" },
+      },
+      {
+        op: "clip.source.switch",
+        params: {
+          clipId: "clp_dddddddddd",
+          assetId: "ast_aaaaaaaaaa",
+          synchronizedTo: "ast_aaaaaaaaaa",
+        },
+      },
+    ])).toMatchObject([
+      { divergence: "framing", operationIndexes: [0] },
+      { divergence: "cuts", operationIndexes: [1] },
+    ]);
+    const supersede = windowHost.resolveService("OperationEngine")?.["supersedeProposal"];
+    if (typeof supersede !== "function" || planned.proposal === undefined) {
+      throw new Error("proposal supersede service is unavailable");
+    }
+    await expect(Reflect.apply(supersede, undefined, [{
+      proposalId: planned.proposal.id,
+      instruction: "Keep the punch restrained.",
+    }])).resolves.toMatchObject({ divergence: "framing" });
     expect(windowHost.snapshot().revision).toBe("rev_00001");
-    expect(windowHost.snapshot().master.sequences[0]!.clips[1]!.punchIn).toBeUndefined();
+    expect(windowHost.snapshot().master.sequences[1]!.clips[1]!.punchIn).toBeUndefined();
 
     await windowHost.close();
     await appHost.close();

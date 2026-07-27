@@ -12,6 +12,7 @@ import {
   parseRestylePlan,
   planRestylePunchInAlternation,
   restylePlanSidecarRef,
+  touchedDerivativeIds,
 } from "../../core/src/index.js";
 import type {
   Asset,
@@ -71,6 +72,7 @@ interface RestyleJobPayload {
   plan: RestylePlan;
   chunkId: string;
   context: CostContext;
+  divergence?: "graphics";
 }
 
 interface ActiveExternalCall {
@@ -150,6 +152,7 @@ function jobPayload(job: JobRecord): RestyleJobPayload {
     !parsed.ok || typeof context !== "object" || context === null || Array.isArray(context) ||
     typeof context["sessionId"] !== "string" || typeof context["projectId"] !== "string" ||
     typeof context["taskId"] !== "string" ||
+    (payload["divergence"] !== undefined && payload["divergence"] !== "graphics") ||
     (context["initiator"] !== "creator" && context["initiator"] !== "agent")
   ) {
     throw makeGuyditorError("E_RESTYLE_JOB_PAYLOAD", "Restyle job payload is invalid.", {
@@ -166,6 +169,7 @@ function jobPayload(job: JobRecord): RestyleJobPayload {
       taskId: context["taskId"],
       initiator: context["initiator"],
     },
+    ...(payload["divergence"] === undefined ? {} : { divergence: payload["divergence"] }),
   };
 }
 
@@ -219,6 +223,16 @@ export class RestyleExecutionService {
       const preflight = this.#costMeter.preflight(estimate, input.context);
       if (preflight.verdict !== "proceed") return { ...preflight, estimate };
     }
+    const project = this.#projectStore.currentProject;
+    const divergence = touchedDerivativeIds(project, project, [{
+      op: "restyle.segment.approve",
+      params: {
+        deliverableId: input.plan.deliverableId,
+        plan: input.plan,
+      },
+    }]).length > 0
+      ? "graphics" as const
+      : undefined;
     const jobs = input.plan.chunks.map((chunk) => this.#jobs.enqueue({
       kind: "restyle.generate",
       title: `Restyle chunk ${String(chunk.index + 1)}/${String(input.plan.chunks.length)}`,
@@ -227,6 +241,7 @@ export class RestyleExecutionService {
         plan: input.plan,
         chunkId: chunk.id,
         context: input.context,
+        ...(divergence === undefined ? {} : { divergence }),
       }),
     }));
     return { verdict: "enqueued", estimate, jobs };
@@ -552,6 +567,7 @@ export class RestyleExecutionService {
           sources: [{ kind: "media-evidence", ref: result.rawResponseRef }],
         },
         addresses: [],
+        ...(payload.divergence === undefined ? {} : { divergence: payload.divergence }),
       });
       if (!proposal.ok) throw proposal.error;
       reportProgress(1, 0);

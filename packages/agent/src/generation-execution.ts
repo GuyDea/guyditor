@@ -10,6 +10,7 @@ import {
   failure,
   makeGuyditorError,
   makeId,
+  touchedDerivativeIds,
 } from "../../core/src/index.js";
 import type {
   GenerationProvenance,
@@ -363,17 +364,25 @@ export class GenerationExecutionService {
       assetId,
       reviewAnnotationId: candidate.review.annotationId,
     };
+    const operations = [{
+      op: "generation.accept",
+      params: {
+        cachedPath: candidate.filePath,
+        asset,
+        provenance,
+        review: candidate.review,
+        placement: { ...placement, layerId, itemId },
+      },
+    }];
+    const divergence = touchedDerivativeIds(
+      this.#projectStore.currentProject,
+      this.#projectStore.currentProject,
+      operations,
+    ).length > 0
+      ? "graphics" as const
+      : undefined;
     const result = await this.#operationEngine.createProposal({
-      operations: [{
-        op: "generation.accept",
-        params: {
-          cachedPath: candidate.filePath,
-          asset,
-          provenance,
-          review: candidate.review,
-          placement: { ...placement, layerId, itemId },
-        },
-      }],
+      operations,
       instruction: { kind: "annotation", annotation: candidate.review.annotationId },
       actor: { kind: "agent", id: "generation-review", model: "deterministic-lifecycle" },
       reason: {
@@ -381,6 +390,7 @@ export class GenerationExecutionService {
         sources: [{ kind: "annotation", ref: candidate.review.annotationId }],
       },
       addresses: [],
+      ...(divergence === undefined ? {} : { divergence }),
     });
     if (result.ok) {
       candidate.status = "proposed";

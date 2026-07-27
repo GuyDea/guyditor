@@ -45,7 +45,7 @@ const NO_BUDGETS: BudgetConfig = {
   cumulative: { warnUsd: null, capUsd: null },
 };
 const PROFILE: RenderProfile = {
-  id: "youtube",
+  id: "youtube-shorts",
   version: "1.0.0",
   video: { codec: "libx264", crf: 18, pixelFormat: "yuv420p" },
   audio: { codec: "aac", bitrate: "192k" },
@@ -109,6 +109,46 @@ describe("FR-604/605/606 B-roll generation lifecycle", () => {
       version: "2.0.0",
       path: "skills/brand_visual/2.0.0/",
       contentHash: "b".repeat(64),
+    });
+    project.sequences.push({
+      id: "seq_bbbbbbbbbb",
+      name: "short",
+      clips: [{
+        id: "clp_cccccccccc",
+        asset: "ast_aaaaaaaaaa",
+        source: {
+          in: { frames: 0, fps: "24/1" },
+          out: { frames: 12, fps: "24/1" },
+        },
+      }],
+    });
+    project.layers.push({
+      id: "lyr_bbbbbbbbbb",
+      kind: "video",
+      name: "short",
+      order: 1,
+      enabled: true,
+      locked: false,
+      sequence: "seq_bbbbbbbbbb",
+    });
+    project.deliverables.push({
+      id: "dlv_bbbbbbbbbb",
+      kind: "short",
+      name: "Short",
+      profile: "youtube-shorts@1.0.0",
+      sequenceId: "seq_bbbbbbbbbb",
+      status: "draft",
+      dependencies: [{
+        derivativeClipId: "clp_cccccccccc",
+        source: {
+          assetId: "ast_aaaaaaaaaa",
+          range: {
+            start: { frames: 0, fps: "24/1" },
+            end: { frames: 12, fps: "24/1" },
+          },
+          longformClipId: "clp_aaaaaaaaaa",
+        },
+      }],
     });
     const store = await valueOf(createProject(projectRoot, project, { now: () => NOW }));
     const idFactory = ids();
@@ -198,10 +238,11 @@ describe("FR-604/605/606 B-roll generation lifecycle", () => {
     }
     await service.resolveReview(candidate.candidateId);
     const proposal = await valueOf(service.acceptCandidate(candidate.candidateId, {
-      sequenceId: "seq_aaaaaaaaaa",
+      sequenceId: "seq_bbbbbbbbbb",
       atFrame: 24,
       durationFrames: 12,
     }));
+    expect(proposal.divergence).toBe("graphics");
     await valueOf(engine.acceptProposal(proposal.id, "creator"));
     const firstAsset = engine.currentProject.assets.at(-1)!;
     expect(firstAsset).toMatchObject({
@@ -219,7 +260,7 @@ describe("FR-604/605/606 B-roll generation lifecycle", () => {
     const graph = compileRenderGraph({
       project: engine.currentProject,
       revision: engine.currentProject.revision,
-      deliverableId: "dlv_aaaaaaaaaa",
+      deliverableId: "dlv_bbbbbbbbbb",
       variant: "clean",
       quality: "high",
       profile: PROFILE,

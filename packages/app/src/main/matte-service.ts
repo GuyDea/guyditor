@@ -6,6 +6,7 @@ import { isAbsolute, join, resolve } from "node:path";
 import {
   makeGuyditorError,
   makeId,
+  touchedDerivativeIds,
 } from "../../../core/src/index.js";
 import type {
   Asset,
@@ -40,6 +41,7 @@ export interface MatteServiceOptions {
   store: ProjectStore;
   jobs: JobQueue;
   mlworker: Pick<MlworkerSupervisor, "hello">;
+  preflight: (request: ExecuteRequest) => Promise<void>;
   execute: (request: ExecuteRequest) => Promise<ExecuteResult>;
 }
 
@@ -147,12 +149,14 @@ export class MatteService {
   readonly #store: ProjectStore;
   readonly #jobs: JobQueue;
   readonly #mlworker: Pick<MlworkerSupervisor, "hello">;
+  readonly #preflight: MatteServiceOptions["preflight"];
   readonly #execute: MatteServiceOptions["execute"];
 
   public constructor(options: MatteServiceOptions) {
     this.#store = options.store;
     this.#jobs = options.jobs;
     this.#mlworker = options.mlworker;
+    this.#preflight = options.preflight;
     this.#execute = options.execute;
   }
 
@@ -321,12 +325,19 @@ export class MatteService {
       masks: structuredClone(priorKey?.masks ?? []),
       ...(priorKey?.postColor === undefined ? {} : { postColor: structuredClone(priorKey.postColor) }),
     };
+    const keyOperation = { op: "clip.key.set", params: { clipId, settings } };
+    const divergence = touchedDerivativeIds(current, current, [keyOperation]).length > 0
+      ? "graphics" as const
+      : undefined;
     if (reused !== undefined) {
-      const accepted = await this.#execute({
-        operations: [{ op: "clip.key.set", params: { clipId, settings } }],
+      const request: ExecuteRequest = {
+        operations: [keyOperation],
         intent: "direct",
         label: `Accept neural matte ${jobId} for ${clipId}`,
-      });
+        ...(divergence === undefined ? {} : { divergence }),
+      };
+      await this.#preflight(request);
+      const accepted = await this.#execute(request);
       return { assetId: reused.id, path: reused.path, revision: accepted.revision };
     }
 
@@ -348,14 +359,7 @@ export class MatteService {
       jobId,
     };
     const provenanceText = `${JSON.stringify(provenance, null, 2)}\n`;
-    await Promise.all([
-      mkdir(join(this.#store.root, "assets", "mattes"), { recursive: true }),
-      mkdir(join(this.#store.root, "sidecars", "provenance"), { recursive: true }),
-    ]);
-    await copyFile(candidatePath, mattePath);
-    await chmod(mattePath, 0o444);
-    await writeFile(sidecarPath, provenanceText, "utf8");
-    const matteBytes = (await stat(mattePath)).size;
+    const matteBytes = (await stat(candidatePath)).size;
     const sidecar: SidecarRef = {
       name: sidecarName,
       path: sidecarRelativePath,
@@ -403,16 +407,26 @@ export class MatteService {
       },
       provenance: { sidecar: sidecarName },
     };
+    const request: ExecuteRequest = {
+      operations: [
+        { op: "sidecar.register", params: { name: sidecarName, sidecar } },
+        { op: "asset.ingest", params: { assets: [asset] } },
+        keyOperation,
+      ],
+      intent: "direct",
+      label: `Freeze and accept neural matte ${jobId} for ${clipId}`,
+      ...(divergence === undefined ? {} : { divergence }),
+    };
+    await this.#preflight(request);
     try {
-      const accepted = await this.#execute({
-        operations: [
-          { op: "sidecar.register", params: { name: sidecarName, sidecar } },
-          { op: "asset.ingest", params: { assets: [asset] } },
-          { op: "clip.key.set", params: { clipId, settings } },
-        ],
-        intent: "direct",
-        label: `Freeze and accept neural matte ${jobId} for ${clipId}`,
-      });
+      await Promise.all([
+        mkdir(join(this.#store.root, "assets", "mattes"), { recursive: true }),
+        mkdir(join(this.#store.root, "sidecars", "provenance"), { recursive: true }),
+      ]);
+      await copyFile(candidatePath, mattePath);
+      await chmod(mattePath, 0o444);
+      await writeFile(sidecarPath, provenanceText, "utf8");
+      const accepted = await this.#execute(request);
       return { assetId: matteAssetId, path: matteRelativePath, revision: accepted.revision };
     } catch (error: unknown) {
       await Promise.allSettled([unlink(mattePath), unlink(sidecarPath)]);

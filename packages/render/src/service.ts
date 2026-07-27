@@ -21,8 +21,10 @@ import {
   placedItemAppliesToSequence,
   OperationEngine,
   parseProjectYaml,
+  programmaticAnimationSidecar,
   resolveBrandTemplateParams,
   resolveAnchor,
+  touchedDerivativeIds,
 } from "../../core/src/index.js";
 import type {
   CaptionTrack,
@@ -32,6 +34,7 @@ import type {
   JobExecutorContext,
   JobQueue,
   KeySettings,
+  ProgrammaticAnimationProvenance,
   ProjectStore,
   TemplateBrandDefaults,
 } from "../../core/src/index.js";
@@ -968,6 +971,126 @@ export class RenderService {
       bottom: Math.round(height * (titleSafe?.bottom ?? 0.05)),
       left: Math.round(width * (titleSafe?.left ?? 0.05)),
     };
+    let assetId = makeId("ast");
+    while (project.assets.some(({ id }) => id === assetId)) assetId = makeId("ast");
+    const outputDirectory = join(this.#projectRoot, "media/programmatic");
+    const outputPath = join(outputDirectory, `${assetId}.${profile.container}`);
+    let clipId: string | undefined;
+    let placement: {
+      sequenceId: string;
+      layerId: string;
+      clipId: string;
+      index: number;
+    } | undefined;
+    if (request.placeAsClip === true) {
+      const layer = project.layers.find(({ kind, sequence }) =>
+        kind === "video" && sequence === deliverable.sequenceId);
+      const sequence = project.sequences.find(({ id }) => id === deliverable.sequenceId);
+      if (layer === undefined || sequence === undefined) {
+        throw makeGuyditorError(
+          "E_OP_LAYER_TARGET",
+          `Deliverable ${deliverable.id} has no sequence-bound video layer.`,
+          { affected: [deliverable.id, deliverable.sequenceId] },
+        );
+      }
+      clipId = makeId("clp");
+      while (project.sequences.some(({ clips }) => clips.some(({ id }) => id === clipId))) {
+        clipId = makeId("clp");
+      }
+      placement = {
+        sequenceId: sequence.id,
+        layerId: layer.id,
+        clipId,
+        index: request.clipIndex ?? sequence.clips.length,
+      };
+    }
+    const preflightRights = {
+      origin: "programmatic" as const,
+      restrictions: [],
+      confirmedBy: "creator" as const,
+    };
+    const preflightHash = createHash("sha256")
+      .update(`template-freeze-preflight:${assetId}`)
+      .digest("hex");
+    const preflightProvenance: ProgrammaticAnimationProvenance = {
+      schema: "guyditor.programmatic-provenance/v1",
+      assetId,
+      template: {
+        id: descriptor.value.id,
+        version: descriptor.value.version,
+        contentHash: descriptor.value.contentHash,
+      },
+      params: structuredClone(params),
+      seed,
+      renderer: {
+        template: TEMPLATE_RENDERER_VERSION,
+        primitives: PRIMITIVES_V1_VERSION,
+        canvas: TEMPLATE_CANVAS_VERSION,
+        toolchainHash: `sha256:${preflightHash}`,
+        fontHashes: Object.fromEntries(
+          Object.entries(runtime.value.fonts).map(([family, font]) =>
+            [family, font.sha256]),
+        ),
+      },
+      output: { frames, fps, width, height },
+      rights: preflightRights,
+      contentHash: `sha256:${preflightHash}`,
+    };
+    const preflightSidecar = programmaticAnimationSidecar(preflightProvenance);
+    const preflightOperation = {
+      op: "template.freeze",
+      params: {
+        asset: {
+          id: assetId,
+          kind: "generated",
+          path: `media/programmatic/${assetId}.${profile.container}`,
+          sha256: preflightHash,
+          bytes: 1,
+          container: profile.container,
+          probe: {
+            duration: { frames, fps },
+            width,
+            height,
+            fps,
+          },
+          video: {
+            codec: profile.video.codec,
+            width,
+            height,
+            fps,
+            pixFmt: profile.video.pixelFormat,
+            hasAlpha: false,
+            rotation: 0,
+          },
+          integrity: "ok",
+          ingest: {
+            at: "2000-01-01T00:00:00.000Z",
+            ffprobeVersion: "template-freeze-preflight",
+            via: "generated",
+          },
+          provenance: { sidecar: preflightSidecar.name },
+          rights: preflightRights,
+        },
+        provenance: preflightProvenance,
+        sidecar: preflightSidecar,
+        ...(placement === undefined ? {} : { placement }),
+      },
+    };
+    const divergence = touchedDerivativeIds(project, project, [preflightOperation]).length > 0
+      ? "graphics" as const
+      : undefined;
+    const engine = new OperationEngine(this.#store.currentProject, {
+      committer: this.#store,
+      templateProvider: this.#templateRegistry,
+    });
+    const preflight = await engine.execute([preflightOperation], {
+      baseRevision: request.revision,
+      origin: "ui",
+      dryRun: true,
+      recordUndo: false,
+      ...(divergence === undefined ? {} : { divergence }),
+    });
+    if (!preflight.ok) throw preflight.error;
     const freezeKey = createHash("sha256").update(canonicalJson({
       template: {
         id: descriptor.value.id,
@@ -1016,10 +1139,6 @@ export class RenderService {
         png.value,
       );
     }
-    let assetId = makeId("ast");
-    while (project.assets.some(({ id }) => id === assetId)) assetId = makeId("ast");
-    const outputDirectory = join(this.#projectRoot, "media/programmatic");
-    const outputPath = join(outputDirectory, `${assetId}.${profile.container}`);
     await mkdir(outputDirectory, { recursive: true });
     await runFfmpeg([
       "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
@@ -1075,39 +1194,6 @@ export class RenderService {
       chmod(outputPath, 0o444),
       chmod(provenancePath, 0o444),
     ]);
-    let clipId: string | undefined;
-    let placement: {
-      sequenceId: string;
-      layerId: string;
-      clipId: string;
-      index: number;
-    } | undefined;
-    if (request.placeAsClip === true) {
-      const layer = project.layers.find(({ kind, sequence }) =>
-        kind === "video" && sequence === deliverable.sequenceId);
-      const sequence = project.sequences.find(({ id }) => id === deliverable.sequenceId);
-      if (layer === undefined || sequence === undefined) {
-        throw makeGuyditorError(
-          "E_OP_LAYER_TARGET",
-          `Deliverable ${deliverable.id} has no sequence-bound video layer.`,
-          { affected: [deliverable.id, deliverable.sequenceId] },
-        );
-      }
-      clipId = makeId("clp");
-      while (project.sequences.some(({ clips }) => clips.some(({ id }) => id === clipId))) {
-        clipId = makeId("clp");
-      }
-      placement = {
-        sequenceId: sequence.id,
-        layerId: layer.id,
-        clipId,
-        index: request.clipIndex ?? sequence.clips.length,
-      };
-    }
-    const engine = new OperationEngine(this.#store.currentProject, {
-      committer: this.#store,
-      templateProvider: this.#templateRegistry,
-    });
     const committed = await engine.execute([{
       op: "template.freeze",
       params: {
@@ -1120,6 +1206,7 @@ export class RenderService {
       baseRevision: request.revision,
       origin: "ui",
       dryRun: false,
+      ...(divergence === undefined ? {} : { divergence }),
     });
     if (!committed.ok) {
       await Promise.all([

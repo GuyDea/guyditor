@@ -23,10 +23,12 @@ import {
   planJumpCutConcealment,
   resolveAnchor,
   serializeTakeMarkerSidecar,
+  touchedDerivativeIds,
 } from "../../../core/src/index.js";
 import type {
   Asset, FaceTrackAvailability, JumpCutConcealmentConfig, JobFilter, JobOverview, JobRecord,
-  OperationBatchResult, OperationCommitter, OperationInput, Proposal, ProjectStore, Result,
+  DivergenceClass, GuyditorProject, OperationBatchResult, OperationCommitter, OperationInput,
+  Proposal, ProjectStore, Result,
   RestyleFrameRange, RestylePlan, RestyleSeamTreatment, RightsPolicy, SidecarRef,
   TakeMarkerSidecar, WatchFolderConfig,
 } from "../../../core/src/index.js";
@@ -193,6 +195,44 @@ function projectAudioPath(store: ProjectStore, assetId: string): string {
 
 function inverseOperations(result: OperationBatchResult): OperationInput[] {
   return result.applied.slice().reverse().flatMap(({ inverse }) => inverse);
+}
+
+export interface JumpCutProposalOperationGroup {
+  operations: OperationInput[];
+  operationIndexes: number[];
+  divergence?: DivergenceClass;
+}
+
+export function groupJumpCutProposalOperations(
+  project: GuyditorProject,
+  operations: readonly OperationInput[],
+): JumpCutProposalOperationGroup[] {
+  const groups: JumpCutProposalOperationGroup[] = [];
+  operations.forEach((operation, operationIndex) => {
+    const touchesShort = touchedDerivativeIds(project, project, [operation]).length > 0;
+    const divergence = !touchesShort
+      ? undefined
+      : operation.op === "clip.punchin.set"
+        ? "framing" as const
+        : operation.op === "clip.source.switch" || operation.op === "transition.set"
+          ? "cuts" as const
+          : undefined;
+    if (touchesShort && divergence === undefined) {
+      throw new Error(`Jump-cut operation ${operation.op} has no divergence classification.`);
+    }
+    let group = groups.find((candidate) => candidate.divergence === divergence);
+    if (group === undefined) {
+      group = {
+        operations: [],
+        operationIndexes: [],
+        ...(divergence === undefined ? {} : { divergence }),
+      };
+      groups.push(group);
+    }
+    group.operations.push(operation);
+    group.operationIndexes.push(operationIndex);
+  });
+  return groups;
 }
 
 function publicJobStatus(job: JobRecord): JobStatus {
@@ -961,6 +1001,7 @@ export class WindowServiceHost {
       store,
       jobs,
       mlworker: this.#app.mlworker,
+      preflight: (request) => this.#preflight(request),
       execute: (request) => this.#execute(request),
     });
     const compositor = new CompositorModel({
@@ -1993,6 +2034,18 @@ export class WindowServiceHost {
     return { txnId, revision, inverse: inverseOperations(result) };
   }
 
+  async #preflight(request: ExecuteRequest): Promise<void> {
+    const project = this.#requireProject();
+    resultValue(await this.#coreEngine(project).execute(request.operations, {
+      baseRevision: project.store.currentProject.revision,
+      origin: "ui",
+      dryRun: true,
+      recordUndo: false,
+      instruction: { kind: "ui-direct", text: request.label },
+      ...(request.divergence === undefined ? {} : { divergence: request.divergence }),
+    }));
+  }
+
   #coreEngine(
     project: ProjectServices,
     anchorResolvers?: AnchorResolverRegistry,
@@ -2033,6 +2086,7 @@ export class WindowServiceHost {
             sources: [...current.reason.sources],
           },
           addresses: [...current.addresses],
+          ...(current.divergence === undefined ? {} : { divergence: current.divergence }),
         },
       ));
       this.publisher.publish({ kind: "proposal.updated", proposalId: current.id });
@@ -2099,6 +2153,7 @@ export class WindowServiceHost {
         sources: [{ kind: "instruction", ref: proposalId }],
       },
       addresses: current.addresses,
+      ...(current.divergence === undefined ? {} : { divergence: current.divergence }),
     }));
     this.publisher.publish({ kind: "proposal.updated", proposalId });
     this.publisher.publish({ kind: "proposal.updated", proposalId: proposal.id });
@@ -2110,7 +2165,10 @@ export class WindowServiceHost {
     beforeClipId?: string;
     config?: Partial<JumpCutConcealmentConfig>;
     faceTracks?: Record<string, FaceTrackAvailability>;
-  }): Promise<ReturnType<typeof planJumpCutConcealment> & { proposal?: Proposal }> {
+  }): Promise<ReturnType<typeof planJumpCutConcealment> & {
+    proposal?: Proposal;
+    proposals?: Proposal[];
+  }> {
     const project = this.#requireProject();
     const config: JumpCutConcealmentConfig = {
       ...structuredClone(DEFAULT_JUMP_CUT_CONCEALMENT_CONFIG),
@@ -2131,25 +2189,36 @@ export class WindowServiceHost {
       faceTracks: params.faceTracks ?? {},
     });
     if (plan.kind !== "proposal") return plan;
-    const proposal = resultValue(await this.#coreEngine(project).createProposal({
-      operations: plan.operations,
-      instruction: {
-        kind: "skill-policy",
-        text: "Review jump-cut concealment (policy supplied directly; editorial-skill integration lands in M4)",
-      },
-      actor: { kind: "tool", id: "assist.jumpcuts.conceal" },
-      reason: {
-        text: "Conceal flagged same-source jump cuts without silently changing the accepted timeline.",
-        sources: plan.reasons.map(({ evidence }) => ({
-          kind: "media-evidence" as const,
-          ref: evidence,
-        })),
-      },
-      addresses: [],
-      warnings,
-    }));
-    this.publisher.publish({ kind: "proposal.updated", proposalId: proposal.id });
-    return { ...plan, proposal };
+    const proposals: Proposal[] = [];
+    for (const group of groupJumpCutProposalOperations(
+      project.store.currentProject,
+      plan.operations,
+    )) {
+      const operationIndexes = new Set(group.operationIndexes);
+      const proposal = resultValue(await this.#coreEngine(project).createProposal({
+        operations: group.operations,
+        instruction: {
+          kind: "skill-policy",
+          text: "Review jump-cut concealment (policy supplied directly; editorial-skill integration lands in M4)",
+        },
+        actor: { kind: "tool", id: "assist.jumpcuts.conceal" },
+        reason: {
+          text: "Conceal flagged same-source jump cuts without silently changing the accepted timeline.",
+          sources: plan.reasons
+            .filter(({ operationIndex }) => operationIndexes.has(operationIndex))
+            .map(({ evidence }) => ({
+              kind: "media-evidence" as const,
+              ref: evidence,
+            })),
+        },
+        addresses: [],
+        warnings,
+        ...(group.divergence === undefined ? {} : { divergence: group.divergence }),
+      }));
+      proposals.push(proposal);
+      this.publisher.publish({ kind: "proposal.updated", proposalId: proposal.id });
+    }
+    return { ...plan, proposal: proposals[0], proposals };
   }
 
   async #proposePickup(params: {
