@@ -52,6 +52,22 @@ import {
 } from "./state/view-state.js";
 import type { PanelId } from "./state/view-state.js";
 import type { DockPanelId } from "./state/layout-state.js";
+import {
+  beginContextRequest,
+  createContextRequestGate,
+  invalidateContextRequests,
+  isContextRequestCurrent,
+} from "./state/async-context.js";
+import {
+  createRestyleContext,
+  keyRestylePlan,
+  restylePlanForContext,
+} from "./state/restyle-context.js";
+import type {
+  KeyedRestylePlan,
+  RestyleContext,
+} from "./state/restyle-context.js";
+import { resolveActiveDeliverable } from "./active-deliverable.js";
 import { phaseForShortcut } from "./workflow-phases.js";
 import { revealPanel } from "./workspace-navigation.js";
 
@@ -62,6 +78,26 @@ function isTypingTarget(target: EventTarget | null): boolean {
 }
 
 const OVERVIEW_CONFIRMATION_POLL_MS = 2_000;
+
+function activeRestyleContext(
+  snapshot: ProjectSnapshot | null,
+  selectedDeliverableId: string | null,
+): RestyleContext | null {
+  if (snapshot === null) return null;
+  try {
+    const deliverable = resolveActiveDeliverable(
+      snapshot.master,
+      selectedDeliverableId,
+    );
+    return createRestyleContext(
+      snapshot.projectPath,
+      deliverable.id,
+      deliverable.sequenceId,
+    );
+  } catch {
+    return null;
+  }
+}
 
 export function App(): React.JSX.Element {
   const snapshot = useProjectMirror((state) => state.snapshot);
@@ -80,11 +116,13 @@ export function App(): React.JSX.Element {
   const [skills, setSkills] = useState<SkillManifest[]>([]);
   const [pinnedSkills, setPinnedSkills] = useState<ResolvedSkill[]>([]);
   const [skillDrafts, setSkillDrafts] = useState<ResolvedSkill[]>([]);
-  const [restylePlan, setRestylePlan] = useState<RestylePlan | null>(null);
+  const [restylePlanState, setRestylePlanState] =
+    useState<KeyedRestylePlan | null>(null);
   const [exportReport, setExportReport] = useState<ExportReport | null>(null);
   const [notice, setNotice] = useState("Open a project directory to connect the edit journal.");
   const overviewGeneration = useRef(0);
   const annotationGeneration = useRef(0);
+  const restylePlanGate = useRef(createContextRequestGate());
   const replaceJobs = useJobsStore((state) => state.replace);
   const replaceOverview = useJobsStore((state) => state.replaceOverview);
   const applyJobEvent = useJobsStore((state) => state.applyEvent);
@@ -96,8 +134,13 @@ export function App(): React.JSX.Element {
   const setPlaying = usePreviewStore((state) => state.setPlaying);
   const selectWord = useSelectionStore((state) => state.selectWord);
   const selectAnnotation = useSelectionStore((state) => state.selectAnnotation);
+  const selectedDeliverableId = useSelectionStore(
+    (state) => state.selectedDeliverableId,
+  );
   const undoCount = useUndoStore((state) => state.undo.length);
   const redoCount = useUndoStore((state) => state.redo.length);
+  const restyleContext = activeRestyleContext(snapshot, selectedDeliverableId);
+  const restylePlan = restylePlanForContext(restylePlanState, restyleContext);
 
   const applyChecklistSignal = useCallback((signal: OnboardingSignal): void => {
     setOnboarding((current) => {
@@ -185,19 +228,45 @@ export function App(): React.JSX.Element {
   }, [applyChecklistSignal]);
 
   const refreshRestylePlan = useCallback(async (): Promise<void> => {
-    const deliverableId = useProjectMirror.getState().snapshot?.master.settings.primaryDeliverable;
-    if (deliverableId === undefined) {
-      setRestylePlan(null);
+    const context = activeRestyleContext(
+      useProjectMirror.getState().snapshot,
+      useSelectionStore.getState().selectedDeliverableId,
+    );
+    if (context === null) {
+      invalidateContextRequests(restylePlanGate.current);
+      setRestylePlanState(null);
       return;
     }
+    const request = beginContextRequest(restylePlanGate.current, context.key);
     try {
-      setRestylePlan(await window.guyditor.call<RestylePlan | null>(
+      const next = await window.guyditor.call<RestylePlan | null>(
         "DeliverableService",
         "restylePlan",
-        { deliverableId },
-      ));
+        { deliverableId: context.deliverableId },
+      );
+      const current = activeRestyleContext(
+        useProjectMirror.getState().snapshot,
+        useSelectionStore.getState().selectedDeliverableId,
+      );
+      if (isContextRequestCurrent(
+        restylePlanGate.current,
+        request,
+        current?.key ?? null,
+      )) {
+        setRestylePlanState(keyRestylePlan(context, next));
+      }
     } catch {
-      setRestylePlan(null);
+      const current = activeRestyleContext(
+        useProjectMirror.getState().snapshot,
+        useSelectionStore.getState().selectedDeliverableId,
+      );
+      if (isContextRequestCurrent(
+        restylePlanGate.current,
+        request,
+        current?.key ?? null,
+      )) {
+        setRestylePlanState(keyRestylePlan(context, null));
+      }
     }
   }, []);
 
@@ -314,6 +383,10 @@ export function App(): React.JSX.Element {
     }, OVERVIEW_CONFIRMATION_POLL_MS);
     return () => window.clearInterval(interval);
   }, [refreshOverview, snapshot]);
+
+  useEffect(() => {
+    void refreshRestylePlan();
+  }, [refreshRestylePlan, restyleContext?.key, restyleContext?.sequenceId]);
 
   useEffect(() => {
     const keydown = (event: KeyboardEvent): void => {

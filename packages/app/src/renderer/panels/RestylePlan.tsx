@@ -10,6 +10,13 @@ import type { TemplateCatalogEntry } from "../../../../render/src/index.js";
 import { resolveActiveDeliverable } from "../active-deliverable.js";
 import { errorMessage } from "../ipc.js";
 import { useJobsStore } from "../state/jobs.js";
+import {
+  createRestyleContext,
+  keyRestylePlan,
+  restylePlanForContext,
+  restylePlanMatchesContext,
+} from "../state/restyle-context.js";
+import type { KeyedRestylePlan } from "../state/restyle-context.js";
 import { useSelectionStore } from "../state/view-state.js";
 import type { WorkspacePanelProps } from "./types.js";
 
@@ -218,21 +225,43 @@ export function RestylePlanReview({
   const [coverageMode, setCoverageMode] = useState<"full" | "range">("full");
   const [startFrame, setStartFrame] = useState(0);
   const [endFrame, setEndFrame] = useState(300);
-  const [draft, setDraft] = useState<RestylePlan | null>(null);
+  const [draftState, setDraftState] = useState<KeyedRestylePlan | null>(null);
   const [catalog, setCatalog] = useState<TemplateCatalogEntry[]>([]);
-  const [confirmation, setConfirmation] = useState<Extract<
-    RestyleStartResult,
-    { verdict: "warn" }
-  > | null>(null);
+  const [confirmationState, setConfirmationState] = useState<{
+    contextKey: string;
+    sequenceId: string;
+    value: Extract<
+      RestyleStartResult,
+      { verdict: "warn" }
+    >;
+  } | null>(null);
   const jobs = useJobsStore((state) => state.jobs);
   const selectedDeliverableId = useSelectionStore(
     (state) => state.selectedDeliverableId,
   );
-  const plan = restylePlan ?? draft;
-  const accepted = restylePlan !== null;
   const deliverable = snapshot === null
     ? undefined
     : resolveActiveDeliverable(snapshot.master, selectedDeliverableId);
+  const context = snapshot === null || deliverable === undefined
+    ? null
+    : createRestyleContext(
+        snapshot.projectPath,
+        deliverable.id,
+        deliverable.sequenceId,
+      );
+  const acceptedPlan = restylePlan !== null &&
+      context !== null &&
+      restylePlanMatchesContext(restylePlan, context)
+    ? restylePlan
+    : null;
+  const draftPlan = restylePlanForContext(draftState, context);
+  const confirmation = confirmationState !== null &&
+      confirmationState.contextKey === context?.key &&
+      confirmationState.sequenceId === context.sequenceId
+    ? confirmationState.value
+    : null;
+  const plan = acceptedPlan ?? draftPlan;
+  const accepted = acceptedPlan !== null;
   const deliverableId = deliverable?.id;
   const fps = snapshot?.master.settings.timeline.fps ?? "24/1";
   const projectName = snapshot?.master.project.name ?? "Episode";
@@ -243,12 +272,12 @@ export function RestylePlanReview({
   ) ?? 1;
 
   useEffect(() => {
-    setDraft(null);
-    setConfirmation(null);
+    setDraftState(null);
+    setConfirmationState(null);
     setCoverageMode("full");
     setStartFrame(0);
     setEndFrame(300);
-  }, [deliverableId]);
+  }, [context?.key]);
 
   useEffect(() => {
     let current = true;
@@ -273,7 +302,11 @@ export function RestylePlanReview({
         seed: 607,
         providerSettings: {},
       });
-      setDraft(result.plan);
+      if (context === null || !restylePlanMatchesContext(result.plan, context)) {
+        setNotice("Ignored a restyle plan returned for a different deliverable context.");
+        return;
+      }
+      setDraftState(keyRestylePlan(context, result.plan));
       await refreshProposals();
       setNotice(`Prepared ${String(result.plan.chunks.length)} restyle chunks in ${result.proposal.id}; accept the plan before generation.`);
     } catch (error: unknown) {
@@ -290,13 +323,19 @@ export function RestylePlanReview({
         { deliverableId, ...(confirmToken === undefined ? {} : { confirmToken }) },
       );
       if (result.verdict === "enqueued") {
-        setConfirmation(null);
+        setConfirmationState(null);
         setNotice(`Queued ${String(result.jobs.length)} restyle chunks after the $${result.estimate.amount.toFixed(2)} whole-plan preflight.`);
       } else if (result.verdict === "warn") {
-        setConfirmation(result);
+        if (context !== null) {
+          setConfirmationState({
+            contextKey: context.key,
+            sequenceId: context.sequenceId,
+            value: result,
+          });
+        }
         setNotice(result.message);
       } else {
-        setConfirmation(null);
+        setConfirmationState(null);
         setNotice(result.message);
       }
       await refreshRestylePlan();
@@ -313,7 +352,7 @@ export function RestylePlanReview({
           <strong>Segmented AI restyle</strong>
         </div>
         <span className="state-chip" data-state={accepted ? "ready" : "queued"}>
-          {accepted ? "accepted plan" : draft === null ? "not planned" : "review plan"}
+          {accepted ? "accepted plan" : draftPlan === null ? "not planned" : "review plan"}
         </span>
       </header>
       <div className="restyle-create-grid">

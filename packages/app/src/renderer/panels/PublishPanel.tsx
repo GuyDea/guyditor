@@ -7,8 +7,29 @@ import {
   resolveActiveDeliverable,
 } from "../active-deliverable.js";
 import { errorMessage } from "../ipc.js";
+import {
+  beginContextRequest,
+  createContextRequestGate,
+  invalidateContextRequests,
+  isContextRequestCurrent,
+} from "../state/async-context.js";
+import type { ContextRequest } from "../state/async-context.js";
 import { useSelectionStore } from "../state/view-state.js";
 import { Panel } from "./Panel.js";
+import {
+  batchIdsForProject,
+  contextualValue,
+  createPublishBatchState,
+  createPublishMetadataState,
+  editPublishMetadata,
+  publishContextKey,
+  publishMetadataForContext,
+  reconcilePublishBatch,
+  reconcilePublishMetadata,
+  replacePublishMetadata,
+  valueForContext,
+} from "./publish-runtime.js";
+import type { ContextualValue } from "./publish-runtime.js";
 import type { WorkspacePanelProps } from "./types.js";
 
 function codePoints(value: string): number {
@@ -32,18 +53,39 @@ export function PublishPanel({ snapshot, refreshProject, refreshExportReport, se
   const deliverable = snapshot === null
     ? undefined
     : resolveActiveDeliverable(snapshot.master, selectedId);
+  const projectPath = snapshot?.projectPath ?? null;
+  const contextKey = projectPath === null || deliverable === undefined
+    ? null
+    : publishContextKey(projectPath, deliverable.id);
+  const canonicalMetadata = deliverable?.publish?.metadata ?? null;
   const [profiles, setProfiles] = useState<PlatformProfile[]>([]);
-  const [metadata, setMetadata] = useState<PublishMetadataDocument | null>(
-    deliverable?.publish?.metadata ?? null,
+  const [metadataState, setMetadataState] = useState(
+    () => createPublishMetadataState(contextKey, canonicalMetadata),
   );
-  const [batchIds, setBatchIds] = useState<string[]>(() => deliverables
-    .filter(({ status }) => status === "approved")
-    .map(({ id }) => id));
+  const metadata = publishMetadataForContext(
+    metadataState,
+    contextKey,
+    canonicalMetadata,
+  );
+  const [batchState, setBatchState] = useState(
+    () => createPublishBatchState(projectPath, deliverables),
+  );
+  const batchIds = batchIdsForProject(batchState, projectPath, deliverables);
   const [buildKits, setBuildKits] = useState(true);
-  const [otioLosses, setOtioLosses] = useState<OtioLoss[] | null>(null);
+  const [otioPreview, setOtioPreview] =
+    useState<ContextualValue<OtioLoss[]> | null>(null);
   const [otioMediaPaths, setOtioMediaPaths] = useState<"absolute" | "relative">("relative");
   const [otioAnnotations, setOtioAnnotations] = useState(false);
-  const metadataDeliverableId = useRef(deliverable?.id);
+  const otioRequestKey = contextKey === null
+    ? null
+    : JSON.stringify([contextKey, otioMediaPaths, otioAnnotations]);
+  const operationGate = useRef(createContextRequestGate());
+  const otioGate = useRef(createContextRequestGate());
+  const currentContextKey = useRef(contextKey);
+  const currentOtioRequestKey = useRef(otioRequestKey);
+  currentContextKey.current = contextKey;
+  currentOtioRequestKey.current = otioRequestKey;
+  const otioLosses = valueForContext(otioPreview, otioRequestKey);
   const profile = profiles.find(({ id, version }) => `${id}@${version}` === deliverable?.profile);
 
   useEffect(() => {
@@ -53,11 +95,23 @@ export function PublishPanel({ snapshot, refreshProject, refreshExportReport, se
   }, []);
 
   useEffect(() => {
-    if (metadataDeliverableId.current === deliverable?.id) return;
-    metadataDeliverableId.current = deliverable?.id;
-    setMetadata(deliverable?.publish?.metadata ?? null);
-    setOtioLosses(null);
-  }, [deliverable?.id, deliverable?.publish?.metadata]);
+    setMetadataState((current) =>
+      reconcilePublishMetadata(current, contextKey, canonicalMetadata));
+  }, [canonicalMetadata, contextKey]);
+
+  useEffect(() => {
+    invalidateContextRequests(operationGate.current);
+  }, [contextKey]);
+
+  useEffect(() => {
+    setBatchState((current) =>
+      reconcilePublishBatch(current, projectPath, deliverables));
+  }, [deliverables, projectPath]);
+
+  useEffect(() => {
+    invalidateContextRequests(otioGate.current);
+    setOtioPreview(null);
+  }, [otioRequestKey]);
 
   const counts = useMemo(() => ({
     title: codePoints(metadata?.title ?? ""),
@@ -66,14 +120,65 @@ export function PublishPanel({ snapshot, refreshProject, refreshExportReport, se
     hashtags: metadata?.hashtags.length ?? 0,
   }), [metadata]);
 
-  async function run(label: string, action: () => Promise<unknown>): Promise<void> {
+  function operationIsCurrent(request: ContextRequest): boolean {
+    return isContextRequestCurrent(
+      operationGate.current,
+      request,
+      currentContextKey.current,
+    );
+  }
+
+  async function run(
+    label: string,
+    action: (request: ContextRequest) => Promise<unknown>,
+  ): Promise<void> {
+    if (contextKey === null) return;
+    const request = beginContextRequest(operationGate.current, contextKey);
     setNotice(`${label}…`);
     try {
-      await action();
+      await action(request);
+      if (!operationIsCurrent(request)) return;
       await Promise.all([refreshProject(), refreshExportReport()]);
+      if (!operationIsCurrent(request)) return;
       setNotice(`${label} ready.`);
     } catch (error: unknown) {
-      setNotice(errorMessage(error));
+      if (operationIsCurrent(request)) setNotice(errorMessage(error));
+    }
+  }
+
+  async function reviewOtioLosses(): Promise<void> {
+    if (otioRequestKey === null) return;
+    const request = beginContextRequest(otioGate.current, otioRequestKey);
+    const params = structuredClone(otioParams);
+    setNotice("Review OTIO losses…");
+    try {
+      const preview = await window.guyditor.call<{ losses: OtioLoss[] }>(
+        "DeliverableService",
+        "previewOtioExport",
+        params,
+      );
+      if (!isContextRequestCurrent(
+        otioGate.current,
+        request,
+        currentOtioRequestKey.current,
+      )) return;
+      setOtioPreview(contextualValue(request.contextKey, preview.losses));
+      await Promise.all([refreshProject(), refreshExportReport()]);
+      if (isContextRequestCurrent(
+        otioGate.current,
+        request,
+        currentOtioRequestKey.current,
+      )) {
+        setNotice("Review OTIO losses ready.");
+      }
+    } catch (error: unknown) {
+      if (isContextRequestCurrent(
+        otioGate.current,
+        request,
+        currentOtioRequestKey.current,
+      )) {
+        setNotice(errorMessage(error));
+      }
     }
   }
 
@@ -85,7 +190,13 @@ export function PublishPanel({ snapshot, refreshProject, refreshExportReport, se
   };
 
   function edit<Key extends keyof PublishMetadataDocument>(key: Key, value: PublishMetadataDocument[Key]): void {
-    setMetadata((current) => current === null ? current : { ...current, [key]: value });
+    if (contextKey === null || metadata === null) return;
+    setMetadataState((current) => {
+      const base = publishMetadataForContext(current, contextKey, metadata);
+      return base === null
+        ? current
+        : editPublishMetadata(current, contextKey, { ...base, [key]: value });
+    });
   }
 
   if (snapshot === null || deliverable === undefined) {
@@ -131,9 +242,12 @@ export function PublishPanel({ snapshot, refreshProject, refreshExportReport, se
         <section className="publish-section" aria-label="Metadata editor">
           <header><strong>Metadata</strong><span>{metadata?.status ?? "missing"}</span></header>
           {metadata === null ? (
-            <button type="button" className="primary-action" onClick={() => void run("Draft metadata", async () => {
+            <button type="button" className="primary-action" onClick={() => void run("Draft metadata", async (request) => {
               const drafted = await window.guyditor.call<PublishMetadataDocument>("DeliverableService", "draftMetadata", { deliverableId: deliverable.id });
-              setMetadata(drafted);
+              if (operationIsCurrent(request)) {
+                setMetadataState((current) =>
+                  replacePublishMetadata(current, request.contextKey, drafted));
+              }
             })}>Draft from transcript + beats</button>
           ) : (
             <div className="metadata-fields">
@@ -147,9 +261,12 @@ export function PublishPanel({ snapshot, refreshProject, refreshExportReport, se
               <span className="limit-indicator" data-over={hashtagLimit !== undefined && counts.hashtags > hashtagLimit}>{counts.hashtags}/{hashtagLimit ?? "—"}</span>
               <label className="wide">CTA<input value={metadata.cta ?? ""} onChange={(event) => edit("cta", event.target.value)} /></label>
               <div className="publish-actions wide">
-                <button type="button" onClick={() => void run("Save metadata", async () => {
+                <button type="button" onClick={() => void run("Save metadata", async (request) => {
                   const saved = await window.guyditor.call<PublishMetadataDocument>("DeliverableService", "saveMetadata", { deliverableId: deliverable.id, metadata });
-                  setMetadata(saved);
+                  if (operationIsCurrent(request)) {
+                    setMetadataState((current) =>
+                      replacePublishMetadata(current, request.contextKey, saved));
+                  }
                 })}>Save draft</button>
                 <button type="button" onClick={() => void run("Approve metadata", () => window.guyditor.call("DeliverableService", "approvePublish", { deliverableId: deliverable.id, targets: ["metadata"] }))}>Approve</button>
               </div>
@@ -197,10 +314,7 @@ export function PublishPanel({ snapshot, refreshProject, refreshExportReport, se
           </div>
           {otioLosses === null ? null : <ul className="output-contents">{otioLosses.map((loss) => <li key={loss.construct}><strong>{loss.construct}</strong> · {loss.disposition} ({loss.ids.length})</li>)}</ul>}
           <div className="publish-actions">
-            <button type="button" onClick={() => void run("Review OTIO losses", async () => {
-              const preview = await window.guyditor.call<{ losses: OtioLoss[] }>("DeliverableService", "previewOtioExport", otioParams);
-              setOtioLosses(preview.losses);
-            })}>Review OTIO losses</button>
+            <button type="button" onClick={() => void reviewOtioLosses()}>Review OTIO losses</button>
             <button type="button" className="primary-action" disabled={otioLosses === null} onClick={() => void run("Export .otio", () => window.guyditor.call("DeliverableService", "exportOtio", otioParams))}>Export .otio</button>
           </div>
         </section>
@@ -210,9 +324,19 @@ export function PublishPanel({ snapshot, refreshProject, refreshExportReport, se
           <div>{deliverables.map((item) => <label key={item.id}><input
             type="checkbox"
             checked={batchIds.includes(item.id)}
-            onChange={(event) => setBatchIds((current) => event.target.checked
-              ? [...new Set([...current, item.id])]
-              : current.filter((id) => id !== item.id))}
+            onChange={(event) => setBatchState((current) => {
+              const reconciled = reconcilePublishBatch(
+                current,
+                projectPath,
+                deliverables,
+              );
+              return {
+                ...reconciled,
+                ids: event.target.checked
+                  ? [...new Set([...reconciled.ids, item.id])]
+                  : reconciled.ids.filter((id) => id !== item.id),
+              };
+            })}
           />{item.name}<span className="state-chip" data-state={item.status}>{item.status}</span></label>)}</div>
           <label><input type="checkbox" checked={buildKits} onChange={(event) => setBuildKits(event.target.checked)} />Build upload kits after exports</label>
           <button type="button" className="primary-action" disabled={batchIds.length === 0} onClick={() => void run("Batch export", () => window.guyditor.call("DeliverableService", "batchExport", { deliverableIds: batchIds, buildKits }))}>Batch export</button>

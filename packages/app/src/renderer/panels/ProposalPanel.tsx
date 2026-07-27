@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import type {
   EvidenceRef,
@@ -7,6 +7,12 @@ import type {
 } from "../../../../core/src/index.js";
 import { activateDeliverable } from "../active-deliverable.js";
 import { errorMessage } from "../ipc.js";
+import {
+  beginContextRequest,
+  createContextRequestGate,
+  isContextRequestCurrent,
+  isContextRequestLatest,
+} from "../state/async-context.js";
 import {
   useAgentPanelStore,
   usePreviewStore,
@@ -49,13 +55,22 @@ export function ProposalPanel({
   const selectWord = useSelectionStore((state) => state.selectWord);
   const setWordRange = useSelectionStore((state) => state.setWordRange);
   const selectAnnotation = useSelectionStore((state) => state.selectAnnotation);
+  const evidenceGate = useRef(createContextRequestGate());
 
   async function jumpToEvidence(evidence: EvidenceRef): Promise<void> {
+    const selectedBefore = useSelectionStore.getState().selectedDeliverableId;
+    const targetDeliverableId = evidence.deliverableId ?? selectedBefore;
+    const request = beginContextRequest(
+      evidenceGate.current,
+      targetDeliverableId ?? "no-deliverable",
+    );
     if (evidence.deliverableId !== undefined) {
       if (snapshot === null) {
-        setNotice(
-          `Evidence target is unavailable: open a project containing ${evidence.deliverableId}.`,
-        );
+        if (isContextRequestLatest(evidenceGate.current, request)) {
+          setNotice(
+            `Evidence target is unavailable: open a project containing ${evidence.deliverableId}.`,
+          );
+        }
         return;
       }
       try {
@@ -65,9 +80,18 @@ export function ProposalPanel({
           setNotice,
         );
       } catch (error: unknown) {
-        setNotice(`Evidence target is unavailable: ${errorMessage(error)}`);
+        if (isContextRequestLatest(evidenceGate.current, request)) {
+          setNotice(`Evidence target is unavailable: ${errorMessage(error)}`);
+        }
         return;
       }
+      if (!isContextRequestCurrent(
+        evidenceGate.current,
+        request,
+        useSelectionStore.getState().selectedDeliverableId,
+      )) return;
+    } else if (!isContextRequestLatest(evidenceGate.current, request)) {
+      return;
     }
     if (evidence.sourceRange !== undefined) setPlayhead(evidence.sourceRange.start);
     if (evidence.wordRange !== undefined) {
