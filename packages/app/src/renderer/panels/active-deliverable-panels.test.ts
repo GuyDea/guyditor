@@ -82,7 +82,11 @@ interface TimelinePanelTestApi {
 
 interface GraphicsPanelTestApi {
   graphicEditDivergence(
-    deliverable: Deliverable | undefined,
+    project: GuyditorProject,
+    target:
+      | { kind: "add"; sequenceId: string }
+      | { kind: "item"; graphicId: string }
+      | { kind: "layer"; layerId: string },
   ): "graphics" | undefined;
 }
 
@@ -492,7 +496,7 @@ describe("active deliverable panels", () => {
     expect(html).not.toContain("Primary graphic leak");
   });
 
-  it("classifies only short graphic edits as derivative divergence", () => {
+  it("classifies graphic additions from their target sequence", () => {
     const project = projectWithShort();
     const graphicsApi =
       GraphicsPanelModule as unknown as Partial<GraphicsPanelTestApi>;
@@ -500,11 +504,127 @@ describe("active deliverable panels", () => {
     expect(typeof graphicsApi.graphicEditDivergence).toBe("function");
     if (graphicsApi.graphicEditDivergence === undefined) return;
 
-    expect(graphicsApi.graphicEditDivergence(project.deliverables[0]))
+    expect(graphicsApi.graphicEditDivergence(project, {
+      kind: "add",
+      sequenceId: "seq_aaaaaaaaaa",
+    }))
       .toBeUndefined();
-    expect(graphicsApi.graphicEditDivergence(project.deliverables[1]))
+    expect(graphicsApi.graphicEditDivergence(project, {
+      kind: "add",
+      sequenceId: "seq_bbbbbbbbbb",
+    }))
       .toBe("graphics");
-    expect(graphicsApi.graphicEditDivergence(undefined)).toBeUndefined();
+  });
+
+  it("classifies graphic updates and removals from item applicability", () => {
+    const project = projectWithShort();
+    project.templates = {
+      tpl_a2c3d4e5f6: { version: "1.0.0", contentHash: "a".repeat(64) },
+    };
+    project.layers.push({
+      id: "lyr_cccccccccc",
+      kind: "animation",
+      name: "Mixed graphics",
+      order: 2,
+      enabled: true,
+      locked: false,
+      items: [{
+        id: "gfx_aaaaaaaaaa",
+        sequenceId: "seq_aaaaaaaaaa",
+        template: "tpl_a2c3d4e5f6",
+        at: "word:w000001",
+        duration: { frames: 12, fps: "24/1" },
+        params: { title: "Long-form only" },
+        seed: 1,
+      }, {
+        id: "gfx_bbbbbbbbbb",
+        sequenceId: "seq_bbbbbbbbbb",
+        template: "tpl_a2c3d4e5f6",
+        at: "word:w000001",
+        duration: { frames: 12, fps: "24/1" },
+        params: { title: "Short only" },
+        seed: 2,
+      }, {
+        id: "gfx_cccccccccc",
+        template: "tpl_a2c3d4e5f6",
+        at: "word:w000001",
+        duration: { frames: 12, fps: "24/1" },
+        params: { title: "Genuinely global legacy graphic" },
+        seed: 3,
+      }],
+    });
+    const graphicsApi =
+      GraphicsPanelModule as unknown as Partial<GraphicsPanelTestApi>;
+
+    expect(typeof graphicsApi.graphicEditDivergence).toBe("function");
+    if (graphicsApi.graphicEditDivergence === undefined) return;
+
+    expect(graphicsApi.graphicEditDivergence(project, {
+      kind: "item",
+      graphicId: "gfx_aaaaaaaaaa",
+    })).toBeUndefined();
+    expect(graphicsApi.graphicEditDivergence(project, {
+      kind: "item",
+      graphicId: "gfx_bbbbbbbbbb",
+    })).toBe("graphics");
+    expect(graphicsApi.graphicEditDivergence(project, {
+      kind: "item",
+      graphicId: "gfx_cccccccccc",
+    })).toBe("graphics");
+  });
+
+  it("classifies layer reordering from the applicability of its contents", () => {
+    const project = projectWithShort();
+    project.templates = {
+      tpl_a2c3d4e5f6: { version: "1.0.0", contentHash: "a".repeat(64) },
+    };
+    project.layers.push({
+      id: "lyr_cccccccccc",
+      kind: "animation",
+      name: "Short-affecting graphics",
+      order: 2,
+      enabled: true,
+      locked: false,
+      items: [{
+        id: "gfx_bbbbbbbbbb",
+        sequenceId: "seq_bbbbbbbbbb",
+        template: "tpl_a2c3d4e5f6",
+        at: "word:w000001",
+        duration: { frames: 12, fps: "24/1" },
+        params: { title: "Short only" },
+        seed: 2,
+      }],
+    }, {
+      id: "lyr_dddddddddd",
+      kind: "animation",
+      name: "Long-form graphics",
+      order: 3,
+      enabled: true,
+      locked: false,
+      items: [{
+        id: "gfx_aaaaaaaaaa",
+        sequenceId: "seq_aaaaaaaaaa",
+        template: "tpl_a2c3d4e5f6",
+        at: "word:w000001",
+        duration: { frames: 12, fps: "24/1" },
+        params: { title: "Long-form only" },
+        seed: 1,
+      }],
+    });
+    const graphicsApi =
+      GraphicsPanelModule as unknown as Partial<GraphicsPanelTestApi>;
+
+    expect(typeof graphicsApi.graphicEditDivergence).toBe("function");
+    if (graphicsApi.graphicEditDivergence === undefined) return;
+
+    expect(graphicsApi.graphicEditDivergence(project, {
+      kind: "layer",
+      layerId: "lyr_cccccccccc",
+    })).toBe("graphics");
+    expect(graphicsApi.graphicEditDivergence(project, {
+      kind: "layer",
+      layerId: "lyr_dddddddddd",
+    })).toBeUndefined();
   });
 
   it("server-renders restyle seam controls only for the active full context", () => {

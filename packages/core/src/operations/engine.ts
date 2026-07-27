@@ -715,6 +715,16 @@ function nestedStrings(value: unknown): string[] {
   return Object.values(value).flatMap(nestedStrings);
 }
 
+function derivativeMentionedIds(operation: AppliedOperation): string[] {
+  return [
+    ...operation.affected,
+    ...Object.entries(operation.params).flatMap(([name, value]) =>
+      operation.op === "graphic.add" && name === "layerId"
+        ? []
+        : nestedStrings(value)),
+  ];
+}
+
 function shortScopeIds(project: GuyditorProject, deliverableId: string): Set<string> {
   const deliverable = project.deliverables.find(({ id }) => id === deliverableId);
   if (deliverable === undefined || deliverable.kind !== "short") return new Set();
@@ -750,10 +760,7 @@ function touchedDerivativeIds(
         ? [operation.params["deliverableId"]]
         : []))];
   }
-  const mentioned = new Set(applied.flatMap((operation) => [
-    ...operation.affected,
-    ...nestedStrings(operation.params),
-  ]));
+  const mentioned = new Set(applied.flatMap(derivativeMentionedIds));
   const shortIds = new Set(
     before.deliverables.filter(({ kind }) => kind === "short").map(({ id }) => id),
   );

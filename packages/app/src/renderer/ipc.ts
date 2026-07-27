@@ -88,7 +88,15 @@ export async function redoLast(): Promise<ExecuteResult | undefined> {
         ? {}
         : { divergence: entry.divergence }),
     });
-    useUndoStore.getState().finishRedo(entry);
+    useUndoStore.getState().finishRedo({
+      txnId: result.txnId,
+      label: entry.label,
+      ops: structuredClone(entry.ops),
+      inverse: structuredClone(result.inverse),
+      ...(entry.divergence === undefined
+        ? {}
+        : { divergence: entry.divergence }),
+    });
     return result;
   } catch (error: unknown) {
     useUndoStore.getState().cancelRedo(entry, errorMessage(error));

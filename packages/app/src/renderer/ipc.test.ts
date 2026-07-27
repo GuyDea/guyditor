@@ -21,6 +21,10 @@ const GRAPHIC_REMOVE = {
   op: "graphic.remove",
   params: { graphicId: "gfx_bbbbbbbbbb" },
 };
+const REDO_GRAPHIC_REMOVE = {
+  op: "graphic.remove",
+  params: { graphicId: "gfx_cccccccccc" },
+};
 
 function result(
   txnId: string,
@@ -40,7 +44,7 @@ afterEach(() => {
 });
 
 describe("renderer operation divergence", () => {
-  it("forwards and replays a direct edit's divergence through undo and redo", async () => {
+  it("rekeys a redone edit so its next undo targets the redo transaction", async () => {
     const call = vi.fn()
       .mockResolvedValueOnce(result(
         "txn_aaaaaaaaaa",
@@ -55,6 +59,11 @@ describe("renderer operation divergence", () => {
       .mockResolvedValueOnce(result(
         "txn_cccccccccc",
         "rev_00004",
+        [REDO_GRAPHIC_REMOVE],
+      ))
+      .mockResolvedValueOnce(result(
+        "txn_dddddddddd",
+        "rev_00005",
         [GRAPHIC_REMOVE],
       ));
     vi.stubGlobal("window", { guyditor: { call } });
@@ -82,6 +91,18 @@ describe("renderer operation divergence", () => {
       divergence: "graphics",
     });
     expect(useUndoStore.getState().undo[0]).toMatchObject({
+      txnId: "txn_cccccccccc",
+      label: "Add short graphic",
+      ops: [GRAPHIC_ADD],
+      inverse: [REDO_GRAPHIC_REMOVE],
+      divergence: "graphics",
+    });
+
+    await undoLast();
+    expect(call.mock.calls[3]?.[2]).toMatchObject({
+      operations: [REDO_GRAPHIC_REMOVE],
+      intent: "undo",
+      undoOf: "txn_cccccccccc",
       divergence: "graphics",
     });
   });

@@ -445,6 +445,40 @@ describe("FR-600/601 graphic operation catalog", () => {
     });
   });
 
+  it("does not treat a long-form add as a short edit because its global layer also has short graphics", async () => {
+    const project = projectWithShortGraphic([shortGraphic()]);
+    const engine = new OperationEngine(project, {
+      templateProvider: templateProvider(),
+    });
+
+    await expect(engine.execute([{
+      op: "graphic.add",
+      params: {
+        templateId: TEMPLATE_ID,
+        layerId: "lyr_bbbbbbbbbb",
+        graphicId: "gfx_cccccccccc",
+        sequenceId: "seq_aaaaaaaaaa",
+        anchor: "word:w000001",
+        duration: { frames: 12, fps: "24/1" },
+        params: { title: "Long-form graphic" },
+        seed: 8,
+      },
+    }], {
+      baseRevision: project.revision,
+      origin: "ui",
+      dryRun: false,
+    })).resolves.toMatchObject({ ok: true });
+
+    expect(engine.currentProject.layers[1]?.items).toEqual([
+      expect.objectContaining({ id: "gfx_bbbbbbbbbb" }),
+      expect.objectContaining({
+        id: "gfx_cccccccccc",
+        sequenceId: "seq_aaaaaaaaaa",
+      }),
+    ]);
+    expect(engine.currentProject.deliverables[1]?.divergences).toBeUndefined();
+  });
+
   it("maps truly global graphics to every short and conflicts to none", async () => {
     const global = {
       id: "gfx_cccccccccc",

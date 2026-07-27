@@ -2,8 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 
 import { placedItemAppliesToSequence } from "../../../../core/src/anchors/applicability.js";
 import type {
-  Deliverable,
   DivergenceClass,
+  GuyditorProject,
   PlacedItem,
 } from "../../../../core/src/index.js";
 import type {
@@ -38,10 +38,41 @@ interface GraphicInstance {
   layerOrder: number;
 }
 
+export type GraphicEditTarget =
+  | { kind: "add"; sequenceId: string }
+  | { kind: "item"; graphicId: string }
+  | { kind: "layer"; layerId: string };
+
 export function graphicEditDivergence(
-  deliverable: Deliverable | undefined,
+  project: GuyditorProject,
+  target: GraphicEditTarget,
 ): DivergenceClass | undefined {
-  return deliverable?.kind === "short" ? "graphics" : undefined;
+  const shortSequenceIds = new Set(
+    project.deliverables
+      .filter(({ kind }) => kind === "short")
+      .map(({ sequenceId }) => sequenceId),
+  );
+  if (target.kind === "add") {
+    return shortSequenceIds.has(target.sequenceId) ? "graphics" : undefined;
+  }
+
+  const layer = target.kind === "layer"
+    ? project.layers.find(({ id }) => id === target.layerId)
+    : project.layers.find(({ items }) =>
+        items?.some(({ id }) => id === target.graphicId));
+  if (layer === undefined) return undefined;
+  if (target.kind === "layer" && layer.sequence !== undefined) {
+    return shortSequenceIds.has(layer.sequence) ? "graphics" : undefined;
+  }
+
+  const items = target.kind === "item"
+    ? layer.items?.filter(({ id }) => id === target.graphicId) ?? []
+    : layer.items ?? [];
+  const affectsShort = [...shortSequenceIds].some((sequenceId) =>
+    (layer.sequence === undefined || layer.sequence === sequenceId) &&
+    items.some((item) =>
+      placedItemAppliesToSequence(project, item, sequenceId)));
+  return affectsShort ? "graphics" : undefined;
 }
 
 function schemaOf(entry: TemplateCatalogEntry | undefined): ParameterSchema {
@@ -296,6 +327,7 @@ export function GraphicsPanel({
     const placement = anchor();
     const placedDuration = duration();
     if (
+      snapshot === null ||
       selectedTemplate === undefined ||
       deliverable === undefined ||
       placement === undefined ||
@@ -318,7 +350,10 @@ export function GraphicsPanel({
           },
         }],
         `Add ${selectedTemplate.name}`,
-        graphicEditDivergence(deliverable),
+        graphicEditDivergence(snapshot.master, {
+          kind: "add",
+          sequenceId: deliverable.sequenceId,
+        }),
       );
       await refreshProject();
       setNotice(`Placed ${selectedTemplate.name} at ${placement}.`);
@@ -328,7 +363,7 @@ export function GraphicsPanel({
   }
 
   async function updateGraphic(): Promise<void> {
-    if (selectedInstance === undefined) return;
+    if (snapshot === null || selectedInstance === undefined) return;
     try {
       await executeDirect(
         [{
@@ -336,7 +371,10 @@ export function GraphicsPanel({
           params: { graphicId: selectedInstance.item.id, patch: params },
         }],
         `Update ${selectedInstance.item.id}`,
-        graphicEditDivergence(deliverable),
+        graphicEditDivergence(snapshot.master, {
+          kind: "item",
+          graphicId: selectedInstance.item.id,
+        }),
       );
       await refreshProject();
       setNotice(`Updated ${selectedInstance.item.id}.`);
@@ -375,7 +413,7 @@ export function GraphicsPanel({
   }
 
   async function removeGraphic(): Promise<void> {
-    if (selectedInstance === undefined) return;
+    if (snapshot === null || selectedInstance === undefined) return;
     try {
       await executeDirect(
         [{
@@ -383,7 +421,10 @@ export function GraphicsPanel({
           params: { graphicId: selectedInstance.item.id },
         }],
         `Remove ${selectedInstance.item.id}`,
-        graphicEditDivergence(deliverable),
+        graphicEditDivergence(snapshot.master, {
+          kind: "item",
+          graphicId: selectedInstance.item.id,
+        }),
       );
       setSelectedGraphicId(null);
       await refreshProject();
@@ -405,7 +446,10 @@ export function GraphicsPanel({
           params: { layerId: selectedInstance.layerId, toIndex },
         }],
         `Reorder ${selectedInstance.layerName}`,
-        graphicEditDivergence(deliverable),
+        graphicEditDivergence(snapshot.master, {
+          kind: "layer",
+          layerId: selectedInstance.layerId,
+        }),
       );
       await refreshProject();
     } catch (error: unknown) {
