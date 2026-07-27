@@ -13,6 +13,7 @@ import { z } from "zod";
 
 import {
   buildAnnotationContext,
+  DIVERGENCE_CLASSES,
   JobQueue,
   OperationEngine,
 } from "../../core/src/index.js";
@@ -518,7 +519,7 @@ export class AgentGateway {
         addresses: z.array(z.string().regex(ANNOTATION_ID)).default([]),
         assessmentId: z.string().regex(/^asm_[a-z2-7]{10}$/u).optional(),
         evidenceRefs: z.array(z.string().min(1)).optional(),
-        divergence: z.enum(["hook", "order", "pacing", "cuts", "graphics", "captions", "cta", "ending", "framing"]).optional(),
+        divergence: z.enum(DIVERGENCE_CLASSES).optional(),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
     }, async ({ title, ops, addresses, divergence, assessmentId, evidenceRefs }, extra) => this.#toolCall(

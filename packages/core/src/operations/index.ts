@@ -1,4 +1,11 @@
-export { OperationEngine } from "./engine.js";
+export {
+  OperationEngine,
+  cataloguedOperationNames,
+} from "./engine.js";
+export {
+  DERIVATIVE_OPERATION_POLICIES,
+  touchedDerivativeIds,
+} from "./derivative-policy.js";
 export { applyClipOperation } from "./clip.js";
 export { applySkillOperation } from "./skill.js";
 export {
@@ -15,6 +22,13 @@ export type {
   OperationCommitter,
   OperationEngineOptions,
 } from "./engine.js";
+export type {
+  CataloguedOperationName,
+  DerivativeImpact,
+  DerivativeOperationPolicy,
+  DerivativeTargetOperation,
+  DerivativeTargetResolver,
+} from "./derivative-policy.js";
 export type {
   AppliedOperation,
   AuditSink,

@@ -9,6 +9,7 @@ export type DivergenceClass =
   | "cuts"
   | "graphics"
   | "captions"
+  | "audio"
   | "cta"
   | "ending"
   | "framing";
@@ -20,6 +21,7 @@ export const DIVERGENCE_CLASSES = Object.freeze([
   "cuts",
   "graphics",
   "captions",
+  "audio",
   "cta",
   "ending",
   "framing",

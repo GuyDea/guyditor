@@ -1,8 +1,19 @@
 import { describe, expect, it } from "vitest";
 
+import { DIVERGENCE_CLASSES } from "../../../core/src/index.js";
 import { IPC_SURFACES } from "./surfaces.js";
 
 describe("workspace IPC surfaces", () => {
+  it("keeps the operation divergence enum aligned with core", () => {
+    const operationSurface = IPC_SURFACES.find(({ service }) =>
+      service === "OperationEngine");
+    const executeSchema = operationSurface?.methods["execute"]?.paramsSchema as {
+      properties?: { divergence?: { enum?: unknown } };
+    } | undefined;
+
+    expect(executeSchema?.properties?.divergence?.enum).toEqual(DIVERGENCE_CLASSES);
+  });
+
   it("exposes every M1 workspace read and action with an async budget", () => {
     const methods = new Map(IPC_SURFACES.map(({ service, methods: entries }) => [
       service,

@@ -178,6 +178,27 @@ async function createReady(engine: OperationEngine): Promise<Proposal> {
 }
 
 describe("proposal lifecycle", () => {
+  it("round-trips audio divergence through proposal persistence", async () => {
+    const { root, engine } = await projectEngine();
+
+    const proposal = await valueOf(engine.createProposal({
+      operations: [trim()],
+      instruction: { kind: "user-text", text: "Balance the short audio." },
+      actor: { kind: "agent", id: "ses_aaaaaaaaaa", model: "test-agent" },
+      sessionId: "ses_aaaaaaaaaa",
+      divergence: "audio",
+      reason: reason("Balance the short audio."),
+      addresses: [],
+    }));
+    const persisted = JSON.parse(await readFile(
+      join(root, "proposals", proposal.id, "proposal.json"),
+      "utf8",
+    )) as { divergence?: string };
+
+    expect(proposal.divergence).toBe("audio");
+    expect(persisted.divergence).toBe("audio");
+  });
+
   it("emits linked creation and acceptance audit events", async () => {
     const events: AuditSinkEvent[] = [];
     const { engine } = await projectEngine(undefined, {

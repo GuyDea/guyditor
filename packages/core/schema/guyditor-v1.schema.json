@@ -1486,7 +1486,7 @@
       "additionalProperties": false,
       "required": ["class", "transactionIds"],
       "properties": {
-        "class": { "enum": ["hook", "order", "pacing", "cuts", "graphics", "captions", "cta", "ending", "framing"] },
+        "class": { "enum": ["hook", "order", "pacing", "cuts", "graphics", "captions", "audio", "cta", "ending", "framing"] },
         "transactionIds": { "type": "array", "items": { "type": "string", "pattern": "^txn_[a-z2-7]{10}$" } }
       }
     },

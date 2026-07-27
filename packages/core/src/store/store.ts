@@ -69,6 +69,7 @@ import type {
   GenerationProvenance,
   GenerationReviewAnnotation,
 } from "../generation/index.js";
+import { DIVERGENCE_CLASSES } from "../deliverables/types.js";
 import { computeChangedRanges } from "./history.js";
 import type {
   RevisionComparison,
@@ -891,7 +892,7 @@ function proposalRecord(value: unknown, expectedId: string): Proposal | undefine
   const instructions = new Set(["user-text", "annotation", "ui-direct", "skill-policy"]);
   const actors = new Set(["human", "agent", "tool"]);
   const sources = new Set(["instruction", "annotation", "skill-rule", "media-evidence"]);
-  const divergences = new Set(["hook", "order", "pacing", "cuts", "graphics", "captions", "cta", "ending", "framing"]);
+  const divergences = new Set<string>(DIVERGENCE_CLASSES);
   const instruction = value["instruction"];
   const actor = value["actor"];
   const reason = value["reason"];

@@ -201,6 +201,18 @@ describe("project validation", () => {
     expect(valueOf(validateProject(projectFixture()))).toEqual(projectFixture());
   });
 
+  it("round-trips audio divergence through the closed project schema", () => {
+    const project = projectFixture();
+    project.deliverables[0]!.divergences = [{
+      class: "audio",
+      transactionIds: ["txn_aaaaaaaaaa"],
+    }];
+
+    const serialized = canonicalizeYaml(project);
+
+    expect(valueOf(parseProjectYaml(serialized))).toEqual(project);
+  });
+
   it("accepts ISO-8601 asset timestamps with an explicit offset", () => {
     const project = projectFixture();
     project.assets[0]!.captureTime = {

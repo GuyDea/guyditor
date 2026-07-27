@@ -119,7 +119,6 @@ import skillPinSetSchema from "./schemas/skill.pin.set.json" with { type: "json"
 import {
   AnchorResolverRegistry,
   computeAnchorTransitions,
-  placedItemAppliesToSequence,
   resolveAnchor,
   resolveNavigationTarget,
   validateProjectAnchors,
@@ -164,6 +163,13 @@ import { applySidecarOperation } from "./sidecar.js";
 import { applySkillOperation } from "./skill.js";
 import { applyAnchorOperation } from "./anchor.js";
 import { assessBatchRisk, buildSemanticDiff } from "./diff.js";
+import {
+  DERIVATIVE_OPERATION_POLICIES,
+  touchedDerivativeIds,
+} from "./derivative-policy.js";
+import type {
+  DerivativeOperationPolicy,
+} from "./derivative-policy.js";
 import { applyGraphicOperation, applyTemplateOperation } from "./graphic.js";
 import type { GraphicInverseTrust } from "./graphic.js";
 import { applyRestyleOperation } from "../restyle/operations.js";
@@ -242,11 +248,15 @@ export interface OperationEngineOptions {
 }
 
 const ajv = new Ajv2020({ allErrors: true, strict: true });
-interface CatalogEntry {
+interface CatalogEntryDefinition {
   captionImpact: AppliedOperation["captionImpact"];
   riskClass: RiskClass;
   summaryTemplate: string;
   validate: ValidateFunction<Record<string, unknown>>;
+}
+
+interface CatalogEntry extends CatalogEntryDefinition {
+  derivativePolicy: DerivativeOperationPolicy;
 }
 
 function catalogEntry(
@@ -254,7 +264,7 @@ function catalogEntry(
   riskClass: RiskClass,
   captionImpact: AppliedOperation["captionImpact"],
   summaryTemplate: string,
-): CatalogEntry {
+): CatalogEntryDefinition {
   return {
     validate: ajv.compile<Record<string, unknown>>(schema),
     riskClass,
@@ -263,7 +273,7 @@ function catalogEntry(
   };
 }
 
-const catalog = new Map<string, CatalogEntry>([
+const catalogDefinitions = new Map<string, CatalogEntryDefinition>([
   ["asset.ingest", catalogEntry(assetIngestSchema, "normal", "none", "Ingest {n} assets")],
   ["asset.remove", catalogEntry(assetRemoveSchema, "normal", "none", "Remove {n} assets")],
   ["asset.rights.set", catalogEntry(assetRightsSetSchema, "normal", "none", "Set rights for {assetId}")],
@@ -620,6 +630,28 @@ const catalog = new Map<string, CatalogEntry>([
   )],
 ]);
 
+const catalog = new Map<string, CatalogEntry>(
+  [...catalogDefinitions].map(([operation, definition]) => {
+    const derivativePolicy = DERIVATIVE_OPERATION_POLICIES[
+      operation as keyof typeof DERIVATIVE_OPERATION_POLICIES
+    ];
+    if (derivativePolicy === undefined) {
+      throw new TypeError(`Operation ${operation} has no derivative policy.`);
+    }
+    return [operation, { ...definition, derivativePolicy }];
+  }),
+);
+
+for (const operation of Object.keys(DERIVATIVE_OPERATION_POLICIES)) {
+  if (!catalogDefinitions.has(operation)) {
+    throw new TypeError(`Derivative policy ${operation} has no catalog operation.`);
+  }
+}
+
+export function cataloguedOperationNames(): string[] {
+  return [...catalog.keys()];
+}
+
 const RISK_RANK: Record<RiskClass, number> = {
   low: 0,
   normal: 1,
@@ -706,71 +738,6 @@ function instructionFor(context: OperationContext): TransactionRecord["instructi
   return context.origin === "ui"
     ? { kind: "ui-direct" }
     : { kind: "skill-policy" };
-}
-
-function nestedStrings(value: unknown): string[] {
-  if (typeof value === "string") return [value];
-  if (Array.isArray(value)) return value.flatMap(nestedStrings);
-  if (typeof value !== "object" || value === null) return [];
-  return Object.values(value).flatMap(nestedStrings);
-}
-
-function derivativeMentionedIds(operation: AppliedOperation): string[] {
-  return [
-    ...operation.affected,
-    ...Object.entries(operation.params).flatMap(([name, value]) =>
-      operation.op === "graphic.add" && name === "layerId"
-        ? []
-        : nestedStrings(value)),
-  ];
-}
-
-function shortScopeIds(project: GuyditorProject, deliverableId: string): Set<string> {
-  const deliverable = project.deliverables.find(({ id }) => id === deliverableId);
-  if (deliverable === undefined || deliverable.kind !== "short") return new Set();
-  const sequence = project.sequences.find(({ id }) => id === deliverable.sequenceId);
-  const applicableGlobalLayers = project.layers.filter((layer) =>
-    layer.sequence === undefined &&
-    (layer.items ?? []).some((item) =>
-      placedItemAppliesToSequence(project, item, deliverable.sequenceId)));
-  return new Set([
-    deliverable.id,
-    deliverable.sequenceId,
-    ...(sequence?.clips.map(({ id }) => id) ?? []),
-    ...project.layers.filter(({ sequence: id }) => id === deliverable.sequenceId).map(({ id }) => id),
-    ...applicableGlobalLayers.map(({ id }) => id),
-    ...applicableGlobalLayers.flatMap(({ items }) =>
-      (items ?? [])
-        .filter((item) =>
-          placedItemAppliesToSequence(project, item, deliverable.sequenceId))
-        .map(({ id }) => id)),
-    ...(deliverable.captionsTrackId === undefined ? [] : [deliverable.captionsTrackId]),
-  ]);
-}
-
-function touchedDerivativeIds(
-  before: GuyditorProject,
-  after: GuyditorProject,
-  applied: readonly AppliedOperation[],
-): string[] {
-  if (applied.every(({ op }) => op.startsWith("deliverable."))) {
-    return [...new Set(applied.flatMap((operation) =>
-      operation.op === "deliverable.framing.override" &&
-      typeof operation.params["deliverableId"] === "string"
-        ? [operation.params["deliverableId"]]
-        : []))];
-  }
-  const mentioned = new Set(applied.flatMap(derivativeMentionedIds));
-  const shortIds = new Set(
-    before.deliverables.filter(({ kind }) => kind === "short").map(({ id }) => id),
-  );
-  return [...shortIds].filter((deliverableId) => {
-    const scope = new Set([
-      ...shortScopeIds(before, deliverableId),
-      ...shortScopeIds(after, deliverableId),
-    ]);
-    return [...mentioned].some((id) => scope.has(id));
-  });
 }
 
 function rangeContains(container: DependencyEntry["source"]["range"], candidate: DependencyEntry["source"]["range"]): boolean {
@@ -1147,11 +1114,12 @@ export class OperationEngine {
       );
     }
 
-    let working = base;
-    const applied: AppliedOperation[] = [];
-    const applications: ClipApplication[] = [];
+    const normalizedBatch: Array<{
+      definition: CatalogEntry;
+      input: OperationInput;
+      requested: OperationInput;
+    }> = [];
     for (const requested of batch) {
-      const beforeOperation = working;
       const definition = catalog.get(requested.op);
       if (definition === undefined) {
         return operationFailure("E_OP_UNKNOWN", `Unknown operation ${requested.op}.`);
@@ -1178,8 +1146,43 @@ export class OperationEngine {
           `${requested.op} parameters failed schema validation: ${detail}`,
         );
       }
+      normalizedBatch.push({
+        definition,
+        input: { op: requested.op, params },
+        requested,
+      });
+    }
 
-      const normalized = { op: requested.op, params };
+    const suppliedDivergence = context.divergence;
+    const preflightDerivativeIds = touchedDerivativeIds(
+      base,
+      base,
+      normalizedBatch.map(({ input }) => input),
+    );
+    if (
+      suppliedDivergence !== undefined &&
+      !DIVERGENCE_CLASSES.includes(suppliedDivergence)
+    ) {
+      return operationFailure(
+        "E_DIVERGENCE_CLASS",
+        `Unknown derivative divergence class ${String(suppliedDivergence)}.`,
+        preflightDerivativeIds,
+      );
+    }
+    if (preflightDerivativeIds.length > 0 && suppliedDivergence === undefined) {
+      return operationFailure(
+        "E_DIVERGENCE_REQUIRED",
+        "Transactions touching a derivative sequence require a divergence classification.",
+        preflightDerivativeIds,
+      );
+    }
+
+    let working = base;
+    const applied: AppliedOperation[] = [];
+    const applications: ClipApplication[] = [];
+    for (const { definition, input: normalized, requested } of normalizedBatch) {
+      const beforeOperation = working;
+      const params = normalized.params;
       let application: Result<ClipApplication>;
       if (isAudioColorOperation(requested.op)) {
         application = applyAudioColorOperation(working, normalized, this.#idFactory);
@@ -1275,17 +1278,6 @@ export class OperationEngine {
     }
 
     const derivativeIds = touchedDerivativeIds(base, working, applied);
-    const suppliedDivergence = context.divergence;
-    if (
-      suppliedDivergence !== undefined &&
-      !DIVERGENCE_CLASSES.includes(suppliedDivergence)
-    ) {
-      return operationFailure(
-        "E_DIVERGENCE_CLASS",
-        `Unknown derivative divergence class ${String(suppliedDivergence)}.`,
-        derivativeIds,
-      );
-    }
     if (derivativeIds.length > 0 && suppliedDivergence === undefined) {
       return operationFailure(
         "E_DIVERGENCE_REQUIRED",
@@ -1561,6 +1553,9 @@ export class OperationEngine {
         instruction: { kind: "ui-direct" },
         reason: `Revert transaction ${id}`,
         recordUndo: false,
+        ...(loaded.value.divergence === undefined
+          ? {}
+          : { divergence: loaded.value.divergence }),
       },
       false,
       undefined,
@@ -1655,11 +1650,6 @@ export class OperationEngine {
       orphanedAnchors: [],
       createdAt,
     };
-    const savedDraft = await store.saveProposal(draft, {
-      ...structuredClone(this.#project),
-      revision: proposedRevision,
-    });
-    if (!savedDraft.ok) return savedDraft;
     let capturedProject: GuyditorProject | undefined;
     const dryRun = await this.#execute(
       request.operations,
@@ -1683,6 +1673,11 @@ export class OperationEngine {
         "Proposal dry-run did not produce a proposed project.",
       );
     }
+    const savedDraft = await store.saveProposal(draft, {
+      ...structuredClone(this.#project),
+      revision: proposedRevision,
+    });
+    if (!savedDraft.ok) return savedDraft;
     const proposedProject: GuyditorProject = proposed;
     const warnings = [...new Map([
       ...(request.warnings ?? []),

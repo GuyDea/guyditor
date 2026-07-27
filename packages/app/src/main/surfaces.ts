@@ -1,3 +1,4 @@
+import { DIVERGENCE_CLASSES } from "../../../core/src/index.js";
 import type { IpcSurface, JsonSchema } from "../shared/ipc.js";
 
 const anyResult: JsonSchema = {};
@@ -268,7 +269,7 @@ export const IPC_SURFACES: readonly IpcSurface[] = Object.freeze([
             intent: { enum: ["direct", "undo", "redo"] },
             label: { type: "string", minLength: 1 },
             undoOf: { type: "string", pattern: "^txn_[a-z2-7]{10}$" },
-            divergence: { enum: ["hook", "order", "pacing", "cuts", "graphics", "captions", "cta", "ending", "framing"] },
+            divergence: { enum: DIVERGENCE_CLASSES },
           },
           additionalProperties: false,
         },
