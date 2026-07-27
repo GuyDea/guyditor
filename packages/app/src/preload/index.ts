@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer, webUtils } from "electron";
 
 import type { GdEvent, IpcRequest } from "../shared/ipc.js";
 import { createGuyditorFacade } from "./facade.js";
@@ -11,6 +11,7 @@ const facade = createGuyditorFacade({
   removeListener: (channel: "gd:evt", listener: (event: unknown, payload: GdEvent) => void) => {
     ipcRenderer.removeListener(channel, listener);
   },
+  pathForFile: (file: File) => webUtils.getPathForFile(file),
 });
 
 contextBridge.exposeInMainWorld("guyditor", facade);

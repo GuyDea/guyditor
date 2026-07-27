@@ -12,16 +12,32 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { AnnotationService, createProject, JobQueue, OperationEngine } from "../../../core/src/index.js";
-import type { JobOverview, Proposal, Result } from "../../../core/src/index.js";
+import {
+  AnnotationService,
+  createProject,
+  JobQueue,
+  OperationEngine,
+  serializeTakeComparison,
+  takeComparisonSidecarRef,
+} from "../../../core/src/index.js";
+import type {
+  JobChangeEvent,
+  JobOverview,
+  JobRecord,
+  Proposal,
+  Result,
+  TakeComparison,
+} from "../../../core/src/index.js";
 import { projectFixture } from "../../../core/src/project/test-fixtures.js";
+import { CaptureWatcher } from "../../../media/src/index.js";
 import { TranscriptEngine } from "../../../transcript/src/index.js";
 import { SkillRegistry } from "../../../agent/src/index.js";
+import { PublishService } from "../../../deliver/src/index.js";
 import {
   TemplateAuthoringService,
   TemplateRegistry,
 } from "../../../render/src/index.js";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { GdEvent } from "../shared/ipc.js";
 import { WindowEventPublisher } from "./events.js";
@@ -38,6 +54,50 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
   return {
     promise,
     resolve: () => resolvePromise?.(),
+  };
+}
+
+function takeComparisonFixture(): TakeComparison {
+  const candidate = (takeId: string, start: number) => ({
+    takeId,
+    assetId: "ast_aaaaaaaaaa",
+    sourceRange: {
+      in: { frames: start, fps: "24/1" },
+      out: { frames: start + 48, fps: "24/1" },
+    },
+    transcriptText: "Make the opening specific",
+    delivery: {
+      wordsPerMinute: 150,
+      fillerCount: 0,
+      pauseRatio: 0.1,
+      energyVariance: 0.5,
+      restartCount: 0,
+    },
+    technical: { audioClippingPct: 0, noiseFloorDb: -50 },
+    preference: {
+      score: 0.8,
+      rubricId: "skl_aaaaaaaaaa",
+      rubricVersion: "1.0.0",
+    },
+    markers: { qualityFlags: ["unrated"], notes: [] },
+  });
+  return {
+    id: "tkc_aaaaaaaaaa",
+    slot: { scriptSection: "opening" },
+    candidates: [
+      candidate("tak_aaaaaaaaaa", 0),
+      candidate("tak_bbbbbbbbbb", 60),
+    ],
+    recommendation: {
+      takeId: "tak_aaaaaaaaaa",
+      reasons: [{
+        criterion: "delivery",
+        detail: "More stable delivery.",
+        evidence: "tak_aaaaaaaaaa pauseRatio=0.1",
+      }],
+      confidence: "medium",
+    },
+    createdAt: "2026-07-22T12:00:00.000Z",
   };
 }
 
@@ -256,7 +316,7 @@ describe("AppServiceHost", () => {
     if (typeof candidates !== "function" || typeof accept !== "function") {
       throw new Error("Matte candidate service is unavailable.");
     }
-    expect(Reflect.apply(candidates, service, [{ clipId: "clp_cccccccccc" }]))
+    expect(await Reflect.apply(candidates, service, [{ clipId: "clp_cccccccccc" }]))
       .toMatchObject([{ jobId: queued.jobId, alpha: { maximum: 255 } }]);
     const editRacedAcceptance = Reflect.apply(accept, service, [{
       clipId: "clp_cccccccccc",
@@ -286,14 +346,20 @@ describe("AppServiceHost", () => {
       jobId: queued.jobId,
     }]) as Promise<{ assetId: string; path: string }>;
     await switchGate.prepared.promise;
-    await windowHost.openProject(otherRoot);
-    switchGate.release.resolve();
-    await expect(switchRacedAcceptance).rejects.toMatchObject({
-      code: "E_PROJECT_CONTEXT_STALE",
-      retry: "safe",
+    let switched = false;
+    const switching = windowHost.openProject(otherRoot).then((snapshot) => {
+      switched = true;
+      return snapshot;
     });
-    expect(await entriesOrEmpty(join(root, "assets/mattes"))).toEqual([]);
-    expect(await entriesOrEmpty(join(root, "sidecars/provenance"))).toEqual([]);
+    await new Promise<void>((resolveTurn) => setImmediate(resolveTurn));
+    expect(switched).toBe(false);
+    switchGate.release.resolve();
+    await expect(switchRacedAcceptance).resolves.toMatchObject({
+      path: expect.stringMatching(/^assets\/mattes\/ast_/u),
+    });
+    await switching;
+    expect(await entriesOrEmpty(join(root, "assets/mattes"))).toHaveLength(1);
+    expect(await entriesOrEmpty(join(root, "sidecars/provenance"))).toHaveLength(1);
     expect(windowHost.snapshot().master.project.id).toBe("prj_bbbbbbbbbb");
     expect(windowHost.snapshot().master.assets).toHaveLength(1);
 
@@ -380,6 +446,429 @@ describe("AppServiceHost", () => {
     const source = await readFile(new URL("./take-comparison-service.ts", import.meta.url), "utf8");
     expect(source).toContain('registerExecutor("assist.takes.compare"');
     expect(source).toContain('kind: "assist.takes.compare"');
+  });
+
+  it("rejects a retained project service after switching projects", async () => {
+    const root = await mkdtemp(join(tmpdir(), "guyditor-host-project-context-"));
+    const otherRoot = await mkdtemp(join(tmpdir(), "guyditor-host-project-context-other-"));
+    const userDirectory = await mkdtemp(join(tmpdir(), "guyditor-host-project-context-user-"));
+    const comparison = takeComparisonFixture();
+    const model = projectFixture();
+    const comparisonRef = takeComparisonSidecarRef(comparison, {
+      ast_aaaaaaaaaa: model.assets[0]!.sha256,
+    });
+    model.sidecars.push(comparisonRef);
+    const created = await createProject(root, model);
+    if (!created.ok) throw created.error;
+    await mkdir(join(root, "sidecars/takes"), { recursive: true });
+    await writeFile(
+      join(root, comparisonRef.path),
+      serializeTakeComparison(comparison),
+      "utf8",
+    );
+    const otherModel = projectFixture();
+    otherModel.project.id = "prj_bbbbbbbbbb";
+    const otherCreated = await createProject(otherRoot, otherModel);
+    if (!otherCreated.ok) throw otherCreated.error;
+
+    const appHost = testAppHost(userDirectory);
+    const operationGate = { entered: deferred(), release: deferred() };
+    let blockProjectOperation = false;
+    const windowHost = appHost.createWindowHost({
+      publisher: new WindowEventPublisher(() => undefined),
+      afterProjectBoundStart: async () => {
+        if (!blockProjectOperation) return;
+        operationGate.entered.resolve();
+        await operationGate.release.promise;
+      },
+    });
+    try {
+      await windowHost.openProject(root);
+      const retained = windowHost.resolveService("CaptureWatcher");
+      const selectTake = retained?.["selectTake"];
+      if (typeof selectTake !== "function") {
+        throw new Error("Take-selection service is unavailable.");
+      }
+      await windowHost.openProject(otherRoot);
+
+      await expect(Reflect.apply(selectTake, retained, [{
+        comparisonId: comparison.id,
+        takeId: "tak_aaaaaaaaaa",
+      }])).rejects.toMatchObject({
+        code: "E_PROJECT_CONTEXT_STALE",
+        affected: [root],
+        acceptedStateChanged: false,
+        retry: "safe",
+      });
+      expect(windowHost.snapshot().master.project.id).toBe("prj_bbbbbbbbbb");
+
+      await windowHost.openProject(root);
+      const active = windowHost.resolveService("CaptureWatcher");
+      const selectActiveTake = active?.["selectTake"];
+      if (typeof selectActiveTake !== "function") {
+        throw new Error("Active take-selection service is unavailable.");
+      }
+      blockProjectOperation = true;
+      const inFlight = Reflect.apply(selectActiveTake, active, [{
+        comparisonId: comparison.id,
+        takeId: "tak_aaaaaaaaaa",
+      }]) as Promise<Proposal>;
+      await operationGate.entered.promise;
+      let switchCompleted = false;
+      const switching = windowHost.openProject(otherRoot).then((opened) => {
+        switchCompleted = true;
+        return opened;
+      });
+      await new Promise<void>((resolveTurn) => setImmediate(resolveTurn));
+      expect(switchCompleted).toBe(false);
+      operationGate.release.resolve();
+
+      const proposal = await inFlight;
+      await switching;
+      await expect(access(join(root, "proposals", proposal.id, "proposal.json")))
+        .resolves.toBeUndefined();
+      const currentProjectService = windowHost.resolveService("ProjectStore");
+      const listProposals = currentProjectService?.["listProposals"];
+      if (typeof listProposals !== "function") {
+        throw new Error("Proposal listing service is unavailable.");
+      }
+      await expect(Reflect.apply(listProposals, currentProjectService, []))
+        .resolves.toEqual([]);
+      expect(windowHost.snapshot().master.project.id).toBe("prj_bbbbbbbbbb");
+    } finally {
+      await windowHost.close();
+      await appHost.close();
+      await Promise.all([
+        rm(root, { recursive: true, force: true }),
+        rm(otherRoot, { recursive: true, force: true }),
+        rm(userDirectory, { recursive: true, force: true }),
+      ]);
+    }
+  });
+
+  it("drains an admitted primary edit before switching projects", async () => {
+    const root = await mkdtemp(join(tmpdir(), "guyditor-host-primary-lease-"));
+    const otherRoot = await mkdtemp(join(tmpdir(), "guyditor-host-primary-lease-other-"));
+    const userDirectory = await mkdtemp(join(tmpdir(), "guyditor-host-primary-lease-user-"));
+    const created = await createProject(root, projectFixture());
+    if (!created.ok) throw created.error;
+    const otherModel = projectFixture();
+    otherModel.project.id = "prj_bbbbbbbbbb";
+    const otherCreated = await createProject(otherRoot, otherModel);
+    if (!otherCreated.ok) throw otherCreated.error;
+    const entered = deferred();
+    const release = deferred();
+    let blockEdit = false;
+    const appHost = testAppHost(userDirectory);
+    const windowHost = appHost.createWindowHost({
+      publisher: new WindowEventPublisher(() => undefined),
+      afterProjectBoundStart: async (projectRoot) => {
+        if (!blockEdit || projectRoot !== root) return;
+        entered.resolve();
+        await release.promise;
+      },
+    });
+    try {
+      await windowHost.openProject(root);
+      const service = windowHost.resolveService("OperationEngine");
+      const execute = service?.["execute"];
+      if (typeof execute !== "function") throw new Error("Operation service is unavailable.");
+      blockEdit = true;
+      const editing = Reflect.apply(execute, service, [{
+        operations: [{
+          op: "clip.trim",
+          params: {
+            clipId: "clp_aaaaaaaaaa",
+            edge: "tail",
+            delta: { frames: -1, fps: "24/1" },
+            snapPolicy: "none",
+          },
+        }],
+        intent: "direct",
+        label: "Lease the primary edit",
+      }]) as Promise<{ revision: string }>;
+      await entered.promise;
+
+      let switched = false;
+      const switching = windowHost.openProject(otherRoot).then((snapshot) => {
+        switched = true;
+        return snapshot;
+      });
+      await new Promise<void>((resolveTurn) => setImmediate(resolveTurn));
+      expect(switched).toBe(false);
+
+      release.resolve();
+      await expect(editing).resolves.toMatchObject({ revision: "rev_00002" });
+      await expect(switching).resolves.toMatchObject({
+        master: { project: { id: "prj_bbbbbbbbbb" }, revision: "rev_00001" },
+      });
+      await expect(windowHost.openProject(root)).resolves.toMatchObject({
+        master: { revision: "rev_00002" },
+      });
+    } finally {
+      release.resolve();
+      await windowHost.close();
+      await appHost.close();
+      await Promise.all([
+        rm(root, { recursive: true, force: true }),
+        rm(otherRoot, { recursive: true, force: true }),
+        rm(userDirectory, { recursive: true, force: true }),
+      ]);
+    }
+  });
+
+  it("keeps an async publish RPC bound to its original project", async () => {
+    const root = await mkdtemp(join(tmpdir(), "guyditor-host-publish-lease-"));
+    const otherRoot = await mkdtemp(join(tmpdir(), "guyditor-host-publish-lease-other-"));
+    const userDirectory = await mkdtemp(join(tmpdir(), "guyditor-host-publish-lease-user-"));
+    const model = projectFixture();
+    model.deliverables[0] = {
+      ...model.deliverables[0]!,
+      profile: "youtube-longform@1.0.0",
+    };
+    const created = await createProject(root, model);
+    if (!created.ok) throw created.error;
+    const otherModel = structuredClone(model);
+    otherModel.project.id = "prj_bbbbbbbbbb";
+    const otherCreated = await createProject(otherRoot, otherModel);
+    if (!otherCreated.ok) throw otherCreated.error;
+    const appHost = testAppHost(userDirectory);
+    const windowHost = appHost.createWindowHost({
+      publisher: new WindowEventPublisher(() => undefined),
+    });
+    const entered = deferred();
+    const release = deferred();
+    let writeMetadata: ReturnType<typeof vi.spyOn> | undefined;
+    try {
+      await windowHost.openProject(root);
+      const service = windowHost.resolveService("DeliverableService");
+      const draftMetadata = service?.["draftMetadata"];
+      const saveMetadata = service?.["saveMetadata"];
+      if (typeof draftMetadata !== "function" || typeof saveMetadata !== "function") {
+        throw new Error("Publish service is unavailable.");
+      }
+      const drafted = await Reflect.apply(draftMetadata, service, [{
+        deliverableId: "dlv_aaaaaaaaaa",
+      }]) as Record<string, unknown>;
+      const original = PublishService.prototype.writeMetadata;
+      writeMetadata = vi.spyOn(PublishService.prototype, "writeMetadata")
+        .mockImplementation(async function (this: PublishService, metadata) {
+          entered.resolve();
+          await release.promise;
+          return original.call(this, metadata);
+        });
+
+      const saving = Reflect.apply(saveMetadata, service, [{
+        deliverableId: "dlv_aaaaaaaaaa",
+        metadata: { ...drafted, title: "Project A only" },
+      }]) as Promise<unknown>;
+      await entered.promise;
+      const switching = windowHost.openProject(otherRoot);
+      const switchedBeforeRelease = await Promise.race([
+        switching.then(() => true),
+        new Promise<false>((resolveWait) =>
+          setTimeout(() => resolveWait(false), 500)),
+      ]);
+      expect(switchedBeforeRelease).toBe(false);
+
+      release.resolve();
+      await Promise.all([saving, switching]);
+      const active = windowHost.snapshot().master;
+      expect(active.project.id).toBe("prj_bbbbbbbbbb");
+      expect(active.revision).toBe("rev_00001");
+      const deliverable = active.deliverables.find(({ id }) =>
+        id === "dlv_aaaaaaaaaa");
+      expect(deliverable?.publish).toBeUndefined();
+      expect(deliverable?.publishFiles).toBeUndefined();
+    } finally {
+      release.resolve();
+      writeMetadata?.mockRestore();
+      await windowHost.close();
+      await appHost.close();
+      await Promise.all([
+        rm(root, { recursive: true, force: true }),
+        rm(otherRoot, { recursive: true, force: true }),
+        rm(userDirectory, { recursive: true, force: true }),
+      ]);
+    }
+  });
+
+  it("drains already-started job follow-ups before activating another project", async () => {
+    const root = await mkdtemp(join(tmpdir(), "guyditor-host-follow-up-"));
+    const otherRoot = await mkdtemp(join(tmpdir(), "guyditor-host-follow-up-other-"));
+    const userDirectory = await mkdtemp(join(tmpdir(), "guyditor-host-follow-up-user-"));
+    const created = await createProject(root, projectFixture());
+    if (!created.ok) throw created.error;
+    const otherModel = projectFixture();
+    otherModel.project.id = "prj_bbbbbbbbbb";
+    const otherCreated = await createProject(otherRoot, otherModel);
+    if (!otherCreated.ok) throw otherCreated.error;
+    const listeners: Array<(event: JobChangeEvent) => void> = [];
+    const originalOnChange = JobQueue.prototype.onChange;
+    const onChange = vi.spyOn(JobQueue.prototype, "onChange")
+      .mockImplementation(function (
+        this: JobQueue,
+        listener: (event: JobChangeEvent) => void,
+      ) {
+        listeners.push(listener);
+        return originalOnChange.call(this, listener);
+      });
+    const entered = deferred();
+    const release = deferred();
+    const appHost = testAppHost(userDirectory);
+    const windowHost = appHost.createWindowHost({
+      publisher: new WindowEventPublisher(() => undefined),
+      afterProjectFollowUpStart: async (projectRoot, kind) => {
+        if (projectRoot !== root || kind !== "keyqc.analyze") return;
+        entered.resolve();
+        await release.promise;
+      },
+    });
+    try {
+      await windowHost.openProject(root);
+      const job: JobRecord = {
+        jobId: "job_aaaaaaaaaa",
+        kind: "keyqc.analyze",
+        state: "done",
+        progress: 1,
+        dependsOn: [],
+        title: "Capture guidance fixture",
+        cancellable: true,
+        payload: {
+          assetId: "ast_aaaaaaaaaa",
+          clipId: "clp_aaaaaaaaaa",
+        },
+        createdAt: "2026-07-26T10:00:00.000Z",
+        startedAt: "2026-07-26T10:00:00.000Z",
+        finishedAt: "2026-07-26T10:00:01.000Z",
+        attempt: 1,
+      };
+      for (const listener of listeners) listener({ kind: "job.state", job });
+      await entered.promise;
+
+      let switched = false;
+      const switching = windowHost.openProject(otherRoot).then((snapshot) => {
+        switched = true;
+        return snapshot;
+      });
+      await new Promise<void>((resolveTurn) => setImmediate(resolveTurn));
+      expect(switched).toBe(false);
+
+      release.resolve();
+      await expect(switching).resolves.toMatchObject({
+        master: { project: { id: "prj_bbbbbbbbbb" } },
+      });
+    } finally {
+      release.resolve();
+      onChange.mockRestore();
+      await windowHost.close();
+      await appHost.close();
+      await Promise.all([
+        rm(root, { recursive: true, force: true }),
+        rm(otherRoot, { recursive: true, force: true }),
+        rm(userDirectory, { recursive: true, force: true }),
+      ]);
+    }
+  });
+
+  it("cleans up staged services when capture startup fails", async () => {
+    const root = await mkdtemp(join(tmpdir(), "guyditor-host-staged-failure-"));
+    const userDirectory = await mkdtemp(join(tmpdir(), "guyditor-host-staged-failure-user-"));
+    const created = await createProject(root, projectFixture());
+    if (!created.ok) throw created.error;
+    const start = vi.spyOn(CaptureWatcher.prototype, "start")
+      .mockRejectedValueOnce(new Error("capture startup fixture"));
+    const appHost = testAppHost(userDirectory);
+    const windowHost = appHost.createWindowHost({
+      publisher: new WindowEventPublisher(() => undefined),
+    });
+    try {
+      await expect(windowHost.openProject(root))
+        .rejects.toThrow("capture startup fixture");
+      expect(windowHost.resolveService("OperationEngine")).toBeUndefined();
+      expect(() => windowHost.snapshot()).toThrow(expect.objectContaining({
+        code: "E_PROJECT_NOT_OPEN",
+      }));
+    } finally {
+      start.mockRestore();
+      await windowHost.close();
+      await appHost.close();
+      await Promise.all([
+        rm(root, { recursive: true, force: true }),
+        rm(userDirectory, { recursive: true, force: true }),
+      ]);
+    }
+  });
+
+  it("serializes competing project opens and close", async () => {
+    const roots = await Promise.all(["a", "b", "c"].map(async (name, index) => {
+      const root = await mkdtemp(join(tmpdir(), `guyditor-host-lifecycle-${name}-`));
+      const model = projectFixture();
+      model.project.id = `prj_${String.fromCharCode(97 + index).repeat(10)}`;
+      const created = await createProject(root, model);
+      if (!created.ok) throw created.error;
+      return root;
+    }));
+    const userDirectory = await mkdtemp(join(tmpdir(), "guyditor-host-lifecycle-user-"));
+    const appHost = testAppHost(userDirectory);
+    const windowHost = appHost.createWindowHost({
+      publisher: new WindowEventPublisher(() => undefined),
+    });
+    await windowHost.openProject(roots[0]!);
+    const first = { entered: deferred(), release: deferred() };
+    const secondEntered = deferred();
+    const closingOpen = { entered: deferred(), release: deferred() };
+    let starts = 0;
+    const start = vi.spyOn(CaptureWatcher.prototype, "start")
+      .mockImplementation(async () => {
+        starts += 1;
+        if (starts === 1) {
+          first.entered.resolve();
+          await first.release.promise;
+        } else if (starts === 2) {
+          secondEntered.resolve();
+        } else if (starts === 3) {
+          closingOpen.entered.resolve();
+          await closingOpen.release.promise;
+        }
+      });
+    try {
+      const openingB = windowHost.openProject(roots[1]!);
+      await first.entered.promise;
+      const openingC = windowHost.openProject(roots[2]!);
+      const secondStartedEarly = await Promise.race([
+        secondEntered.promise.then(() => true),
+        new Promise<false>((resolveWait) =>
+          setTimeout(() => resolveWait(false), 150)),
+      ]);
+      expect(secondStartedEarly).toBe(false);
+      first.release.resolve();
+      const [openedB, openedC] = await Promise.all([openingB, openingC]);
+      expect(openedB.master.project.id).toBe("prj_bbbbbbbbbb");
+      expect(openedC.master.project.id).toBe("prj_cccccccccc");
+      expect(windowHost.snapshot().master.project.id).toBe("prj_cccccccccc");
+
+      const openingA = windowHost.openProject(roots[0]!);
+      await closingOpen.entered.promise;
+      let closeCompleted = false;
+      const closing = windowHost.close().then(() => {
+        closeCompleted = true;
+      });
+      await new Promise<void>((resolveTurn) => setImmediate(resolveTurn));
+      expect(closeCompleted).toBe(false);
+      closingOpen.release.resolve();
+      await Promise.all([openingA, closing]);
+      await expect(Promise.resolve().then(() => windowHost.snapshot()))
+        .rejects.toMatchObject({ code: "E_PROJECT_NOT_OPEN" });
+    } finally {
+      start.mockRestore();
+      await windowHost.close();
+      await appHost.close();
+      await Promise.all([
+        ...roots.map((root) => rm(root, { recursive: true, force: true })),
+        rm(userDirectory, { recursive: true, force: true }),
+      ]);
+    }
   });
 
   it("exposes the skill library, project pin, immutable upgrade, and version diff over IPC", async () => {

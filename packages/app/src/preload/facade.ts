@@ -15,6 +15,7 @@ type EventListener = (event: unknown, payload: GdEvent) => void;
 export interface FacadeTransport {
   invoke(channel: "gd:rpc", request: IpcRequest): Promise<unknown>;
   on(channel: "gd:evt", listener: EventListener): void;
+  pathForFile(file: File): string;
   removeListener(channel: "gd:evt", listener: EventListener): void;
   requestId?: () => string;
 }
@@ -75,6 +76,9 @@ export function createGuyditorFacade(transport: FacadeTransport): GuyditorApi {
       };
       transport.on("gd:evt", listener);
       return () => transport.removeListener("gd:evt", listener);
+    },
+    pathForFile(file: File) {
+      return transport.pathForFile(file);
     },
   });
 }

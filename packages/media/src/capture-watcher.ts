@@ -142,8 +142,11 @@ export class CaptureWatcher {
   readonly #registered = new Set<string>();
   readonly #processing = new Set<string>();
   readonly #pendingJobs = new Map<string, PendingIngest>();
+  readonly #tasks = new Set<Promise<unknown>>();
   #lastIngestJobId: string | undefined;
   #configs: WatchFolderConfig[] = [];
+  #closed = false;
+  #closePromise: Promise<void> | undefined;
   readonly #unsubscribeJobs: () => void;
 
   public constructor(options: CaptureWatcherOptions) {
@@ -162,6 +165,7 @@ export class CaptureWatcher {
       if (asset.session !== undefined) this.#sessionIds.set(path.dirname(absolute), asset.session);
     }
     this.#unsubscribeJobs = this.#queue.onChange(({ kind, job }) => {
+      if (this.#closed) return;
       if (kind !== "job.state") return;
       const pending = this.#pendingJobs.get(job.jobId);
       if (pending === undefined || (job.state !== "done" && job.state !== "failed" && job.state !== "cancelled")) return;
@@ -176,7 +180,7 @@ export class CaptureWatcher {
       this.#processing.delete(pending.path);
       this.#registered.add(pending.path);
       if (assetIds.length > 0) {
-        void Promise.all(assetIds.map((assetId) =>
+        void this.#track(Promise.all(assetIds.map((assetId) =>
           this.#onTakeSeeded?.(assetId, pending.take),
         )).then(() => this.#onIngested?.(assetIds)).catch((error: unknown) => {
           this.#warning(
@@ -184,7 +188,7 @@ export class CaptureWatcher {
             pending.path,
             error instanceof Error ? error.message : String(error),
           );
-        });
+        }));
       }
     });
   }
@@ -194,6 +198,7 @@ export class CaptureWatcher {
   }
 
   public async start(configs: readonly WatchFolderConfig[]): Promise<void> {
+    if (this.#closed) throw new Error("Capture watcher is closed.");
     await this.stop();
     this.#configs = configs.map((config) => structuredClone(config));
     for (const config of this.#configs) {
@@ -207,14 +212,15 @@ export class CaptureWatcher {
         ignored: (candidate) => ignored(candidate, root, config.ignore ?? []),
       });
       watcher.on("add", (candidate) => {
-        void this.#handleStable(path.resolve(candidate), config).catch((error: unknown) => {
+        if (this.#closed) return;
+        void this.#track(this.#handleStable(path.resolve(candidate), config).catch((error: unknown) => {
           this.#processing.delete(path.resolve(candidate));
           this.#warning(
             "E_CAPTURE_WATCH_FAILED",
             candidate,
             error instanceof Error ? error.message : String(error),
           );
-        });
+        }));
       });
       watcher.on("error", (error) => {
         this.#warning(
@@ -232,17 +238,36 @@ export class CaptureWatcher {
   public async stop(): Promise<void> {
     const current = this.#watchers.splice(0);
     await Promise.all(current.map(async (watcher) => watcher.close()));
+    await this.#drainTasks();
   }
 
   public close(): Promise<void> {
+    if (this.#closePromise !== undefined) return this.#closePromise;
+    this.#closed = true;
     this.#unsubscribeJobs();
-    return this.stop();
+    this.#closePromise = this.stop();
+    return this.#closePromise;
   }
 
-  public async reconcile(): Promise<void> {
+  public reconcile(): Promise<void> {
+    if (this.#closed) return Promise.reject(new Error("Capture watcher is closed."));
+    return this.#track(this.#reconcile());
+  }
+
+  async #reconcile(): Promise<void> {
     for (const config of this.#configs) {
       const root = path.resolve(config.path);
-      const candidates = await filesBelow(root);
+      let candidates: string[];
+      try {
+        candidates = await filesBelow(root);
+      } catch (error: unknown) {
+        this.#warning(
+          "E_CAPTURE_WATCH_FAILED",
+          root,
+          error instanceof Error ? error.message : String(error),
+        );
+        continue;
+      }
       candidates.sort((left, right) =>
         Number(MARKER_FILE.test(path.basename(left).toLocaleLowerCase("en"))) -
         Number(MARKER_FILE.test(path.basename(right).toLocaleLowerCase("en"))));
@@ -250,6 +275,21 @@ export class CaptureWatcher {
         if (ignored(candidate, root, config.ignore ?? [])) continue;
         await this.#handleStable(path.resolve(candidate), config);
       }
+    }
+  }
+
+  #track<Value>(task: Promise<Value>): Promise<Value> {
+    this.#tasks.add(task);
+    const release = (): void => {
+      this.#tasks.delete(task);
+    };
+    void task.then(release, release);
+    return task;
+  }
+
+  async #drainTasks(): Promise<void> {
+    while (this.#tasks.size > 0) {
+      await Promise.allSettled([...this.#tasks]);
     }
   }
 

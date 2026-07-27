@@ -43,6 +43,7 @@ export async function executeDirect(
   label: string,
   divergence?: DivergenceClass,
 ): Promise<ExecuteResult> {
+  const contextVersion = useUndoStore.getState().contextVersion;
   const result = await executeOperations({
     operations,
     intent: "direct",
@@ -55,12 +56,13 @@ export async function executeDirect(
     ops: structuredClone(operations),
     inverse: structuredClone(result.inverse),
     ...(divergence === undefined ? {} : { divergence }),
-  });
+  }, contextVersion);
   return result;
 }
 
 export async function undoLast(): Promise<ExecuteResult | undefined> {
   const store = useUndoStore.getState();
+  const contextVersion = store.contextVersion;
   const entry = store.beginUndo();
   if (entry === undefined) return undefined;
   try {
@@ -73,16 +75,21 @@ export async function undoLast(): Promise<ExecuteResult | undefined> {
         ? {}
         : { divergence: entry.divergence }),
     });
-    useUndoStore.getState().finishUndo(entry);
+    useUndoStore.getState().finishUndo(entry, contextVersion);
     return result;
   } catch (error: unknown) {
-    useUndoStore.getState().cancelUndo(entry, errorMessage(error));
+    useUndoStore.getState().cancelUndo(
+      entry,
+      errorMessage(error),
+      contextVersion,
+    );
     throw error;
   }
 }
 
 export async function redoLast(): Promise<ExecuteResult | undefined> {
   const store = useUndoStore.getState();
+  const contextVersion = store.contextVersion;
   const entry = store.beginRedo();
   if (entry === undefined) return undefined;
   try {
@@ -103,10 +110,14 @@ export async function redoLast(): Promise<ExecuteResult | undefined> {
       ...(entry.divergence === undefined
         ? {}
         : { divergence: entry.divergence }),
-    });
+    }, contextVersion);
     return result;
   } catch (error: unknown) {
-    useUndoStore.getState().cancelRedo(entry, errorMessage(error));
+    useUndoStore.getState().cancelRedo(
+      entry,
+      errorMessage(error),
+      contextVersion,
+    );
     throw error;
   }
 }

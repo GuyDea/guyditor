@@ -15,8 +15,14 @@ test("opens the secure Electron shell with the generated facade and jobs panel",
     await expect.poll(() => launched.page.evaluate(() => ({
       call: typeof window.guyditor?.call,
       on: typeof window.guyditor?.on,
+      pathForFile: typeof window.guyditor?.pathForFile,
       keys: Object.keys(window.guyditor ?? {}).sort(),
-    }))).toEqual({ call: "function", on: "function", keys: ["call", "on"] });
+    }))).toEqual({
+      call: "function",
+      on: "function",
+      pathForFile: "function",
+      keys: ["call", "on", "pathForFile"],
+    });
   } finally {
     await launched.electronApp.close();
   }

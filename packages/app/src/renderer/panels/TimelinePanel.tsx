@@ -46,6 +46,7 @@ function clipDuration(clip: Clip): number {
 export function TimelinePanel({
   snapshot,
   annotations,
+  annotationTimelineFrames = {},
   restylePlan,
   refreshProject,
   refreshProposals,
@@ -96,6 +97,12 @@ export function TimelinePanel({
   const jumpCuts = snapshot === null || sequence === undefined
     ? []
     : findJumpCutWarnings(snapshot.master, sequence.id);
+  const positionedAnnotations = annotations.flatMap((annotation) => {
+    const frame = annotationTimelineFrames[annotation.id];
+    return annotation.canvasRef.sequenceId === sequence?.id && frame !== undefined
+      ? [{ annotation, frame }]
+      : [];
+  });
 
   useEffect(() => {
     const viewport = viewportRef.current;
@@ -407,12 +414,13 @@ export function TimelinePanel({
                 );
               })}
               <div className="timeline-playhead" style={{ left: `${String(playhead.frames * zoom)}px` }} />
-              {annotations.map((annotation, index) => (
+              {positionedAnnotations.map(({ annotation, frame }) => (
                 <span
                   key={annotation.id}
                   className="annotation-marker"
+                  data-testid={`timeline-annotation-${annotation.id}`}
                   title={annotation.body}
-                  style={{ left: `${String((index * 8 + playhead.frames) * zoom)}px` }}
+                  style={{ left: `${String(frame.frames * zoom)}px` }}
                 />
               ))}
             </div>

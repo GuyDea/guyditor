@@ -131,8 +131,9 @@ Rules:
 1. Every service that is renderer-callable exports an `IpcSurface` manifest
    `{ service, methods: { [name]: { paramsSchema, resultSchema, budgetMs } } }`.
    The preload script exposes a generated, fully typed facade `window.guyditor:
-   GuyditorApi` (`call(service, method, params)` + `on(kind, handler)`); nothing
-   else crosses the context bridge.
+   GuyditorApi` (`call(service, method, params)` + `on(kind, handler)` plus the
+   native-file `pathForFile(file)` adapter); nothing else crosses the context
+   bridge.
 2. Main validates `params` against `paramsSchema` before dispatch; failure
    returns `E_IPC_SCHEMA` with `retry: 'none'`.
 3. Events are broadcast to the owning window, carry a per-window monotonic
@@ -171,6 +172,7 @@ export interface GuyditorApi {
     kind: Kind,
     handler: (event: GdEventOfKind<Kind>) => void,
   ): () => void;
+  pathForFile(file: File): string;
 }
 
 export interface ExecuteRequest {

@@ -35,6 +35,11 @@ import {
   errorMessage,
   executeDirect,
 } from "../ipc.js";
+import {
+  annotationIsVisibleAtFrame,
+  annotationNavigationRequest,
+} from "../annotation-timeline.js";
+export { annotationNavigationRequest } from "../annotation-timeline.js";
 import { resolveActiveDeliverable } from "../active-deliverable.js";
 import {
   formatTimecode,
@@ -162,15 +167,6 @@ export function currentPreviewResult<T>(
     : null;
 }
 
-export function annotationNavigationRequest(
-  annotation: Annotation,
-): Record<string, unknown> {
-  return {
-    target: { kind: "annotation", annotationId: annotation.id },
-    scope: annotation.canvasRef.sequenceId,
-  };
-}
-
 function sourceFrame(
   clip: Clip,
   timelineFrame: number,
@@ -225,6 +221,7 @@ export function PreviewPanel({
   snapshot,
   transcripts,
   annotations,
+  annotationTimelineFrames = {},
   refreshAnnotations,
   refreshProject,
   setNotice,
@@ -308,6 +305,11 @@ export function PreviewPanel({
   const activeAnnotations = annotations.filter(
     ({ canvasRef }) => canvasRef.sequenceId === deliverable?.sequenceId,
   );
+  const visibleAnnotations = activeAnnotations.filter((annotation) => {
+    const position = annotationTimelineFrames[annotation.id];
+    return position !== undefined &&
+      annotationIsVisibleAtFrame(annotation, position, playhead);
+  });
   const loudnessTarget: LoudnessTargetOverlay = {
     integratedLufs: sequence?.audio?.targetLufs ?? -14,
     toleranceLu: 1,
@@ -537,14 +539,34 @@ export function PreviewPanel({
   useEffect(() => {
     let current = true;
     setProxy(null);
-    if (active === undefined) return () => { current = false; };
+    setSettled(false);
+    setWarning(null);
+    if (active === undefined) {
+      setSettled(true);
+      return () => { current = false; };
+    }
     void window.guyditor.call<ProxyResolution | null>("MediaEngine", "resolveProxy", {
       assetId: active.clip.asset,
     }).then((resolved) => {
-      if (current) setProxy(resolved);
-    }).catch(() => undefined);
+      if (!current) return;
+      setProxy(resolved);
+      if (resolved === null) {
+        setSettled(true);
+        setWarning("Proxy unavailable; annotations remain timeline-anchored.");
+      }
+    }).catch(() => {
+      if (!current) return;
+      setSettled(true);
+      setWarning("Proxy unavailable; annotations remain timeline-anchored.");
+    });
     return () => { current = false; };
-  }, [active?.clip.asset]);
+  }, [
+    active?.clip.asset,
+    deliverable?.id,
+    setSettled,
+    setWarning,
+    snapshot?.projectPath,
+  ]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -878,7 +900,8 @@ export function PreviewPanel({
           viewBox={`0 0 100 ${String(annotationViewBoxHeight)}`}
           aria-label="Annotation overlay"
         >
-          {activeAnnotations.filter(({ state }) => state === "open" || state === "reopened").map((annotation) => (
+          {visibleAnnotations.filter(({ state }) =>
+            state === "open" || state === "reopened").map((annotation) => (
             <AnnotationMark
               key={annotation.id}
               annotation={annotation}
@@ -1075,16 +1098,16 @@ function AnnotationMark({
   const geometry = annotation.geometry;
   if (geometry === null) return null;
   if (geometry.kind === "pin") {
-    return <circle cx={geometry.at.x * 100} cy={geometry.at.y * viewBoxHeight} r="1.4" />;
+    return <circle data-testid={`annotation-mark-${annotation.id}`} cx={geometry.at.x * 100} cy={geometry.at.y * viewBoxHeight} r="1.4" />;
   }
   if (geometry.kind === "rect") {
-    return <rect x={geometry.origin.x * 100} y={geometry.origin.y * viewBoxHeight} width={geometry.size.x * 100} height={geometry.size.y * viewBoxHeight} />;
+    return <rect data-testid={`annotation-mark-${annotation.id}`} x={geometry.origin.x * 100} y={geometry.origin.y * viewBoxHeight} width={geometry.size.x * 100} height={geometry.size.y * viewBoxHeight} />;
   }
   if (geometry.kind === "ellipse") {
-    return <ellipse cx={geometry.center.x * 100} cy={geometry.center.y * viewBoxHeight} rx={geometry.radii.x * 100} ry={geometry.radii.y * viewBoxHeight} />;
+    return <ellipse data-testid={`annotation-mark-${annotation.id}`} cx={geometry.center.x * 100} cy={geometry.center.y * viewBoxHeight} rx={geometry.radii.x * 100} ry={geometry.radii.y * viewBoxHeight} />;
   }
   if (geometry.kind === "arrow") {
-    return <line x1={geometry.from.x * 100} y1={geometry.from.y * viewBoxHeight} x2={geometry.to.x * 100} y2={geometry.to.y * viewBoxHeight} />;
+    return <line data-testid={`annotation-mark-${annotation.id}`} x1={geometry.from.x * 100} y1={geometry.from.y * viewBoxHeight} x2={geometry.to.x * 100} y2={geometry.to.y * viewBoxHeight} />;
   }
   return null;
 }

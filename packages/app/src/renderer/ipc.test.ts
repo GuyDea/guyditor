@@ -36,6 +36,20 @@ function result(
   return { txnId, revision, inverse };
 }
 
+function deferred<Value>(): {
+  promise: Promise<Value>;
+  resolve: (value: Value) => void;
+} {
+  let resolvePromise: ((value: Value) => void) | undefined;
+  const promise = new Promise<Value>((resolve) => {
+    resolvePromise = resolve;
+  });
+  return {
+    promise,
+    resolve: (value) => resolvePromise?.(value),
+  };
+}
+
 beforeEach(() => {
   useUndoStore.getState().clear();
 });
@@ -121,6 +135,69 @@ describe("renderer operation divergence", () => {
 
     expect(call.mock.calls[0]?.[2]).not.toHaveProperty("divergence");
     expect(useUndoStore.getState().undo[0]).not.toHaveProperty("divergence");
+  });
+
+  it("does not record a direct edit after project history is cleared", async () => {
+    const response = deferred<ReturnType<typeof result>>();
+    vi.stubGlobal("window", {
+      guyditor: { call: vi.fn(() => response.promise) },
+    });
+
+    const pending = executeDirect([GRAPHIC_ADD], "Late project A edit", "graphics");
+    useUndoStore.getState().clear();
+    response.resolve(result("txn_aaaaaaaaaa", "rev_00002", [GRAPHIC_REMOVE]));
+    await pending;
+
+    expect(useUndoStore.getState()).toMatchObject({ undo: [], redo: [] });
+  });
+
+  it("does not finish or cancel an undo after project history is cleared", async () => {
+    useUndoStore.getState().record({
+      txnId: "txn_aaaaaaaaaa",
+      label: "Project A edit",
+      ops: [GRAPHIC_ADD],
+      inverse: [GRAPHIC_REMOVE],
+    });
+    const response = deferred<ReturnType<typeof result>>();
+    vi.stubGlobal("window", {
+      guyditor: { call: vi.fn(() => response.promise) },
+    });
+
+    const pending = undoLast();
+    useUndoStore.getState().clear();
+    response.resolve(result("txn_bbbbbbbbbb", "rev_00003", [GRAPHIC_ADD]));
+    await pending;
+
+    expect(useUndoStore.getState()).toMatchObject({ undo: [], redo: [] });
+  });
+
+  it("does not finish or cancel a redo after project history is cleared", async () => {
+    const state = useUndoStore.getState();
+    const entry = {
+      txnId: "txn_aaaaaaaaaa",
+      label: "Project A edit",
+      ops: [GRAPHIC_ADD],
+      inverse: [GRAPHIC_REMOVE],
+    };
+    state.record(entry);
+    const undone = state.beginUndo();
+    if (undone === undefined) throw new Error("Expected seeded undo entry.");
+    state.finishUndo(undone);
+    const response = deferred<ReturnType<typeof result>>();
+    vi.stubGlobal("window", {
+      guyditor: { call: vi.fn(() => response.promise) },
+    });
+
+    const pending = redoLast();
+    useUndoStore.getState().clear();
+    response.resolve(result(
+      "txn_bbbbbbbbbb",
+      "rev_00003",
+      [REDO_GRAPHIC_REMOVE],
+    ));
+    await pending;
+
+    expect(useUndoStore.getState()).toMatchObject({ undo: [], redo: [] });
   });
 });
 

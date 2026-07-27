@@ -13,6 +13,14 @@ const temporaryDirectories: string[] = [];
 const queues: JobQueue[] = [];
 const watchers: CaptureWatcher[] = [];
 
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolvePromise: (() => void) | undefined;
+  const promise = new Promise<void>((resolve) => {
+    resolvePromise = resolve;
+  });
+  return { promise, resolve: () => resolvePromise?.() };
+}
+
 afterEach(async () => {
   await Promise.all(watchers.splice(0).map(async (watcher) => watcher.stop()));
   for (const queue of queues.splice(0)) queue.close();
@@ -38,6 +46,42 @@ async function waitUntil(predicate: () => boolean, label: string | (() => string
 }
 
 describe("CaptureWatcher watch-folder integration", () => {
+  it("keeps an unavailable saved watch folder nonfatal and reports it", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "guyditor-capture-offline-"));
+    temporaryDirectories.push(root);
+    const store = await valueOf(ProjectStore.createProject(
+      path.join(root, "project"),
+      { name: "Offline capture root" },
+      { profilesDirectory: path.join(REPOSITORY_ROOT, "profiles") },
+    ));
+    const { queue } = JobQueue.open(path.join(store.root, ".guyditor/jobs.sqlite"));
+    queues.push(queue);
+    const warnings: Array<{ code: string; path: string }> = [];
+    const watcher = new CaptureWatcher({
+      project: store,
+      media: new MediaEngine({ jobQueue: queue, followUpJobs: [] }),
+      jobQueue: queue,
+      onWarning: ({ code, path: warningPath }) => {
+        warnings.push({ code, path: warningPath });
+      },
+    });
+    watchers.push(watcher);
+    const missing = path.join(root, "offline-volume", "captures");
+
+    await expect(watcher.start([{
+      path: missing,
+      convention: "guyditor",
+      autoIngest: true,
+      autoJobs: { proxy: false, analysis: false, transcription: false },
+    }])).resolves.toBeUndefined();
+
+    expect(watcher.configs).toEqual([expect.objectContaining({ path: missing })]);
+    expect(warnings).toContainEqual({
+      code: "E_CAPTURE_WATCH_FAILED",
+      path: missing,
+    });
+  });
+
   it("stabilizes drops, groups a session, chains configured jobs, imports marker files, and emits ingest events", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "guyditor-capture-"));
     temporaryDirectories.push(root);
@@ -124,4 +168,55 @@ describe("CaptureWatcher watch-folder integration", () => {
     await watcher.reconcile();
     expect(queue.list().filter(({ kind }) => kind === "ingest")).toHaveLength(2);
   }, 20_000);
+
+  it("waits for an in-flight marker handler before close completes", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "guyditor-capture-close-"));
+    temporaryDirectories.push(root);
+    const store = await valueOf(ProjectStore.createProject(
+      path.join(root, "project"),
+      { name: "Capture close test" },
+      { profilesDirectory: path.join(REPOSITORY_ROOT, "profiles") },
+    ));
+    const watchRoot = path.join(root, "watch");
+    await mkdir(watchRoot, { recursive: true });
+    const { queue } = JobQueue.open(path.join(store.root, ".guyditor/jobs.sqlite"));
+    queues.push(queue);
+    const entered = deferred();
+    const release = deferred();
+    const watcher = new CaptureWatcher({
+      project: store,
+      media: new MediaEngine({ jobQueue: queue, followUpJobs: [] }),
+      jobQueue: queue,
+      stability: { awaitWriteFinishMs: 20, pollIntervalMs: 10, verifyUnchangedMs: 20 },
+      importMarkerFile: async () => {
+        entered.resolve();
+        await release.promise;
+      },
+    });
+    watchers.push(watcher);
+    await watcher.start([{
+      path: watchRoot,
+      convention: "guyditor",
+      autoIngest: true,
+      autoJobs: { proxy: false, analysis: false, transcription: false },
+    }]);
+    await writeFile(path.join(watchRoot, "markers.json"), JSON.stringify({
+      format: "guyditor.take-markers-intake/v1",
+      session: "close-test",
+      clock: "recording",
+      markers: [],
+    }), "utf8");
+
+    const reconciling = watcher.reconcile();
+    await entered.promise;
+    let closeCompleted = false;
+    const closing = watcher.close().then(() => {
+      closeCompleted = true;
+    });
+    await new Promise<void>((resolveTurn) => setImmediate(resolveTurn));
+    expect(closeCompleted).toBe(false);
+    release.resolve();
+    await Promise.all([reconciling, closing]);
+    await expect(watcher.reconcile()).rejects.toThrow(/closed/iu);
+  });
 });

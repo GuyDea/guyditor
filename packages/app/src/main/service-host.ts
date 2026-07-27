@@ -1,7 +1,7 @@
 import { cpus } from "node:os";
 import { createHash } from "node:crypto";
 import { access, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
-import { basename, extname, isAbsolute, join, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import {
@@ -9,7 +9,6 @@ import {
   AnnotationService,
   absoluteSeconds,
   buildAnnotationContext,
-  convertTimeRounding,
   DEFAULT_JUMP_CUT_CONCEALMENT_CONFIG,
   findJumpCutWarnings,
   formatRevision,
@@ -19,16 +18,14 @@ import {
   openProject as openCoreProject,
   parseRevision,
   parseRestylePlan,
-  parseTakeMarkerSidecar,
   planJumpCutConcealment,
   resolveAnchor,
-  serializeTakeMarkerSidecar,
 } from "../../../core/src/index.js";
 import type {
-  Asset, FaceTrackAvailability, JumpCutConcealmentConfig, JobFilter, JobOverview, JobRecord,
+  FaceTrackAvailability, JumpCutConcealmentConfig, JobFilter, JobOverview, JobRecord,
   OperationBatchResult, OperationCommitter, OperationInput, Proposal, ProjectStore, Result,
   RestyleFrameRange, RestylePlan, RestyleSeamTreatment, RightsPolicy, SidecarRef,
-  TakeMarkerSidecar, WatchFolderConfig,
+  WatchFolderConfig,
 } from "../../../core/src/index.js";
 import {
   buildCaptureGuidanceReport,
@@ -54,8 +51,6 @@ import {
   createTranscriptWordLookup,
   detectSpokenTakeMarkers,
   enqueueFillerDetection,
-  importJsonTakeMarkers,
-  importTakeNotes,
   parseFillerDetectionResult,
   planPickupSplice,
   registerFillerDetectionExecutor,
@@ -146,6 +141,9 @@ import { MatteService } from "./matte-service.js";
 import type { MatteProjectGuard } from "./matte-service.js";
 import { prepareMatteCommit } from "./matte-prepared-commit.js";
 import { OtioService } from "./otio-service.js";
+import { CaptureProjectMetadata } from "./capture-project-metadata.js";
+import { ProjectContextCoordinator } from "./project-context-coordinator.js";
+import { TaskScope } from "./task-scope.js";
 import {
   createProjectTemplateServices,
   templateAuthoringIpc,
@@ -183,6 +181,11 @@ export interface WindowServiceHostOptions {
   revealPath?: (path: string) => void;
   openPath?: (path: string) => Promise<string>;
   afterMattePrepare?: (guard: MatteProjectGuard) => Promise<void>;
+  afterProjectBoundStart?: (projectRoot: string) => Promise<void>;
+  afterProjectFollowUpStart?: (
+    projectRoot: string,
+    kind: string,
+  ) => Promise<void>;
 }
 
 function resultValue<Value>(result: Result<Value>): Value {
@@ -443,38 +446,6 @@ function transcriptionFromJob(job: JobRecord): {
   };
 }
 
-function assetTiming(
-  asset: Asset,
-  timelineFps: string,
-): { fps: string; endFrame: number } {
-  const fps = asset.video?.fps ?? asset.probe.fps ?? timelineFps;
-  const duration = asset.probe.duration;
-  if (duration === undefined) return { fps, endFrame: 1 };
-  const converted = "frames" in duration
-    ? convertTimeRounding(duration, fps)
-    : convertTimeRounding(
-        { frames: duration.samples, fps: `${String(duration.rate)}/1` },
-        fps,
-      );
-  return {
-    fps,
-    endFrame: converted.ok ? Math.max(1, converted.value.time.frames) : 1,
-  };
-}
-
-function markerFingerprint(
-  marker: TakeMarkerSidecar["markers"][number],
-): string {
-  return JSON.stringify({
-    at: marker.at,
-    type: marker.type,
-    note: marker.note ?? null,
-    anchor: marker.anchor ?? null,
-    detected: marker.detected ?? false,
-    source: marker.source,
-  });
-}
-
 export class AppServiceHost {
   public readonly auditLog: AuditLog;
   public readonly costMeter: CostMeter;
@@ -590,6 +561,9 @@ export class WindowServiceHost {
   readonly #revealPath: ((path: string) => void) | undefined;
   readonly #openPath: ((path: string) => Promise<string>) | undefined;
   readonly #afterMattePrepare: WindowServiceHostOptions["afterMattePrepare"];
+  readonly #afterProjectFollowUpStart:
+    WindowServiceHostOptions["afterProjectFollowUpStart"];
+  readonly #projectContext: ProjectContextCoordinator;
   #project: ProjectServices | undefined;
   #closed = false;
 
@@ -603,16 +577,33 @@ export class WindowServiceHost {
     this.#revealPath = options.revealPath;
     this.#openPath = options.openPath;
     this.#afterMattePrepare = options.afterMattePrepare;
+    this.#afterProjectFollowUpStart = options.afterProjectFollowUpStart;
+    this.#projectContext = new ProjectContextCoordinator({
+      activeProject: () => this.#project,
+      createEngine: (project) => this.#coreEngine(project),
+      afterStart: async (store) => { await options.afterProjectBoundStart?.(store.root); },
+    });
   }
 
-  public async openProject(
+  public openProject(
     projectPath: string,
     options: { initializeWorkspace?: boolean } = {},
   ): Promise<ReturnType<WindowServiceHost["snapshot"]>> {
+    return this.#projectContext.serialize(() => this.#openProject(projectPath, options));
+  }
+
+  async #openProject(
+    projectPath: string,
+    options: { initializeWorkspace?: boolean },
+  ): Promise<ReturnType<WindowServiceHost["snapshot"]>> {
     if (this.#closed) throw new Error("Window service host is closed.");
-    const opened = await openCoreProject(resolve(projectPath), { appVersion: this.#app.appVersion });
+    const path = resolve(projectPath);
+    if (this.#project !== undefined && resolve(this.#project.store.root) === path) {
+      await this.#deactivateProject();
+    }
+    const opened = await openCoreProject(path, { appVersion: this.#app.appVersion });
     const store = resultValue(opened);
-    this.#closeProject();
+    await this.#deactivateProject();
     const workspace = new ProjectWorkspaceStateStore(store.root);
     if (options.initializeWorkspace === true) {
       await workspace.initialize(store.currentProject);
@@ -895,7 +886,7 @@ export class WindowServiceHost {
       jobs,
       mlworker: this.#app.mlworker,
       prepare: (request, guard) => {
-        const project = this.#requireProject();
+        const project = this.#projectContext.require(store);
         return prepareMatteCommit({
           request,
           guard,
@@ -1024,7 +1015,7 @@ export class WindowServiceHost {
     const restyle = new RestyleExecutionService({
       projectStore: store,
       operationEngine: {
-        createProposal: (input) => this.#coreEngine(this.#requireProject()).createProposal(input),
+        createProposal: (input) => this.#projectContext.engine(store).createProposal(input),
       },
       adapters,
       jobs,
@@ -1033,13 +1024,28 @@ export class WindowServiceHost {
     const generation = new GenerationExecutionService({
       projectStore: store,
       operationEngine: {
-        createProposal: (input) => this.#coreEngine(this.#requireProject()).createProposal(input),
+        createProposal: (input) => this.#projectContext.engine(store).createProposal(input),
       },
       adapters,
       jobs,
       costMeter: this.#app.costMeter,
     });
     restyleRuntime.service = restyle;
+    const openedProject: { value?: ProjectServices } = {};
+    const followUps = new TaskScope();
+    const runFollowUp = (
+      job: JobRecord,
+      task: (project: ProjectServices, job: JobRecord) => Promise<void>,
+    ): void => {
+      void followUps.run(async () => {
+        const project = openedProject.value;
+        if (project === undefined) {
+          throw new Error("Project services are not initialized.");
+        }
+        await this.#afterProjectFollowUpStart?.(project.store.root, job.kind);
+        await task(project, job);
+      }).catch(() => undefined);
+    };
     const unsubscribeJobs = jobs.onChange(({ kind, job }) => {
       if (kind === "job.progress") {
         this.publisher.publishProgress({
@@ -1056,13 +1062,16 @@ export class WindowServiceHost {
           });
         }
         if (job.state === "done" && job.kind === "assist.fillers.detect") {
-          void this.#createFillerProposal(job).catch(() => undefined);
+          runFollowUp(job, (project, completed) =>
+            this.#createFillerProposal(project, completed));
         }
         if (job.state === "done" && job.kind === "transcribe") {
-          void this.#createTranscriptFromJob(job).catch(() => undefined);
+          runFollowUp(job, (project, completed) =>
+            this.#createTranscriptFromJob(project, completed));
         }
         if (job.state === "done" && job.kind === "keyqc.analyze") {
-          void this.#writeCaptureGuidance(job).catch(() => undefined);
+          runFollowUp(job, (project, completed) =>
+            this.#writeCaptureGuidance(project, completed));
         }
         if (job.state === "done" && job.kind === "reframe") {
           this.publisher.publish({
@@ -1086,12 +1095,24 @@ export class WindowServiceHost {
         return asset === undefined ? undefined : loadPeaks(store.root, asset);
       },
     });
+    const captureMetadata = new CaptureProjectMetadata({
+      store,
+      engine: () => {
+        if (openedProject.value === undefined) {
+          throw new Error("Capture project services are not initialized.");
+        }
+        return this.#coreEngine(openedProject.value);
+      },
+      publishRevision: (revision) =>
+        this.publisher.publish({ kind: "project.revision", revision }),
+    });
     const capture = new CaptureWatcher({
       project: store,
       media,
       jobQueue: jobs,
-      onTakeSeeded: (assetId, take) => this.#seedCaptureTake(assetId, take),
-      importMarkerFile: (path, sessionId) => this.#importTakeMarkerFile(path, sessionId),
+      onTakeSeeded: (assetId, take) => captureMetadata.seedTake(assetId, take),
+      importMarkerFile: (path, sessionId) =>
+        captureMetadata.importMarkerFile(path, sessionId),
       onIngested: (assetIds) => {
         this.publisher.publish({ kind: "watcher.ingested", assetIds: [...assetIds] });
         this.publisher.publish({
@@ -1104,16 +1125,19 @@ export class WindowServiceHost {
       project: store,
       jobs,
       skillRegistry: this.#app.skillRegistry,
-      operationEngine: () => this.#coreEngine(this.#requireProject()),
-      onRevision: (revision) => this.publisher.publish({ kind: "project.revision", revision }),
-      onProposal: (proposalId) => this.publisher.publish({ kind: "proposal.updated", proposalId }),
+      operationEngine: () => this.#projectContext.engine(store),
+      onRevision: (revision) =>
+        this.publisher.publish({ kind: "project.revision", revision }),
+      onProposal: (proposalId) =>
+        this.publisher.publish({ kind: "proposal.updated", proposalId }),
     });
-    this.#project = {
+    openedProject.value = {
       store,
       workspace,
       jobs,
       media,
       capture,
+      captureMetadata,
       transcript,
       annotations,
       compositor,
@@ -1128,15 +1152,37 @@ export class WindowServiceHost {
       generation,
       restyle,
       takeComparisons,
+      followUps,
       ...recovery,
       unsubscribeJobs,
     };
-    await capture.start(store.currentProject.watchFolders ?? []);
-    return this.snapshot();
+    try {
+      await capture.start(store.currentProject.watchFolders ?? []);
+      this.#project = openedProject.value;
+      return this.snapshot();
+    } catch (error: unknown) {
+      await this.#disposeProject(openedProject.value).catch(() => undefined);
+      throw error;
+    }
   }
 
   public resolveService(service: ServiceName): IpcService | undefined {
     const project = this.#project;
+    const resolved = this.#resolveService(service, project);
+    if (
+      resolved === undefined ||
+      project === undefined ||
+      service === "ProjectStore" ||
+      service === "AuditLog" ||
+      service === "CostMeter"
+    ) return resolved;
+    return this.#bindProjectService(project, resolved);
+  }
+
+  #resolveService(
+    service: ServiceName,
+    project: ProjectServices | undefined,
+  ): IpcService | undefined {
     switch (service) {
       case "ProjectStore":
         return {
@@ -1154,14 +1200,14 @@ export class WindowServiceHost {
           open: ({ path }: { path: string }) => this.openProject(path),
           getSnapshot: () => this.snapshot(),
           getWorkspaceState: ({ projectPath }: { projectPath: string }) => {
-            const current = this.#requireProjectContext(projectPath);
+            const current = this.#projectContext.requirePath(projectPath);
             return current.workspace.load(current.store.currentProject);
           },
           setActiveDeliverable: ({ projectPath, deliverableId }: {
             projectPath: string;
             deliverableId: string;
           }) => {
-            const current = this.#requireProjectContext(projectPath);
+            const current = this.#projectContext.requirePath(projectPath);
             return current.workspace.setActiveDeliverable(
               current.store.currentProject,
               deliverableId,
@@ -1325,7 +1371,7 @@ export class WindowServiceHost {
             await project.capture.reconcile();
             return { watching: project.capture.configs.length };
           },
-          listTakes: () => this.#takeSidecars(),
+          listTakes: () => project.captureMetadata.list(),
           listTakeComparisons: () => project.takeComparisons.list(),
           compareTakes: ({ takeIds }: { takeIds: string[] }) =>
             project.takeComparisons.compare(takeIds),
@@ -1339,9 +1385,11 @@ export class WindowServiceHost {
           acceptMatteCandidate: ({ clipId, jobId }: { clipId: string; jobId: string }) =>
             project.matte.accept(clipId, jobId),
           keyQcReport: ({ clipId }: { clipId: string }) => this.#readAnalysis<KeyQcReport>(
+            project,
             `${clipId}.keyqc.json`,
           ),
           captureGuidance: ({ assetId }: { assetId: string }) => this.#readAnalysis(
+            project,
             `${assetId}.capture.json`,
           ),
         };
@@ -1866,6 +1914,21 @@ export class WindowServiceHost {
     }
   }
 
+  #bindProjectService(
+    project: ProjectServices,
+    service: IpcService,
+  ): IpcService {
+    return Object.fromEntries(Object.entries(service).map(([name, implementation]) => [
+      name,
+      typeof implementation !== "function"
+        ? implementation
+        : async (...args: unknown[]) => this.#projectContext.run(
+            project.store,
+            async () => Reflect.apply(implementation, service, args) as unknown,
+          ),
+    ]));
+  }
+
   public snapshot(): {
     revision: string;
     master: ProjectStore["currentProject"];
@@ -1881,17 +1944,29 @@ export class WindowServiceHost {
     };
   }
 
-  public async close(): Promise<void> {
-    if (this.#closed) return;
-    this.#closed = true;
-    await this.#project?.backupScheduler?.quit().catch(() => undefined);
-    this.#closeProject();
-    this.publisher.dispose();
-    this.#app.forgetWindow(this);
+  public close(): Promise<void> {
+    return this.#projectContext.serialize(async () => {
+      if (this.#closed) return;
+      this.#closed = true;
+      await this.#project?.backupScheduler?.quit().catch(() => undefined);
+      await this.#deactivateProject();
+      this.publisher.dispose();
+      this.#app.forgetWindow(this);
+    });
   }
 
   async #execute(request: ExecuteRequest): Promise<ExecuteResult> {
     const project = this.#requireProject();
+    return this.#projectContext.run(
+      project.store,
+      (current) => this.#executeInProject(current, request),
+    );
+  }
+
+  async #executeInProject(
+    project: ProjectServices,
+    request: ExecuteRequest,
+  ): Promise<ExecuteResult> {
     const context = {
       origin: "ui" as const,
       dryRun: false,
@@ -2209,136 +2284,12 @@ export class WindowServiceHost {
     return { ...plan, warnings: [...plan.warnings, captionWarning], proposal };
   }
 
-  async #takeSidecars(): Promise<TakeMarkerSidecar[]> {
-    const project = this.#requireProject();
-    return Promise.all(project.store.currentProject.sidecars
-      .filter(({ schema }) => schema === "guyditor.take-markers/v1")
-      .map(async ({ path }) => parseTakeMarkerSidecar(
-        await readFile(join(project.store.root, path), "utf8"),
-      )));
-  }
-
-  async #takeSidecar(assetId: string): Promise<TakeMarkerSidecar> {
-    const existing = (await this.#takeSidecars()).find((sidecar) => sidecar.assetId === assetId);
-    return existing ?? {
-      format: "guyditor.take-markers/v1",
-      assetId,
-      markers: [],
-      takes: [],
-    };
-  }
-
-  async #persistTakeSidecar(sidecar: TakeMarkerSidecar): Promise<void> {
-    const project = this.#requireProject();
-    const content = serializeTakeMarkerSidecar(sidecar);
-    const relativePath = `sidecars/takes/${sidecar.assetId}.takes.json`;
-    await mkdir(join(project.store.root, "sidecars/takes"), { recursive: true });
-    await writeFile(join(project.store.root, relativePath), content, "utf8");
-    const sha256 = createHash("sha256").update(content).digest("hex");
-    resultValue(await this.#coreEngine(project).execute([
-      {
-        op: "asset.markers.attach",
-        params: {
-          assetId: sidecar.assetId,
-          markerIds: sidecar.markers.map(({ id }) => id),
-          sidecar: { path: relativePath, sha256 },
-        },
-      },
-      {
-        op: "asset.takes.set",
-        params: {
-          assetId: sidecar.assetId,
-          takeIds: sidecar.takes.map(({ id }) => id),
-          sidecar: { path: relativePath, sha256 },
-        },
-      },
-    ], {
-      baseRevision: project.store.currentProject.revision,
-      origin: "system",
-      dryRun: false,
-      recordUndo: false,
-      instruction: { kind: "ui-direct", text: "Attach capture take metadata" },
-    }));
-  }
-
-  async #seedCaptureTake(
-    assetId: string,
-    seed: { id: string; index: number },
+  async #createTranscriptFromJob(
+    project: ProjectServices,
+    job: JobRecord,
   ): Promise<void> {
-    const project = this.#requireProject();
-    const asset = project.store.currentProject.assets.find(({ id }) => id === assetId);
-    if (asset === undefined) throw new Error(`Capture asset ${assetId} is unavailable.`);
-    const sidecar = await this.#takeSidecar(assetId);
-    if (sidecar.takes.some(({ id }) => id === seed.id)) return;
-    const timing = assetTiming(asset, project.store.currentProject.settings.timeline.fps);
-    sidecar.takes.push({
-      id: seed.id,
-      assetId,
-      index: seed.index,
-      range: { start: 0, end: timing.endFrame, fps: timing.fps },
-      quality: "unrated",
-      notes: [],
-      sourceMarkerIds: [],
-    });
-    await this.#persistTakeSidecar(sidecar);
-  }
-
-  async #importTakeMarkerFile(markerPath: string, sessionId: string): Promise<void> {
-    const project = this.#requireProject();
-    const markerName = basename(markerPath).toLocaleLowerCase("en");
-    const specificName = markerName === "markers.json" || markerName === "notes.txt"
-      ? undefined
-      : markerName.slice(0, -".markers.json".length);
-    const assets = project.store.currentProject.assets.filter((asset) => {
-      if (asset.session !== sessionId) return false;
-      if (specificName === undefined) return true;
-      const mediaName = basename(asset.path).toLocaleLowerCase("en");
-      return mediaName === specificName || mediaName.slice(0, -extname(mediaName).length) === specificName;
-    });
-    const text = await readFile(markerPath, "utf8");
-    let changed = false;
-    for (const asset of assets) {
-      const timing = assetTiming(asset, project.store.currentProject.settings.timeline.fps);
-      const imported = markerName.endsWith(".json")
-        ? importJsonTakeMarkers(text, {
-            assetId: asset.id,
-            fps: timing.fps,
-            assetEndFrame: timing.endFrame,
-            idFactory: makeId,
-            ...(asset.captureTime === undefined
-              ? {}
-              : { captureStart: asset.captureTime.value }),
-          })
-        : importTakeNotes(text, {
-            assetId: asset.id,
-            fps: timing.fps,
-            assetEndFrame: timing.endFrame,
-            idFactory: makeId,
-          });
-      const existing = await this.#takeSidecar(asset.id);
-      const fingerprints = new Set(existing.markers.map(markerFingerprint));
-      if (imported.markers.every((marker) => fingerprints.has(markerFingerprint(marker)))) continue;
-      await this.#persistTakeSidecar({
-        ...existing,
-        markers: [...existing.markers, ...imported.markers],
-        takes: imported.takes.length === 0
-          ? existing.takes
-          : [...existing.takes, ...imported.takes],
-      });
-      changed = true;
-    }
-    if (changed) {
-      this.publisher.publish({
-        kind: "project.revision",
-        revision: project.store.currentProject.revision,
-      });
-    }
-  }
-
-  async #createTranscriptFromJob(job: JobRecord): Promise<void> {
     const parsed = transcriptionFromJob(job);
     if (parsed === undefined) return;
-    const project = this.#requireProject();
     const created = await project.transcript.createFromTranscription(
       project.store,
       parsed.assetId,
@@ -2350,17 +2301,13 @@ export class WindowServiceHost {
     }
     const asset = project.store.currentProject.assets.find(({ id }) => id === parsed.assetId);
     if (asset !== undefined) {
-      const timing = assetTiming(asset, project.store.currentProject.settings.timeline.fps);
+      const timing = project.captureMetadata.timing(asset.id);
       const spoken = detectSpokenTakeMarkers(created.value.sidecar, {
         fps: timing.fps,
         idFactory: makeId,
       });
       if (spoken.length > 0) {
-        const existing = await this.#takeSidecar(asset.id);
-        const fingerprints = new Set(existing.markers.map(markerFingerprint));
-        existing.markers.push(...spoken.filter((marker) =>
-          !fingerprints.has(markerFingerprint(marker))));
-        await this.#persistTakeSidecar(existing);
+        await project.captureMetadata.addMarkers(asset.id, spoken);
       }
     }
     this.publisher.publish({
@@ -2369,8 +2316,10 @@ export class WindowServiceHost {
     });
   }
 
-  async #createFillerProposal(job: JobRecord): Promise<void> {
-    const project = this.#requireProject();
+  async #createFillerProposal(
+    project: ProjectServices,
+    job: JobRecord,
+  ): Promise<void> {
     const detected = parseFillerDetectionResult(job.payload);
     if (detected.candidates.length === 0) return;
     const workspace = resultValue(await loadTranscriptWorkspace(project.store, (prefix) => {
@@ -2398,8 +2347,11 @@ export class WindowServiceHost {
     this.publisher.publish({ kind: "proposal.updated", proposalId: proposal.id });
   }
 
-  async #readAnalysis<Value>(filename: string): Promise<Value | null> {
-    const path = join(this.#requireProject().store.root, "sidecars/analysis", filename);
+  async #readAnalysis<Value>(
+    project: ProjectServices,
+    filename: string,
+  ): Promise<Value | null> {
+    const path = join(project.store.root, "sidecars/analysis", filename);
     try {
       return JSON.parse(await readFile(path, "utf8")) as Value;
     } catch {
@@ -2407,11 +2359,16 @@ export class WindowServiceHost {
     }
   }
 
-  async #writeCaptureGuidance(job: JobRecord): Promise<void> {
-    const project = this.#requireProject();
+  async #writeCaptureGuidance(
+    project: ProjectServices,
+    job: JobRecord,
+  ): Promise<void> {
     const payload = job.payload as unknown as KeyQcJobPayload;
     const asset = project.store.currentProject.assets.find(({ id }) => id === payload.assetId);
-    const report = await this.#readAnalysis<KeyQcReport>(`${payload.clipId}.keyqc.json`);
+    const report = await this.#readAnalysis<KeyQcReport>(
+      project,
+      `${payload.clipId}.keyqc.json`,
+    );
     if (asset === undefined || report === null) return;
     const probe = await probeMedia(isAbsolute(asset.path) ? asset.path : resolve(project.store.root, asset.path));
     await writeCaptureGuidanceReport(project.store.root, buildCaptureGuidanceReport({
@@ -2422,41 +2379,32 @@ export class WindowServiceHost {
     }));
   }
 
-  #requireProject(): ProjectServices {
-    if (this.#project === undefined) {
-      throw {
-        code: "E_PROJECT_NOT_OPEN",
-        message: "Open a Guyditor project first.",
-        affected: [],
-        acceptedStateChanged: false,
-        retry: "none",
-      };
-    }
-    return this.#project;
-  }
+  #requireProject(): ProjectServices { return this.#projectContext.current(); }
 
-  #requireProjectContext(projectPath: string): ProjectServices {
-    const project = this.#requireProject();
-    if (resolve(project.store.root) !== resolve(projectPath)) {
-      throw {
-        code: "E_PROJECT_CONTEXT_STALE",
-        message:
-          `The requested project context ${projectPath} is no longer open.`,
-        affected: [projectPath],
-        acceptedStateChanged: false,
-        retry: "safe",
-      };
-    }
-    return project;
-  }
-
-  #closeProject(): void {
+  async #deactivateProject(): Promise<void> {
     const project = this.#project;
-    this.#project = undefined;
     if (project === undefined) return;
+    await this.#projectContext.deactivate(project, () => this.#closeProject());
+  }
+
+  async #closeProject(): Promise<void> {
+    const project = this.#project;
+    if (project === undefined) return;
+    try {
+      await this.#disposeProject(project);
+    } finally {
+      if (this.#project === project) this.#project = undefined;
+    }
+  }
+
+  async #disposeProject(project: ProjectServices): Promise<void> {
     project.backupScheduler?.close();
     project.unsubscribeJobs();
-    void project.capture.close();
-    project.jobs.close();
+    try {
+      await project.followUps.close();
+      await project.capture.close();
+    } finally {
+      project.jobs.close();
+    }
   }
 }

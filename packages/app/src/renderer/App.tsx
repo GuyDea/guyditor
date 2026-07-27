@@ -92,6 +92,7 @@ import {
   applyDeliverableSelection,
   resolveActiveDeliverable,
 } from "./active-deliverable.js";
+import { useAnnotationTimelineFrames } from "./annotation-timeline.js";
 import { phaseForShortcut } from "./workflow-phases.js";
 import { revealPanel } from "./workspace-navigation.js";
 
@@ -175,6 +176,16 @@ export function App(): React.JSX.Element {
   const undoCount = useUndoStore((state) => state.undo.length);
   const redoCount = useUndoStore((state) => state.redo.length);
   const restyleContext = activeRestyleContext(snapshot, selectedDeliverableId);
+  const annotationDeliverable = snapshot === null
+    ? undefined
+    : resolveActiveDeliverable(snapshot.master, selectedDeliverableId);
+  const annotationTimelineFrames = useAnnotationTimelineFrames(
+    annotations,
+    snapshot?.projectPath,
+    annotationDeliverable?.sequenceId,
+    snapshot?.master.settings.timeline.fps ?? "24/1",
+    snapshot?.revision,
+  );
   const restylePlan = restylePlanForContext(restylePlanState, restyleContext);
   const currentRestyleContextKey = useRef(restyleContext?.key ?? null);
   if (currentRestyleContextKey.current !== (restyleContext?.key ?? null)) {
@@ -1048,6 +1059,7 @@ export function App(): React.JSX.Element {
     snapshot,
     transcripts,
     annotations,
+    annotationTimelineFrames,
     proposals,
     skills,
     pinnedSkills,

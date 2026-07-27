@@ -1,5 +1,6 @@
 import type {
   Annotation,
+  FrameTime,
   Proposal,
   RestylePlan,
 } from "../../../../core/src/index.js";
@@ -12,6 +13,7 @@ export interface WorkspacePanelProps {
   snapshot: ProjectSnapshot | null;
   transcripts: TranscriptSidecar[];
   annotations: Annotation[];
+  annotationTimelineFrames?: Readonly<Record<string, FrameTime>>;
   proposals: Proposal[];
   skills: SkillManifest[];
   pinnedSkills: ResolvedSkill[];

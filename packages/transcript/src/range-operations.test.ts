@@ -752,7 +752,7 @@ describe("transcript range operations", () => {
         paddingMs: 0,
         snapPolicy: "none",
       },
-    }]);
+    }], { origin: "ui", dryRun: false, divergence: "cuts" });
 
     expect(result).toMatchObject({
       ok: false,

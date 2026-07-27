@@ -29,14 +29,6 @@ function jobState(jobs: JobStatus[], assetId: string, kind: string): JobStatus["
   return jobs.find((job) => job.kind === kind && job.title.includes(assetId))?.state ?? null;
 }
 
-function filePath(file: File): string | undefined {
-  const candidate: unknown = file;
-  if (typeof candidate !== "object" || candidate === null || !("path" in candidate)) return undefined;
-  return typeof candidate.path === "string" && candidate.path.length > 0
-    ? candidate.path
-    : undefined;
-}
-
 export function MediaBrowserPanel({
   snapshot,
   transcripts,
@@ -255,8 +247,8 @@ export function MediaBrowserPanel({
         onDrop={(event) => {
           event.preventDefault();
           const paths = [...event.dataTransfer.files].flatMap((file) => {
-            const resolved = filePath(file);
-            return resolved === undefined ? [] : [resolved];
+            const resolved = window.guyditor.pathForFile(file);
+            return resolved === "" ? [] : [resolved];
           });
           if (paths.length === 0) setNotice("Dropped files did not expose local paths.");
           else void ingest(paths);

@@ -34,11 +34,17 @@ test("AC-004 — reviews an exact-frame visual note through the real gateway", a
 
     await launched.page.getByTestId("annotation-seek-ann_aaaaaaaaaa").click();
     await expect(launched.page.getByTestId("preview-frame-input")).toHaveValue("90");
+    await expect(launched.page.getByTestId("annotation-mark-ann_aaaaaaaaaa"))
+      .toBeVisible();
     await launched.page.getByTestId("preview-surface").click();
     await launched.page.keyboard.press("ArrowRight");
     await expect(launched.page.getByTestId("preview-frame-input")).toHaveValue("91");
+    await expect(launched.page.getByTestId("annotation-mark-ann_aaaaaaaaaa"))
+      .toHaveCount(0);
     await launched.page.keyboard.press("ArrowLeft");
     await expect(launched.page.getByTestId("preview-frame-input")).toHaveValue("90");
+    await expect(launched.page.getByTestId("annotation-mark-ann_aaaaaaaaaa"))
+      .toBeVisible();
 
     await launched.page.getByTestId("annotation-tool-arrow").click();
     await launched.page.getByTestId("annotation-body").fill("Point to the pacing problem");

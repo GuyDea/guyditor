@@ -14,6 +14,7 @@ describe("createGuyditorFacade", () => {
     const facade = createGuyditorFacade({
       invoke,
       on: vi.fn(),
+      pathForFile: vi.fn(),
       removeListener: vi.fn(),
       requestId: () => "req_aaaaaaaaaa",
     });
@@ -37,6 +38,7 @@ describe("createGuyditorFacade", () => {
     const facade = createGuyditorFacade({
       invoke: vi.fn(),
       on: vi.fn((_channel, registered) => { listener = registered; }),
+      pathForFile: vi.fn(),
       removeListener,
       requestId: () => "req_aaaaaaaaaa",
     });
@@ -53,5 +55,19 @@ describe("createGuyditorFacade", () => {
       revision: "rev_00002",
     });
     expect(removeListener).toHaveBeenCalledWith("gd:evt", listener);
+  });
+
+  it("resolves native dropped-file paths through the preload boundary", () => {
+    const file = { name: "clip.mp4" } as File;
+    const pathForFile = vi.fn(() => "/media/clip.mp4");
+    const facade = createGuyditorFacade({
+      invoke: vi.fn(),
+      on: vi.fn(),
+      pathForFile,
+      removeListener: vi.fn(),
+    });
+
+    expect(facade.pathForFile(file)).toBe("/media/clip.mp4");
+    expect(pathForFile).toHaveBeenCalledWith(file);
   });
 });

@@ -29,6 +29,8 @@ import type { TakeComparisonService } from "./take-comparison-service.js";
 import type { MatteService } from "./matte-service.js";
 import type { OtioService } from "./otio-service.js";
 import type { ProjectWorkspaceStateStore } from "./project-workspace-state.js";
+import type { CaptureProjectMetadata } from "./capture-project-metadata.js";
+import type { TaskScope } from "./task-scope.js";
 
 export interface ProjectServices extends RecoveryServices {
   store: ProjectStore;
@@ -36,6 +38,7 @@ export interface ProjectServices extends RecoveryServices {
   jobs: JobQueue;
   media: MediaEngine;
   capture: CaptureWatcher;
+  captureMetadata: CaptureProjectMetadata;
   transcript: TranscriptEngine;
   annotations: AnnotationService;
   compositor: CompositorModel;
@@ -50,5 +53,6 @@ export interface ProjectServices extends RecoveryServices {
   generation: GenerationExecutionService;
   restyle: RestyleExecutionService;
   takeComparisons: TakeComparisonService;
+  followUps: TaskScope;
   unsubscribeJobs: () => void;
 }
