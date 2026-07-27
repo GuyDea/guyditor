@@ -1,5 +1,7 @@
 import { create } from "zustand";
 
+import type { DivergenceClass } from "../../../../core/src/index.js";
+
 export interface UndoOperation {
   op: string;
   params: Record<string, unknown>;
@@ -10,6 +12,7 @@ export interface UndoStackEntry {
   label: string;
   ops: UndoOperation[];
   inverse: UndoOperation[];
+  divergence?: DivergenceClass;
   invalidReason?: string;
 }
 

@@ -5,6 +5,7 @@ import type {
   ProjectWorkspaceState,
   ProjectSnapshot,
 } from "../shared/ipc.js";
+import type { DivergenceClass } from "../../../core/src/index.js";
 import { useUndoStore } from "./state/undo.js";
 import type { UndoOperation, UndoStackEntry } from "./state/undo.js";
 
@@ -33,13 +34,20 @@ export function executeOperations(request: ExecuteRequest): Promise<ExecuteResul
 export async function executeDirect(
   operations: UndoOperation[],
   label: string,
+  divergence?: DivergenceClass,
 ): Promise<ExecuteResult> {
-  const result = await executeOperations({ operations, intent: "direct", label });
+  const result = await executeOperations({
+    operations,
+    intent: "direct",
+    label,
+    ...(divergence === undefined ? {} : { divergence }),
+  });
   useUndoStore.getState().record({
     txnId: result.txnId,
     label,
     ops: structuredClone(operations),
     inverse: structuredClone(result.inverse),
+    ...(divergence === undefined ? {} : { divergence }),
   });
   return result;
 }
@@ -54,6 +62,9 @@ export async function undoLast(): Promise<ExecuteResult | undefined> {
       intent: "undo",
       undoOf: entry.txnId,
       label: `Undo: ${entry.label}`,
+      ...(entry.divergence === undefined
+        ? {}
+        : { divergence: entry.divergence }),
     });
     useUndoStore.getState().finishUndo(entry);
     return result;
@@ -73,6 +84,9 @@ export async function redoLast(): Promise<ExecuteResult | undefined> {
       intent: "redo",
       undoOf: entry.txnId,
       label: `Redo: ${entry.label}`,
+      ...(entry.divergence === undefined
+        ? {}
+        : { divergence: entry.divergence }),
     });
     useUndoStore.getState().finishRedo(entry);
     return result;

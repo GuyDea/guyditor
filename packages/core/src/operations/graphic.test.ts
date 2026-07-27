@@ -158,6 +158,54 @@ function spareGraphicLayer() {
   };
 }
 
+function projectWithShortGraphic(
+  items: NonNullable<ReturnType<typeof projectFixture>["layers"][number]["items"]> = [],
+) {
+  const project = projectFixture();
+  project.sequences.push({
+    id: "seq_bbbbbbbbbb",
+    name: "short",
+    clips: [],
+  });
+  project.deliverables.push({
+    id: "dlv_bbbbbbbbbb",
+    kind: "short",
+    name: "Portrait short",
+    profile: "youtube-shorts@1.0.0",
+    sequenceId: "seq_bbbbbbbbbb",
+    status: "draft",
+    dependencies: [],
+  });
+  project.templates = {
+    [TEMPLATE_ID]: {
+      version: descriptor.version,
+      contentHash: descriptor.contentHash,
+    },
+  };
+  project.layers.push({
+    id: "lyr_bbbbbbbbbb",
+    kind: "animation",
+    name: "Shared graphics",
+    order: 1,
+    enabled: true,
+    locked: false,
+    items: structuredClone(items),
+  });
+  return project;
+}
+
+function shortGraphic() {
+  return {
+    id: "gfx_bbbbbbbbbb",
+    sequenceId: "seq_bbbbbbbbbb",
+    template: TEMPLATE_ID,
+    at: "word:w000001",
+    duration: { frames: 12, fps: "24/1" },
+    params: { title: "Short graphic" },
+    seed: 7,
+  };
+}
+
 async function historicalGraphicConflict() {
   const project = projectFixture();
   project.sequences.push({
@@ -222,6 +270,254 @@ async function historicalGraphicConflict() {
 }
 
 describe("FR-600/601 graphic operation catalog", () => {
+  it.each([
+    ["add", () => ({
+      project: projectWithShortGraphic(),
+      operation: {
+        op: "graphic.add",
+        params: {
+          templateId: TEMPLATE_ID,
+          layerId: "lyr_bbbbbbbbbb",
+          graphicId: "gfx_bbbbbbbbbb",
+          sequenceId: "seq_bbbbbbbbbb",
+          anchor: "word:w000001",
+          duration: { frames: 12, fps: "24/1" },
+          params: { title: "Short graphic" },
+          seed: 7,
+        },
+      },
+    })],
+    ["update", () => ({
+      project: projectWithShortGraphic([shortGraphic()]),
+      operation: {
+        op: "graphic.param.set",
+        params: {
+          graphicId: "gfx_bbbbbbbbbb",
+          patch: { title: "Updated short graphic" },
+        },
+      },
+    })],
+    ["remove", () => ({
+      project: projectWithShortGraphic([shortGraphic()]),
+      operation: {
+        op: "graphic.remove",
+        params: { graphicId: "gfx_bbbbbbbbbb" },
+      },
+    })],
+  ] as const)("requires and records graphics divergence for short graphic %s", async (
+    _label,
+    setup,
+  ) => {
+    const { project, operation } = setup();
+    const unclassified = new OperationEngine(project, {
+      templateProvider: templateProvider(),
+    });
+
+    await expect(unclassified.execute([operation], {
+      baseRevision: project.revision,
+      origin: "ui",
+      dryRun: false,
+    })).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "E_DIVERGENCE_REQUIRED",
+        affected: ["dlv_bbbbbbbbbb"],
+      },
+    });
+
+    const { committer, transactions } = transactionCommitter();
+    const classified = new OperationEngine(project, {
+      committer,
+      idFactory: ids,
+      templateProvider: templateProvider(),
+    });
+    await valueOf(classified.execute([operation], {
+      baseRevision: project.revision,
+      origin: "ui",
+      dryRun: false,
+      divergence: "graphics",
+    }));
+
+    expect(transactions).toHaveLength(1);
+    expect(transactions[0]?.divergence).toBe("graphics");
+    expect(classified.currentProject.deliverables[1]?.divergences).toEqual([{
+      class: "graphics",
+      transactionIds: ["txn_bbbbbbbbbb"],
+    }]);
+  });
+
+  it("preserves graphics divergence through built-in short graphic undo and redo", async () => {
+    const project = projectWithShortGraphic();
+    const { committer, transactions } = transactionCommitter();
+    let transactionOrdinal = 0;
+    const engine = new OperationEngine(project, {
+      committer,
+      templateProvider: templateProvider(),
+      idFactory: (prefix) => {
+        if (prefix !== "txn") return ids(prefix);
+        const character = String.fromCharCode(
+          "b".charCodeAt(0) + transactionOrdinal,
+        );
+        transactionOrdinal += 1;
+        return `txn_${character.repeat(10)}`;
+      },
+    });
+    const operation = {
+      op: "graphic.add",
+      params: {
+        templateId: TEMPLATE_ID,
+        layerId: "lyr_bbbbbbbbbb",
+        graphicId: "gfx_bbbbbbbbbb",
+        sequenceId: "seq_bbbbbbbbbb",
+        anchor: "word:w000001",
+        duration: { frames: 12, fps: "24/1" },
+        params: { title: "Short graphic" },
+        seed: 7,
+      },
+    };
+
+    await valueOf(engine.execute([operation], {
+      baseRevision: project.revision,
+      origin: "ui",
+      dryRun: false,
+      divergence: "graphics",
+    }));
+    await valueOf(engine.undo());
+    await valueOf(engine.redo());
+
+    expect(transactions.map(({ divergence }) => divergence)).toEqual([
+      "graphics",
+      "graphics",
+      "graphics",
+    ]);
+    expect(engine.currentProject.layers[1]?.items).toEqual([
+      expect.objectContaining({ id: "gfx_bbbbbbbbbb" }),
+    ]);
+  });
+
+  it("maps applicable global graphic items and layers to their short scopes", async () => {
+    const explicit = shortGraphic();
+    const project = projectWithShortGraphic([explicit]);
+    project.layers.push({
+      id: "lyr_cccccccccc",
+      kind: "animation",
+      name: "Unrelated graphics",
+      order: 2,
+      enabled: true,
+      locked: false,
+      items: [],
+    });
+    const provider = templateProvider();
+
+    const update = new OperationEngine(project, { templateProvider: provider });
+    await expect(update.execute([{
+      op: "graphic.param.set",
+      params: {
+        graphicId: explicit.id,
+        patch: { title: "Scoped update" },
+      },
+    }], {
+      baseRevision: project.revision,
+      origin: "ui",
+      dryRun: false,
+    })).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "E_DIVERGENCE_REQUIRED",
+        affected: ["dlv_bbbbbbbbbb"],
+      },
+    });
+
+    const reorder = new OperationEngine(project, { templateProvider: provider });
+    await expect(reorder.execute([{
+      op: "layer.reorder",
+      params: { layerId: "lyr_bbbbbbbbbb", toIndex: 2 },
+    }], {
+      baseRevision: project.revision,
+      origin: "ui",
+      dryRun: false,
+    })).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "E_DIVERGENCE_REQUIRED",
+        affected: ["dlv_bbbbbbbbbb"],
+      },
+    });
+  });
+
+  it("maps truly global graphics to every short and conflicts to none", async () => {
+    const global = {
+      id: "gfx_cccccccccc",
+      template: TEMPLATE_ID,
+      at: "word:w000001",
+      duration: { frames: 12, fps: "24/1" },
+      params: { title: "Global" },
+      seed: 7,
+    };
+    const conflict = {
+      id: "gfx_dddddddddd",
+      template: TEMPLATE_ID,
+      at: "timeline:seq_aaaaaaaaaa@4",
+      duration: { until: "timeline:seq_bbbbbbbbbb@12" },
+      params: { title: "Apply nowhere" },
+      seed: 7,
+    };
+    const project = projectWithShortGraphic([global, conflict]);
+    project.sequences.push({
+      id: "seq_cccccccccc",
+      name: "second short",
+      clips: [],
+    });
+    project.deliverables.push({
+      id: "dlv_cccccccccc",
+      kind: "short",
+      name: "Second short",
+      profile: "youtube-shorts@1.0.0",
+      sequenceId: "seq_cccccccccc",
+      status: "draft",
+      dependencies: [],
+    });
+    const provider = templateProvider();
+
+    const globallyScoped = new OperationEngine(project, {
+      templateProvider: provider,
+    });
+    await expect(globallyScoped.execute([{
+      op: "graphic.param.set",
+      params: {
+        graphicId: global.id,
+        patch: { title: "All shorts" },
+      },
+    }], {
+      baseRevision: project.revision,
+      origin: "ui",
+      dryRun: false,
+    })).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "E_DIVERGENCE_REQUIRED",
+        affected: ["dlv_bbbbbbbbbb", "dlv_cccccccccc"],
+      },
+    });
+
+    const conflicting = new OperationEngine(project, {
+      templateProvider: provider,
+    });
+    await valueOf(conflicting.execute([{
+      op: "graphic.param.set",
+      params: {
+        graphicId: conflict.id,
+        patch: { title: "Still applies nowhere" },
+      },
+    }], {
+      baseRevision: project.revision,
+      origin: "ui",
+      dryRun: false,
+    }));
+    expect(conflicting.currentProject.deliverables.slice(1))
+      .toEqual(project.deliverables.slice(1));
+  });
+
   it("keeps an unreviewed authored template out of accepted graphic placements", async () => {
     const project = projectFixture();
     const engine = new OperationEngine(project, {

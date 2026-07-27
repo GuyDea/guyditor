@@ -80,6 +80,12 @@ interface TimelinePanelTestApi {
   ): void;
 }
 
+interface GraphicsPanelTestApi {
+  graphicEditDivergence(
+    deliverable: Deliverable | undefined,
+  ): "graphics" | undefined;
+}
+
 interface TranscriptPanelTestApi {
   transcriptNavigationRequest(
     wordId: string,
@@ -484,6 +490,21 @@ describe("active deliverable panels", () => {
 
     expect(html).toContain("Short graphic");
     expect(html).not.toContain("Primary graphic leak");
+  });
+
+  it("classifies only short graphic edits as derivative divergence", () => {
+    const project = projectWithShort();
+    const graphicsApi =
+      GraphicsPanelModule as unknown as Partial<GraphicsPanelTestApi>;
+
+    expect(typeof graphicsApi.graphicEditDivergence).toBe("function");
+    if (graphicsApi.graphicEditDivergence === undefined) return;
+
+    expect(graphicsApi.graphicEditDivergence(project.deliverables[0]))
+      .toBeUndefined();
+    expect(graphicsApi.graphicEditDivergence(project.deliverables[1]))
+      .toBe("graphics");
+    expect(graphicsApi.graphicEditDivergence(undefined)).toBeUndefined();
   });
 
   it("server-renders restyle seam controls only for the active full context", () => {

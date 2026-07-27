@@ -119,6 +119,7 @@ import skillPinSetSchema from "./schemas/skill.pin.set.json" with { type: "json"
 import {
   AnchorResolverRegistry,
   computeAnchorTransitions,
+  placedItemAppliesToSequence,
   resolveAnchor,
   resolveNavigationTarget,
   validateProjectAnchors,
@@ -718,11 +719,21 @@ function shortScopeIds(project: GuyditorProject, deliverableId: string): Set<str
   const deliverable = project.deliverables.find(({ id }) => id === deliverableId);
   if (deliverable === undefined || deliverable.kind !== "short") return new Set();
   const sequence = project.sequences.find(({ id }) => id === deliverable.sequenceId);
+  const applicableGlobalLayers = project.layers.filter((layer) =>
+    layer.sequence === undefined &&
+    (layer.items ?? []).some((item) =>
+      placedItemAppliesToSequence(project, item, deliverable.sequenceId)));
   return new Set([
     deliverable.id,
     deliverable.sequenceId,
     ...(sequence?.clips.map(({ id }) => id) ?? []),
     ...project.layers.filter(({ sequence: id }) => id === deliverable.sequenceId).map(({ id }) => id),
+    ...applicableGlobalLayers.map(({ id }) => id),
+    ...applicableGlobalLayers.flatMap(({ items }) =>
+      (items ?? [])
+        .filter((item) =>
+          placedItemAppliesToSequence(project, item, deliverable.sequenceId))
+        .map(({ id }) => id)),
     ...(deliverable.captionsTrackId === undefined ? [] : [deliverable.captionsTrackId]),
   ]);
 }
@@ -1006,12 +1017,14 @@ export class OperationEngine {
     inverse: OperationInput[];
     redo: OperationInput[];
     expectedHead: string;
+    divergence?: DivergenceClass;
   }> = [];
   readonly #redoStack: Array<{
     originalTransactionId: string;
     inverse: OperationInput[];
     redo: OperationInput[];
     expectedHead: string;
+    divergence?: DivergenceClass;
   }> = [];
   #project: GuyditorProject;
 
@@ -1408,6 +1421,9 @@ export class OperationEngine {
         inverse: applied.slice().reverse().flatMap(({ inverse }) => inverse),
         redo: applied.map(({ op, params }) => ({ op, params })),
         expectedHead: committed.value.revision,
+        ...(suppliedDivergence === undefined
+          ? {}
+          : { divergence: suppliedDivergence }),
       }));
       this.#redoStack.splice(0);
     }
@@ -1442,6 +1458,9 @@ export class OperationEngine {
         dryRun: false,
         undoOf: entry.transactionId,
         recordUndo: false,
+        ...(entry.divergence === undefined
+          ? {}
+          : { divergence: entry.divergence }),
       },
       false,
       undefined,
@@ -1454,6 +1473,9 @@ export class OperationEngine {
       inverse: entry.inverse,
       redo: entry.redo,
       expectedHead: this.#project.revision,
+      ...(entry.divergence === undefined
+        ? {}
+        : { divergence: entry.divergence }),
     });
     return undone;
   }
@@ -1484,6 +1506,9 @@ export class OperationEngine {
       dryRun: false,
       redoOf: entry.originalTransactionId,
       recordUndo: false,
+      ...(entry.divergence === undefined
+        ? {}
+        : { divergence: entry.divergence }),
     });
     if (!redone.ok) return redone;
     this.#redoStack.pop();
@@ -1493,6 +1518,9 @@ export class OperationEngine {
         inverse: entry.inverse,
         redo: entry.redo,
         expectedHead: this.#project.revision,
+        ...(entry.divergence === undefined
+          ? {}
+          : { divergence: entry.divergence }),
       });
     }
     return redone;
