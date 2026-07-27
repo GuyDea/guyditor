@@ -199,6 +199,47 @@ function expectLocalJoinedDerivative(project: GuyditorProject): void {
   ).toEqual([]);
 }
 
+function expectDependentAndLocalSplit(
+  project: GuyditorProject,
+  start: number,
+): void {
+  expect.soft(
+    project.sequences.find(({ id }) => id === "seq_bbbbbbbbbb")?.clips,
+  ).toEqual([
+    {
+      id: "clp_dddddddddd",
+      asset: "ast_aaaaaaaaaa",
+      source: {
+        in: { frames: start, fps: "24/1" },
+        out: { frames: 72, fps: "24/1" },
+      },
+    },
+    {
+      id: "clp_eeeeeeeeee",
+      asset: "ast_aaaaaaaaaa",
+      origin: "local",
+      source: {
+        in: { frames: start, fps: "24/1" },
+        out: { frames: 72, fps: "24/1" },
+      },
+    },
+  ]);
+  expect.soft(
+    project.deliverables.find(({ id }) => id === "dlv_bbbbbbbbbb")?.dependencies,
+  ).toEqual([{
+    derivativeClipId: "clp_dddddddddd",
+    source: {
+      assetId: "ast_aaaaaaaaaa",
+      range: {
+        start: { frames: start, fps: "24/1" },
+        end: { frames: 72, fps: "24/1" },
+      },
+      words: { startWordId: "w000002", endWordId: "w000003" },
+      longformClipId: "clp_aaaaaaaaaa",
+    },
+  }]);
+}
+
 describe("transcript range operations", () => {
   it("records range.remove as one semantic operation and its inverse restores the project", async () => {
     const { store, engine } = await fixture();
@@ -472,6 +513,65 @@ describe("transcript range operations", () => {
     );
   });
 
+  it.each([
+    ["remove", 48],
+    ["retain", 60],
+  ] as const)(
+    "keeps an overlapping local split local after targeted range.%s",
+    async (kind, survivorStart) => {
+      const { store, engine } = await fixture();
+      await valueOf(engine.execute(store, [{
+        op: "transcript.range.shortCandidate",
+        params: {
+          wordRange: { fromWord: "w000002", toWord: "w000003" },
+          title: "Targeted short",
+        },
+      }]));
+      const primaryBefore = structuredClone(
+        store.currentProject.sequences.find(({ id }) => id === "seq_aaaaaaaaaa"),
+      );
+      const cuts = { origin: "ui" as const, dryRun: false, divergence: "cuts" as const };
+      await valueOf(engine.execute(store, [{
+        op: "clip.insert",
+        params: {
+          sequenceId: "seq_bbbbbbbbbb",
+          layerId: "lyr_bbbbbbbbbb",
+          index: 1,
+          clipId: "clp_gggggggggg",
+          source: {
+            assetId: "ast_aaaaaaaaaa",
+            in: { frames: 36, fps: "24/1" },
+            out: { frames: 72, fps: "24/1" },
+          },
+        },
+      }], cuts));
+      const operation = kind === "remove"
+        ? {
+            op: "transcript.range.remove",
+            params: {
+              sequenceId: "seq_bbbbbbbbbb",
+              wordRange: { fromWord: "w000002", toWord: "w000002" },
+              paddingMs: 0,
+              snapPolicy: "none",
+            },
+          }
+        : {
+            op: "transcript.range.retain",
+            params: {
+              scope: { sequenceId: "seq_bbbbbbbbbb" },
+              wordRanges: [{ fromWord: "w000003", toWord: "w000003" }],
+            },
+          };
+
+      await valueOf(engine.execute(store, [operation], cuts));
+
+      expect.soft(
+        store.currentProject.sequences.find(({ id }) => id === "seq_aaaaaaaaaa"),
+      ).toEqual(primaryBefore);
+      expectDependentAndLocalSplit(store.currentProject, survivorStart);
+    },
+  );
+
   it("keeps a local-first derivative join local across separate transactions", async () => {
     const { store, engine } = await fixture();
     await valueOf(engine.execute(store, [{
@@ -537,6 +637,73 @@ describe("transcript range operations", () => {
       },
     ], cuts));
 
+    expectLocalJoinedDerivative(store.currentProject);
+  });
+
+  it("does not let a later captured restore qualify an earlier join", async () => {
+    const { store, engine } = await fixture();
+    await valueOf(engine.execute(store, [{
+      op: "transcript.range.shortCandidate",
+      params: {
+        wordRange: { fromWord: "w000002", toWord: "w000003" },
+        title: "Targeted short",
+      },
+    }]));
+    const primaryBefore = structuredClone(
+      store.currentProject.sequences.find(({ id }) => id === "seq_aaaaaaaaaa"),
+    );
+    const cuts = { origin: "ui" as const, dryRun: false, divergence: "cuts" as const };
+    await valueOf(engine.execute(store, [{
+      op: "clip.insert",
+      params: {
+        sequenceId: "seq_bbbbbbbbbb",
+        layerId: "lyr_bbbbbbbbbb",
+        index: 0,
+        clipId: "clp_dddddddddd",
+        source: {
+          assetId: "ast_aaaaaaaaaa",
+          in: { frames: 24, fps: "24/1" },
+          out: { frames: 36, fps: "24/1" },
+        },
+      },
+    }], cuts));
+
+    await valueOf(engine.execute(store, [
+      {
+        op: "clip.join",
+        params: { clipIds: ["clp_dddddddddd", "clp_cccccccccc"] },
+      },
+      {
+        op: "clip.remove",
+        params: { clipId: "clp_dddddddddd" },
+      },
+      {
+        op: "clip.insert",
+        params: {
+          sequenceId: "seq_bbbbbbbbbb",
+          layerId: "lyr_bbbbbbbbbb",
+          index: 0,
+          clipId: "clp_dddddddddd",
+          source: {
+            assetId: "ast_aaaaaaaaaa",
+            in: { frames: 24, fps: "24/1" },
+            out: { frames: 72, fps: "24/1" },
+          },
+          restore: {
+            id: "clp_dddddddddd",
+            asset: "ast_aaaaaaaaaa",
+            source: {
+              in: { frames: 24, fps: "24/1" },
+              out: { frames: 72, fps: "24/1" },
+            },
+          },
+        },
+      },
+    ], cuts));
+
+    expect.soft(
+      store.currentProject.sequences.find(({ id }) => id === "seq_aaaaaaaaaa"),
+    ).toEqual(primaryBefore);
     expectLocalJoinedDerivative(store.currentProject);
   });
 
