@@ -28,7 +28,7 @@ describe("restyle timeline insertion ownership", () => {
       items: [{
         id: "gfx_bbbbbbbbbb",
         sequenceId: "seq_aaaaaaaaaa",
-        template: "tpl_callout_text",
+        template: "tpl_bbbbbbbbbb",
         at: "timeline:seq_aaaaaaaaaa@5",
         duration: { frames: 2, fps: "24/1" },
         layout: {
@@ -42,7 +42,7 @@ describe("restyle timeline insertion ownership", () => {
       }, {
         id: "gfx_cccccccccc",
         sequenceId: "seq_bbbbbbbbbb",
-        template: "tpl_callout_text",
+        template: "tpl_bbbbbbbbbb",
         at: "word:w000001",
         duration: "intrinsic",
         layout: {

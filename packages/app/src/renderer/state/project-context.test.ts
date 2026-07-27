@@ -86,16 +86,16 @@ describe("project context", () => {
   });
 
   it("cycles from no or out-of-scope selection without skipping an endpoint", () => {
-    const ids = ["ann_first", "ann_middle", "ann_last"];
-    expect(nextCycledId(ids, null, 1)).toBe("ann_first");
-    expect(nextCycledId(ids, "ann_elsewhere", 1)).toBe("ann_first");
-    expect(nextCycledId(ids, null, -1)).toBe("ann_last");
-    expect(nextCycledId(ids, "ann_elsewhere", -1)).toBe("ann_last");
+    const ids = ["ann_aaaaaaaaaa", "ann_bbbbbbbbbb", "ann_cccccccccc"];
+    expect(nextCycledId(ids, null, 1)).toBe("ann_aaaaaaaaaa");
+    expect(nextCycledId(ids, "ann_dddddddddd", 1)).toBe("ann_aaaaaaaaaa");
+    expect(nextCycledId(ids, null, -1)).toBe("ann_cccccccccc");
+    expect(nextCycledId(ids, "ann_dddddddddd", -1)).toBe("ann_cccccccccc");
   });
 
   it("wraps an in-scope annotation selection in either direction", () => {
-    const ids = ["ann_first", "ann_middle", "ann_last"];
-    expect(nextCycledId(ids, "ann_last", 1)).toBe("ann_first");
-    expect(nextCycledId(ids, "ann_first", -1)).toBe("ann_last");
+    const ids = ["ann_aaaaaaaaaa", "ann_bbbbbbbbbb", "ann_cccccccccc"];
+    expect(nextCycledId(ids, "ann_cccccccccc", 1)).toBe("ann_aaaaaaaaaa");
+    expect(nextCycledId(ids, "ann_aaaaaaaaaa", -1)).toBe("ann_cccccccccc");
   });
 });

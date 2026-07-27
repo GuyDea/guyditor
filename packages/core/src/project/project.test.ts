@@ -286,7 +286,7 @@ describe("project validation", () => {
           items: [{
             id: "gfx_aaaaaaaaaa",
             sequenceId: "seq_bbbbbbbbbb",
-            template: "tpl_callout_text",
+            template: "tpl_bbbbbbbbbb",
             at: "word:w000001",
             duration: { frames: 12, fps: "24/1" },
           }],

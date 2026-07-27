@@ -16,9 +16,9 @@ import { describe, expect, it } from "vitest";
 
 import type { GdEvent } from "../shared/ipc.js";
 import { WindowEventPublisher } from "./events.js";
+import { groupJumpCutProposalOperations } from "./jump-cut-proposal-operations.js";
 import {
   AppServiceHost,
-  groupJumpCutProposalOperations,
 } from "./service-host.js";
 
 describe("AppServiceHost", () => {

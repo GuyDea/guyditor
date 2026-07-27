@@ -1,4 +1,5 @@
 import { placedItemAppliesToSequence } from "../anchors/applicability.js";
+import { isId } from "../project/ids.js";
 import type { GuyditorProject, PlacedItem } from "../project/model.js";
 
 export type DerivativeImpact = "content" | "non-editorial" | "baseline";
@@ -223,7 +224,7 @@ function annotationConversionTargets(
 ): string[] {
   return [
     ...(operation.affected ?? []).filter((target) =>
-      !target.startsWith("ann_") && !target.startsWith("lyr_")),
+      !isId("ann", target) && !isId("lyr", target)),
     ...targetValues(operation.params, ["sequenceId", "itemId"]),
     ...targetValues(operation.params["revert"], ["itemId"]),
     ...targetValues(operation.params["forward"], ["sequenceId", "itemId"]),

@@ -350,16 +350,17 @@ describe("FR-600/601 graphic operation catalog", () => {
     const project = projectWithShortGraphic();
     const { committer, transactions } = transactionCommitter();
     let transactionOrdinal = 0;
+    const transactionIds = [
+      "txn_bbbbbbbbbb",
+      "txn_cccccccccc",
+      "txn_dddddddddd",
+    ];
     const engine = new OperationEngine(project, {
       committer,
       templateProvider: templateProvider(),
       idFactory: (prefix) => {
         if (prefix !== "txn") return ids(prefix);
-        const character = String.fromCharCode(
-          "b".charCodeAt(0) + transactionOrdinal,
-        );
-        transactionOrdinal += 1;
-        return `txn_${character.repeat(10)}`;
+        return transactionIds[transactionOrdinal++]!;
       },
     });
     const operation = {

@@ -55,7 +55,7 @@ describe("context request gate", () => {
     const applied: string[] = [];
     let selectedDeliverableId: string | null = null;
 
-    const invalid = beginContextRequest(gate, "dlv_missing");
+    const invalid = beginContextRequest(gate, "dlv_cccccccccc");
     await Promise.reject(new Error("missing")).catch(() => undefined);
     if (isContextRequestCurrent(gate, invalid, selectedDeliverableId)) {
       applied.push("invalid");
