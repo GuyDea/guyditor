@@ -400,6 +400,12 @@ export class AnnotationService {
   ): Promise<Result<OperationBatchResult>> {
     const loaded = await loadWorkspace(project);
     if (!loaded.ok) return loaded;
+    const annotationSequences = new Map(
+      loaded.value.workspace.current.annotations.map((candidate) => [
+        candidate.id,
+        candidate.canvasRef.sequenceId,
+      ]),
+    );
     const engine = new OperationEngine(project.currentProject, {
       appVersion: this.#appVersion,
       committer: new AnnotationCommitter(
@@ -415,6 +421,37 @@ export class AnnotationService {
         idFactory: this.#idFactory,
         now: this.#now,
       }),
+      derivativeTargetResolver: (_model, input) => {
+        if (input.op === "annotation.create") {
+          const candidate = input.params["annotation"] as Partial<Annotation> | undefined;
+          if (
+            typeof candidate?.id === "string" &&
+            typeof candidate.canvasRef?.sequenceId === "string"
+          ) {
+            annotationSequences.set(candidate.id, candidate.canvasRef.sequenceId);
+          }
+          return [];
+        }
+        const annotationId = input.params["annotationId"];
+        if (typeof annotationId !== "string") return [];
+        if (input.op === "annotation.update") {
+          const patch = input.params["patch"] as Readonly<Record<string, unknown>>;
+          const canvasRef = patch["canvasRef"] as
+            | Readonly<{ sequenceId?: unknown }>
+            | undefined;
+          if (typeof canvasRef?.sequenceId === "string") {
+            annotationSequences.set(annotationId, canvasRef.sequenceId);
+          }
+          return [];
+        }
+        if (input.op === "annotation.delete") {
+          annotationSequences.delete(annotationId);
+          return [];
+        }
+        if (input.op !== "annotation.convert") return [];
+        const sequenceId = annotationSequences.get(annotationId);
+        return sequenceId === undefined ? [] : [sequenceId];
+      },
       anchorResolvers: {
         ...this.#resolverDependencies,
         annotationResolver: createAnnotationAnchorResolver([

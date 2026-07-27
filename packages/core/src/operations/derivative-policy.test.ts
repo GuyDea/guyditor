@@ -10,10 +10,30 @@ import {
 import type {
   GuyditorProject,
   OperationDispatcher,
+  OperationInput,
   ProposalStore,
   TransactionRecord,
 } from "../index.js";
 import { projectFixture } from "../project/test-fixtures.js";
+
+const TEMPLATE_ID = "tpl_a2c3d4e5f6";
+const TEMPLATE_DESCRIPTOR = {
+  schema: "guyditor/template/v1" as const,
+  id: TEMPLATE_ID,
+  name: "Global title",
+  kind: "title" as const,
+  version: "1.0.0",
+  engine: "overlay/v1" as const,
+  duration: {
+    mode: "fixed" as const,
+    default: { frames: 24, fps: "24/1" },
+  },
+  params: {
+    type: "object",
+    additionalProperties: false,
+  },
+  contentHash: "b".repeat(64),
+};
 
 function projectWithShort(): GuyditorProject {
   const project = projectFixture();
@@ -121,7 +141,15 @@ describe("derivative operation policy", () => {
 
     expect(DERIVATIVE_OPERATION_POLICIES["annotation.convert"]).toMatchObject({
       impact: "content",
-      target: "placed-item",
+      target: "annotation-conversion",
+    });
+    expect(DERIVATIVE_OPERATION_POLICIES["transition.remove"].target)
+      .toBe("transition-owner");
+    expect(DERIVATIVE_OPERATION_POLICIES["graphic.add"].target)
+      .toBe("new-graphic");
+    expect(DERIVATIVE_OPERATION_POLICIES["caption.track.add"]).toMatchObject({
+      impact: "non-editorial",
+      target: "none",
     });
     expect(DERIVATIVE_OPERATION_POLICIES["deliverable.framing.override"].impact)
       .toBe("content");
@@ -253,6 +281,213 @@ describe("derivative operation policy", () => {
     expect(callbacks).toBe(0);
   });
 
+  it("includes global adjustment layers in every short render scope", async () => {
+    const project = projectWithShort();
+    project.layers.push({
+      id: "lyr_cccccccccc",
+      kind: "adjustment",
+      name: "Global grade",
+      order: 2,
+      enabled: true,
+      locked: false,
+      adjustment: {
+        exposure: 0.25,
+        contrast: 1.1,
+        saturation: 0.95,
+      },
+    });
+    const engine = new OperationEngine(project);
+
+    const result = await engine.execute([{
+      op: "layer.disable",
+      params: { layerId: "lyr_cccccccccc" },
+    }], {
+      baseRevision: project.revision,
+      origin: "ui",
+      dryRun: false,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: "E_DIVERGENCE_REQUIRED",
+        affected: ["dlv_bbbbbbbbbb"],
+      },
+    });
+  });
+
+  it("resolves transition.remove ownership before dispatching an earlier batch operation", async () => {
+    let callbacks = 0;
+    const project = projectWithShort();
+    const first = project.sequences[1]!.clips[0]!;
+    first.transitionAfter = {
+      id: "trn_bbbbbbbbbb",
+      preset: "crossfade",
+      duration: { frames: 2, fps: "24/1" },
+    };
+    project.sequences[1]!.clips.push({
+      id: "clp_dddddddddd",
+      asset: "ast_aaaaaaaaaa",
+      source: {
+        in: { frames: 12, fps: "24/1" },
+        out: { frames: 24, fps: "24/1" },
+      },
+    });
+    const engine = new OperationEngine(project, {
+      operationDispatcher: passThroughDispatcher(() => {
+        callbacks += 1;
+      }),
+    });
+
+    const result = await engine.execute([{
+      op: "key.qc.run",
+      params: { clipId: "clp_cccccccccc" },
+    }, {
+      op: "transition.remove",
+      params: { transitionId: "trn_bbbbbbbbbb" },
+    }], {
+      baseRevision: project.revision,
+      origin: "ui",
+      dryRun: false,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: "E_DIVERGENCE_REQUIRED",
+        affected: ["dlv_bbbbbbbbbb"],
+      },
+    });
+    expect(callbacks).toBe(0);
+  });
+
+  it.each([
+    ["global", {}, "word:w000001", ["dlv_bbbbbbbbbb"]],
+    ["short-owned", { sequenceId: "seq_bbbbbbbbbb" }, "word:w000001", [
+      "dlv_bbbbbbbbbb",
+    ]],
+    ["short-anchor-owned", {}, "clip:clp_cccccccccc@0", [
+      "dlv_bbbbbbbbbb",
+    ]],
+    ["long-form-owned", { sequenceId: "seq_aaaaaaaaaa" }, "word:w000001", []],
+    ["long-form-anchor-owned", {}, "clip:clp_aaaaaaaaaa@0", []],
+  ])(
+    "resolves %s graphic.add ownership before the item exists",
+    (_name, ownership, anchor, expected) => {
+      const project = projectWithShort();
+
+      expect(touchedDerivativeIds(project, project, [{
+        op: "graphic.add",
+        params: {
+          templateId: TEMPLATE_ID,
+          ...ownership,
+          anchor,
+          duration: { frames: 24, fps: "24/1" },
+          params: {},
+        },
+      }])).toEqual(expected);
+    },
+  );
+
+  it("preflights a global graphic before consulting its template provider", async () => {
+    let templateCalls = 0;
+    const project = projectWithShort();
+    const engine = new OperationEngine(project, {
+      templateProvider: {
+        latest() {
+          templateCalls += 1;
+          return success(TEMPLATE_DESCRIPTOR);
+        },
+        get() {
+          templateCalls += 1;
+          return success(TEMPLATE_DESCRIPTOR);
+        },
+      },
+    });
+
+    const result = await engine.execute([{
+      op: "graphic.add",
+      params: {
+        templateId: TEMPLATE_ID,
+        anchor: "word:w000001",
+        duration: { frames: 24, fps: "24/1" },
+        params: {},
+      },
+    }], {
+      baseRevision: project.revision,
+      origin: "ui",
+      dryRun: false,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: "E_DIVERGENCE_REQUIRED",
+        affected: ["dlv_bbbbbbbbbb"],
+      },
+    });
+    expect(templateCalls).toBe(0);
+  });
+
+  it("accepts read-only target hints for annotation conversion preflight", async () => {
+    let callbacks = 0;
+    const project = projectWithShort();
+    const engine = new OperationEngine(project, {
+      operationDispatcher: passThroughDispatcher(() => {
+        callbacks += 1;
+      }),
+      derivativeTargetResolver: (
+        _candidate: GuyditorProject,
+        input: OperationInput,
+      ) => input.op === "annotation.convert" ? ["seq_bbbbbbbbbb"] : [],
+    });
+
+    const result = await engine.execute([{
+      op: "annotation.convert",
+      params: { annotationId: "ann_aaaaaaaaaa" },
+    }], {
+      baseRevision: project.revision,
+      origin: "ui",
+      dryRun: false,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: "E_DIVERGENCE_REQUIRED",
+        affected: ["dlv_bbbbbbbbbb"],
+      },
+    });
+    expect(callbacks).toBe(0);
+  });
+
+  it("does not treat an unselected caption track as rendered short content", async () => {
+    let callbacks = 0;
+    const project = projectWithShort();
+    const engine = new OperationEngine(project, {
+      operationDispatcher: passThroughDispatcher(() => {
+        callbacks += 1;
+      }),
+    });
+
+    const result = await engine.execute([{
+      op: "caption.track.add",
+      params: {
+        name: "Alternate captions",
+        sourceLayerIds: ["lyr_bbbbbbbbbb"],
+        preset: { presetId: "pre_aaaaaaaaaa", version: 1 },
+      },
+    }], {
+      baseRevision: project.revision,
+      origin: "ui",
+      dryRun: false,
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(callbacks).toBe(1);
+    expect(engine.currentProject.deliverables[1]?.divergences).toBeUndefined();
+  });
+
   it("does not persist a proposal draft when short content lacks a divergence", async () => {
     const savedStatuses: string[] = [];
     const project = projectWithShort();
@@ -322,6 +557,47 @@ describe("derivative operation policy", () => {
 
     expect(result).toMatchObject({ ok: true });
     expect(callbacks).toBe(1);
+  });
+
+  it("strips supplied divergence from non-editorial journal and undo state", async () => {
+    const transactions: TransactionRecord[] = [];
+    const dispatchedDivergences: Array<string | undefined> = [];
+    const project = projectWithShort();
+    const engine = new OperationEngine(project, {
+      committer: {
+        async commit(model, transaction) {
+          transactions.push(structuredClone(transaction));
+          return success(model);
+        },
+      },
+      operationDispatcher(model, input, context) {
+        dispatchedDivergences.push(context.divergence);
+        return success({
+          model,
+          inverse: [{ op: input.op, params: structuredClone(input.params) }],
+          affected: ["clp_cccccccccc"],
+          summary: `Run ${input.op}`,
+        });
+      },
+    });
+
+    const result = await engine.execute([{
+      op: "key.qc.run",
+      params: { clipId: "clp_cccccccccc" },
+    }], {
+      baseRevision: project.revision,
+      origin: "ui",
+      dryRun: false,
+      divergence: "graphics",
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(await engine.undo()).toMatchObject({ ok: true });
+    expect(await engine.redo()).toMatchObject({ ok: true });
+    expect(transactions.map(({ divergence }) => divergence))
+      .toEqual([undefined, undefined, undefined]);
+    expect(dispatchedDivergences).toEqual(["graphics", undefined, undefined]);
+    expect(engine.currentProject.deliverables[1]?.divergences).toBeUndefined();
   });
 
   it("accepts and journals audio divergence for a short audio edit", async () => {

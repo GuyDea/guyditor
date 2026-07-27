@@ -231,12 +231,18 @@ export type OperationDispatcher = (
 ) => Result<DispatchedOperationApplication> |
   Promise<Result<DispatchedOperationApplication>>;
 
+export type DerivativeTargetHintResolver = (
+  project: GuyditorProject,
+  input: OperationInput,
+) => readonly string[];
+
 export interface OperationEngineOptions {
   idFactory?: IdFactory;
   committer?: OperationCommitter;
   appVersion?: string;
   now?: () => Date;
   operationDispatcher?: OperationDispatcher;
+  derivativeTargetResolver?: DerivativeTargetHintResolver;
   anchorResolvers?: AnchorResolverRegistry | AnchorResolverDependencies;
   proposalStore?: ProposalStore;
   automationPolicy?: AutomationPolicy;
@@ -977,6 +983,7 @@ export class OperationEngine {
   readonly #appVersion: string;
   readonly #now: () => Date;
   readonly #operationDispatcher: OperationDispatcher | undefined;
+  readonly #derivativeTargetResolver: DerivativeTargetHintResolver | undefined;
   readonly #anchorDependencies: AnchorResolverDependencies;
   readonly #proposalStore: ProposalStore | undefined;
   readonly #automationPolicy: AutomationPolicy | undefined;
@@ -1009,6 +1016,7 @@ export class OperationEngine {
     this.#appVersion = options.appVersion ?? "0.0.0";
     this.#now = options.now ?? (() => new Date());
     this.#operationDispatcher = options.operationDispatcher;
+    this.#derivativeTargetResolver = options.derivativeTargetResolver;
     this.#anchorDependencies = options.anchorResolvers instanceof AnchorResolverRegistry
       ? options.anchorResolvers.dependencies()
       : options.anchorResolvers ?? {};
@@ -1157,7 +1165,12 @@ export class OperationEngine {
     const preflightDerivativeIds = touchedDerivativeIds(
       base,
       base,
-      normalizedBatch.map(({ input }) => input),
+      normalizedBatch.map(({ input }) => ({
+        ...input,
+        ...(this.#derivativeTargetResolver === undefined
+          ? {}
+          : { affected: [...this.#derivativeTargetResolver(base, input)] }),
+      })),
     );
     if (
       suppliedDivergence !== undefined &&
@@ -1285,6 +1298,9 @@ export class OperationEngine {
         derivativeIds,
       );
     }
+    const effectiveDivergence = derivativeIds.length === 0
+      ? undefined
+      : suppliedDivergence;
     working = synchronizeDerivativeDependencies(base, working, applied, derivativeIds);
 
     const transitions = await computeAnchorTransitions(
@@ -1326,11 +1342,11 @@ export class OperationEngine {
     const transactionId = this.#idFactory("txn");
     const actor = context.actor ?? actorFor(context);
     let committedCandidate = { ...working, revision: resultRevision };
-    if (derivativeIds.length > 0 && suppliedDivergence !== undefined) {
+    if (derivativeIds.length > 0 && effectiveDivergence !== undefined) {
       committedCandidate = recordDivergence(
         committedCandidate,
         derivativeIds,
-        suppliedDivergence,
+        effectiveDivergence,
         transactionId,
       );
     }
@@ -1390,7 +1406,7 @@ export class OperationEngine {
         anchor,
       })),
       addresses: [...(context.addresses ?? [])],
-      ...(suppliedDivergence === undefined ? {} : { divergence: suppliedDivergence }),
+      ...(effectiveDivergence === undefined ? {} : { divergence: effectiveDivergence }),
       ...(context.undoOf === undefined ? {} : { undoOf: context.undoOf }),
       ...(context.redoOf === undefined ? {} : { redoOf: context.redoOf }),
     };
@@ -1420,9 +1436,9 @@ export class OperationEngine {
         inverse: applied.slice().reverse().flatMap(({ inverse }) => inverse),
         redo: applied.map(({ op, params }) => ({ op, params })),
         expectedHead: committed.value.revision,
-        ...(suppliedDivergence === undefined
+        ...(effectiveDivergence === undefined
           ? {}
-          : { divergence: suppliedDivergence }),
+          : { divergence: effectiveDivergence }),
       }));
       this.#redoStack.splice(0);
     }
@@ -1619,6 +1635,17 @@ export class OperationEngine {
       return operationFailure(
         "E_ASSESSMENT_SCHEMA",
         error instanceof Error ? error.message : String(error),
+      );
+    }
+    const acceptedRevision = await store.readAcceptedRevision();
+    if (!acceptedRevision.ok) return acceptedRevision;
+    if (
+      acceptedRevision.value !== store.head ||
+      acceptedRevision.value !== this.#project.revision
+    ) {
+      return operationFailure(
+        "E_PROPOSAL_STALE",
+        `Proposal base ${this.#project.revision} does not match accepted revision ${acceptedRevision.value}.`,
       );
     }
     const id = this.#idFactory("prp");
@@ -1937,7 +1964,13 @@ export class OperationEngine {
         [id],
       );
     }
-    const created = await this.createProposal(replacement);
+    const inheritedReplacement = (
+        replacement.divergence === undefined &&
+        current.value.divergence !== undefined
+      )
+      ? { ...replacement, divergence: current.value.divergence }
+      : replacement;
+    const created = await this.createProposal(inheritedReplacement);
     if (!created.ok) return created;
     const superseded: Proposal = {
       ...current.value,

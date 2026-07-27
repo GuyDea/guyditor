@@ -16,6 +16,7 @@ export { applyRestyleOperation } from "../restyle/operations.js";
 export { applyGenerationOperation } from "../generation/operations.js";
 export { applyTakeOperation } from "../takes/operations.js";
 export type {
+  DerivativeTargetHintResolver,
   DispatchedOperationApplication,
   IdFactory,
   OperationDispatcher,

@@ -89,6 +89,62 @@ async function fixtureStore(idFactory: IdFactory): Promise<ProjectStore> {
   return store;
 }
 
+function addShortWorkspace(store: ProjectStore): void {
+  store.currentProject.sequences.push({
+    id: "seq_bbbbbbbbbb",
+    name: "short",
+    clips: [{
+      id: "clp_cccccccccc",
+      asset: "ast_aaaaaaaaaa",
+      source: {
+        in: { frames: 0, fps: "24/1" },
+        out: { frames: 12, fps: "24/1" },
+      },
+    }],
+  });
+  store.currentProject.layers.push(
+    {
+      id: "lyr_bbbbbbbbbb",
+      kind: "video",
+      name: "short",
+      order: 1,
+      enabled: true,
+      locked: false,
+      sequence: "seq_bbbbbbbbbb",
+    },
+    {
+      id: "lyr_cccccccccc",
+      kind: "animation",
+      name: "graphics",
+      order: 2,
+      enabled: true,
+      locked: false,
+    },
+  );
+  store.currentProject.deliverables.push({
+    id: "dlv_bbbbbbbbbb",
+    kind: "short",
+    name: "Short",
+    profile: "youtube-shorts@1.0.0",
+    sequenceId: "seq_bbbbbbbbbb",
+    status: "draft",
+    dependencies: [{
+      derivativeClipId: "clp_cccccccccc",
+      source: {
+        assetId: "ast_aaaaaaaaaa",
+        range: {
+          start: { frames: 0, fps: "24/1" },
+          end: { frames: 12, fps: "24/1" },
+        },
+        longformClipId: "clp_aaaaaaaaaa",
+      },
+    }],
+  });
+  store.currentProject.templates = {
+    tpl_aaaaaaaaaa: { version: "1.0.0", contentHash: "b".repeat(64) },
+  };
+}
+
 function annotation(
   overrides: Partial<Annotation> = {},
 ): Annotation {
@@ -127,6 +183,106 @@ function serviceApi(): AnnotationServiceConstructor | undefined {
 }
 
 describe("AnnotationService", () => {
+  it("preflights short annotation conversion before allocating an overlay", async () => {
+    const Service = serviceApi();
+    if (Service === undefined) return;
+    let graphicIds = 0;
+    const nextId = ids();
+    const idFactory: IdFactory = (prefix) => {
+      if (prefix === "gfx") graphicIds += 1;
+      return nextId(prefix);
+    };
+    const store = await fixtureStore(idFactory);
+    addShortWorkspace(store);
+    const service = new Service({ idFactory, now: () => NOW });
+    await valueOf(service.execute(store, [{
+      op: "annotation.create",
+      params: {
+        annotation: annotation({
+          anchor: {
+            kind: "clip",
+            clipId: "clp_cccccccccc",
+            assetId: "ast_aaaaaaaaaa",
+            sourceFrame: { frames: 6, fps: "24/1" },
+          },
+          canvasRef: { sequenceId: "seq_bbbbbbbbbb", aspect: "9:16" },
+        }),
+      },
+    }]));
+    const beforeConversionIds = graphicIds;
+
+    const result = await service.execute(store, [{
+      op: "annotation.convert",
+      params: {
+        annotationId: "ann_aaaaaaaaaa",
+        layerId: "lyr_cccccccccc",
+        templateId: "tpl_aaaaaaaaaa",
+      },
+    }]);
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: "E_DIVERGENCE_REQUIRED",
+        affected: ["dlv_bbbbbbbbbb"],
+      },
+    });
+    expect(graphicIds).toBe(beforeConversionIds);
+    expect(store.currentProject.layers[2]?.items).toBeUndefined();
+  });
+
+  it("folds annotation ownership updates before conversion preflight", async () => {
+    const Service = serviceApi();
+    if (Service === undefined) return;
+    let graphicIds = 0;
+    const nextId = ids();
+    const idFactory: IdFactory = (prefix) => {
+      if (prefix === "gfx") graphicIds += 1;
+      return nextId(prefix);
+    };
+    const store = await fixtureStore(idFactory);
+    addShortWorkspace(store);
+    const service = new Service({ idFactory, now: () => NOW });
+    await valueOf(service.execute(store, [{
+      op: "annotation.create",
+      params: { annotation: annotation() },
+    }]));
+    const beforeConversionIds = graphicIds;
+
+    const result = await service.execute(store, [{
+      op: "annotation.update",
+      params: {
+        annotationId: "ann_aaaaaaaaaa",
+        patch: {
+          anchor: {
+            kind: "clip",
+            clipId: "clp_cccccccccc",
+            assetId: "ast_aaaaaaaaaa",
+            sourceFrame: { frames: 6, fps: "24/1" },
+          },
+          canvasRef: { sequenceId: "seq_bbbbbbbbbb", aspect: "9:16" },
+        },
+      },
+    }, {
+      op: "annotation.convert",
+      params: {
+        annotationId: "ann_aaaaaaaaaa",
+        layerId: "lyr_cccccccccc",
+        templateId: "tpl_aaaaaaaaaa",
+      },
+    }]);
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: "E_DIVERGENCE_REQUIRED",
+        affected: ["dlv_bbbbbbbbbb"],
+      },
+    });
+    expect(graphicIds).toBe(beforeConversionIds);
+    expect(store.currentProject.layers[2]?.items).toBeUndefined();
+  });
+
   it("keeps sidecar bytes, registry hash, summary, and transaction history consistent", async () => {
     const Service = serviceApi();
     if (Service === undefined) return;

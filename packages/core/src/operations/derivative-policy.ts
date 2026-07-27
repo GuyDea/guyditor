@@ -1,8 +1,14 @@
 import { placedItemAppliesToSequence } from "../anchors/applicability.js";
-import type { GuyditorProject } from "../project/model.js";
+import type { GuyditorProject, PlacedItem } from "../project/model.js";
 
 export type DerivativeImpact = "content" | "non-editorial" | "baseline";
-export type DerivativeTargetResolver = "none" | "scope" | "placed-item" | "template-uses";
+export type DerivativeTargetResolver =
+  | "none"
+  | "scope"
+  | "transition-owner"
+  | "annotation-conversion"
+  | "new-graphic"
+  | "template-uses";
 
 export interface DerivativeOperationPolicy {
   impact: DerivativeImpact;
@@ -87,7 +93,7 @@ export const DERIVATIVE_OPERATION_POLICIES = Object.freeze({
   "clip.color.set": content(),
   "clip.look.apply": content(),
   "transition.set": content(),
-  "transition.remove": content(),
+  "transition.remove": content("transition-owner"),
   "pickup.splice": content(),
   "transcript.create": baseline(),
   "transcript.word.correct": nonEditorial(),
@@ -103,7 +109,7 @@ export const DERIVATIVE_OPERATION_POLICIES = Object.freeze({
   "transcript.range.retain": content(),
   "transcript.range.createClip": content(),
   "transcript.range.shortCandidate": nonEditorial(),
-  "caption.track.add": content(),
+  "caption.track.add": nonEditorial(),
   "caption.track.remove": content(),
   "caption.track.set": content(),
   "caption.style.set": content(),
@@ -119,8 +125,8 @@ export const DERIVATIVE_OPERATION_POLICIES = Object.freeze({
   "annotation.resolve": nonEditorial(),
   "annotation.reject": nonEditorial(),
   "annotation.reopen": nonEditorial(),
-  "annotation.convert": content("placed-item"),
-  "graphic.add": content("placed-item"),
+  "annotation.convert": content("annotation-conversion"),
+  "graphic.add": content("new-graphic"),
   "graphic.param.set": content(),
   "graphic.anchor.set": content(),
   "graphic.retime": content(),
@@ -163,10 +169,11 @@ function applicableLayerItems(
 ): Array<{ layerId: string; itemIds: string[] }> {
   return project.layers.flatMap((layer) => {
     const sequenceOwned = layer.sequence === sequenceId;
+    const globalAdjustment = layer.kind === "adjustment";
     const itemIds = (layer.items ?? [])
       .filter((item) => placedItemAppliesToSequence(project, item, sequenceId))
       .map(({ id }) => id);
-    if (!sequenceOwned && itemIds.length === 0) return [];
+    if (!sequenceOwned && !globalAdjustment && itemIds.length === 0) return [];
     return [{ layerId: layer.id, itemIds }];
   });
 }
@@ -186,16 +193,90 @@ function shortScopeIds(project: GuyditorProject, deliverableId: string): Set<str
   ]);
 }
 
+function targetValues(
+  value: unknown,
+  names: readonly string[],
+): string[] {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return [];
+  const record = value as Readonly<Record<string, unknown>>;
+  return names.flatMap((name) =>
+    typeof record[name] === "string" ? [record[name]] : []);
+}
+
+function transitionOwnerTargets(
+  project: GuyditorProject,
+  operation: DerivativeTargetOperation,
+): string[] {
+  const transitionId = operation.params["transitionId"];
+  if (typeof transitionId !== "string") return [...(operation.affected ?? [])];
+  return [
+    ...(operation.affected ?? []),
+    ...project.sequences.flatMap(({ clips }) =>
+      clips
+        .filter(({ transitionAfter }) => transitionAfter?.id === transitionId)
+        .map(({ id }) => id)),
+  ];
+}
+
+function annotationConversionTargets(
+  operation: DerivativeTargetOperation,
+): string[] {
+  return [
+    ...(operation.affected ?? []).filter((target) =>
+      !target.startsWith("ann_") && !target.startsWith("lyr_")),
+    ...targetValues(operation.params, ["sequenceId", "itemId"]),
+    ...targetValues(operation.params["revert"], ["itemId"]),
+    ...targetValues(operation.params["forward"], ["sequenceId", "itemId"]),
+  ];
+}
+
+function newGraphicTargets(
+  project: GuyditorProject,
+  operation: DerivativeTargetOperation,
+): string[] {
+  const anchor = operation.params["anchor"];
+  const duration = operation.params["duration"];
+  if (
+    typeof anchor !== "string" ||
+    (
+      duration !== "intrinsic" &&
+      (typeof duration !== "object" || duration === null || Array.isArray(duration))
+    )
+  ) return [];
+  const sequenceId = operation.params["sequenceId"];
+  const item: PlacedItem = {
+    id: typeof operation.params["graphicId"] === "string"
+      ? operation.params["graphicId"]
+      : "gfx_aaaaaaaaaa",
+    ...(typeof sequenceId === "string" ? { sequenceId } : {}),
+    template: typeof operation.params["templateId"] === "string"
+      ? operation.params["templateId"]
+      : "tpl_aaaaaaaaaa",
+    at: anchor as PlacedItem["at"],
+    duration: structuredClone(duration) as PlacedItem["duration"],
+    params: {},
+    seed: 0,
+  };
+  return project.deliverables
+    .filter(({ kind }) => kind === "short")
+    .filter(({ sequenceId: candidate }) =>
+      placedItemAppliesToSequence(project, item, candidate))
+    .map(({ id }) => id);
+}
+
 function targetStrings(
   project: GuyditorProject,
   operation: DerivativeTargetOperation,
   policy: DerivativeOperationPolicy,
 ): string[] {
   if (policy.target === "none") return [];
-  if (policy.target === "placed-item") {
-    return Object.entries(operation.params).flatMap(([name, value]) =>
-      name === "layerId" ? [] : nestedStrings(value));
+  if (policy.target === "transition-owner") {
+    return transitionOwnerTargets(project, operation);
   }
+  if (policy.target === "annotation-conversion") {
+    return annotationConversionTargets(operation);
+  }
+  if (policy.target === "new-graphic") return newGraphicTargets(project, operation);
   if (policy.target === "template-uses") {
     const templateId = operation.params["templateId"];
     return [

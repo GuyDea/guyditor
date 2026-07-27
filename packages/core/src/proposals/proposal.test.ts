@@ -18,11 +18,13 @@ import {
   makeGuyditorError,
   openProject,
   parseProjectYaml,
+  success,
 } from "../index.js";
 import type {
   AuditSink,
   AuditSinkEvent,
   AutomationPolicy,
+  GuyditorProject,
   IdPrefix,
   OperationDispatcher,
   Proposal,
@@ -115,6 +117,51 @@ function trim(delta = 1) {
   };
 }
 
+function projectWithShort(): GuyditorProject {
+  const project = projectFixture();
+  project.sequences.push({
+    id: "seq_bbbbbbbbbb",
+    name: "short",
+    clips: [{
+      id: "clp_cccccccccc",
+      asset: "ast_aaaaaaaaaa",
+      source: {
+        in: { frames: 0, fps: "24/1" },
+        out: { frames: 12, fps: "24/1" },
+      },
+    }],
+  });
+  project.layers.push({
+    id: "lyr_bbbbbbbbbb",
+    kind: "video",
+    name: "short",
+    order: 1,
+    enabled: true,
+    locked: false,
+    sequence: "seq_bbbbbbbbbb",
+  });
+  project.deliverables.push({
+    id: "dlv_bbbbbbbbbb",
+    kind: "short",
+    name: "Short",
+    profile: "youtube-shorts@1.0.0",
+    sequenceId: "seq_bbbbbbbbbb",
+    status: "draft",
+    dependencies: [{
+      derivativeClipId: "clp_cccccccccc",
+      source: {
+        assetId: "ast_aaaaaaaaaa",
+        range: {
+          start: { frames: 0, fps: "24/1" },
+          end: { frames: 12, fps: "24/1" },
+        },
+        longformClipId: "clp_aaaaaaaaaa",
+      },
+    }],
+  });
+  return project;
+}
+
 function applySingleFileUnifiedDiff(base: string, patch: string): string {
   const lines = patch.split("\n");
   const header = lines.findIndex((line) => line.startsWith("@@ "));
@@ -178,6 +225,67 @@ async function createReady(engine: OperationEngine): Promise<Proposal> {
 }
 
 describe("proposal lifecycle", () => {
+  it.each([
+    ["accepted revision", "rev_00001", "rev_00002"],
+    ["HEAD", "rev_00002", "rev_00001"],
+  ])(
+    "validates proposal-store %s before running a dry-run",
+    async (_mismatch, head, acceptedRevision) => {
+      let dispatches = 0;
+      let saves = 0;
+      const project = projectFixture();
+      const store: ProposalStore = {
+        head,
+        async readAcceptedRevision() {
+          return success(acceptedRevision);
+        },
+        async saveProposal(proposal) {
+          saves += 1;
+          return success(proposal);
+        },
+        async readProposal() {
+          throw new Error("readProposal should not be called");
+        },
+        async updateProposal() {
+          throw new Error("updateProposal should not be called");
+        },
+        async archiveProposal() {
+          throw new Error("archiveProposal should not be called");
+        },
+      };
+      const engine = new OperationEngine(project, {
+        proposalStore: store,
+        operationDispatcher(model, input) {
+          dispatches += 1;
+          return success({
+            model,
+            inverse: [],
+            affected: [input.params["wordId"] as string],
+            summary: "Correct transcript word",
+          });
+        },
+      });
+
+      const result = await engine.createProposal({
+        operations: [{
+          op: "transcript.word.correct",
+          params: { wordId: "w000001", text: "after" },
+        }],
+        instruction: { kind: "user-text", text: "correct the word" },
+        actor: { kind: "agent", id: "ses_aaaaaaaaaa" },
+        reason: reason("Correct the transcript typo."),
+        addresses: [],
+      });
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: { code: "E_PROPOSAL_STALE", acceptedStateChanged: false },
+      });
+      expect(dispatches).toBe(0);
+      expect(saves).toBe(0);
+    },
+  );
+
   it("round-trips audio divergence through proposal persistence", async () => {
     const { root, engine } = await projectEngine();
 
@@ -197,6 +305,64 @@ describe("proposal lifecycle", () => {
 
     expect(proposal.divergence).toBe("audio");
     expect(persisted.divergence).toBe("audio");
+  });
+
+  it("preserves short divergence through proposal save and acceptance", async () => {
+    const root = await directory();
+    const idFactory = ids();
+    const store = await valueOf(createProject(root, projectWithShort(), {
+      idFactory,
+      now: () => NOW,
+    }));
+    const engine = new OperationEngine(store.currentProject, {
+      committer: store,
+      proposalStore: store,
+      idFactory,
+      now: () => NOW,
+    });
+
+    const proposal = await valueOf(engine.createProposal({
+      operations: [{
+        op: "clip.trim",
+        params: {
+          clipId: "clp_cccccccccc",
+          edge: "tail",
+          delta: { frames: 1, fps: "24/1" },
+        },
+      }],
+      instruction: { kind: "user-text", text: "tighten the short" },
+      actor: { kind: "agent", id: "ses_aaaaaaaaaa" },
+      divergence: "cuts",
+      reason: reason("Tighten the short by one frame."),
+      addresses: [],
+    }));
+    expect(await store.readProposal(proposal.id)).toMatchObject({
+      ok: true,
+      value: { status: "ready", divergence: "cuts" },
+    });
+
+    const accepted = await valueOf(engine.acceptProposal(proposal.id, "creator"));
+    const archived = JSON.parse(await readFile(
+      join(root, "history/proposals", proposal.id, "proposal.json"),
+      "utf8",
+    )) as Proposal;
+    const transaction = JSON.parse(
+      (await readFile(join(root, "history/transactions.jsonl"), "utf8"))
+        .trim().split("\n").at(-1)!,
+    ) as TransactionRecord;
+
+    expect(accepted).toMatchObject({
+      status: "accepted",
+      divergence: "cuts",
+    });
+    expect(archived).toMatchObject({
+      status: "accepted",
+      divergence: "cuts",
+    });
+    expect(transaction).toMatchObject({
+      id: accepted.resultTransaction,
+      divergence: "cuts",
+    });
   });
 
   it("emits linked creation and acceptance audit events", async () => {
@@ -534,7 +700,15 @@ describe("proposal lifecycle", () => {
 
   it("creates a replacement and archives the superseded proposal as a chain", async () => {
     const { root, engine } = await projectEngine();
-    const original = await createReady(engine);
+    const original = await valueOf(engine.createProposal({
+      operations: [trim()],
+      instruction: { kind: "user-text", text: "tighten the ending" },
+      actor: { kind: "agent", id: "ses_aaaaaaaaaa", model: "test-agent" },
+      sessionId: "ses_aaaaaaaaaa",
+      divergence: "cuts",
+      reason: reason(),
+      addresses: [],
+    }));
 
     const replacement = await valueOf(engine.supersedeProposal(original.id, {
       operations: [trim(2)],
@@ -545,7 +719,11 @@ describe("proposal lifecycle", () => {
       addresses: [],
     }));
 
-    expect(replacement).toMatchObject({ id: "prp_bbbbbbbbbb", status: "ready" });
+    expect(replacement).toMatchObject({
+      id: "prp_bbbbbbbbbb",
+      status: "ready",
+      divergence: "cuts",
+    });
     const archived = JSON.parse(await readFile(
       join(root, "history/proposals", original.id, "proposal.json"),
       "utf8",
@@ -554,6 +732,39 @@ describe("proposal lifecycle", () => {
       status: "superseded",
       supersededBy: replacement.id,
       resolvedBy: original.actor.id,
+    });
+  });
+
+  it("preserves divergence when superseding a stale proposal as a rebase", async () => {
+    const { engine } = await projectEngine();
+    const original = await valueOf(engine.createProposal({
+      operations: [trim()],
+      instruction: { kind: "user-text", text: "tighten the ending" },
+      actor: { kind: "agent", id: "ses_aaaaaaaaaa", model: "test-agent" },
+      sessionId: "ses_aaaaaaaaaa",
+      divergence: "cuts",
+      reason: reason(),
+      addresses: [],
+    }));
+    await valueOf(engine.execute([trim(2)], {
+      baseRevision: engine.currentProject.revision,
+      origin: "ui",
+      dryRun: false,
+    }));
+
+    const rebased = await valueOf(engine.supersedeProposal(original.id, {
+      operations: [trim()],
+      instruction: structuredClone(original.instruction),
+      actor: structuredClone(original.actor),
+      ...(original.sessionId === undefined ? {} : { sessionId: original.sessionId }),
+      reason: reason("Rebase the trim over the accepted edit."),
+      addresses: [],
+    }));
+
+    expect(rebased).toMatchObject({
+      status: "ready",
+      baseRevision: engine.currentProject.revision,
+      divergence: "cuts",
     });
   });
 
