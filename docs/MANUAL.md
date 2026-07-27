@@ -91,7 +91,7 @@ review — nothing consequential applies silently, ever.
 
 | Feature | Where | How |
 |---|---|---|
-| Deliverables | Deliverables/status panel | The long-form master plus any number of shorts, each with status (draft → in-review → approved → stale) and its own profile. |
+| Deliverables | Deliverables/status panel | The long-form master plus any number of shorts, each with status (draft → in-review → approved → stale) and its own profile. Select one here or in Publish to make it the active distribution across Preview, Timeline, caption/edit targets, Graphics, B-roll, inspectors, Restyle, and Publish. The choice autosaves with the project and survives phase changes and reopen. The visible Transcript source stream remains project-wide. |
 | Finding shorts | Agent candidates or manual | The agent proposes hook/coherence/payoff-scored candidates, or select any transcript passage/range → "derive short". |
 | Independent short edits | Derived short's own sequence | A short is a real edit — its own ordering, pacing, graphics, CTA — never just a crop. Edits are tracked as intentional divergences. |
 | Vertical reframing | Preview (portrait mode) per short | Subject tracking + per-shot framing decisions; presenter repositioned, layers rearranged (never center-cropped). Override any shot's crop manually — overrides survive re-derivation. |
@@ -129,7 +129,9 @@ review — nothing consequential applies silently, ever.
 
 - **Shortcuts**: phase tabs `Ctrl/Cmd+Alt+1..5`; frame step `←/→`; undo/redo
   `Ctrl+Z/Ctrl+Y`; full map in the in-app keyboard reference.
-- **Project on disk**: `episode.guyditor.yaml` (the whole edit, human-readable) ·
+- **Project on disk**: `episode.guyditor.yaml` (the canonical project model,
+  human-readable) · `workspace.guyditor.yaml` (portable non-editorial active-
+  distribution state; safe fallback to primary if missing or invalid) ·
   `sidecars/` (transcripts, annotations, framing...) · `history/` (journal +
   revision snapshots) · `proposals/` (pending review) · `.guyditor/` (disposable
   caches — always safe to delete).
