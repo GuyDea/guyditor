@@ -14,6 +14,8 @@ import type { IdFactory } from "./engine.js";
 import type { ClipApplication, EntityMutation } from "./clip.js";
 import type { OperationInput } from "./types.js";
 
+export type GraphicInverseTrust = "none" | "captured-restore" | "head-undo";
+
 function graphicFailure(
   code: `E_${Uppercase<string>}`,
   message: string,
@@ -222,7 +224,7 @@ async function applyAdd(
   provider: TemplateProvider,
   idFactory: IdFactory,
   seedFactory: () => number,
-  trustedInverse: boolean,
+  inverseTrust: GraphicInverseTrust,
 ): Promise<Result<ClipApplication>> {
   const templateId = input.params["templateId"] as string;
   const sequenceId = input.params["sequenceId"] as string | undefined;
@@ -306,7 +308,7 @@ async function applyAdd(
   const restoreIndex = input.params["restoreIndex"] as number | undefined;
   if (
     (restore !== undefined &&
-      (!trustedInverse || !graphicRestoreMatchesAddressing(restore, item))) ||
+      (inverseTrust === "none" || !graphicRestoreMatchesAddressing(restore, item))) ||
     (restore === undefined && restoreIndex !== undefined)
   ) {
     return graphicFailure(
@@ -438,7 +440,7 @@ async function applyItemField(
   input: OperationInput,
   provider: TemplateProvider,
   field: "at" | "duration",
-  trustedInverse: boolean,
+  inverseTrust: GraphicInverseTrust,
 ): Promise<Result<ClipApplication>> {
   const graphicId = input.params["graphicId"] as string;
   const located = graphicLocation(project, graphicId);
@@ -455,7 +457,7 @@ async function applyItemField(
   const after = structuredClone(input.params[parameter] as PlacedItem[typeof field]);
   const item = { ...located.item, [field]: after };
   const sequenceConflict = graphicSequenceConflictAffected(project, item);
-  if (sequenceConflict !== undefined && !trustedInverse) {
+  if (sequenceConflict !== undefined && inverseTrust !== "head-undo") {
     return graphicFailure(
       "E_GRAPHIC_SEQUENCE_CONFLICT",
       `Graphic ${graphicId} has contradictory or unresolved sequence-qualified anchors.`,
@@ -545,19 +547,19 @@ export async function applyGraphicOperation(
   provider: TemplateProvider,
   idFactory: IdFactory,
   seedFactory: () => number,
-  trustedInverse = false,
+  inverseTrust: GraphicInverseTrust = "none",
 ): Promise<Result<ClipApplication>> {
   if (input.op === "graphic.add") {
-    return applyAdd(project, input, provider, idFactory, seedFactory, trustedInverse);
+    return applyAdd(project, input, provider, idFactory, seedFactory, inverseTrust);
   }
   if (input.op === "graphic.param.set") {
     return applyParamSet(project, input, provider);
   }
   if (input.op === "graphic.anchor.set") {
-    return applyItemField(project, input, provider, "at", trustedInverse);
+    return applyItemField(project, input, provider, "at", inverseTrust);
   }
   if (input.op === "graphic.retime") {
-    return applyItemField(project, input, provider, "duration", trustedInverse);
+    return applyItemField(project, input, provider, "duration", inverseTrust);
   }
   if (input.op === "graphic.remove") {
     return applyRemove(project, input, provider);

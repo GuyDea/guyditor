@@ -158,6 +158,69 @@ function spareGraphicLayer() {
   };
 }
 
+async function historicalGraphicConflict() {
+  const project = projectFixture();
+  project.sequences.push({
+    id: "seq_bbbbbbbbbb",
+    name: "sibling",
+    clips: [],
+  });
+  project.templates = {
+    [TEMPLATE_ID]: { version: descriptor.version, contentHash: descriptor.contentHash },
+  };
+  const graphic = {
+    id: "gfx_bbbbbbbbbb",
+    template: TEMPLATE_ID,
+    at: "timeline:seq_aaaaaaaaaa@4",
+    duration: { frames: 12, fps: "24/1" },
+    params: { title: "Initially valid" },
+    seed: 7,
+  };
+  project.layers.push({
+    id: "lyr_bbbbbbbbbb",
+    kind: "animation",
+    name: "Graphics",
+    order: 1,
+    enabled: true,
+    locked: false,
+    items: [graphic],
+  });
+  const { committer } = transactionCommitter();
+  const engine = new OperationEngine(project, {
+    committer,
+    templateProvider: templateProvider(),
+  });
+  const reanchored = await valueOf(engine.execute([{
+    op: "graphic.anchor.set",
+    params: {
+      graphicId: graphic.id,
+      anchor: "word:w000001",
+    },
+  }], {
+    baseRevision: project.revision,
+    origin: "ui",
+    dryRun: false,
+    recordUndo: false,
+  }));
+  await valueOf(engine.execute([{
+    op: "graphic.retime",
+    params: {
+      graphicId: graphic.id,
+      duration: { until: "timeline:seq_bbbbbbbbbb@12" },
+    },
+  }], {
+    baseRevision: engine.currentProject.revision,
+    origin: "ui",
+    dryRun: false,
+    recordUndo: false,
+  }));
+  return {
+    accepted: structuredClone(engine.currentProject),
+    committer,
+    reanchored,
+  };
+}
+
 describe("FR-600/601 graphic operation catalog", () => {
   it("keeps an unreviewed authored template out of accepted graphic placements", async () => {
     const project = projectFixture();
@@ -531,6 +594,45 @@ describe("FR-600/601 graphic operation catalog", () => {
     expect(fresh.currentProject.layers.at(-1)!.items).toEqual([graphic]);
   });
 
+  it("restores a captured grandfathered graphic through historical revert", async () => {
+    const { project, graphic } = grandfatheredGraphicProject();
+    const { committer } = transactionCommitter();
+    const removing = new OperationEngine(project, {
+      committer,
+      templateProvider: templateProvider(),
+    });
+    const removed = await valueOf(removing.execute([{
+      op: "graphic.remove",
+      params: { graphicId: graphic.id },
+    }], {
+      baseRevision: project.revision,
+      origin: "ui",
+      dryRun: false,
+      recordUndo: false,
+    }));
+    await valueOf(removing.execute([{
+      op: "clip.trim",
+      params: {
+        clipId: "clp_aaaaaaaaaa",
+        edge: "tail",
+        delta: { frames: 1, fps: "24/1" },
+      },
+    }], {
+      baseRevision: removing.currentProject.revision,
+      origin: "system",
+      dryRun: false,
+      recordUndo: false,
+    }));
+    const fresh = new OperationEngine(removing.currentProject, {
+      committer,
+      templateProvider: templateProvider(),
+    });
+
+    await valueOf(fresh.revertTransaction(removed.transactionId!));
+
+    expect(fresh.currentProject.layers.at(-1)!.items).toEqual([graphic]);
+  });
+
   it.each(["layout", "addressing", "layer", "undoOf"] as const)(
     "rejects %s tampering against a recorded graphic inverse",
     async (tamper) => {
@@ -579,7 +681,7 @@ describe("FR-600/601 graphic operation catalog", () => {
       })).resolves.toMatchObject({
         ok: false,
         error: {
-          code: "E_OP_CAPTURE_MISMATCH",
+          code: "E_OP_UNDO_STALE",
           acceptedStateChanged: false,
         },
       });
@@ -668,6 +770,46 @@ describe("FR-600/601 graphic operation catalog", () => {
     }));
 
     expect(fresh.currentProject.layers.at(-1)!.items).toMatchObject([graphic]);
+  });
+
+  it("rejects an exact recorded graphic inverse after its result revision", async () => {
+    const { accepted, committer, reanchored } = await historicalGraphicConflict();
+    const fresh = new OperationEngine(accepted, {
+      committer,
+      templateProvider: templateProvider(),
+    });
+
+    await expect(fresh.execute(reanchored.applied[0]!.inverse, {
+      baseRevision: fresh.currentProject.revision,
+      origin: "ui",
+      dryRun: false,
+      undoOf: reanchored.transactionId!,
+      recordUndo: false,
+    })).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "E_OP_UNDO_STALE",
+        acceptedStateChanged: false,
+      },
+    });
+    expect(fresh.currentProject).toEqual(accepted);
+  });
+
+  it("rejects a historical graphic revert that contradicts newer addressing", async () => {
+    const { accepted, committer, reanchored } = await historicalGraphicConflict();
+    const fresh = new OperationEngine(accepted, {
+      committer,
+      templateProvider: templateProvider(),
+    });
+
+    await expect(fresh.revertTransaction(reanchored.transactionId!)).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "E_OP_REVERT_CONFLICT",
+        acceptedStateChanged: false,
+      },
+    });
+    expect(fresh.currentProject).toEqual(accepted);
   });
 
   it("rejects missing sequence ownership and sequence-owned placement layers", async () => {

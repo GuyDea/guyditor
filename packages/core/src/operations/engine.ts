@@ -164,6 +164,7 @@ import { applySkillOperation } from "./skill.js";
 import { applyAnchorOperation } from "./anchor.js";
 import { assessBatchRisk, buildSemanticDiff } from "./diff.js";
 import { applyGraphicOperation, applyTemplateOperation } from "./graphic.js";
+import type { GraphicInverseTrust } from "./graphic.js";
 import { applyRestyleOperation } from "../restyle/operations.js";
 import { applyGenerationOperation } from "../generation/operations.js";
 import { applyTakeOperation } from "../takes/operations.js";
@@ -1041,21 +1042,44 @@ export class OperationEngine {
     batch: OperationInput[],
     context: OperationContext,
   ): Promise<Result<OperationBatchResult>> {
-    const trustedInverse = context.undoOf === undefined
-      ? false
-      : await this.#matchesRecordedInverse(batch, context.undoOf);
-    return this.#execute(batch, context, false, undefined, trustedInverse);
+    if (context.undoOf === undefined) {
+      return this.#execute(batch, context, false);
+    }
+    if (context.baseRevision !== this.#project.revision) {
+      return this.#execute(batch, context, false);
+    }
+    const authorized = await this.#matchesHeadRecordedInverse(
+      batch,
+      context.undoOf,
+      context.baseRevision,
+    );
+    if (!authorized) {
+      return operationFailure(
+        "E_OP_UNDO_STALE",
+        `Transaction ${context.undoOf} is not an exact recorded inverse at HEAD.`,
+        [context.undoOf],
+      );
+    }
+    return this.#execute(batch, context, false, undefined, "head-undo");
   }
 
-  async #matchesRecordedInverse(
+  async #matchesHeadRecordedInverse(
     batch: readonly OperationInput[],
     transactionId: string,
+    baseRevision: string,
   ): Promise<boolean> {
     const reader = this.#committer?.readTransaction;
     if (reader === undefined) return false;
     try {
       const loaded = await reader.call(this.#committer, transactionId);
-      if (!loaded.ok || loaded.value.id !== transactionId) return false;
+      if (
+        !loaded.ok ||
+        loaded.value.id !== transactionId ||
+        loaded.value.resultRevision !== baseRevision ||
+        baseRevision !== this.#project.revision
+      ) {
+        return false;
+      }
       const inverse = transactionInverse(loaded.value);
       return inverse !== undefined && sameOperationBatch(batch, inverse);
     } catch {
@@ -1068,7 +1092,7 @@ export class OperationEngine {
     context: OperationContext,
     allowProposalCommit: boolean,
     captureDryRun?: (project: GuyditorProject) => void,
-    trustedInverse = false,
+    inverseTrust: GraphicInverseTrust = "none",
   ): Promise<Result<OperationBatchResult>> {
     const base = this.#project;
     if (context.baseRevision !== base.revision) {
@@ -1168,7 +1192,7 @@ export class OperationEngine {
               this.#templateProvider,
               this.#idFactory,
               this.#seedFactory,
-              trustedInverse,
+              inverseTrust,
             );
       } else if (requested.op.startsWith("template.")) {
         application = this.#templateProvider === undefined
@@ -1421,7 +1445,7 @@ export class OperationEngine {
       },
       false,
       undefined,
-      true,
+      "head-undo",
     );
     if (!undone.ok) return undone;
     this.#undoStack.pop();
@@ -1505,7 +1529,9 @@ export class OperationEngine {
       },
       false,
       undefined,
-      true,
+      loaded.value.resultRevision === this.#project.revision
+        ? "head-undo"
+        : "captured-restore",
     );
     return reverted.ok
       ? reverted
