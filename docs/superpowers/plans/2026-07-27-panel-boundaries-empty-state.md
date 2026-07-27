@@ -44,7 +44,7 @@ test("drag-over emphasis remains stronger than the resting frame", async () => {
     await region.dispatchEvent("dragenter");
     await expect(region).toHaveAttribute("data-drop-active", "true");
     await expect.poll(() => region.evaluate(
-      (element) => window.getComputedStyle(element).boxShadow,
+      (element) => window.getComputedStyle(element, "::before").boxShadow,
     )).toContain("rgb(242, 184, 75)");
     await expect.poll(() => region.evaluate(
       (element) => window.getComputedStyle(element, "::after").content,
@@ -65,11 +65,11 @@ Run:
 
 ```bash
 pnpm --filter @guyditor/app build
-xvfb-run -a pnpm --filter @guyditor/app test:e2e -- panel-management.spec.ts --grep "drag-over emphasis"
+pnpm --filter @guyditor/app exec playwright test --config playwright.config.ts panel-management.spec.ts --grep "drag-over emphasis"
 ```
 
-Expected: PASS, proving the current amber box shadow and “Dock here” overlay are
-covered before the resting frame changes.
+Expected: PASS, proving the current amber shadow on the foreground pseudo layer and
+the “Dock here” overlay are covered before the resting frame changes.
 
 - [ ] **Step 3: Add one failing test for the structured resting frame**
 
@@ -84,11 +84,12 @@ test("docking regions show a structured resting frame", async () => {
       .getByTestId("dock-region-center-top")
       .evaluate((element) => {
         const style = window.getComputedStyle(element);
+        const frameStyle = window.getComputedStyle(element, "::before");
         return {
           borderTopColor: style.borderTopColor,
           borderTopStyle: style.borderTopStyle,
           borderTopWidth: style.borderTopWidth,
-          boxShadow: style.boxShadow,
+          frameBoxShadow: frameStyle.boxShadow,
         };
       });
 
@@ -97,7 +98,8 @@ test("docking regions show a structured resting frame", async () => {
       borderTopStyle: "solid",
       borderTopWidth: "1px",
     });
-    expect(appearance.boxShadow).not.toBe("none");
+    expect(appearance.frameBoxShadow).not.toBe("none");
+    expect(appearance.frameBoxShadow).toContain("inset");
   } finally {
     await launched.electronApp.close();
     await rm(template, { recursive: true, force: true });
@@ -160,14 +162,14 @@ Run:
 
 ```bash
 pnpm --filter @guyditor/app build
-xvfb-run -a pnpm --filter @guyditor/app test:e2e -- panel-management.spec.ts --grep "structured resting frame|checkerboard only"
+pnpm --filter @guyditor/app exec playwright test --config playwright.config.ts panel-management.spec.ts --grep "structured resting frame|checkerboard only"
 ```
 
 Expected: FAIL for the new behavior. The frame test reports the current
-`borderTopWidth` as `0px` instead of `1px`; the vacant-state test reports zero
-gradient layers instead of four. If either test errors for fixture or selector
-reasons, correct the test and rerun until it fails only because the approved visual
-behavior is absent.
+`borderTopWidth` as `0px` instead of `1px` and the foreground pseudo shadow as
+`none`; the vacant-state test reports zero gradient layers instead of four. If
+either test errors for fixture or selector reasons, correct the test and rerun
+until it fails only because the approved visual behavior is absent.
 
 ### Task 2: Implement the structured frame and vacant checkerboard
 
@@ -278,7 +280,7 @@ drag-over still exposes the amber shadow and overlay.
 Run:
 
 ```bash
-xvfb-run -a pnpm --filter @guyditor/app test:e2e -- panel-management.spec.ts
+pnpm --filter @guyditor/app exec playwright test --config playwright.config.ts panel-management.spec.ts
 ```
 
 Expected: all panel-management tests PASS, including splitter persistence, docking,
