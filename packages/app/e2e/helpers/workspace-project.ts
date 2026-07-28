@@ -17,6 +17,14 @@ import {
   serializeFramingSidecar,
 } from "../../../deliver/src/index.js";
 import type { FramingSidecar } from "../../../deliver/src/index.js";
+import {
+  peaksCachePaths,
+  timelineFrameCachePaths,
+} from "../../../media/src/index.js";
+import {
+  representativeSourceFrames,
+  TIMELINE_FRAME_HEIGHT,
+} from "../../src/renderer/panels/timeline-media.js";
 
 const EMPTY_ANNOTATIONS = "format: guyditor.annotations/v1\nannotations: []\n";
 
@@ -29,6 +37,7 @@ export interface WorkspaceProjectOptions {
   derivedShort?: boolean;
   framing?: boolean;
   shortAnnotation?: boolean;
+  timelineMedia?: boolean;
 }
 
 async function valueOf<Value>(result: Promise<Result<Value>>): Promise<Value> {
@@ -62,6 +71,17 @@ export async function createWorkspaceProject(
   model.assets[0]!.probe.audio = { rate: 48_000, channels: 1 };
   model.sidecars[0]!.inputs = [];
   model.sidecars[0]!.sha256 = createHash("sha256").update(EMPTY_ANNOTATIONS).digest("hex");
+  if (options.timelineMedia === true) {
+    model.assets[0]!.video = {
+      codec: "h264",
+      width: 1920,
+      height: 1080,
+      fps: "30/1",
+      pixFmt: "yuv420p",
+      hasAlpha: false,
+      rotation: 0,
+    };
+  }
   if (options.jumpCut === true) {
     model.sequences[0]!.clips[1]!.source = {
       in: { frames: 48, fps: "24/1" },
@@ -174,6 +194,38 @@ export async function createWorkspaceProject(
     model.sidecars.push(framingSidecarReference(framing, []));
   }
   const created = await valueOf(Promise.resolve(createProject(root, model)));
+  if (options.timelineMedia === true) {
+    const asset = created.currentProject.assets[0]!;
+    const peaksPath = peaksCachePaths(created.root, asset).file;
+    await mkdir(dirname(peaksPath), { recursive: true });
+    await writeFile(peaksPath, `${JSON.stringify({
+      format: "guyditor.peaks/v1",
+      assetId: asset.id,
+      sourceHash: asset.sha256,
+      sampleRate: 48_000,
+      tiers: [960, 9_600, 48_000].map((samplesPerPeak) => ({
+        samplesPerPeak,
+        data: Array.from({ length: 240 }, (_unused, index) =>
+          index % 2 === 0 ? -48 - index % 32 : 48 + index % 32),
+      })),
+    })}\n`);
+    const image = await readFile(resolve(
+      import.meta.dirname,
+      "../../../../templates/title-card/preview.png",
+    ));
+    for (const clip of created.currentProject.sequences[0]!.clips) {
+      for (const sourceFrame of representativeSourceFrames(clip, 96)) {
+        const paths = timelineFrameCachePaths(
+          created.root,
+          asset,
+          sourceFrame,
+          TIMELINE_FRAME_HEIGHT,
+        );
+        await mkdir(dirname(paths.file), { recursive: true });
+        await writeFile(paths.file, image);
+      }
+    }
+  }
   await writeFile(join(root, "sidecars/annotations.yaml"), EMPTY_ANNOTATIONS, "utf8");
   await mkdir(join(root, "presets"), { recursive: true });
   await writeFile(

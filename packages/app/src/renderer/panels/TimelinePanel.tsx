@@ -3,13 +3,19 @@ import { useEffect, useRef, useState } from "react";
 import { deriveTimeline } from "../../../../core/src/project/derive.js";
 import { convertTimeRounding } from "../../../../core/src/time/index.js";
 import { findJumpCutWarnings } from "../../../../core/src/assist/jumpcuts.js";
-import type { Clip, Layer } from "../../../../core/src/index.js";
-import type { PeaksFile } from "../../../../media/src/index.js";
+import type { Asset, Clip, Layer } from "../../../../core/src/index.js";
 import { resolveActiveDeliverable } from "../active-deliverable.js";
 import { errorMessage, executeDirect } from "../ipc.js";
 import { usePreviewStore, useSelectionStore, useTimelineViewStore } from "../state/view-state.js";
 import { directEditDivergence } from "./direct-edit-divergence.js";
 import { Panel } from "./Panel.js";
+import { TimelineClipMedia } from "./TimelineClipMedia.js";
+import {
+  representativeSourceFrames,
+  timelineMediaRequestKey,
+  type TimelineMediaRequest,
+  useTimelineMedia,
+} from "./timeline-media.js";
 import type { WorkspacePanelProps } from "./types.js";
 
 export function synchronizeTimelineScroll(
@@ -43,6 +49,21 @@ function clipDuration(clip: Clip): number {
   return clip.source.out.frames - clip.source.in.frames;
 }
 
+export function timelineMediaRequests(
+  visible: readonly { clipId: string; width: number }[],
+  clips: readonly Clip[],
+  assets: readonly Asset[],
+): TimelineMediaRequest[] {
+  const byClip = new Map(clips.map((clip) => [clip.id, clip]));
+  const byAsset = new Map(assets.map((asset) => [asset.id, asset]));
+  return visible.flatMap(({ clipId, width }) => {
+    const clip = byClip.get(clipId);
+    if (clip === undefined) return [];
+    const asset = byAsset.get(clip.asset);
+    return asset === undefined ? [] : [{ asset, clip, width }];
+  });
+}
+
 export function TimelinePanel({
   snapshot,
   annotations,
@@ -56,7 +77,6 @@ export function TimelinePanel({
   const [trimFrames, setTrimFrames] = useState(1);
   const [trimEdge, setTrimEdge] = useState<"head" | "tail">("tail");
   const [gapFrames, setGapFrames] = useState(0);
-  const [peaks, setPeaks] = useState<PeaksFile | null>(null);
   const zoom = useTimelineViewStore((state) => state.zoomPixelsPerFrame);
   const scrollOffset = useTimelineViewStore((state) => state.scrollOffsetFrames);
   const viewportWidth = useTimelineViewStore((state) => state.viewportWidth);
@@ -103,6 +123,21 @@ export function TimelinePanel({
       ? [{ annotation, frame }]
       : [];
   });
+  const mediaRequests = timelineMediaRequests(
+    visibleClips.map((timed) => ({
+      clipId: timed.clipId,
+      width: Math.max(36, timed.duration.frames * zoom),
+    })),
+    sequence?.clips ?? [],
+    snapshot?.master.assets ?? [],
+  );
+  const mediaKey = timelineMediaRequestKey(
+    snapshot?.revision ?? "closed",
+    sequence?.id ?? "none",
+    zoom,
+    mediaRequests,
+  );
+  const mediaByClip = useTimelineMedia(mediaRequests, mediaKey);
 
   useEffect(() => {
     const viewport = viewportRef.current;
@@ -119,18 +154,6 @@ export function TimelinePanel({
     if (viewport === null) return;
     synchronizeTimelineScroll(viewport, scrollOffset, zoom);
   }, [scrollOffset, sequence?.id, zoom]);
-
-  useEffect(() => {
-    let current = true;
-    setPeaks(null);
-    if (selected === undefined) return () => { current = false; };
-    void window.guyditor.call<PeaksFile | null>("MediaEngine", "readPeaks", {
-      assetId: selected.asset,
-    }).then((value) => {
-      if (current) setPeaks(value);
-    }).catch(() => undefined);
-    return () => { current = false; };
-  }, [selected?.asset]);
 
   async function commit(
     operations: Array<{ op: string; params: Record<string, unknown> }>,
@@ -363,17 +386,22 @@ export function TimelinePanel({
               {visibleClips.map((timed) => {
                 const clip = sequence?.clips.find(({ id }) => id === timed.clipId);
                 if (clip === undefined) return null;
+                const asset = snapshot?.master.assets.find(({ id }) => id === clip.asset);
+                if (asset === undefined) return null;
+                const clipWidth = Math.max(36, timed.duration.frames * zoom);
+                const sourceFrames = representativeSourceFrames(clip, clipWidth);
                 return (
                   <button
                     key={clip.id}
                     type="button"
                     draggable
+                    aria-label={`${clip.id}, ${String(clipDuration(clip))} frames`}
                     className="timeline-clip"
                     data-selected={selectedClipId === clip.id}
                     data-testid={`timeline-clip-${clip.id}`}
                     style={{
                       left: `${String(timed.start.frames * zoom)}px`,
-                      width: `${String(Math.max(36, timed.duration.frames * zoom))}px`,
+                      width: `${String(clipWidth)}px`,
                     }}
                     onClick={() => {
                       selectClip(clip.id);
@@ -387,9 +415,17 @@ export function TimelinePanel({
                       void reorder(event.dataTransfer.getData("text/guyditor-clip"), clip.id);
                     }}
                   >
-                    <span>{clip.id}</span>
-                    <small>{clipDuration(clip)}f</small>
-                    {selectedClipId === clip.id && peaks !== null ? <Waveform peaks={peaks} /> : null}
+                    <TimelineClipMedia
+                      clipId={clip.id}
+                      durationFrames={clipDuration(clip)}
+                      media={mediaByClip[clip.id] ?? {
+                        frameUrls: sourceFrames.map(() => null),
+                        hasAudio: (asset.audio?.length ?? 0) > 0,
+                        hasVideo: asset.video !== undefined,
+                        sourceFrames,
+                        waveform: [],
+                      }}
+                    />
                   </button>
                 );
               })}
@@ -433,17 +469,5 @@ export function TimelinePanel({
           : `${String(jumpCuts.length)} jump-cut seam${jumpCuts.length === 1 ? "" : "s"} flagged; select ! to prepare a review proposal.`}
       </small>
     </Panel>
-  );
-}
-
-function Waveform({ peaks }: { peaks: PeaksFile }): React.JSX.Element {
-  const data = peaks.tiers.at(-1)?.data ?? [];
-  const bars = data.slice(0, 120).filter((_value, index) => index % 2 === 1);
-  return (
-    <span className="waveform" aria-hidden="true">
-      {bars.map((value, index) => (
-        <i key={index} style={{ height: `${String(Math.max(2, Math.abs(value) / 127 * 22))}px` }} />
-      ))}
-    </span>
   );
 }

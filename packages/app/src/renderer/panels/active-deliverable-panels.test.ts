@@ -144,6 +144,22 @@ function annotation(
 
 function projectWithShort(): GuyditorProject {
   const project = projectFixture();
+  project.assets[0]!.video = {
+    codec: "h264",
+    width: 1920,
+    height: 1080,
+    fps: "24/1",
+    pixFmt: "yuv420p",
+    hasAlpha: false,
+    rotation: 0,
+  };
+  project.assets[0]!.audio = [{
+    index: 0,
+    codec: "aac",
+    sampleRate: 48_000,
+    channels: 1,
+    layout: "mono",
+  }];
   project.layers[0]!.pip = {
     style: { mask: { shape: "rounded" } },
     placement: {
@@ -284,6 +300,7 @@ describe("active deliverable panels", () => {
       selectedLayerId: "lyr_aaaaaaaaaa",
     });
     setServerSelection({
+      selectedClipId: null,
       selectedDeliverableId: "dlv_bbbbbbbbbb",
       selectedLayerId: "lyr_aaaaaaaaaa",
     });
@@ -311,7 +328,9 @@ describe("active deliverable panels", () => {
     expect(preview).not.toContain("Primary annotation leak");
     expect(preview).not.toContain('data-testid="pip-preview-canvas"');
     expect(timeline).toContain('data-testid="timeline-clip-clp_cccccccccc"');
+    expect(timeline).toContain('data-testid="timeline-waveform-clp_cccccccccc"');
     expect(timeline).not.toContain("timeline-clip-clp_aaaaaaaaaa");
+    expect(timeline).not.toContain("timeline-waveform-clp_aaaaaaaaaa");
     expect(timeline).toContain('data-testid="layer-select-lyr_bbbbbbbbbb"');
     expect(timeline).not.toContain("layer-select-lyr_aaaaaaaaaa");
     expect(transcript).toContain("cts_bbbbbbbbbb");

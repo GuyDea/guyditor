@@ -135,6 +135,29 @@ test("shows a ready proposal as waiting on the creator and jumps to review", asy
   }
 });
 
+test("shows filmstrips and waveforms on selected and unselected timeline clips", async () => {
+  const template = await createWorkspaceProject({ timelineMedia: true });
+  const launched = await launchApp({ projectTemplate: template });
+  try {
+    const first = launched.page.getByTestId("timeline-clip-clp_aaaaaaaaaa");
+    const second = launched.page.getByTestId("timeline-clip-clp_bbbbbbbbbb");
+    await first.click();
+
+    await expect(first.getByTestId("timeline-filmstrip-clp_aaaaaaaaaa"))
+      .toBeVisible();
+    await expect(second.getByTestId("timeline-filmstrip-clp_bbbbbbbbbb"))
+      .toBeVisible();
+    await expect(first.getByTestId("timeline-waveform-clp_aaaaaaaaaa"))
+      .toBeVisible();
+    await expect(second.getByTestId("timeline-waveform-clp_bbbbbbbbbb"))
+      .toBeVisible();
+    await expect(second).toHaveAttribute("data-selected", "false");
+  } finally {
+    await launched.electronApp.close();
+    await rm(template, { recursive: true, force: true });
+  }
+});
+
 test("reviews restyle seam markers, previews an interstitial, and proposes its override", async () => {
   const template = await createWorkspaceProject();
   const launched = await launchApp({ projectTemplate: template });
