@@ -190,6 +190,15 @@ export type {
   ProxyGenerateResult,
   ProxyMetadata,
 } from "./proxy.js";
+export {
+  TimelineFrameService,
+  timelineFrameCachePaths,
+  timelineFrameCommand,
+} from "./timeline-frames.js";
+export type {
+  TimelineFrameCachePaths,
+  TimelineFrameResult,
+} from "./timeline-frames.js";
 export { runFfmpeg, runFfprobe } from "./run.js";
 export type { FfmpegRunResult, RunFfmpegOptions } from "./run.js";
 export { materializeProgrammaticAnimationArtifact } from "./programmatic-animation.js";
