@@ -263,7 +263,7 @@ export class CostMeter {
       if (warning === null || projected[level] <= warning) continue;
       if (
         confirmToken !== undefined &&
-        this.#redeem(confirmToken, context, estimate.amount)
+        this.#redeem(confirmToken, context, estimate.amount, level)
       ) {
         this.#budgetEvent(context, level, "creator_override", warning, projected[level]);
         return { verdict: "proceed" };
@@ -298,12 +298,21 @@ export class CostMeter {
    * floating-point noise in a re-derived estimate does not force a pointless
    * second confirmation.
    */
-  #redeem(confirmToken: string, context: CostContext, amountUsd: number): boolean {
+  #redeem(
+    confirmToken: string,
+    context: CostContext,
+    amountUsd: number,
+    level: BudgetLevel,
+  ): boolean {
     const confirmation = this.#outstandingConfirmations.get(confirmToken);
     if (
       confirmation === undefined ||
       confirmation.projectId !== context.projectId ||
       confirmation.taskId !== context.taskId ||
+      // A confirmation clears the warning it was shown for. Redeeming it
+      // against a different level would silently swallow a threshold the
+      // creator was never told about.
+      confirmation.level !== level ||
       Math.round(amountUsd * 100) > Math.round(confirmation.estimatedUsd * 100)
     ) return false;
     this.#outstandingConfirmations.delete(confirmToken);

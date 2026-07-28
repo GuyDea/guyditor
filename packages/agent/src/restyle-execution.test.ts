@@ -236,7 +236,9 @@ async function harness(
   const registry = new AdapterRegistry();
   registry.register(new KlingRestyleAdapter({
     credentials,
-    config: { apiKeyRef: "apiKey", model: "kling-video-o1" },
+    // Match the plan's declared concurrency: the gate reads the *adapter*
+    // constraint, and the adapter defaults to 2 when config omits it.
+    config: { apiKeyRef: "apiKey", model: "kling-video-o1", concurrency: 1 },
     ...(apiFactory === undefined
       ? { stubMode: true }
       : { stubMode: false, apiFactory }),
@@ -437,26 +439,28 @@ describe("FR-607/608 restyle execution", () => {
     let inFlight = 0;
     let peakInFlight = 0;
     const countingApi: KlingApi = {
-      submitVideoToVideo: (request) => {
+      // Hold the in-flight window open long enough that two ungated chunks
+      // would overlap: without this the per-chunk mkdir plus segment
+      // materialization staggers them far enough apart to pass regardless.
+      submitVideoToVideo: async (request) => {
         inFlight += 1;
         peakInFlight = Math.max(peakInFlight, inFlight);
-        return Promise.resolve<KlingApiTask>({
+        await new Promise<void>((resolveWait) => setTimeout(resolveWait, 150));
+        inFlight -= 1;
+        return {
           taskId: `kling-${request.requestId}`,
           state: "queued",
           progress: 0,
           providerMetadata: {},
-        });
+        } satisfies KlingApiTask;
       },
-      getTask: (taskId) => {
-        inFlight = Math.max(0, inFlight - 1);
-        return Promise.resolve<KlingApiTask>({
-          taskId,
-          state: "failed",
-          progress: 0,
-          error: "deliberate stop after the concurrency window",
-          providerMetadata: {},
-        });
-      },
+      getTask: (taskId) => Promise.resolve<KlingApiTask>({
+        taskId,
+        state: "failed",
+        progress: 0,
+        error: "deliberate stop after the concurrency window",
+        providerMetadata: {},
+      }),
       downloadResult: () => Promise.reject(new Error("no result")),
       cancel: () => Promise.resolve(),
     };

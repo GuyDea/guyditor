@@ -113,6 +113,7 @@ process.stdout.write(JSON.stringify({
 }) + "\n");
 let inFlight = 0;
 let peak = 0;
+let served = 0;
 readline.createInterface({ input: process.stdin }).on("line", (line) => {
   const message = JSON.parse(line);
   if (message.method === "ping") {
@@ -122,12 +123,13 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
   if (message.method !== "transcribe" && message.method !== "vad") return;
   inFlight += 1;
   peak = Math.max(peak, inFlight);
+  const dispatchOrder = ++served;
   setTimeout(() => {
     inFlight -= 1;
     process.stdout.write(JSON.stringify({
       jsonrpc: "2.0",
       id: message.id,
-      result: { taskId: message.params.taskId, peakInFlight: peak },
+      result: { taskId: message.params.taskId, peakInFlight: peak, dispatchOrder },
     }) + "\n");
   }, 60);
 });
@@ -164,8 +166,12 @@ describe("MlworkerSupervisor", () => {
     for (const result of results) {
       expect(result).toMatchObject({ ok: true, value: { peakInFlight: 1 } });
     }
-    expect(results.map((result) => result.ok ? (result.value as { taskId: string }).taskId : ""))
-      .toEqual(taskIds);
+    // Assert the order the *worker* saw, not the order Promise.all returns:
+    // results[i] always corresponds to taskIds[i] because responses are routed
+    // by JSON-RPC id, so comparing task IDs would pass under any wake order.
+    expect(results.map((result) =>
+      result.ok ? (result.value as { dispatchOrder: number }).dispatchOrder : 0))
+      .toEqual([1, 2, 3, 4]);
   });
 
   it("fails a queued task when the worker is stopped and does not respawn", async () => {

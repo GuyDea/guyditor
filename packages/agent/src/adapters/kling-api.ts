@@ -1,5 +1,5 @@
 import { createWriteStream } from "node:fs";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, rm, writeFile } from "node:fs/promises";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream } from "node:stream/web";
@@ -68,6 +68,7 @@ const SUCCEEDED_STATUSES = ["succeed", "succeeded", "success", "completed"];
 const FAILED_STATUSES = ["failed", "failure", "error", "cancelled", "canceled"];
 const RUNNING_STATUSES = ["processing", "running"];
 const PENDING_STATUSES = ["", "queued", "queueing", "pending", "submitted", "created"];
+const ABSENT_STATUS = "<absent>";
 
 interface ResolvedState {
   state: KlingApiTask["state"];
@@ -79,8 +80,8 @@ interface ResolvedState {
  * An unrecognized status resolves to `failed`, not `queued`. The poll loop
  * treats `queued` as "keep waiting", so silently defaulting an unknown status
  * would turn any wire-format drift (see the PROVIDER-VERIFY note below) into an
- * unbounded wait instead of an actionable error. A *missing* status stays
- * pending, because a task-creation acknowledgement may legitimately omit it.
+ * unbounded wait instead of an actionable error. Whether an *absent* status is
+ * tolerated is the caller's decision - see `requireStatus` below.
  */
 function stateFrom(value: unknown): ResolvedState {
   const normalized = String(value ?? "").toLowerCase().trim();
@@ -91,7 +92,34 @@ function stateFrom(value: unknown): ResolvedState {
   return { state: "failed", unrecognized: normalized };
 }
 
-function taskFromResponse(response: Record<string, unknown>, fallbackTaskId: string): KlingApiTask {
+const WIRE_DRIFT_HINT =
+  "The provider wire format may have changed; see PROVIDER-VERIFY in kling-api.ts.";
+
+function terminalError(
+  unrecognized: string | undefined,
+  data: Record<string, unknown>,
+  response: Record<string, unknown>,
+): string {
+  if (unrecognized === undefined) {
+    return stringValue(data["task_status_msg"] ?? response["message"]) ?? "Kling task failed.";
+  }
+  return unrecognized === ABSENT_STATUS
+    ? `Kling returned no readable task status. ${WIRE_DRIFT_HINT}`
+    : `Kling reported an unrecognized task status "${unrecognized}". ${WIRE_DRIFT_HINT}`;
+}
+
+function taskFromResponse(
+  response: Record<string, unknown>,
+  fallbackTaskId: string,
+  /**
+   * True on the polling path, where a response carrying no status at all means
+   * this client cannot read the provider's shape. Treating that as "still
+   * queued" is what turned a renamed field into an unbounded wait, and a
+   * renamed field is the likeliest drift given PROVIDER-VERIFY below. The task
+   * *creation* path stays lenient: an acknowledgement may carry only a task id.
+   */
+  requireStatus = false,
+): KlingApiTask {
   const data = record(response["data"]);
   const result = record(data["task_result"] ?? response["task_result"]);
   const videos = Array.isArray(result["videos"])
@@ -99,21 +127,18 @@ function taskFromResponse(response: Record<string, unknown>, fallbackTaskId: str
     : [];
   const first = videos[0];
   const url = stringValue(first?.["url"] ?? result["video_url"]);
-  const { state, unrecognized } = stateFrom(
-    data["task_status"] ?? response["task_status"] ?? response["status"],
-  );
+  const rawStatus = data["task_status"] ?? response["task_status"] ?? response["status"];
+  const statusMissing = String(rawStatus ?? "").trim().length === 0;
+  const { state, unrecognized } = requireStatus && statusMissing
+    ? { state: "failed" as const, unrecognized: ABSENT_STATUS }
+    : stateFrom(rawStatus);
   return {
     taskId: taskIdFrom(response) ?? fallbackTaskId,
     state,
     progress: numberValue(data["progress"] ?? response["progress"]) ??
       (state === "succeeded" ? 1 : 0),
     ...(state === "failed"
-      ? {
-          error: unrecognized === undefined
-            ? stringValue(data["task_status_msg"] ?? response["message"]) ?? "Kling task failed."
-            : `Kling reported an unrecognized task status "${unrecognized}". ` +
-              "The provider wire format may have changed; see PROVIDER-VERIFY in kling-api.ts.",
-        }
+      ? { error: terminalError(unrecognized, data, response) }
       : {}),
     ...(url === undefined
       ? {}
@@ -173,7 +198,7 @@ export class HttpKlingApi implements KlingApi {
     if (!response.ok) {
       const message = parseFailed || parsed === undefined
         ? response.statusText.length > 0 ? response.statusText : errorSnippet(text)
-        : stringValue(record(parsed)["message"]) ?? response.statusText;
+        : errorSnippet(stringValue(record(parsed)["message"]) ?? response.statusText);
       throw new Error(`Kling API ${String(response.status)}: ${message}`);
     }
     if (parseFailed || parsed === undefined) {
@@ -228,7 +253,7 @@ export class HttpKlingApi implements KlingApi {
         ...(signal === undefined ? {} : { signal }),
       },
     );
-    return taskFromResponse(await this.#json(response), taskId);
+    return taskFromResponse(await this.#json(response), taskId, true);
   }
 
   public async downloadResult(taskId: string, destination: string): Promise<void> {
@@ -257,7 +282,17 @@ export class HttpKlingApi implements KlingApi {
       await writeFile(destination, "");
       return;
     }
-    await pipeline(Readable.fromWeb(response.body as ReadableStream), createWriteStream(destination));
+    try {
+      await pipeline(
+        Readable.fromWeb(response.body as ReadableStream),
+        createWriteStream(destination),
+      );
+    } catch (error: unknown) {
+      // Never leave a truncated segment behind: the caller hashes whatever is
+      // at this path and would otherwise freeze a partial download.
+      await rm(destination, { force: true }).catch(() => undefined);
+      throw error;
+    }
   }
 
   public async cancel(taskId: string): Promise<void> {

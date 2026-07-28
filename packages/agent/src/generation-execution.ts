@@ -465,8 +465,11 @@ export class GenerationExecutionService {
         durationMs: Math.max(0, Date.now() - startedAt),
       });
     };
-    // A resumed job already transmitted its prompt in an earlier run.
-    let callIssued = payload.adapterHandle !== undefined;
+    // Only a submission made in *this* run is ours to record. A resumed job
+    // (JobQueue.retry keeps the checkpointed adapterHandle, so `submit` is
+    // skipped) was already recorded by the run that issued it; counting it
+    // again would charge one provider submission once per retry.
+    let callIssued = false;
     try {
       return await this.#executeSubmitted(
         job,

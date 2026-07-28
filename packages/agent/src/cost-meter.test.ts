@@ -322,6 +322,39 @@ describe("CostMeter", () => {
     meter.close();
   });
 
+  it("does not let a task confirmation swallow an episode warning", () => {
+    const userDir = userDirectory();
+    const audit = new AuditLog({ userDir, now: () => NOW });
+    let issued = 0;
+    const meter = CostMeter.open({
+      userDir,
+      auditLog: audit,
+      budgets: {
+        ...NO_BUDGETS,
+        task: { warnUsd: 1, capUsd: null },
+        episode: { warnUsd: 2, capUsd: null },
+      },
+      now: () => NOW,
+      confirmTokenFactory: () => `confirm-${String(++issued)}`,
+    });
+    const callContext = context("ses_aaaaaaaaaa", "prj_aaaaaaaaaa", "restyle-plan-001");
+    // Issued for the task warning.
+    expect(meter.preflight(estimate(1.5), callContext))
+      .toMatchObject({ verdict: "warn", level: "task", confirmToken: "confirm-1" });
+
+    // Unrelated work on the same project pushes the episode total up. The
+    // confirmation survives because record() only clears the same task.
+    const otherTask = context("ses_aaaaaaaaaa", "prj_aaaaaaaaaa", "other-task");
+    meter.record(actual(otherTask, estimate(1.5), 1.5));
+
+    // This request is under the task warning but over the episode one. The
+    // task-level confirmation must not clear a threshold the creator was
+    // never shown.
+    expect(meter.preflight(estimate(0.9), callContext, "confirm-1"))
+      .toMatchObject({ verdict: "warn", level: "episode" });
+    meter.close();
+  });
+
   it("ignores a confirmation issued for another task", () => {
     const userDir = userDirectory();
     const audit = new AuditLog({ userDir, now: () => NOW });

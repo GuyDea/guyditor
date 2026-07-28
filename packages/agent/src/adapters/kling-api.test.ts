@@ -138,6 +138,30 @@ describe("HttpKlingApi error reporting", () => {
     expect(task.error).toMatch(/quota_exhausted/u);
   });
 
+  it("fails a polled task whose response carries no readable status", async () => {
+    const api = new HttpKlingApi({
+      apiKey: "secret",
+      // The likeliest wire drift is a renamed field, which lands here.
+      fetchImplementation: async () =>
+        jsonResponse(200, { data: { task_id: "task-1", state: "processing" } }),
+    });
+
+    const task = await api.getTask("task-1");
+    expect(task.state).toBe("failed");
+    expect(task.error).toMatch(/no readable task status/u);
+  });
+
+  it("accepts a task-creation acknowledgement that omits the status", async () => {
+    const request = await restyleRequest();
+    const api = new HttpKlingApi({
+      apiKey: "secret",
+      fetchImplementation: async () => jsonResponse(200, { data: { task_id: "task-9" } }),
+    });
+
+    const task = await api.submitVideoToVideo(request, AbortSignal.timeout(5_000));
+    expect(task).toMatchObject({ taskId: "task-9", state: "queued" });
+  });
+
   it("keeps a genuinely pending task in a non-terminal state", async () => {
     const api = new HttpKlingApi({
       apiKey: "secret",

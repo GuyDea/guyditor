@@ -179,6 +179,10 @@ export function BrollPanel({
   const [count, setCount] = useState(1);
   const [estimate, setEstimate] = useState<EstimateView | null>(null);
   const [confirmToken, setConfirmToken] = useState<string | undefined>();
+  // A cost confirmation is bound to the task it was issued for, and the task ID
+  // is the request ID. Minting a fresh one on the confirm click made the
+  // confirmation unredeemable, so the warned request ID is held alongside it.
+  const [pendingRequestId, setPendingRequestId] = useState<string | undefined>();
   const [candidates, setCandidates] = useState<CandidateView[]>([]);
   const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(null);
   const [reviewDraft, setReviewDraft] = useState<Record<string, {
@@ -349,23 +353,28 @@ export function BrollPanel({
 
   async function startGeneration(): Promise<void> {
     if (prompt.trim() === "") return;
+    const requestId = pendingRequestId ?? `generation-${window.crypto.randomUUID()}`;
     try {
       const result = await window.guyditor.call<GenerationStartResult>(
         "GenerationService",
         "request",
         {
           adapterId,
-          request: generationRequest(`generation-${window.crypto.randomUUID()}`),
+          request: generationRequest(requestId),
           ...(confirmToken === undefined ? {} : { confirmToken }),
         },
       );
       if (result.verdict === "warn") {
         setConfirmToken(result.confirmToken);
+        setPendingRequestId(requestId);
         setNotice(`${result.message} Confirm the generation request to continue.`);
       } else if (result.verdict === "enqueued") {
         setConfirmToken(undefined);
+        setPendingRequestId(undefined);
         setNotice(`Queued ${result.job.title}; outputs will enter creator review.`);
       } else if (result.verdict === "blocked") {
+        setConfirmToken(undefined);
+        setPendingRequestId(undefined);
         setNotice(result.message);
       } else {
         setNotice(`${result.error.message}${result.error.suggestion === undefined ? "" : ` ${result.error.suggestion}`}`);
