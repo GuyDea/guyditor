@@ -408,7 +408,24 @@ export const IPC_SURFACES: readonly IpcSurface[] = Object.freeze([
           },
           additionalProperties: false,
         },
-        resultSchema: { type: "array" },
+        resultSchema: {
+          type: "array",
+          maxItems: 12,
+          items: {
+            type: "object",
+            required: ["sourceFrame", "url"],
+            properties: {
+              sourceFrame: { type: "integer", minimum: 0 },
+              url: {
+                anyOf: [
+                  { type: "string", pattern: "^file:" },
+                  { type: "null" },
+                ],
+              },
+            },
+            additionalProperties: false,
+          },
+        },
         budgetMs: 2_000,
       },
       readPeaks: { paramsSchema: assetIdParams, resultSchema: anyResult, budgetMs: 50 },

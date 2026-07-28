@@ -120,45 +120,52 @@ describe("AppServiceHost", () => {
     const userDirectory = await mkdtemp(
       join(tmpdir(), "guyditor-host-timeline-frames-user-"),
     );
-    const model = projectFixture();
-    const video = model.assets[0]!;
-    video.probe.width = 1920;
-    video.probe.height = 1080;
-    video.video = {
-      codec: "h264",
-      width: 1920,
-      height: 1080,
-      fps: "24/1",
-      pixFmt: "yuv420p",
-      hasAlpha: false,
-      rotation: 0,
-    };
-    const created = await createProject(root, model);
-    if (!created.ok) throw created.error;
-    const paths = timelineFrameCachePaths(root, video, 12, 96);
-    await mkdir(dirname(paths.file), { recursive: true });
-    await writeFile(paths.file, "jpeg");
-
     const appHost = testAppHost(userDirectory);
     const windowHost = appHost.createWindowHost({
       publisher: new WindowEventPublisher(() => undefined),
     });
-    await windowHost.openProject(root);
-    const service = windowHost.resolveService("MediaEngine");
-    const resolveFrames = service?.["resolveTimelineFrames"];
-    if (typeof resolveFrames !== "function") {
-      throw new Error("Timeline frame service is unavailable.");
+    try {
+      const model = projectFixture();
+      const video = model.assets[0]!;
+      video.probe.width = 1920;
+      video.probe.height = 1080;
+      video.video = {
+        codec: "h264",
+        width: 1920,
+        height: 1080,
+        fps: "24/1",
+        pixFmt: "yuv420p",
+        hasAlpha: false,
+        rotation: 0,
+      };
+      const created = await createProject(root, model);
+      if (!created.ok) throw created.error;
+      const paths = timelineFrameCachePaths(root, video, 12, 96);
+      await mkdir(dirname(paths.file), { recursive: true });
+      await writeFile(paths.file, "jpeg");
+
+      await windowHost.openProject(root);
+      const service = windowHost.resolveService("MediaEngine");
+      const resolveFrames = service?.["resolveTimelineFrames"];
+      if (typeof resolveFrames !== "function") {
+        throw new Error("Timeline frame service is unavailable.");
+      }
+      await expect(Reflect.apply(resolveFrames, service, [{
+        assetId: video.id,
+        sourceFrames: [12],
+        height: 96,
+      }])).resolves.toEqual([{
+        sourceFrame: 12,
+        url: pathToFileURL(paths.file).href,
+      }]);
+    } finally {
+      await windowHost.close();
+      await appHost.close();
+      await Promise.all([
+        rm(root, { recursive: true, force: true }),
+        rm(userDirectory, { recursive: true, force: true }),
+      ]);
     }
-    await expect(Reflect.apply(resolveFrames, service, [{
-      assetId: video.id,
-      sourceFrames: [12],
-      height: 96,
-    }])).resolves.toEqual([{
-      sourceFrame: 12,
-      url: pathToFileURL(paths.file).href,
-    }]);
-    await windowHost.close();
-    await appHost.close();
   });
 
   it("exposes creator review for authored-template drafts and audits immutable publication", async () => {

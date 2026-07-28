@@ -31,7 +31,8 @@ describe("workspace IPC surfaces", () => {
 
   it("bounds timeline frame resolution to cache-owned thumbnail requests", () => {
     const media = IPC_SURFACES.find(({ service }) => service === "MediaEngine");
-    const schema = media?.methods["resolveTimelineFrames"]?.paramsSchema as {
+    const method = media?.methods["resolveTimelineFrames"];
+    const schema = method?.paramsSchema as {
       required?: unknown;
       properties?: {
         sourceFrames?: { maxItems?: unknown; uniqueItems?: unknown };
@@ -45,6 +46,24 @@ describe("workspace IPC surfaces", () => {
       uniqueItems: true,
     });
     expect(schema?.properties?.height?.enum).toEqual([96]);
+    expect(method?.resultSchema).toMatchObject({
+      type: "array",
+      maxItems: 12,
+      items: {
+        type: "object",
+        required: ["sourceFrame", "url"],
+        properties: {
+          sourceFrame: { type: "integer", minimum: 0 },
+          url: {
+            anyOf: [
+              { type: "string", pattern: "^file:" },
+              { type: "null" },
+            ],
+          },
+        },
+        additionalProperties: false,
+      },
+    });
   });
 
   it("exposes every M1 workspace read and action with an async budget", () => {

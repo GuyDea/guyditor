@@ -14,6 +14,22 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function jsonValuesEqual(left: unknown, right: unknown): boolean {
+  if (left === right) return true;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return Array.isArray(left) &&
+      Array.isArray(right) &&
+      left.length === right.length &&
+      left.every((entry, index) => jsonValuesEqual(entry, right[index]));
+  }
+  if (!isRecord(left) || !isRecord(right)) return false;
+  const leftKeys = Object.keys(left);
+  const rightKeys = Object.keys(right);
+  return leftKeys.length === rightKeys.length && leftKeys.every((key) =>
+    Object.prototype.hasOwnProperty.call(right, key) &&
+    jsonValuesEqual(left[key], right[key]));
+}
+
 function schemaError(path: string, message: string): string {
   return `${path === "" ? "/" : path} ${message}`;
 }
@@ -71,10 +87,31 @@ function validateSchema(value: unknown, schema: JsonSchema, path = ""): string[]
       errors.push(schemaError(path, `must be at most ${String(maximum)}`));
     }
   }
-  if (Array.isArray(value) && isRecord(schema["items"])) {
-    value.forEach((entry, index) => {
-      errors.push(...validateSchema(entry, schema["items"] as JsonSchema, `${path}/${String(index)}`));
-    });
+  if (Array.isArray(value)) {
+    const maxItems = schema["maxItems"];
+    if (typeof maxItems === "number" && value.length > maxItems) {
+      errors.push(schemaError(path, `must have at most ${String(maxItems)} items`));
+    }
+    if (schema["uniqueItems"] === true) {
+      value.forEach((entry, index) => {
+        const duplicateIndex = value
+          .slice(0, index)
+          .findIndex((candidate) => jsonValuesEqual(candidate, entry));
+        if (duplicateIndex >= 0) {
+          errors.push(schemaError(
+            `${path}/${String(index)}`,
+            `must be unique; duplicates ${path}/${String(duplicateIndex)}`,
+          ));
+        }
+      });
+    }
+    if (isRecord(schema["items"])) {
+      value.forEach((entry, index) => {
+        errors.push(
+          ...validateSchema(entry, schema["items"] as JsonSchema, `${path}/${String(index)}`),
+        );
+      });
+    }
   }
   if (isRecord(value)) {
     const required = schema["required"];
