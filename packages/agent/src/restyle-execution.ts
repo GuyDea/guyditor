@@ -324,7 +324,38 @@ export class RestyleExecutionService {
     const release = await this.#acquire(adapter, signal);
     let handle: AdapterJobHandle | undefined;
     let externalKey: string | undefined;
+    let lastStatus: AdapterJobStatus | undefined;
+    let callIssued = false;
+    let recorded = false;
     const startedAt = this.#now().getTime();
+    const chunkEstimate: CostEstimate = {
+      adapterId: adapter.descriptor.adapterId,
+      currency: "USD",
+      amount: chunk.estimatedCostUsd,
+      units: { seconds: chunk.durationSeconds },
+      confidence: "pricebook",
+    };
+    const recordCall = (
+      outcome: "ok" | "error" | "cancelled",
+      actualUsd: number,
+    ): void => {
+      recorded = true;
+      this.#costMeter.record({
+        context: payload.context,
+        estimate: chunkEstimate,
+        provider: adapter.descriptor.provider,
+        purpose: "restyle.generate",
+        dataClassesSent: [...adapter.descriptor.dataClassesSent],
+        payloadSummary: {
+          videoSeconds: chunk.durationSeconds,
+          promptChars: payload.plan.settings.prompt.length,
+        },
+        units: { seconds: chunk.durationSeconds },
+        actualUsd,
+        outcome,
+        durationMs: Math.max(0, this.#now().getTime() - startedAt),
+      });
+    };
     try {
       const cacheDirectory = join(
         this.#projectStore.root,
@@ -362,6 +393,7 @@ export class RestyleExecutionService {
           : { seed: payload.plan.settings.seed }),
         providerSettings: structuredClone(payload.plan.settings.providerSettings),
       };
+      callIssued = true;
       handle = await adapter.restyle(request, signal);
       externalKey = `${job.jobId}:${handle.providerJobId}`;
       this.#external.set(externalKey, {
@@ -373,11 +405,13 @@ export class RestyleExecutionService {
       });
       let delayMs = 2_000;
       let status: AdapterJobStatus = await adapter.poll(handle);
+      lastStatus = status;
       while (status.state === "queued" || status.state === "running") {
         reportProgress(0.2 + (status.progress ?? 0) * 0.55, status.etaSeconds);
         await this.#sleep(delayMs, signal);
         delayMs = Math.min(delayMs * 2, 30_000);
         status = await adapter.poll(handle);
+        lastStatus = status;
       }
       if (status.state === "failed") {
         throw makeGuyditorError("E_RESTYLE_PROVIDER", status.error, {
@@ -395,28 +429,7 @@ export class RestyleExecutionService {
       const result = await adapter.fetchResult(handle, cacheDirectory);
       reportProgress(0.85, 0);
       const actualCostUsd = result.actualCostUsd ?? status.actualCostUsd ?? chunk.estimatedCostUsd;
-      const estimate: CostEstimate = {
-        adapterId: adapter.descriptor.adapterId,
-        currency: "USD",
-        amount: chunk.estimatedCostUsd,
-        units: { seconds: chunk.durationSeconds },
-        confidence: "pricebook",
-      };
-      this.#costMeter.record({
-        context: payload.context,
-        estimate,
-        provider: adapter.descriptor.provider,
-        purpose: "restyle.generate",
-        dataClassesSent: [...adapter.descriptor.dataClassesSent],
-        payloadSummary: {
-          videoSeconds: chunk.durationSeconds,
-          promptChars: payload.plan.settings.prompt.length,
-        },
-        units: { seconds: chunk.durationSeconds },
-        actualUsd: actualCostUsd,
-        outcome: "ok",
-        durationMs: Math.max(0, this.#now().getTime() - startedAt),
-      });
+      recordCall("ok", actualCostUsd);
       const content = await readFile(result.output.filePath);
       const contentHash = createHash("sha256").update(content).digest("hex");
       const probed = await probeMedia(result.output.filePath);
@@ -601,6 +614,21 @@ export class RestyleExecutionService {
       });
     } catch (error: unknown) {
       if (signal.aborted && handle !== undefined) await adapter.cancel?.(handle).catch(() => undefined);
+      // The segment leaves the machine the moment `adapter.restyle` is called,
+      // so from that point every outcome owes an external.call record:
+      // NFR-001/NFR-007 disclosure depends on the data classes sent being
+      // logged whether or not the chunk came back, and the budget aggregates
+      // are rebuilt from these records. No provider reports a charge alongside
+      // a failed status, so the estimate is the only figure available; it errs
+      // toward blocking further spend rather than hiding it.
+      if (callIssued && !recorded) {
+        recordCall(
+          signal.aborted ? "cancelled" : "error",
+          lastStatus?.state === "succeeded"
+            ? lastStatus.actualCostUsd ?? chunk.estimatedCostUsd
+            : chunk.estimatedCostUsd,
+        );
+      }
       throw error;
     } finally {
       if (externalKey !== undefined) this.#external.delete(externalKey);

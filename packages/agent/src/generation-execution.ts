@@ -433,8 +433,73 @@ export class GenerationExecutionService {
       );
     }
     const startedAt = Date.now();
+    let recorded = false;
+    const recordCall = (
+      outcome: "ok" | "error" | "cancelled",
+      actualUsd: number,
+    ): void => {
+      recorded = true;
+      this.#costMeter.record({
+        context: payload.context,
+        estimate: payload.estimate,
+        provider: adapter.descriptor.provider,
+        purpose: "broll.generate",
+        dataClassesSent: [...adapter.descriptor.dataClassesSent],
+        payloadSummary: {
+          promptChars: payload.request.prompt.length,
+          ...(payload.request.mode === "video" && payload.request.durationFrames !== undefined &&
+              payload.request.fps !== undefined
+            ? { videoSeconds: videoSeconds(payload.request.durationFrames, payload.request.fps) }
+            : {}),
+        },
+        units: {
+          ...(payload.request.mode === "image" ? { images: payload.request.count } : {}),
+          ...(payload.request.mode === "video" && payload.request.durationFrames !== undefined &&
+              payload.request.fps !== undefined
+            ? { seconds: videoSeconds(payload.request.durationFrames, payload.request.fps) }
+            : {}),
+        },
+        actualUsd,
+        outcome,
+        durationMs: Math.max(0, Date.now() - startedAt),
+      });
+    };
+    // A resumed job already transmitted its prompt in an earlier run.
+    let callIssued = payload.adapterHandle !== undefined;
+    try {
+      return await this.#executeSubmitted(
+        job,
+        payload,
+        adapter,
+        signal,
+        reportProgress,
+        recordCall,
+        () => { callIssued = true; },
+      );
+    } catch (error: unknown) {
+      // Once the request is on the wire the call is disclosable regardless of
+      // how it ends; without this the two paid paths logged nothing at all for
+      // a failed or cancelled provider call (NFR-001/NFR-007), and the budget
+      // aggregates silently under-counted it.
+      if (callIssued && !recorded) {
+        recordCall(signal.aborted ? "cancelled" : "error", payload.estimate.amount);
+      }
+      throw error;
+    }
+  }
+
+  async #executeSubmitted(
+    job: JobRecord,
+    payload: GenerationJobPayload,
+    adapter: BrollProviderAdapter,
+    signal: AbortSignal,
+    reportProgress: (progress: number, etaSeconds?: number) => void,
+    recordCall: (outcome: "ok" | "error" | "cancelled", actualUsd: number) => void,
+    markCallIssued: () => void,
+  ): Promise<JsonValue> {
     let handle = payload.adapterHandle;
     if (handle === undefined) {
+      markCallIssued();
       handle = await adapter.submit(payload.request, signal);
       payload.adapterHandle = handle;
       const checkpoint = this.#jobs.checkpoint(job.jobId, jsonValue(payload));
@@ -534,30 +599,7 @@ export class GenerationExecutionService {
       await this.#candidates.save(candidate);
       candidateIds.push(candidateId);
     }
-    this.#costMeter.record({
-      context: payload.context,
-      estimate: payload.estimate,
-      provider: adapter.descriptor.provider,
-      purpose: "broll.generate",
-      dataClassesSent: [...adapter.descriptor.dataClassesSent],
-      payloadSummary: {
-        promptChars: payload.request.prompt.length,
-        ...(payload.request.mode === "video" && payload.request.durationFrames !== undefined &&
-            payload.request.fps !== undefined
-          ? { videoSeconds: videoSeconds(payload.request.durationFrames, payload.request.fps) }
-          : {}),
-      },
-      units: {
-        ...(payload.request.mode === "image" ? { images: payload.request.count } : {}),
-        ...(payload.request.mode === "video" && payload.request.durationFrames !== undefined &&
-            payload.request.fps !== undefined
-          ? { seconds: videoSeconds(payload.request.durationFrames, payload.request.fps) }
-          : {}),
-      },
-      actualUsd: terminal.actualCostUsd ?? payload.estimate.amount,
-      outcome: "ok",
-      durationMs: Math.max(0, Date.now() - startedAt),
-    });
+    recordCall("ok", terminal.actualCostUsd ?? payload.estimate.amount);
     return jsonValue({
       status: "waiting-for-review",
       adapterHandle: handle,

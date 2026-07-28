@@ -36,6 +36,7 @@ import type {
   BudgetConfig,
   GenerationStartResult,
 } from "./index.js";
+import type { BrollProviderAdapter } from "./adapters/types.js";
 
 const roots: string[] = [];
 const NOW = new Date("2026-07-23T10:00:00.000Z");
@@ -350,6 +351,85 @@ describe("FR-604/605/606 B-roll generation lifecycle", () => {
       },
     });
     expect(queue.list({ kind: "broll.generate" })).toEqual([]);
+    queue.close();
+    meter.close();
+  });
+
+  it("audits and charges a provider call that fails after the prompt was sent", async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), "guyditor-generation-fail-"));
+    const userDir = await mkdtemp(join(tmpdir(), "guyditor-generation-fail-user-"));
+    roots.push(projectRoot, userDir);
+    const store = await valueOf(createProject(projectRoot, projectFixture()));
+    const engine = new OperationEngine(store.currentProject);
+    const audit = new AuditLog({ userDir });
+    const meter = CostMeter.open({ userDir, auditLog: audit, budgets: NO_BUDGETS });
+    const stub = new DeterministicGenerationAdapter();
+    const failing: BrollProviderAdapter = {
+      descriptor: {
+        ...stub.descriptor,
+        provider: "Failing provider",
+        dataClassesSent: ["prompt", "metadata"],
+      },
+      estimateCost: (request) => stub.estimateCost(request),
+      submit: (request, signal) => stub.submit(request, signal),
+      poll: () => Promise.resolve({
+        state: "failed" as const,
+        error: "provider quota exhausted",
+        retry: "safe" as const,
+      }),
+      fetchResult: () => Promise.reject(new Error("no result")),
+    };
+    const registry = new AdapterRegistry();
+    registry.register(failing);
+    const queue = JobQueue.open(join(projectRoot, ".guyditor/jobs.sqlite")).queue;
+    const service = new GenerationExecutionService({
+      projectStore: store,
+      operationEngine: engine,
+      adapters: registry,
+      jobs: queue,
+      costMeter: meter,
+      sleep: () => Promise.resolve(),
+    });
+
+    const started: GenerationStartResult = await service.request({
+      adapterId: stub.descriptor.adapterId,
+      context: {
+        sessionId: "ses_aaaaaaaaaa",
+        projectId: "prj_aaaaaaaaaa",
+        taskId: "generate-failing",
+        initiator: "creator",
+      },
+      request: {
+        requestId: "01K0GENERATIONFAILS",
+        mode: "video",
+        model: "ffmpeg-synth-v1",
+        prompt: "Chart background",
+        width: 320,
+        height: 180,
+        durationFrames: 12,
+        fps: "24/1",
+        count: 1,
+        providerSettings: {},
+      },
+    });
+    if (started.verdict !== "enqueued") throw new Error("Generation was not enqueued.");
+    const finished = await waitForJob(queue, started.job.jobId);
+    expect(finished.state).toBe("failed");
+
+    expect(audit.readSession("ses_aaaaaaaaaa").records
+      .filter(({ type }) => type === "external.call")).toEqual([
+      expect.objectContaining({
+        type: "external.call",
+        provider: "Failing provider",
+        purpose: "broll.generate",
+        outcome: "error",
+        dataClassesSent: ["prompt", "metadata"],
+      }),
+    ]);
+    // The stub prices at zero, so assert the charge was reconciled at all
+    // rather than a particular amount.
+    expect(audit.readSession("ses_aaaaaaaaaa").records
+      .filter(({ type }) => type === "cost.charge")).toHaveLength(1);
     queue.close();
     meter.close();
   });

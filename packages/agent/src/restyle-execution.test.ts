@@ -35,6 +35,7 @@ import type {
   BudgetConfig,
   RestyleStartResult,
 } from "./index.js";
+import type { KlingApi, KlingApiTask } from "./adapters/kling-api.js";
 
 const roots: string[] = [];
 const NOW = new Date("2026-07-19T10:00:00.000Z");
@@ -122,7 +123,11 @@ interface Harness {
   audit: AuditLog;
 }
 
-async function harness(budgets: BudgetConfig, withShort = false): Promise<Harness> {
+async function harness(
+  budgets: BudgetConfig,
+  withShort = false,
+  apiFactory?: () => KlingApi,
+): Promise<Harness> {
   const projectRoot = await directory("guyditor-restyle-project-");
   const userDir = await directory("guyditor-restyle-user-");
   const parsed = parseProjectYaml(await readFile(FIXTURE_PROJECT, "utf8"));
@@ -231,7 +236,9 @@ async function harness(budgets: BudgetConfig, withShort = false): Promise<Harnes
   registry.register(new KlingRestyleAdapter({
     credentials,
     config: { apiKeyRef: "apiKey", model: "kling-video-o1" },
-    stubMode: true,
+    ...(apiFactory === undefined
+      ? { stubMode: true }
+      : { stubMode: false, apiFactory }),
   }));
   const runtime: { service?: RestyleExecutionService } = {};
   const queue = JobQueue.open(join(projectRoot, ".guyditor/jobs.sqlite"), {
@@ -424,4 +431,101 @@ describe("FR-607/608 restyle execution", () => {
     run.queue.close();
     run.meter.close();
   });
+
+  it("audits and charges a provider call that fails after the video was sent", async () => {
+    const failingApi: KlingApi = {
+      submitVideoToVideo: () => Promise.resolve<KlingApiTask>({
+        taskId: "kling-task-fail",
+        state: "queued",
+        progress: 0,
+        providerMetadata: {},
+      }),
+      getTask: () => Promise.resolve<KlingApiTask>({
+        taskId: "kling-task-fail",
+        state: "failed",
+        progress: 0,
+        error: "content moderation rejected the segment",
+        providerMetadata: {},
+      }),
+      downloadResult: () => Promise.reject(new Error("no result")),
+      cancel: () => Promise.resolve(),
+    };
+    const run = await harness(NO_BUDGETS, false, () => failingApi);
+    const context = {
+      sessionId: "ses_aaaaaaaaaa",
+      projectId: "prj_aaaaaaaaaa",
+      taskId: run.plan.id,
+      initiator: "creator" as const,
+    };
+
+    const started = run.service.startPlan({ plan: run.plan, context });
+    if (started.verdict !== "enqueued") throw new Error("Restyle plan was not enqueued.");
+    const queued = started.jobs[0]!;
+    await waitFor(() => run.queue.get(queued.jobId)?.state === "failed");
+
+    // The bytes reached the provider, so the call owes a disclosure record even
+    // though nothing came back.
+    const records = run.audit.readSession("ses_aaaaaaaaaa").records;
+    const external = records.filter(({ type }) => type === "external.call");
+    expect(external).toEqual([
+      expect.objectContaining({
+        type: "external.call",
+        provider: "Kling AI",
+        purpose: "restyle.generate",
+        outcome: "error",
+        dataClassesSent: ["video", "prompt", "metadata"],
+      }),
+    ]);
+    expect(records.some(({ type }) => type === "cost.charge")).toBe(true);
+    expect(run.meter.statusForTask("prj_aaaaaaaaaa", run.plan.id).taskUsd).toBeCloseTo(0.14, 5);
+    run.queue.close();
+    run.meter.close();
+  }, 30_000);
+
+  it("records a single external call when the provider call is cancelled", async () => {
+    let polls = 0;
+    const slowApi: KlingApi = {
+      submitVideoToVideo: () => Promise.resolve<KlingApiTask>({
+        taskId: "kling-task-slow",
+        state: "queued",
+        progress: 0,
+        providerMetadata: {},
+      }),
+      getTask: () => {
+        polls += 1;
+        return Promise.resolve<KlingApiTask>({
+          taskId: "kling-task-slow",
+          state: "running",
+          progress: 0.1,
+          providerMetadata: {},
+        });
+      },
+      downloadResult: () => Promise.reject(new Error("no result")),
+      cancel: () => Promise.resolve(),
+    };
+    const run = await harness(NO_BUDGETS, false, () => slowApi);
+    const context = {
+      sessionId: "ses_aaaaaaaaaa",
+      projectId: "prj_aaaaaaaaaa",
+      taskId: run.plan.id,
+      initiator: "creator" as const,
+    };
+
+    const started = run.service.startPlan({ plan: run.plan, context });
+    if (started.verdict !== "enqueued") throw new Error("Restyle plan was not enqueued.");
+    const queued = started.jobs[0]!;
+    await waitFor(() => polls > 0);
+    expect(run.queue.cancel(queued.jobId).ok).toBe(true);
+    // JobQueue.cancel marks the record synchronously, so wait for the executor
+    // itself to unwind rather than for the job state.
+    await waitFor(() => run.audit.readSession("ses_aaaaaaaaaa").records
+      .some(({ type }) => type === "external.call"));
+
+    expect(run.audit.readSession("ses_aaaaaaaaaa").records
+      .filter(({ type }) => type === "external.call")).toEqual([
+      expect.objectContaining({ type: "external.call", outcome: "cancelled" }),
+    ]);
+    run.queue.close();
+    run.meter.close();
+  }, 30_000);
 });
