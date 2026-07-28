@@ -216,19 +216,12 @@ export class RestyleExecutionService {
       },
       confidence: "pricebook",
     };
-    if (input.confirmToken !== undefined) {
-      if (!this.#costMeter.confirm(input.confirmToken, input.context)) {
-        return {
-          verdict: "blocked",
-          level: "task",
-          message: "Restyle cost confirmation is invalid or expired.",
-          estimate,
-        };
-      }
-    } else {
-      const preflight = this.#costMeter.preflight(estimate, input.context);
-      if (preflight.verdict !== "proceed") return { ...preflight, estimate };
-    }
+    const preflight = this.#costMeter.preflight(
+      estimate,
+      input.context,
+      input.confirmToken,
+    );
+    if (preflight.verdict !== "proceed") return { ...preflight, estimate };
     const jobs = input.plan.chunks.map((chunk) => this.#jobs.enqueue({
       kind: "restyle.generate",
       title: `Restyle chunk ${String(chunk.index + 1)}/${String(input.plan.chunks.length)}`,

@@ -266,12 +266,82 @@ describe("CostMeter", () => {
       confirmToken: "confirm-restyle-plan",
     });
 
-    expect(meter.confirm("confirm-restyle-plan", callContext)).toBe(true);
-    expect(meter.confirm("confirm-restyle-plan", callContext)).toBe(false);
-    expect(meter.outstandingConfirmations(callContext.projectId)).toEqual([]);
+    expect(meter.preflight(estimate(1.5), callContext, "confirm-restyle-plan"))
+      .toEqual({ verdict: "proceed" });
+    // Single use: replaying the token mints a fresh warning instead of passing.
+    expect(meter.preflight(estimate(1.5), callContext, "confirm-restyle-plan"))
+      .toMatchObject({ verdict: "warn", confirmToken: "confirm-restyle-plan" });
     expect(audit.readSession(callContext.sessionId).records).toEqual(expect.arrayContaining([
       expect.objectContaining({ type: "budget.event", kind: "creator_override" }),
     ]));
+    meter.close();
+  });
+
+  it("never lets a confirmation cross a cap", () => {
+    const userDir = userDirectory();
+    const audit = new AuditLog({ userDir, now: () => NOW });
+    const meter = CostMeter.open({
+      userDir,
+      auditLog: audit,
+      budgets: { ...NO_BUDGETS, task: { warnUsd: 1, capUsd: 5 } },
+      now: () => NOW,
+      confirmTokenFactory: () => "confirm-small-plan",
+    });
+    const callContext = context("ses_aaaaaaaaaa", "prj_aaaaaaaaaa", "restyle-plan-001");
+    expect(meter.preflight(estimate(1.5), callContext))
+      .toMatchObject({ verdict: "warn", confirmToken: "confirm-small-plan" });
+
+    // The confirmation was issued for $1.50; it cannot wave through a plan that
+    // breaches the $5 cap.
+    expect(meter.preflight(estimate(9), callContext, "confirm-small-plan"))
+      .toMatchObject({ verdict: "blocked", level: "task" });
+    meter.close();
+  });
+
+  it("re-warns when the confirmed estimate grows", () => {
+    const userDir = userDirectory();
+    const audit = new AuditLog({ userDir, now: () => NOW });
+    let issued = 0;
+    const meter = CostMeter.open({
+      userDir,
+      auditLog: audit,
+      budgets: { ...NO_BUDGETS, task: { warnUsd: 1, capUsd: null } },
+      now: () => NOW,
+      confirmTokenFactory: () => `confirm-${String(++issued)}`,
+    });
+    const callContext = context("ses_aaaaaaaaaa", "prj_aaaaaaaaaa", "restyle-plan-001");
+    expect(meter.preflight(estimate(1.5), callContext))
+      .toMatchObject({ verdict: "warn", confirmToken: "confirm-1" });
+
+    // Confirming $1.50 must not authorize $40 of chunks on the same task.
+    expect(meter.preflight(estimate(40), callContext, "confirm-1"))
+      .toMatchObject({ verdict: "warn", confirmToken: "confirm-2" });
+    // The re-issued token is bound to the larger amount and does clear it.
+    expect(meter.preflight(estimate(40), callContext, "confirm-2"))
+      .toEqual({ verdict: "proceed" });
+    meter.close();
+  });
+
+  it("ignores a confirmation issued for another task", () => {
+    const userDir = userDirectory();
+    const audit = new AuditLog({ userDir, now: () => NOW });
+    const meter = CostMeter.open({
+      userDir,
+      auditLog: audit,
+      budgets: { ...NO_BUDGETS, task: { warnUsd: 1, capUsd: null } },
+      now: () => NOW,
+      confirmTokenFactory: () => "confirm-task-a",
+    });
+    expect(meter.preflight(
+      estimate(1.5),
+      context("ses_aaaaaaaaaa", "prj_aaaaaaaaaa", "task-a"),
+    )).toMatchObject({ verdict: "warn" });
+
+    expect(meter.preflight(
+      estimate(1.5),
+      context("ses_aaaaaaaaaa", "prj_aaaaaaaaaa", "task-b"),
+      "confirm-task-a",
+    )).toMatchObject({ verdict: "warn" });
     meter.close();
   });
 });

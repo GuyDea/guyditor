@@ -181,34 +181,24 @@ export class CriticExecutionService {
     }
 
     const estimate = adapter.estimate(input.request);
-    if (input.confirmToken !== undefined) {
-      if (!this.#costMeter.confirm(input.confirmToken, input.context)) {
-        return failure(makeGuyditorError(
-          "E_BUDGET_CONFIRMATION",
-          "The critic cost confirmation is invalid or expired.",
-          { affected: [input.request.critiqueId] },
-        ));
-      }
-    } else {
-      const preflight = this.#costMeter.preflight(estimate, input.context);
-      if (preflight.verdict === "blocked") {
-        return failure(makeGuyditorError(
-          "E_BUDGET_CAP",
-          preflight.message,
-          { affected: [input.request.critiqueId] },
-        ));
-      }
-      if (preflight.verdict === "warn") {
-        return failure(makeGuyditorError(
-          "E_BUDGET_CONFIRMATION_REQUIRED",
-          preflight.message,
-          {
-            affected: [input.request.critiqueId],
-            retry: "safe",
-            suggestion: preflight.confirmToken,
-          },
-        ));
-      }
+    const preflight = this.#costMeter.preflight(estimate, input.context, input.confirmToken);
+    if (preflight.verdict === "blocked") {
+      return failure(makeGuyditorError(
+        "E_BUDGET_CAP",
+        preflight.message,
+        { affected: [input.request.critiqueId] },
+      ));
+    }
+    if (preflight.verdict === "warn") {
+      return failure(makeGuyditorError(
+        "E_BUDGET_CONFIRMATION_REQUIRED",
+        preflight.message,
+        {
+          affected: [input.request.critiqueId],
+          retry: "safe",
+          suggestion: preflight.confirmToken,
+        },
+      ));
     }
 
     const job = this.#jobs.enqueue({

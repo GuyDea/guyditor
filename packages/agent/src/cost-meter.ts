@@ -225,7 +225,17 @@ export class CostMeter {
     return this.#databasePath;
   }
 
-  public preflight(estimate: CostEstimate, context: CostContext): Preflight {
+  /**
+   * The single gate in front of every external call. A creator confirmation is
+   * redeemed *here* rather than through a separate entry point, so a warning
+   * confirmation can never be used to skip the cap check: `confirmToken`
+   * authorizes crossing the warning it was issued for, and nothing else.
+   */
+  public preflight(
+    estimate: CostEstimate,
+    context: CostContext,
+    confirmToken?: string,
+  ): Preflight {
     this.#ensureOpen();
     assertEstimate(estimate);
     assertContext(context);
@@ -250,28 +260,54 @@ export class CostMeter {
     }
     for (const level of orderedLevels) {
       const warning = this.#budgets[level].warnUsd;
-      if (warning !== null && projected[level] > warning) {
-        this.#budgetEvent(context, level, "warn", warning, projected[level]);
-        const confirmToken = this.#confirmTokenFactory();
-        const message = `${level} projected spend $${projected[level].toFixed(2)} exceeds warning $${warning.toFixed(2)}.`;
-        this.#outstandingConfirmations.set(confirmToken, {
-          confirmToken,
-          projectId: context.projectId,
-          taskId: context.taskId,
-          level,
-          message,
-          estimatedUsd: estimate.amount,
-          createdAt: this.#now().toISOString(),
-        });
-        return {
-          verdict: "warn",
-          level,
-          message,
-          confirmToken,
-        };
+      if (warning === null || projected[level] <= warning) continue;
+      if (
+        confirmToken !== undefined &&
+        this.#redeem(confirmToken, context, estimate.amount)
+      ) {
+        this.#budgetEvent(context, level, "creator_override", warning, projected[level]);
+        return { verdict: "proceed" };
       }
+      // An unknown, foreign, or outgrown confirmation falls through to a fresh
+      // warning bound to the amount actually being requested now.
+      this.#budgetEvent(context, level, "warn", warning, projected[level]);
+      const issuedToken = this.#confirmTokenFactory();
+      const message = `${level} projected spend $${projected[level].toFixed(2)} exceeds warning $${warning.toFixed(2)}.`;
+      this.#outstandingConfirmations.set(issuedToken, {
+        confirmToken: issuedToken,
+        projectId: context.projectId,
+        taskId: context.taskId,
+        level,
+        message,
+        estimatedUsd: estimate.amount,
+        createdAt: this.#now().toISOString(),
+      });
+      return {
+        verdict: "warn",
+        level,
+        message,
+        confirmToken: issuedToken,
+      };
     }
     return { verdict: "proceed" };
+  }
+
+  /**
+   * Consumes a confirmation if it belongs to this task and still covers the
+   * amount being requested. Amounts are compared in whole cents so ordinary
+   * floating-point noise in a re-derived estimate does not force a pointless
+   * second confirmation.
+   */
+  #redeem(confirmToken: string, context: CostContext, amountUsd: number): boolean {
+    const confirmation = this.#outstandingConfirmations.get(confirmToken);
+    if (
+      confirmation === undefined ||
+      confirmation.projectId !== context.projectId ||
+      confirmation.taskId !== context.taskId ||
+      Math.round(amountUsd * 100) > Math.round(confirmation.estimatedUsd * 100)
+    ) return false;
+    this.#outstandingConfirmations.delete(confirmToken);
+    return true;
   }
 
   public record(actual: ExternalCallActual): RecordedCost {
@@ -358,33 +394,6 @@ export class CostMeter {
       .filter((confirmation) => confirmation.projectId === projectId)
       .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
       .map((confirmation) => structuredClone(confirmation));
-  }
-
-  public confirm(confirmToken: string, context: CostContext): boolean {
-    this.#ensureOpen();
-    assertContext(context);
-    const confirmation = this.#outstandingConfirmations.get(confirmToken);
-    if (
-      confirmation === undefined ||
-      confirmation.projectId !== context.projectId ||
-      confirmation.taskId !== context.taskId
-    ) return false;
-    this.#outstandingConfirmations.delete(confirmToken);
-    const threshold = this.#budgets[confirmation.level].warnUsd ?? 0;
-    const status = this.statusForTask(context.projectId, context.taskId);
-    const current = confirmation.level === "task"
-      ? status.taskUsd
-      : confirmation.level === "episode"
-        ? status.episodeUsd
-        : status.cumulativeUsd;
-    this.#budgetEvent(
-      context,
-      confirmation.level,
-      "creator_override",
-      threshold,
-      current + confirmation.estimatedUsd,
-    );
-    return true;
   }
 
   public statusForTask(projectId: string, taskId: string): CostStatus {

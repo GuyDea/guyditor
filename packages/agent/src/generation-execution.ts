@@ -212,14 +212,8 @@ export class GenerationExecutionService {
       );
     }
     const estimate = await adapter.estimateCost(input.request);
-    if (input.confirmToken !== undefined) {
-      if (!this.#costMeter.confirm(input.confirmToken, input.context)) {
-        return { verdict: "blocked", level: "task", message: "Cost confirmation is invalid or expired.", estimate };
-      }
-    } else {
-      const preflight = this.#costMeter.preflight(estimate, input.context);
-      if (preflight.verdict !== "proceed") return { ...preflight, estimate };
-    }
+    const preflight = this.#costMeter.preflight(estimate, input.context, input.confirmToken);
+    if (preflight.verdict !== "proceed") return { ...preflight, estimate };
     const payload: GenerationJobPayload = {
       adapterId: adapter.descriptor.adapterId,
       request: structuredClone(input.request),
