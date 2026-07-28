@@ -1,10 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import type { Clip } from "../../../../core/src/index.js";
+import type { Asset, Clip } from "../../../../core/src/index.js";
 import type { PeaksFile } from "../../../../media/src/index.js";
 import {
+  currentTimelineMediaResult,
+  loadTimelineMedia,
   representativeSourceFrames,
   selectPeaksTier,
+  timelineMediaRequestKey,
   waveformColumns,
 } from "./timeline-media.js";
 
@@ -16,6 +19,32 @@ function clip(sourceIn = 120, sourceOut = 240): Clip {
       in: { frames: sourceIn, fps: "24/1" },
       out: { frames: sourceOut, fps: "24/1" },
     },
+  };
+}
+
+function videoWithAudio(): Asset {
+  return {
+    id: "ast_aaaaaaaaaa",
+    kind: "video",
+    path: "media/a.mp4",
+    sha256: "a".repeat(64),
+    probe: { duration: { frames: 240, fps: "24/1" }, fps: "24/1" },
+    video: {
+      codec: "h264",
+      width: 1920,
+      height: 1080,
+      fps: "24/1",
+      pixFmt: "yuv420p",
+      hasAlpha: false,
+      rotation: 0,
+    },
+    audio: [{
+      index: 0,
+      codec: "aac",
+      sampleRate: 48_000,
+      channels: 1,
+      layout: "mono",
+    }],
   };
 }
 
@@ -61,5 +90,75 @@ describe("waveform projection", () => {
       { minimum: -2, maximum: 2 },
       { minimum: -3, maximum: 3 },
     ]);
+  });
+});
+
+describe("timeline media loading", () => {
+  it("loads peaks once per asset and frames for each visible clip", async () => {
+    const asset = videoWithAudio();
+    const clips = [clip(0, 24), { ...clip(24, 48), id: "clp_bbbbbbbbbb" }];
+    const call = vi.fn(async (
+      _service: string,
+      method: string,
+      params: unknown,
+    ) => {
+      if (method === "readPeaks") return peaks();
+      const sourceFrames = (params as { sourceFrames: number[] }).sourceFrames;
+      return sourceFrames.map((sourceFrame) => ({
+        sourceFrame,
+        url: `file:///cache/${String(sourceFrame)}.jpg`,
+      }));
+    });
+
+    const result = await loadTimelineMedia(
+      clips.map((clip) => ({ asset, clip, width: 192 })),
+      call,
+    );
+
+    expect(
+      call.mock.calls.filter(([, method]) => method === "readPeaks"),
+    ).toHaveLength(1);
+    expect(
+      call.mock.calls.filter(
+        ([, method]) => method === "resolveTimelineFrames",
+      ),
+    ).toHaveLength(2);
+    expect(result["clp_bbbbbbbbbb"]).toMatchObject({
+      frameUrls: expect.arrayContaining([expect.stringContaining("jpg")]),
+      hasAudio: true,
+      hasVideo: true,
+    });
+  });
+
+  it("degrades failed frame and peaks calls without losing media semantics", async () => {
+    const asset = videoWithAudio();
+    const result = await loadTimelineMedia(
+      [{ asset, clip: clip(), width: 192 }],
+      () => Promise.reject(new Error("offline")),
+    );
+
+    expect(result["clp_aaaaaaaaaa"]).toMatchObject({
+      frameUrls: [null, null],
+      hasAudio: true,
+      hasVideo: true,
+      waveform: [],
+    });
+  });
+
+  it("rejects late results with a different timeline request key", () => {
+    const first = timelineMediaRequestKey(
+      "rev_00001",
+      "seq_aaaaaaaaaa",
+      4,
+      [],
+    );
+    const second = timelineMediaRequestKey(
+      "rev_00002",
+      "seq_aaaaaaaaaa",
+      4,
+      [],
+    );
+    expect(currentTimelineMediaResult({ key: first, clips: {} }, second))
+      .toEqual({});
   });
 });

@@ -1,4 +1,6 @@
-import type { Clip } from "../../../../core/src/index.js";
+import { useEffect, useRef, useState } from "react";
+
+import type { Asset, Clip } from "../../../../core/src/index.js";
 import type { PeaksFile, PeaksTier } from "../../../../media/src/index.js";
 
 export const TIMELINE_FRAME_HEIGHT = 96 as const;
@@ -9,6 +11,36 @@ export interface WaveformColumn {
   minimum: number;
   maximum: number;
 }
+
+export interface TimelineMediaRequest {
+  asset: Asset;
+  clip: Clip;
+  width: number;
+}
+
+export interface TimelineClipMediaState {
+  frameUrls: Array<string | null>;
+  hasAudio: boolean;
+  hasVideo: boolean;
+  sourceFrames: number[];
+  waveform: WaveformColumn[];
+}
+
+export interface TimelineMediaResult {
+  key: string;
+  clips: Record<string, TimelineClipMediaState>;
+}
+
+interface TimelineFrameResolution {
+  sourceFrame: number;
+  url: string | null;
+}
+
+type MediaCall = (
+  service: "MediaEngine",
+  method: string,
+  params: unknown,
+) => Promise<unknown>;
 
 function clamp(value: number, minimum: number, maximum: number): number {
   return Math.max(minimum, Math.min(maximum, value));
@@ -43,6 +75,35 @@ export function representativeSourceFrames(
       ),
     ),
   ];
+}
+
+export function timelineMediaRequestKey(
+  revision: string,
+  sequenceId: string,
+  zoom: number,
+  requests: readonly TimelineMediaRequest[],
+): string {
+  return JSON.stringify({
+    revision,
+    sequenceId,
+    zoom,
+    requests: requests.map(({ asset, clip, width }) => ({
+      clipId: clip.id,
+      assetId: asset.id,
+      sourceHash: asset.sha256,
+      sourceIn: clip.source.in,
+      sourceOut: clip.source.out,
+      width,
+      sourceFrames: representativeSourceFrames(clip, width),
+    })),
+  });
+}
+
+export function currentTimelineMediaResult(
+  result: TimelineMediaResult,
+  key: string,
+): Record<string, TimelineClipMediaState> {
+  return result.key === key ? result.clips : {};
 }
 
 export function selectPeaksTier(
@@ -108,4 +169,87 @@ export function waveformColumns(
     }
     return { minimum, maximum };
   });
+}
+
+export async function loadTimelineMedia(
+  requests: readonly TimelineMediaRequest[],
+  call: MediaCall,
+): Promise<Record<string, TimelineClipMediaState>> {
+  const peaksByAsset = new Map<string, Promise<PeaksFile | null>>();
+  const peaksFor = (asset: Asset): Promise<PeaksFile | null> => {
+    const key = `${asset.id}:${asset.sha256}`;
+    const existing = peaksByAsset.get(key);
+    if (existing !== undefined) return existing;
+    const pending = call("MediaEngine", "readPeaks", { assetId: asset.id })
+      .then((value) => value as PeaksFile | null)
+      .catch(() => null);
+    peaksByAsset.set(key, pending);
+    return pending;
+  };
+
+  const entries = await Promise.all(
+    requests.map(async ({ asset, clip, width }) => {
+      const sourceFrames = asset.video === undefined
+        ? []
+        : representativeSourceFrames(clip, width);
+      const hasAudio = (asset.audio?.length ?? 0) > 0;
+      const framePromise = asset.video === undefined
+        ? Promise.resolve([] as TimelineFrameResolution[])
+        : call("MediaEngine", "resolveTimelineFrames", {
+            assetId: asset.id,
+            sourceFrames,
+            height: TIMELINE_FRAME_HEIGHT,
+          })
+            .then((value) => value as TimelineFrameResolution[])
+            .catch(() => []);
+      const peaksPromise = hasAudio
+        ? peaksFor(asset)
+        : Promise.resolve(null);
+      const [resolvedFrames, peaks] = await Promise.all([
+        framePromise,
+        peaksPromise,
+      ]);
+      const urls = new Map(
+        resolvedFrames.map(({ sourceFrame, url }) =>
+          [sourceFrame, url] as const),
+      );
+      return [clip.id, {
+        frameUrls: sourceFrames.map(
+          (sourceFrame) => urls.get(sourceFrame) ?? null,
+        ),
+        hasAudio,
+        hasVideo: asset.video !== undefined,
+        sourceFrames,
+        waveform: peaks === null ? [] : waveformColumns(peaks, clip, width),
+      }] as const;
+    }),
+  );
+  return Object.fromEntries(entries);
+}
+
+export function useTimelineMedia(
+  requests: readonly TimelineMediaRequest[],
+  key: string,
+): Record<string, TimelineClipMediaState> {
+  const [result, setResult] = useState<TimelineMediaResult>({
+    key,
+    clips: {},
+  });
+  const requestsRef = useRef(requests);
+  requestsRef.current = requests;
+  useEffect(() => {
+    let current = true;
+    setResult({ key, clips: {} });
+    void loadTimelineMedia(
+      requestsRef.current,
+      (service, method, params) =>
+        window.guyditor.call(service, method, params),
+    ).then((clips) => {
+      if (current) setResult({ key, clips });
+    });
+    return () => {
+      current = false;
+    };
+  }, [key]);
+  return currentTimelineMediaResult(result, key);
 }
