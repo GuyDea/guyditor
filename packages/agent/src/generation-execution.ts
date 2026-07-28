@@ -109,11 +109,18 @@ function defaultSleep(milliseconds: number, signal: AbortSignal): Promise<void> 
       reject(signal.reason);
       return;
     }
-    const timeout = setTimeout(resolveWait, milliseconds);
-    signal.addEventListener("abort", () => {
+    // `once: true` only detaches the listener when abort actually fires. This
+    // sleep runs once per provider poll on the same job signal, so without an
+    // explicit removal a long-running job accumulates a listener per poll.
+    const onAbort = (): void => {
       clearTimeout(timeout);
       reject(signal.reason);
-    }, { once: true });
+    };
+    const timeout = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolveWait();
+    }, milliseconds);
+    signal.addEventListener("abort", onAbort, { once: true });
   });
 }
 

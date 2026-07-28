@@ -77,7 +77,8 @@ function ids(): (prefix: IdPrefix) => string {
 
 async function valueOf<T>(result: Promise<Result<T>>): Promise<T> {
   const settled = await result;
-  expect(settled.ok).toBe(true);
+  expect(settled.ok, settled.ok ? "" : `${settled.error.code}: ${settled.error.message}`)
+    .toBe(true);
   if (!settled.ok) throw new Error(settled.error.message);
   return settled.value;
 }
@@ -431,6 +432,54 @@ describe("FR-607/608 restyle execution", () => {
     run.queue.close();
     run.meter.close();
   });
+
+  it("never exceeds the adapter concurrency limit across queued chunks", async () => {
+    let inFlight = 0;
+    let peakInFlight = 0;
+    const countingApi: KlingApi = {
+      submitVideoToVideo: (request) => {
+        inFlight += 1;
+        peakInFlight = Math.max(peakInFlight, inFlight);
+        return Promise.resolve<KlingApiTask>({
+          taskId: `kling-${request.requestId}`,
+          state: "queued",
+          progress: 0,
+          providerMetadata: {},
+        });
+      },
+      getTask: (taskId) => {
+        inFlight = Math.max(0, inFlight - 1);
+        return Promise.resolve<KlingApiTask>({
+          taskId,
+          state: "failed",
+          progress: 0,
+          error: "deliberate stop after the concurrency window",
+          providerMetadata: {},
+        });
+      },
+      downloadResult: () => Promise.reject(new Error("no result")),
+      cancel: () => Promise.resolve(),
+    };
+    const run = await harness(NO_BUDGETS, false, () => countingApi);
+    const context = {
+      sessionId: "ses_aaaaaaaaaa",
+      projectId: "prj_aaaaaaaaaa",
+      taskId: run.plan.id,
+      initiator: "creator" as const,
+    };
+
+    // The JobQueue runs two jobs at once; the plan pins adapter concurrency
+    // to 1, so the semaphore is the only thing keeping them apart.
+    const jobs = [
+      enqueueLegacyRestyle(run, context),
+      enqueueLegacyRestyle(run, context),
+    ];
+    await waitFor(() => jobs.every(({ jobId }) => run.queue.get(jobId)?.state === "failed"));
+
+    expect(peakInFlight).toBe(1);
+    run.queue.close();
+    run.meter.close();
+  }, 30_000);
 
   it("audits and charges a provider call that fails after the video was sent", async () => {
     const failingApi: KlingApi = {

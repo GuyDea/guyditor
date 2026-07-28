@@ -82,9 +82,15 @@ interface ActiveExternalCall {
   spendUsd: number;
 }
 
+interface SemaphoreWaiter {
+  resolve: (granted: boolean) => void;
+  signal: AbortSignal;
+  onAbort: () => void;
+}
+
 interface AdapterSemaphore {
   active: number;
-  waiters: Array<() => void>;
+  waiters: SemaphoreWaiter[];
 }
 
 function jsonValue(value: unknown): JsonValue {
@@ -103,11 +109,18 @@ function defaultSleep(milliseconds: number, signal: AbortSignal): Promise<void> 
       reject(signal.reason);
       return;
     }
-    const timeout = setTimeout(resolveWait, milliseconds);
-    signal.addEventListener("abort", () => {
+    // `once: true` only detaches the listener when abort actually fires. This
+    // sleep runs once per provider poll on the same job signal, so without an
+    // explicit removal a long-running chunk accumulates a listener per poll.
+    const onAbort = (): void => {
       clearTimeout(timeout);
       reject(signal.reason);
-    }, { once: true });
+    };
+    const timeout = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolveWait();
+    }, milliseconds);
+    signal.addEventListener("abort", onAbort, { once: true });
   });
 }
 
@@ -271,23 +284,52 @@ export class RestyleExecutionService {
     const key = adapter.descriptor.adapterId;
     const semaphore = this.#semaphores.get(key) ?? { active: 0, waiters: [] };
     this.#semaphores.set(key, semaphore);
-    if (semaphore.active >= adapter.constraints.concurrency) {
-      await new Promise<void>((resolveWait, reject) => {
-        const waiter = (): void => resolveWait();
+    if (semaphore.active < adapter.constraints.concurrency) {
+      semaphore.active += 1;
+    } else {
+      const granted = await new Promise<boolean>((resolveWait) => {
+        const waiter: SemaphoreWaiter = {
+          resolve: resolveWait,
+          signal,
+          onAbort: () => {
+            const index = semaphore.waiters.indexOf(waiter);
+            if (index === -1) return;
+            semaphore.waiters.splice(index, 1);
+            signal.removeEventListener("abort", waiter.onAbort);
+            resolveWait(false);
+          },
+        };
         semaphore.waiters.push(waiter);
-        signal.addEventListener("abort", () => {
-          const index = semaphore.waiters.indexOf(waiter);
-          if (index !== -1) semaphore.waiters.splice(index, 1);
-          reject(signal.reason);
-        }, { once: true });
+        signal.addEventListener("abort", waiter.onAbort, { once: true });
       });
+      // A granted waiter inherits the releaser's slot, so `active` is already
+      // accounted for; only an aborted wait leaves without one.
+      if (!granted) throw signal.reason;
     }
-    if (signal.aborted) throw signal.reason;
-    semaphore.active += 1;
+    if (signal.aborted) {
+      this.#release(semaphore);
+      throw signal.reason;
+    }
+    let released = false;
     return () => {
-      semaphore.active -= 1;
-      semaphore.waiters.shift()?.();
+      if (released) return;
+      released = true;
+      this.#release(semaphore);
     };
+  }
+
+  #release(semaphore: AdapterSemaphore): void {
+    const waiter = semaphore.waiters.shift();
+    if (waiter === undefined) {
+      semaphore.active -= 1;
+      return;
+    }
+    // Hand the slot straight to the next waiter rather than decrementing and
+    // letting it re-increment on a later microtask: in that window a
+    // synchronous #acquire saw a free slot and the adapter's concurrency limit
+    // could be exceeded.
+    waiter.signal.removeEventListener("abort", waiter.onAbort);
+    waiter.resolve(true);
   }
 
   async #executeChunk(
