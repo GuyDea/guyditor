@@ -102,6 +102,7 @@ small { color: var(--muted); }
   width: 260px;
   height: 40px;
   display: grid;
+  grid-template-areas: "copy badge" "track track";
   grid-template-columns: minmax(0, 1fr) auto;
   grid-template-rows: auto 4px;
   gap: 4px 8px;
@@ -110,12 +111,12 @@ small { color: var(--muted); }
   text-align: left;
   background: #10171b;
 }
-.global-progress-copy { min-width: 0; display: flex; align-items: baseline; gap: 7px; }
+.global-progress-copy { grid-area: copy; min-width: 0; display: flex; align-items: baseline; gap: 7px; }
 .global-progress-copy strong { flex: none; color: #cfd8d5; font-size: var(--fs-body); letter-spacing: .04em; }
 .global-progress-copy small { min-width: 0; overflow: hidden; color: var(--muted); font: 500 var(--fs-label)/1 ui-monospace, monospace; text-overflow: ellipsis; white-space: nowrap; }
-.global-progress-track { grid-column: 1 / -1; position: relative; height: 4px; overflow: hidden; border-radius: 1px; background: repeating-linear-gradient(90deg, #29343a 0 11px, #11181c 11px 13px); }
+.global-progress-track { grid-area: track; position: relative; height: 4px; overflow: hidden; border-radius: 1px; background: repeating-linear-gradient(90deg, #29343a 0 11px, #11181c 11px 13px); }
 .global-progress-fill { position: absolute; inset: 0 auto 0 0; background: linear-gradient(90deg, var(--blue), var(--amber)); transition: width 160ms ease-out; }
-.global-waiting-badge { flex: none; align-self: center; padding: 2px 5px; border: 1px solid #3b464c; border-radius: 999px; color: var(--dim); font: 650 var(--fs-label)/1 ui-monospace, monospace; text-transform: uppercase; }
+.global-waiting-badge { grid-area: badge; flex: none; align-self: center; padding: 2px 5px; border: 1px solid #3b464c; border-radius: 999px; color: var(--dim); font: 650 var(--fs-label)/1 ui-monospace, monospace; text-transform: uppercase; }
 .global-waiting-badge[data-active="true"] { border-color: var(--amber-dim); color: #f5ca75; background: #2a2419; }
 .global-progress-popover { position: absolute; z-index: 40; top: calc(100% + 7px); right: 0; width: min(760px, calc(100vw - 24px)); max-height: calc(100vh - 80px); display: grid; grid-template-rows: auto minmax(0, 1fr) auto; overflow: hidden; border: 1px solid #526169; border-radius: 7px; background: #11181d; box-shadow: 0 26px 90px #000c; }
 .global-progress-popover > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border-bottom: 1px solid var(--line); background: #182126; }
