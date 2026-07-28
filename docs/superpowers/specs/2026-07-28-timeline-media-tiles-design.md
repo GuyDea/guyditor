@@ -176,9 +176,9 @@ audio-bearing clip:
    sample indices at 48 kHz;
 2. compute source samples per display pixel from the clip duration and inner
    width;
-3. choose the smallest tier whose `samplesPerPeak` is no greater than four times
-   the samples represented by one pixel, falling back to the finest tier when
-   zoomed in;
+3. choose the coarsest tier whose `samplesPerPeak` is no greater than four times
+   the samples represented by one pixel, falling back to the 960-sample finest
+   tier when zoomed in beyond its resolution;
 4. crop min/max pairs to the clip source range;
 5. aggregate them into at most one vertical min/max line per two CSS pixels.
 
