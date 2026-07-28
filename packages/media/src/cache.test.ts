@@ -119,19 +119,25 @@ describe("MediaEngine.estimateCacheUse", () => {
     const { engine, store } = await estimateFixture();
     const proxyDirectory = path.join(store.root, ".guyditor/cache/proxies/nested");
     const peaksDirectory = path.join(store.root, ".guyditor/cache/peaks");
+    const timelineFramesDirectory = path.join(
+      store.root,
+      ".guyditor/cache/timeline-frames/ast_aaaaaaaaaa.aaaaaaaa",
+    );
     await mkdir(proxyDirectory, { recursive: true });
     await mkdir(peaksDirectory, { recursive: true });
+    await mkdir(timelineFramesDirectory, { recursive: true });
     await writeFile(path.join(proxyDirectory, "orphan.bin"), Buffer.alloc(11));
     await writeFile(path.join(peaksDirectory, "one.json"), Buffer.alloc(7));
     await writeFile(path.join(peaksDirectory, "interrupted.part"), Buffer.alloc(5));
+    await writeFile(path.join(timelineFramesDirectory, "frame.bin"), Buffer.alloc(13));
 
     await expect(engine.estimateCacheUse(store)).resolves.toEqual({
-      byClass: { peaks: 12, proxies: 11 },
+      byClass: { peaks: 12, proxies: 11, timelineFrames: 13 },
       projectedProxies: [
         { assetId: "ast_aaaaaaaaaa", bytes: 3_285_000, tier: "edit" },
         { assetId: "ast_bbbbbbbbbb", bytes: 320_000, tier: "edit" },
       ],
-      totalBytes: 23,
+      totalBytes: 36,
     });
   });
 
@@ -159,6 +165,7 @@ describe("MediaEngine.estimateCacheUse", () => {
     expect(estimate.projectedProxies.map(({ assetId }) => assetId))
       .toEqual(["ast_bbbbbbbbbb"]);
     expect(estimate.byClass.proxies).toBeGreaterThan(10);
-    expect(estimate.totalBytes).toBe(estimate.byClass.proxies);
+    expect(estimate.totalBytes)
+      .toBe(estimate.byClass.proxies + estimate.byClass.timelineFrames);
   });
 });

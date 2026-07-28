@@ -23,6 +23,7 @@ export interface CacheUseEstimate {
   byClass: {
     peaks: number;
     proxies: number;
+    timelineFrames: number;
   };
   projectedProxies: ProjectedProxySize[];
   totalBytes: number;
@@ -99,14 +100,15 @@ export async function estimateProjectCacheUse(
   assets: readonly Asset[],
   projectFps: Rational,
 ): Promise<CacheUseEstimate> {
-  const [proxies, peaks, projectedProxies] = await Promise.all([
+  const [proxies, peaks, timelineFrames, projectedProxies] = await Promise.all([
     directoryBytes(path.join(projectRoot, ".guyditor/cache/proxies")),
     directoryBytes(path.join(projectRoot, ".guyditor/cache/peaks")),
+    directoryBytes(path.join(projectRoot, ".guyditor/cache/timeline-frames")),
     projectedProxySizes(projectRoot, assets, projectFps),
   ]);
   return {
-    byClass: { peaks, proxies },
+    byClass: { peaks, proxies, timelineFrames },
     projectedProxies,
-    totalBytes: proxies + peaks,
+    totalBytes: proxies + peaks + timelineFrames,
   };
 }
