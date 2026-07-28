@@ -244,6 +244,10 @@ export class MlworkerSupervisor implements MlworkerTaskRunner {
     this.#hello = undefined;
     this.#pendingPingId = undefined;
     this.#finishActive(failure(downError("The ML worker was stopped.")));
+    // Queued tasks get the same treatment as the in-flight one. Leaving them
+    // parked would let a waiter granted the slot after the stop call start()
+    // again and respawn the child while stop() is still awaiting the old one.
+    this.#drainSlotWaiters();
     this.#resolveStartWaiters(failure(downError("The ML worker was stopped.")));
     this.#setState("stopped");
     if (child !== undefined && child.exitCode === null && child.signalCode === null) {
@@ -281,7 +285,11 @@ export class MlworkerSupervisor implements MlworkerTaskRunner {
     // queue runs several jobs at once, and ingest/capture routinely make two ML
     // jobs runnable at the same instant.
     if (!await this.#acquireSlot(options.signal)) {
-      return failure(cancelledError(taskId));
+      // The wait ends without the slot either because the caller aborted or
+      // because the worker was stopped out from under the queue.
+      return failure(signalIsAborted(options.signal)
+        ? cancelledError(taskId)
+        : downError("The ML worker was stopped."));
     }
     try {
       return await this.#runExclusive(method, params, options, taskId);
@@ -310,6 +318,15 @@ export class MlworkerSupervisor implements MlworkerTaskRunner {
       }
       this.#slotWaiters.push(waiter);
     });
+  }
+
+  #drainSlotWaiters(): void {
+    for (const waiter of this.#slotWaiters.splice(0)) {
+      if (waiter.signal !== undefined && waiter.onAbort !== undefined) {
+        waiter.signal.removeEventListener("abort", waiter.onAbort);
+      }
+      waiter.resolve(false);
+    }
   }
 
   #releaseSlot(): void {

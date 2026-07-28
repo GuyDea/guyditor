@@ -163,6 +163,33 @@ describe("MlworkerSupervisor", () => {
       .toEqual(["job_burst000a", "job_burst000b", "job_burst000c", "job_burst000d"]);
   });
 
+  it("fails a queued task when the worker is stopped and does not respawn", async () => {
+    const script = await fakeWorker(OVERLAP_REPORTING_WORKER);
+    const states: MlworkerStateEvent[] = [];
+    const supervisor = supervisorFor(script, {
+      onStateChange: (event) => states.push(event),
+    });
+
+    const running = supervisor.runTask("transcribe", { taskId: "job_stopheld0" });
+    while (supervisor.state !== "ready") {
+      await new Promise<void>((resolveWait) => setTimeout(resolveWait, 5));
+    }
+    const queued = supervisor.runTask("vad", { taskId: "job_stopqueued" });
+    await supervisor.stop();
+
+    expect(await running).toMatchObject({
+      ok: false,
+      error: { code: "E_MLWORKER_DOWN" },
+    });
+    expect(await queued).toMatchObject({
+      ok: false,
+      error: { code: "E_MLWORKER_DOWN" },
+    });
+    // A drained waiter must not have restarted the worker behind the stop.
+    expect(states.at(-1)?.state).toBe("stopped");
+    expect(supervisor.state).toBe("stopped");
+  });
+
   it("cancels a task that is aborted while queued behind another task", async () => {
     const script = await fakeWorker(OVERLAP_REPORTING_WORKER);
     const supervisor = supervisorFor(script);
