@@ -1102,6 +1102,7 @@ small { color: var(--muted); }
 .timeline-clips { position: relative; height: 86px; }
 .timeline-clip {
   position: absolute;
+  isolation: isolate;
   top: 8px;
   height: 68px;
   overflow: hidden;

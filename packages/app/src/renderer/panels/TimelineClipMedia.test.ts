@@ -1,7 +1,19 @@
+import { readFileSync } from "node:fs";
+
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { expect, it } from "vitest";
 import { TimelineClipMedia } from "./TimelineClipMedia.js";
+
+it("isolates clip media layers from timeline-wide overlays", () => {
+  const css = readFileSync(
+    new URL("../styles.css", import.meta.url),
+    "utf8",
+  );
+  const timelineClipRule = /\.timeline-clip\s*\{[^}]*\}/u.exec(css)?.[0];
+
+  expect(timelineClipRule).toContain("isolation: isolate;");
+});
 
 it("renders filmstrip frames and an overlaid waveform together", () => {
   const html = renderToStaticMarkup(createElement(TimelineClipMedia, {
