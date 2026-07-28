@@ -1,4 +1,10 @@
-import { access, mkdir, rename, stat } from "node:fs/promises";
+import {
+  access,
+  mkdir,
+  rename,
+  rm,
+  stat,
+} from "node:fs/promises";
 import path from "node:path";
 
 import type { Asset } from "../../core/src/index.js";
@@ -77,7 +83,13 @@ export class TimelineFrameService {
     concurrency?: number;
     run?: FrameRunner;
   } = {}) {
-    this.#concurrency = options.concurrency ?? 2;
+    const concurrency = options.concurrency ?? 2;
+    if (!Number.isSafeInteger(concurrency) || concurrency <= 0) {
+      throw new RangeError(
+        "Timeline frame concurrency must be a positive safe integer.",
+      );
+    }
+    this.#concurrency = concurrency;
     this.#run = options.run ?? runFfmpeg;
   }
 
@@ -121,6 +133,7 @@ export class TimelineFrameService {
       if (await this.#nonEmpty(paths.file)) return paths.file;
       try {
         await mkdir(path.dirname(paths.file), { recursive: true });
+        await rm(paths.part, { force: true });
         const sourcePath = await this.#sourcePath(projectRoot, asset);
         await this.#run(timelineFrameCommand(
           asset,
@@ -129,9 +142,14 @@ export class TimelineFrameService {
           height,
           paths.part,
         ));
+        if (!await this.#nonEmpty(paths.part)) {
+          await rm(paths.part, { force: true });
+          return null;
+        }
         await rename(paths.part, paths.file);
         return paths.file;
       } catch {
+        await rm(paths.part, { force: true }).catch(() => undefined);
         return null;
       }
     });
@@ -172,13 +190,18 @@ export class TimelineFrameService {
   async #withPermit<T>(operation: () => Promise<T>): Promise<T> {
     if (this.#active >= this.#concurrency) {
       await new Promise<void>((resolve) => this.#waiting.push(resolve));
+    } else {
+      this.#active += 1;
     }
-    this.#active += 1;
     try {
       return await operation();
     } finally {
-      this.#active -= 1;
-      this.#waiting.shift()?.();
+      const next = this.#waiting.shift();
+      if (next === undefined) {
+        this.#active -= 1;
+      } else {
+        next();
+      }
     }
   }
 }

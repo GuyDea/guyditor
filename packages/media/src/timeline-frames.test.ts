@@ -1,4 +1,10 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import {
+  access,
+  mkdir,
+  mkdtemp,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -122,6 +128,50 @@ it("prefers an existing edit proxy and degrades an individual failure", async ()
   expect(run.mock.calls[0]![0]).toContain(proxy.media);
 });
 
+it("does not publish zero-byte frame artifacts", async () => {
+  const root = await sandbox();
+  const item = asset();
+  const paths = timelineFrameCachePaths(root, item, 42, 96);
+  const run = vi.fn(async (args: readonly string[]) => {
+    await mkdir(path.dirname(args.at(-1)!), { recursive: true });
+    await writeFile(args.at(-1)!, "");
+    return {
+      binary: { path: "ffmpeg", source: "path" as const, version: "test" },
+      exitCode: 0 as const,
+      stderrLines: [],
+      stdout: "",
+    };
+  });
+  const service = new TimelineFrameService({ run });
+
+  await expect(service.resolve(root, item, [42], 96)).resolves.toEqual([
+    { sourceFrame: 42, path: null },
+  ]);
+  await expect(access(paths.file)).rejects.toThrow();
+  await expect(access(paths.part)).rejects.toThrow();
+});
+
+it("does not publish untouched stale frame parts", async () => {
+  const root = await sandbox();
+  const item = asset();
+  const paths = timelineFrameCachePaths(root, item, 42, 96);
+  await mkdir(path.dirname(paths.part), { recursive: true });
+  await writeFile(paths.part, "stale");
+  const run = vi.fn(async () => ({
+    binary: { path: "ffmpeg", source: "path" as const, version: "test" },
+    exitCode: 0 as const,
+    stderrLines: [],
+    stdout: "",
+  }));
+  const service = new TimelineFrameService({ run });
+
+  await expect(service.resolve(root, item, [42], 96)).resolves.toEqual([
+    { sourceFrame: 42, path: null },
+  ]);
+  await expect(access(paths.file)).rejects.toThrow();
+  await expect(access(paths.part)).rejects.toThrow();
+});
+
 it("runs at most two frame extractions concurrently", async () => {
   const root = await sandbox();
   const item = asset();
@@ -153,3 +203,56 @@ it("runs at most two frame extractions concurrently", async () => {
 
   expect(maximumActive).toBe(2);
 });
+
+it("hands queued extractions the permit in FIFO order without barging", async () => {
+  const root = await sandbox();
+  const item = asset();
+  let active = 0;
+  let maximumActive = 0;
+  const started: number[] = [];
+  const releases = new Map<number, () => void>();
+  const run = vi.fn(async (args: readonly string[]) => {
+    const sourceFrame = Math.round(Number(args[3]) * 30);
+    active += 1;
+    maximumActive = Math.max(maximumActive, active);
+    started.push(sourceFrame);
+    await new Promise<void>((resolve) => releases.set(sourceFrame, resolve));
+    await mkdir(path.dirname(args.at(-1)!), { recursive: true });
+    await writeFile(args.at(-1)!, "jpeg");
+    active -= 1;
+    return {
+      binary: { path: "ffmpeg", source: "path" as const, version: "test" },
+      exitCode: 0 as const,
+      stderrLines: [],
+      stdout: "",
+    };
+  });
+  const service = new TimelineFrameService({ run, concurrency: 1 });
+
+  const firstTwo = service.resolve(root, item, [1, 2], 96);
+  await vi.waitFor(() => expect(started).toEqual([1]));
+  releases.get(1)!();
+  const third = new Promise((resolve, reject) => {
+    queueMicrotask(() => {
+      service.resolve(root, item, [3], 96).then(resolve, reject);
+    });
+  });
+
+  await vi.waitFor(() => expect(started).toEqual([1, 2]));
+  expect(maximumActive).toBe(1);
+  releases.get(2)!();
+  await vi.waitFor(() => expect(started).toEqual([1, 2, 3]));
+  expect(maximumActive).toBe(1);
+  releases.get(3)!();
+  await Promise.all([firstTwo, third]);
+
+  expect(started).toEqual([1, 2, 3]);
+  expect(maximumActive).toBe(1);
+});
+
+it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
+  "rejects invalid extraction concurrency %s",
+  (concurrency) => {
+    expect(() => new TimelineFrameService({ concurrency })).toThrow(RangeError);
+  },
+);
