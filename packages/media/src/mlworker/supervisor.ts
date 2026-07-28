@@ -63,6 +63,12 @@ interface ActiveRequest {
   cancelTimer?: ReturnType<typeof setTimeout>;
 }
 
+interface SlotWaiter {
+  resolve: (granted: boolean) => void;
+  signal: AbortSignal | undefined;
+  onAbort: (() => void) | undefined;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -158,6 +164,8 @@ export class MlworkerSupervisor implements MlworkerTaskRunner {
   readonly #onStateChange: ((event: MlworkerStateEvent) => void) | undefined;
   readonly #onStderrLine: ((line: string) => void) | undefined;
   readonly #startWaiters: Array<(result: Result<MlworkerHello>) => void> = [];
+  readonly #slotWaiters: SlotWaiter[] = [];
+  #slotHeld = false;
   #process: ChildProcessWithoutNullStreams | undefined;
   #state: MlworkerState = "stopped";
   #failureCount = 0;
@@ -268,6 +276,63 @@ export class MlworkerSupervisor implements MlworkerTaskRunner {
       return failure(taskError("", "mlworker taskId must be a non-empty string"));
     }
     if (signalIsAborted(options.signal)) return failure(cancelledError(taskId));
+    // Exactly one task is in flight per worker process (spec §1.2). Concurrent
+    // callers wait their turn in submission order rather than failing: the job
+    // queue runs several jobs at once, and ingest/capture routinely make two ML
+    // jobs runnable at the same instant.
+    if (!await this.#acquireSlot(options.signal)) {
+      return failure(cancelledError(taskId));
+    }
+    try {
+      return await this.#runExclusive(method, params, options, taskId);
+    } finally {
+      this.#releaseSlot();
+    }
+  }
+
+  #acquireSlot(signal: AbortSignal | undefined): Promise<boolean> {
+    if (!this.#slotHeld) {
+      this.#slotHeld = true;
+      return Promise.resolve(true);
+    }
+    return new Promise<boolean>((resolve) => {
+      const waiter: SlotWaiter = { resolve, signal, onAbort: undefined };
+      if (signal !== undefined) {
+        const onAbort = (): void => {
+          const index = this.#slotWaiters.indexOf(waiter);
+          if (index === -1) return;
+          this.#slotWaiters.splice(index, 1);
+          signal.removeEventListener("abort", onAbort);
+          resolve(false);
+        };
+        waiter.onAbort = onAbort;
+        signal.addEventListener("abort", onAbort, { once: true });
+      }
+      this.#slotWaiters.push(waiter);
+    });
+  }
+
+  #releaseSlot(): void {
+    const waiter = this.#slotWaiters.shift();
+    if (waiter === undefined) {
+      this.#slotHeld = false;
+      return;
+    }
+    // Hand the slot straight to the next waiter. #slotHeld deliberately stays
+    // true so a synchronous #acquireSlot cannot claim the slot in the window
+    // before the woken waiter resumes.
+    if (waiter.signal !== undefined && waiter.onAbort !== undefined) {
+      waiter.signal.removeEventListener("abort", waiter.onAbort);
+    }
+    waiter.resolve(true);
+  }
+
+  async #runExclusive(
+    method: MlworkerTaskMethod,
+    params: Record<string, JsonValue>,
+    options: MlworkerRunOptions,
+    taskId: string,
+  ): Promise<Result<JsonValue>> {
     const started = await this.start();
     if (!started.ok) return started;
     if (signalIsAborted(options.signal)) return failure(cancelledError(taskId));

@@ -93,7 +93,96 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
 });
 `;
 
+// Reports how many tasks the worker sees in flight at once, so a test can prove
+// the "one task in flight per worker process" invariant (spec §1.2) holds.
+const OVERLAP_REPORTING_WORKER = String.raw`
+import readline from "node:readline";
+process.stdout.write(JSON.stringify({
+  jsonrpc: "2.0",
+  method: "mlworker.hello",
+  params: {
+    protocol: 1,
+    workerVersion: "test",
+    python: "3.11.9",
+    device: { type: "cpu" },
+    capabilities: [
+      { task: "transcribe", engine: "fake", engineVersion: "1" },
+      { task: "vad", engine: "fake", engineVersion: "1" },
+    ],
+  },
+}) + "\n");
+let inFlight = 0;
+let peak = 0;
+readline.createInterface({ input: process.stdin }).on("line", (line) => {
+  const message = JSON.parse(line);
+  if (message.method === "ping") {
+    process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { pong: true } }) + "\n");
+    return;
+  }
+  if (message.method !== "transcribe" && message.method !== "vad") return;
+  inFlight += 1;
+  peak = Math.max(peak, inFlight);
+  setTimeout(() => {
+    inFlight -= 1;
+    process.stdout.write(JSON.stringify({
+      jsonrpc: "2.0",
+      id: message.id,
+      result: { taskId: message.params.taskId, peakInFlight: peak },
+    }) + "\n");
+  }, 60);
+});
+`;
+
 describe("MlworkerSupervisor", () => {
+  it("queues a concurrent task instead of rejecting it, keeping one task in flight", async () => {
+    const script = await fakeWorker(OVERLAP_REPORTING_WORKER);
+    const supervisor = supervisorFor(script);
+
+    const [first, second] = await Promise.all([
+      supervisor.runTask("transcribe", { taskId: "job_concurrent" }),
+      supervisor.runTask("vad", { taskId: "job_concurrent2" }),
+    ]);
+
+    expect(first).toMatchObject({ ok: true, value: { peakInFlight: 1 } });
+    expect(second).toMatchObject({ ok: true, value: { peakInFlight: 1 } });
+  });
+
+  it("serializes a burst of concurrent tasks in submission order", async () => {
+    const script = await fakeWorker(OVERLAP_REPORTING_WORKER);
+    const supervisor = supervisorFor(script);
+
+    const results = await Promise.all(
+      ["a", "b", "c", "d"].map(async (suffix) =>
+        supervisor.runTask("transcribe", { taskId: `job_burst000${suffix}` })),
+    );
+
+    for (const result of results) {
+      expect(result).toMatchObject({ ok: true, value: { peakInFlight: 1 } });
+    }
+    expect(results.map((result) => result.ok ? (result.value as { taskId: string }).taskId : ""))
+      .toEqual(["job_burst000a", "job_burst000b", "job_burst000c", "job_burst000d"]);
+  });
+
+  it("cancels a task that is aborted while queued behind another task", async () => {
+    const script = await fakeWorker(OVERLAP_REPORTING_WORKER);
+    const supervisor = supervisorFor(script);
+    const controller = new AbortController();
+
+    const running = supervisor.runTask("transcribe", { taskId: "job_holdslot0" });
+    const queued = supervisor.runTask(
+      "vad",
+      { taskId: "job_queued0000" },
+      { signal: controller.signal },
+    );
+    controller.abort();
+
+    expect(await queued).toMatchObject({
+      ok: false,
+      error: { code: "E_MLWORKER_CANCELLED" },
+    });
+    expect(await running).toMatchObject({ ok: true });
+  });
+
   it("handshakes, reports state, forwards progress, and resets failures on success", async () => {
     const script = await fakeWorker(WORKING_WORKER);
     const states: MlworkerStateEvent[] = [];
