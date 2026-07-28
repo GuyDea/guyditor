@@ -25,6 +25,18 @@ import {
 const PROJECT_SCOPE = '["/projects/alpha","prj_aaaaaaaaaa"]';
 const OTHER_PROJECT_SCOPE = '["/projects/beta","prj_bbbbbbbbbb"]';
 
+function indexedClipId(index: number): string {
+  const alphabet = "abcdefghijklmnopqrstuvwxyz234567";
+  let value = index;
+  let encoded = "";
+  do {
+    encoded = `${alphabet[value & 31]}${encoded}`;
+    value = Math.floor(value / 32);
+  } while (value > 0);
+  const suffix = `${"a".repeat(10)}${encoded}`.slice(-10);
+  return ["clp", "_", suffix].join("");
+}
+
 function clip(sourceIn = 120, sourceOut = 240): Clip {
   return {
     id: "clp_aaaaaaaaaa",
@@ -322,7 +334,7 @@ describe("timeline media request planning", () => {
     const requests = Array.from(
       { length: MAX_TIMELINE_MEDIA_CACHE_ENTRIES + 1 },
       (_unused, index) => mediaRequest(
-        `clp_${String(index).padStart(10, "0")}`,
+        indexedClipId(index),
         index * 24,
         (index + 1) * 24,
       ),
