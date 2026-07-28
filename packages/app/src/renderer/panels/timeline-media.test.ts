@@ -145,6 +145,81 @@ describe("timeline media loading", () => {
     });
   });
 
+  it("retains filmstrip data when a successful peaks response is malformed", async () => {
+    const asset = videoWithAudio();
+    const call = vi.fn(async (
+      _service: string,
+      method: string,
+      params: unknown,
+    ) => {
+      if (method === "readPeaks") return {};
+      const sourceFrames = (params as { sourceFrames: number[] }).sourceFrames;
+      return [...sourceFrames].reverse().map((sourceFrame) => ({
+        sourceFrame,
+        url: `file:///cache/${String(sourceFrame)}.jpg`,
+      }));
+    });
+
+    const result = await loadTimelineMedia(
+      [{ asset, clip: clip(), width: 192 }],
+      call,
+    );
+
+    expect(result["clp_aaaaaaaaaa"]).toMatchObject({
+      frameUrls: [
+        "file:///cache/150.jpg",
+        "file:///cache/210.jpg",
+      ],
+      hasAudio: true,
+      hasVideo: true,
+      waveform: [],
+    });
+  });
+
+  it("sanitizes partial frame responses while retaining valid waveform data", async () => {
+    const asset = videoWithAudio();
+    const rangedClip = clip(0, 24);
+    const call = vi.fn(async (_service: string, method: string) => {
+      if (method === "readPeaks") return peaks();
+      return [
+        { sourceFrame: 18, url: "file:///cache/18.jpg" },
+        { sourceFrame: 6, url: "https://example.com/6.jpg" },
+        { sourceFrame: -1, url: "file:///cache/invalid.jpg" },
+        { sourceFrame: 6, url: 42 },
+        null,
+      ];
+    });
+
+    const result = await loadTimelineMedia(
+      [{ asset, clip: rangedClip, width: 192 }],
+      call,
+    );
+
+    expect(result["clp_aaaaaaaaaa"]).toMatchObject({
+      frameUrls: [null, "file:///cache/18.jpg"],
+      hasAudio: true,
+      hasVideo: true,
+      waveform: waveformColumns(peaks(), rangedClip, 192),
+    });
+  });
+
+  it("degrades synchronous media call failures", async () => {
+    const asset = videoWithAudio();
+    const result = await loadTimelineMedia(
+      [{ asset, clip: clip(), width: 192 }],
+      () => {
+        throw new Error("offline");
+      },
+    );
+
+    expect(result["clp_aaaaaaaaaa"]).toMatchObject({
+      frameUrls: [null, null],
+      hasAudio: true,
+      hasVideo: true,
+      waveform: [],
+    });
+  });
+
   it("rejects late results with a different timeline request key", () => {
     const first = timelineMediaRequestKey(
       "rev_00001",

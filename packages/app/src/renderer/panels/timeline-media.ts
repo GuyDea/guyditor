@@ -42,6 +42,80 @@ type MediaCall = (
   params: unknown,
 ) => Promise<unknown>;
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseTimelinePeaks(value: unknown, asset: Asset): PeaksFile | null {
+  if (
+    !isRecord(value) ||
+    value["format"] !== "guyditor.peaks/v1" ||
+    value["assetId"] !== asset.id ||
+    value["sourceHash"] !== asset.sha256 ||
+    value["sampleRate"] !== 48_000 ||
+    !Array.isArray(value["tiers"])
+  ) {
+    return null;
+  }
+  const tiers: PeaksTier[] = [];
+  for (const entry of value["tiers"]) {
+    if (
+      !isRecord(entry) ||
+      !Number.isSafeInteger(entry["samplesPerPeak"]) ||
+      Number(entry["samplesPerPeak"]) <= 0 ||
+      !Array.isArray(entry["data"]) ||
+      entry["data"].some((sample) =>
+        !Number.isInteger(sample) ||
+        Number(sample) < -127 ||
+        Number(sample) > 127)
+    ) {
+      return null;
+    }
+    tiers.push({
+      samplesPerPeak: Number(entry["samplesPerPeak"]),
+      data: entry["data"].map(Number),
+    });
+  }
+  return {
+    format: "guyditor.peaks/v1",
+    assetId: asset.id,
+    sourceHash: asset.sha256,
+    sampleRate: 48_000,
+    tiers,
+  };
+}
+
+function parseTimelineFrames(value: unknown): TimelineFrameResolution[] {
+  if (!Array.isArray(value)) return [];
+  const frames: TimelineFrameResolution[] = [];
+  for (const entry of value) {
+    if (!isRecord(entry)) continue;
+    const sourceFrame = entry["sourceFrame"];
+    const url = entry["url"];
+    if (
+      !Number.isSafeInteger(sourceFrame) ||
+      Number(sourceFrame) < 0 ||
+      !(
+        url === null ||
+        (typeof url === "string" && url.startsWith("file:"))
+      )
+    ) {
+      continue;
+    }
+    frames.push({ sourceFrame: Number(sourceFrame), url });
+  }
+  return frames;
+}
+
+function mediaCall(
+  call: MediaCall,
+  method: string,
+  params: unknown,
+): Promise<unknown> {
+  return Promise.resolve().then(() =>
+    call("MediaEngine", method, params));
+}
+
 function clamp(value: number, minimum: number, maximum: number): number {
   return Math.max(minimum, Math.min(maximum, value));
 }
@@ -180,8 +254,8 @@ export async function loadTimelineMedia(
     const key = `${asset.id}:${asset.sha256}`;
     const existing = peaksByAsset.get(key);
     if (existing !== undefined) return existing;
-    const pending = call("MediaEngine", "readPeaks", { assetId: asset.id })
-      .then((value) => value as PeaksFile | null)
+    const pending = mediaCall(call, "readPeaks", { assetId: asset.id })
+      .then((value) => parseTimelinePeaks(value, asset))
       .catch(() => null);
     peaksByAsset.set(key, pending);
     return pending;
@@ -195,12 +269,12 @@ export async function loadTimelineMedia(
       const hasAudio = (asset.audio?.length ?? 0) > 0;
       const framePromise = asset.video === undefined
         ? Promise.resolve([] as TimelineFrameResolution[])
-        : call("MediaEngine", "resolveTimelineFrames", {
+        : mediaCall(call, "resolveTimelineFrames", {
             assetId: asset.id,
             sourceFrames,
             height: TIMELINE_FRAME_HEIGHT,
           })
-            .then((value) => value as TimelineFrameResolution[])
+            .then(parseTimelineFrames)
             .catch(() => []);
       const peaksPromise = hasAudio
         ? peaksFor(asset)
@@ -220,7 +294,14 @@ export async function loadTimelineMedia(
         hasAudio,
         hasVideo: asset.video !== undefined,
         sourceFrames,
-        waveform: peaks === null ? [] : waveformColumns(peaks, clip, width),
+        waveform: (() => {
+          if (peaks === null) return [];
+          try {
+            return waveformColumns(peaks, clip, width);
+          } catch {
+            return [];
+          }
+        })(),
       }] as const;
     }),
   );
@@ -246,6 +327,8 @@ export function useTimelineMedia(
         window.guyditor.call(service, method, params),
     ).then((clips) => {
       if (current) setResult({ key, clips });
+    }).catch(() => {
+      if (current) setResult({ key, clips: {} });
     });
     return () => {
       current = false;
