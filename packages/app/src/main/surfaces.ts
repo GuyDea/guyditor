@@ -392,6 +392,25 @@ export const IPC_SURFACES: readonly IpcSurface[] = Object.freeze([
       },
       pickAndIngest: { paramsSchema: emptyParams, resultSchema: anyResult, budgetMs: 20 },
       resolveProxy: { paramsSchema: assetIdParams, resultSchema: anyResult, budgetMs: 20 },
+      resolveTimelineFrames: {
+        paramsSchema: {
+          type: "object",
+          required: ["assetId", "sourceFrames", "height"],
+          properties: {
+            assetId: { type: "string", pattern: "^ast_[a-z2-7]{10}$" },
+            sourceFrames: {
+              type: "array",
+              maxItems: 12,
+              uniqueItems: true,
+              items: { type: "integer", minimum: 0 },
+            },
+            height: { enum: [96] },
+          },
+          additionalProperties: false,
+        },
+        resultSchema: { type: "array" },
+        budgetMs: 2_000,
+      },
       readPeaks: { paramsSchema: assetIdParams, resultSchema: anyResult, budgetMs: 50 },
       estimateCacheUse: { paramsSchema: emptyParams, resultSchema: anyResult, budgetMs: 20 },
       mlworkerState: { paramsSchema: emptyParams, resultSchema: anyResult, budgetMs: 20 },

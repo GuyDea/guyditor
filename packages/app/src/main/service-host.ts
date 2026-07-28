@@ -40,6 +40,7 @@ import {
   createStoragePreflight,
   parseSubjectTrackAnalysis,
   subjectTrackSidecarPath,
+  TimelineFrameService,
   writeSubjectTrackAnalysis,
   writeCaptureGuidanceReport,
   StorageAccountant,
@@ -880,6 +881,7 @@ export class WindowServiceHost {
       return { deliverableId, framingPath: framingReference.path, decisionCount: sidecar.decisions.length };
     });
     const media = new MediaEngine({ jobQueue: jobs, mlworker: this.#app.mlworker });
+    const timelineFrames = new TimelineFrameService();
     registerKeyQcExecutor(jobs);
     const matte = new MatteService({
       store,
@@ -1136,6 +1138,7 @@ export class WindowServiceHost {
       workspace,
       jobs,
       media,
+      timelineFrames,
       capture,
       captureMetadata,
       transcript,
@@ -1318,6 +1321,28 @@ export class WindowServiceHost {
             } catch {
               return null;
             }
+          },
+          resolveTimelineFrames: async ({
+            assetId,
+            sourceFrames,
+            height,
+          }: {
+            assetId: string;
+            sourceFrames: number[];
+            height: 96;
+          }) => {
+            const asset = project.store.currentProject.assets.find(({ id }) => id === assetId);
+            if (asset === undefined) throw new Error(`Asset ${assetId} does not exist.`);
+            const frames = await project.timelineFrames.resolve(
+              project.store.root,
+              asset,
+              sourceFrames,
+              height,
+            );
+            return frames.map(({ sourceFrame, path }) => ({
+              sourceFrame,
+              url: path === null ? null : pathToFileURL(path).href,
+            }));
           },
           readPeaks: async ({ assetId }: { assetId: string }) => {
             const asset = project.store.currentProject.assets.find(({ id }) => id === assetId);

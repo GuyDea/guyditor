@@ -6,6 +6,7 @@ import type {
 import type {
   CaptureWatcher,
   MediaEngine,
+  TimelineFrameService,
 } from "../../../media/src/index.js";
 import type { TranscriptEngine } from "../../../transcript/src/index.js";
 import type {
@@ -37,6 +38,7 @@ export interface ProjectServices extends RecoveryServices {
   workspace: ProjectWorkspaceStateStore;
   jobs: JobQueue;
   media: MediaEngine;
+  timelineFrames: TimelineFrameService;
   capture: CaptureWatcher;
   captureMetadata: CaptureProjectMetadata;
   transcript: TranscriptEngine;

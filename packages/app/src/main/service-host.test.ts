@@ -10,7 +10,8 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 import {
   AnnotationService,
@@ -29,7 +30,10 @@ import type {
   TakeComparison,
 } from "../../../core/src/index.js";
 import { projectFixture } from "../../../core/src/project/test-fixtures.js";
-import { CaptureWatcher } from "../../../media/src/index.js";
+import {
+  CaptureWatcher,
+  timelineFrameCachePaths,
+} from "../../../media/src/index.js";
 import { TranscriptEngine } from "../../../transcript/src/index.js";
 import { SkillRegistry } from "../../../agent/src/index.js";
 import { PublishService } from "../../../deliver/src/index.js";
@@ -111,6 +115,52 @@ async function entriesOrEmpty(path: string): Promise<string[]> {
 }
 
 describe("AppServiceHost", () => {
+  it("resolves cache-owned timeline frame URLs", async () => {
+    const root = await mkdtemp(join(tmpdir(), "guyditor-host-timeline-frames-"));
+    const userDirectory = await mkdtemp(
+      join(tmpdir(), "guyditor-host-timeline-frames-user-"),
+    );
+    const model = projectFixture();
+    const video = model.assets[0]!;
+    video.probe.width = 1920;
+    video.probe.height = 1080;
+    video.video = {
+      codec: "h264",
+      width: 1920,
+      height: 1080,
+      fps: "24/1",
+      pixFmt: "yuv420p",
+      hasAlpha: false,
+      rotation: 0,
+    };
+    const created = await createProject(root, model);
+    if (!created.ok) throw created.error;
+    const paths = timelineFrameCachePaths(root, video, 12, 96);
+    await mkdir(dirname(paths.file), { recursive: true });
+    await writeFile(paths.file, "jpeg");
+
+    const appHost = testAppHost(userDirectory);
+    const windowHost = appHost.createWindowHost({
+      publisher: new WindowEventPublisher(() => undefined),
+    });
+    await windowHost.openProject(root);
+    const service = windowHost.resolveService("MediaEngine");
+    const resolveFrames = service?.["resolveTimelineFrames"];
+    if (typeof resolveFrames !== "function") {
+      throw new Error("Timeline frame service is unavailable.");
+    }
+    await expect(Reflect.apply(resolveFrames, service, [{
+      assetId: video.id,
+      sourceFrames: [12],
+      height: 96,
+    }])).resolves.toEqual([{
+      sourceFrame: 12,
+      url: pathToFileURL(paths.file).href,
+    }]);
+    await windowHost.close();
+    await appHost.close();
+  });
+
   it("exposes creator review for authored-template drafts and audits immutable publication", async () => {
     const root = await mkdtemp(join(tmpdir(), "guyditor-host-template-author-"));
     const userDirectory = await mkdtemp(join(tmpdir(), "guyditor-host-template-author-user-"));

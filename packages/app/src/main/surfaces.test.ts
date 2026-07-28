@@ -29,6 +29,24 @@ describe("workspace IPC surfaces", () => {
     ]);
   });
 
+  it("bounds timeline frame resolution to cache-owned thumbnail requests", () => {
+    const media = IPC_SURFACES.find(({ service }) => service === "MediaEngine");
+    const schema = media?.methods["resolveTimelineFrames"]?.paramsSchema as {
+      required?: unknown;
+      properties?: {
+        sourceFrames?: { maxItems?: unknown; uniqueItems?: unknown };
+        height?: { enum?: unknown };
+      };
+    } | undefined;
+
+    expect(schema?.required).toEqual(["assetId", "sourceFrames", "height"]);
+    expect(schema?.properties?.sourceFrames).toMatchObject({
+      maxItems: 12,
+      uniqueItems: true,
+    });
+    expect(schema?.properties?.height?.enum).toEqual([96]);
+  });
+
   it("exposes every M1 workspace read and action with an async budget", () => {
     const methods = new Map(IPC_SURFACES.map(({ service, methods: entries }) => [
       service,
@@ -57,7 +75,14 @@ describe("workspace IPC surfaces", () => {
         "proposeJumpCutConcealment",
       ],
       JobQueue: ["overview"],
-      MediaEngine: ["ingest", "pickAndIngest", "resolveProxy", "readPeaks", "importPickup"],
+      MediaEngine: [
+        "ingest",
+        "pickAndIngest",
+        "resolveProxy",
+        "resolveTimelineFrames",
+        "readPeaks",
+        "importPickup",
+      ],
       TranscriptEngine: ["enqueueFillerDetection", "proposePickup"],
       CaptureWatcher: [
         "list", "configure", "reconcile", "listTakes", "listTakeComparisons",
