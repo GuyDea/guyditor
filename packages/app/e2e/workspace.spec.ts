@@ -46,12 +46,14 @@ test("keeps all project activity content inside its control", async () => {
   const template = await createWorkspaceProject({ proposal: true });
   const launched = await launchApp({ projectTemplate: template });
   try {
+    const control = launched.page.getByTestId("global-progress");
     for (const viewport of [
       { width: 1920, height: 1080 },
       { width: 900, height: 800 },
     ]) {
       await launched.page.setViewportSize(viewport);
-      const layout = await launched.page.getByTestId("global-progress").evaluate((control) => {
+      await expect(control).toBeVisible();
+      const layout = await control.evaluate((control) => {
         const rect = control.getBoundingClientRect();
         return {
           control: {
@@ -88,6 +90,14 @@ test("keeps all project activity content inside its control", async () => {
         layout.gridTemplateAreas,
         `global-progress grid areas at ${viewportLabel}`,
       ).toBe('"copy badge" "track track"');
+      expect(
+        layout.children.map((child) => child.className),
+        `global-progress visible direct children at ${viewportLabel}`,
+      ).toEqual([
+        "global-progress-copy",
+        "global-progress-track",
+        "global-waiting-badge",
+      ]);
       for (const child of layout.children) {
         const childLabel = `${child.className} at ${viewportLabel}`;
         expect(child.left, `${childLabel} left edge`).toBeGreaterThanOrEqual(layout.control.left);
