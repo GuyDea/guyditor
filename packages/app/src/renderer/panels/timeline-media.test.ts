@@ -5,9 +5,13 @@ import type { PeaksFile } from "../../../../media/src/index.js";
 import {
   currentTimelineMediaResult,
   loadTimelineMedia,
+  planTimelineMediaRequests,
   representativeSourceFrames,
   selectPeaksTier,
+  timelineMediaRequestIdentity,
   timelineMediaRequestKey,
+  type TimelineClipMediaState,
+  type TimelineMediaRequest,
   waveformColumns,
 } from "./timeline-media.js";
 
@@ -48,6 +52,37 @@ function videoWithAudio(): Asset {
   };
 }
 
+function mediaRequest(
+  clipId: string,
+  sourceIn: number,
+  sourceOut: number,
+  width = 96,
+): TimelineMediaRequest {
+  const asset = videoWithAudio();
+  return {
+    asset,
+    clip: {
+      id: clipId,
+      asset: asset.id,
+      source: {
+        in: { frames: sourceIn, fps: "24/1" },
+        out: { frames: sourceOut, fps: "24/1" },
+      },
+    },
+    width,
+  };
+}
+
+function mediaState(sourceFrame: number): TimelineClipMediaState {
+  return {
+    frameUrls: [`file:///cache/${String(sourceFrame)}.jpg`],
+    hasAudio: true,
+    hasVideo: true,
+    sourceFrames: [sourceFrame],
+    waveform: [{ minimum: -48, maximum: 48 }],
+  };
+}
+
 describe("representativeSourceFrames", () => {
   it("samples partition centers from the trimmed source range", () => {
     expect(representativeSourceFrames(clip(), 36)).toEqual([180]);
@@ -57,6 +92,59 @@ describe("representativeSourceFrames", () => {
   it("caps wide clips and removes duplicate short-range samples", () => {
     expect(representativeSourceFrames(clip(), 2_000)).toHaveLength(12);
     expect(representativeSourceFrames(clip(10, 12), 480)).toEqual([10, 11]);
+  });
+});
+
+describe("timeline media request planning", () => {
+  const first = mediaRequest("clp_aaaaaaaaaa", 0, 24);
+  const second = mediaRequest("clp_bbbbbbbbbb", 24, 48);
+  const third = mediaRequest("clp_cccccccccc", 48, 72);
+  const firstMedia = mediaState(12);
+  const secondMedia = mediaState(36);
+  const thirdMedia = mediaState(60);
+  const mediaCache = () => new Map([
+    [first.clip.id, {
+      identity: timelineMediaRequestIdentity(first),
+      media: firstMedia,
+    }],
+    [second.clip.id, {
+      identity: timelineMediaRequestIdentity(second),
+      media: secondMedia,
+    }],
+    [third.clip.id, {
+      identity: timelineMediaRequestIdentity(third),
+      media: thirdMedia,
+    }],
+  ]);
+
+  it("retains overlapping media and returns only added requests as missing", () => {
+    const cache = mediaCache();
+    const plan = planTimelineMediaRequests([first, second, third], new Map([
+      [first.clip.id, cache.get(first.clip.id)!],
+      [second.clip.id, cache.get(second.clip.id)!],
+    ]));
+
+    expect(plan.clips).toEqual({
+      [first.clip.id]: firstMedia,
+      [second.clip.id]: secondMedia,
+    });
+    expect(plan.missing.map(({ clip }) => clip.id)).toEqual([third.clip.id]);
+  });
+
+  it("returns a clip with changed media identity as missing", () => {
+    const cache = mediaCache();
+    const changedSecond = { ...second, width: 192 };
+    const plan = planTimelineMediaRequests([first, changedSecond], cache);
+
+    expect(plan.clips).toEqual({ [first.clip.id]: firstMedia });
+    expect(plan.missing.map(({ clip }) => clip.id)).toEqual([second.clip.id]);
+  });
+
+  it("includes cached media only for currently requested clips", () => {
+    const plan = planTimelineMediaRequests([second], mediaCache());
+
+    expect(plan.clips).toEqual({ [second.clip.id]: secondMedia });
+    expect(plan.missing).toEqual([]);
   });
 });
 
@@ -94,6 +182,39 @@ describe("waveform projection", () => {
 });
 
 describe("timeline media loading", () => {
+  it("uses kind and probe metadata for slots and waveform loading", async () => {
+    const asset: Asset = {
+      id: "ast_aaaaaaaaaa",
+      kind: "video",
+      path: "media/a.mp4",
+      sha256: "a".repeat(64),
+      probe: {
+        duration: { frames: 240, fps: "24/1" },
+        fps: "24/1",
+        audio: { rate: 48_000, channels: 1 },
+      },
+    };
+    const call = vi.fn(async (_service: string, method: string) =>
+      method === "readPeaks" ? peaks() : []);
+
+    const result = await loadTimelineMedia(
+      [{ asset, clip: clip(), width: 192 }],
+      call,
+    );
+
+    expect(result["clp_aaaaaaaaaa"]).toMatchObject({
+      frameUrls: [null, null],
+      hasAudio: true,
+      hasVideo: true,
+      sourceFrames: [150, 210],
+    });
+    expect(call.mock.calls.filter(([, method]) => method === "readPeaks"))
+      .toHaveLength(1);
+    expect(call.mock.calls.filter(([, method]) =>
+      method === "resolveTimelineFrames"))
+      .toHaveLength(0);
+  });
+
   it("loads peaks once per asset and frames for each visible clip", async () => {
     const asset = videoWithAudio();
     const clips = [clip(0, 24), { ...clip(24, 48), id: "clp_bbbbbbbbbb" }];

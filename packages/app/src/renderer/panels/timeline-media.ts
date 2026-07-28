@@ -31,6 +31,17 @@ export interface TimelineMediaResult {
   clips: Record<string, TimelineClipMediaState>;
 }
 
+export interface TimelineMediaCacheEntry {
+  identity: string;
+  media: TimelineClipMediaState;
+}
+
+export interface TimelineMediaRequestPlan {
+  clips: Record<string, TimelineClipMediaState>;
+  identities: Map<string, string>;
+  missing: TimelineMediaRequest[];
+}
+
 interface TimelineFrameResolution {
   sourceFrame: number;
   url: string | null;
@@ -151,6 +162,49 @@ export function representativeSourceFrames(
   ];
 }
 
+function timelineMediaRequestFields({
+  asset,
+  clip,
+  width,
+}: TimelineMediaRequest): Record<string, unknown> {
+  return {
+    clipId: clip.id,
+    assetId: asset.id,
+    sourceHash: asset.sha256,
+    sourceIn: clip.source.in,
+    sourceOut: clip.source.out,
+    width,
+    sourceFrames: representativeSourceFrames(clip, width),
+  };
+}
+
+export function timelineMediaRequestIdentity(
+  request: TimelineMediaRequest,
+): string {
+  return JSON.stringify(timelineMediaRequestFields(request));
+}
+
+export function planTimelineMediaRequests(
+  requests: readonly TimelineMediaRequest[],
+  cache: ReadonlyMap<string, TimelineMediaCacheEntry>,
+): TimelineMediaRequestPlan {
+  const clips: Record<string, TimelineClipMediaState> = {};
+  const identities = new Map<string, string>();
+  const missing: TimelineMediaRequest[] = [];
+  for (const request of requests) {
+    const identity = timelineMediaRequestIdentity(request);
+    const clipId = request.clip.id;
+    identities.set(clipId, identity);
+    const cached = cache.get(clipId);
+    if (cached?.identity === identity) {
+      clips[clipId] = cached.media;
+    } else {
+      missing.push(request);
+    }
+  }
+  return { clips, identities, missing };
+}
+
 export function timelineMediaRequestKey(
   revision: string,
   sequenceId: string,
@@ -161,16 +215,18 @@ export function timelineMediaRequestKey(
     revision,
     sequenceId,
     zoom,
-    requests: requests.map(({ asset, clip, width }) => ({
-      clipId: clip.id,
-      assetId: asset.id,
-      sourceHash: asset.sha256,
-      sourceIn: clip.source.in,
-      sourceOut: clip.source.out,
-      width,
-      sourceFrames: representativeSourceFrames(clip, width),
-    })),
+    requests: requests.map(timelineMediaRequestFields),
   });
+}
+
+export function timelineAssetMediaSemantics(
+  asset: Asset,
+): Pick<TimelineClipMediaState, "hasAudio" | "hasVideo"> {
+  return {
+    hasAudio: (asset.audio?.length ?? 0) > 0 ||
+      asset.probe.audio !== undefined,
+    hasVideo: asset.kind === "video" || asset.video !== undefined,
+  };
 }
 
 export function currentTimelineMediaResult(
@@ -263,10 +319,10 @@ export async function loadTimelineMedia(
 
   const entries = await Promise.all(
     requests.map(async ({ asset, clip, width }) => {
-      const sourceFrames = asset.video === undefined
-        ? []
-        : representativeSourceFrames(clip, width);
-      const hasAudio = (asset.audio?.length ?? 0) > 0;
+      const { hasAudio, hasVideo } = timelineAssetMediaSemantics(asset);
+      const sourceFrames = hasVideo
+        ? representativeSourceFrames(clip, width)
+        : [];
       const framePromise = asset.video === undefined
         ? Promise.resolve([] as TimelineFrameResolution[])
         : mediaCall(call, "resolveTimelineFrames", {
@@ -292,7 +348,7 @@ export async function loadTimelineMedia(
           (sourceFrame) => urls.get(sourceFrame) ?? null,
         ),
         hasAudio,
-        hasVideo: asset.video !== undefined,
+        hasVideo,
         sourceFrames,
         waveform: (() => {
           if (peaks === null) return [];
@@ -312,27 +368,81 @@ export function useTimelineMedia(
   requests: readonly TimelineMediaRequest[],
   key: string,
 ): Record<string, TimelineClipMediaState> {
+  const cacheRef = useRef(new Map<string, TimelineMediaCacheEntry>());
+  const inFlightRef = useRef(
+    new Map<string, Promise<TimelineClipMediaState | undefined>>(),
+  );
+  const desiredIdentitiesRef = useRef(new Map<string, string>());
   const [result, setResult] = useState<TimelineMediaResult>({
     key,
     clips: {},
   });
   const requestsRef = useRef(requests);
   requestsRef.current = requests;
+  const renderPlan = planTimelineMediaRequests(requests, cacheRef.current);
   useEffect(() => {
     let current = true;
-    setResult({ key, clips: {} });
-    void loadTimelineMedia(
+    const plan = planTimelineMediaRequests(
       requestsRef.current,
-      (service, method, params) =>
-        window.guyditor.call(service, method, params),
-    ).then((clips) => {
-      if (current) setResult({ key, clips });
-    }).catch(() => {
-      if (current) setResult({ key, clips: {} });
+      cacheRef.current,
+    );
+    for (const [clipId, identity] of plan.identities) {
+      desiredIdentitiesRef.current.set(clipId, identity);
+    }
+    setResult({ key, clips: plan.clips });
+
+    const newRequests = plan.missing.filter((request) =>
+      !inFlightRef.current.has(
+        plan.identities.get(request.clip.id)!,
+      ));
+    if (newRequests.length > 0) {
+      const batch = loadTimelineMedia(
+        newRequests,
+        (service, method, params) =>
+          window.guyditor.call(service, method, params),
+      ).catch((): Record<string, TimelineClipMediaState> => ({}));
+      for (const request of newRequests) {
+        const identity = plan.identities.get(request.clip.id)!;
+        const pending = batch
+          .then((clips) => clips[request.clip.id])
+          .finally(() => {
+            if (inFlightRef.current.get(identity) === pending) {
+              inFlightRef.current.delete(identity);
+            }
+          });
+        inFlightRef.current.set(identity, pending);
+      }
+    }
+
+    const pending = plan.missing.map((request) => {
+      const identity = plan.identities.get(request.clip.id)!;
+      return inFlightRef.current.get(identity)!.then((media) => ({
+        identity,
+        media,
+        request,
+      }));
+    });
+    void Promise.all(pending).then((entries) => {
+      for (const { identity, media, request } of entries) {
+        if (
+          media !== undefined &&
+          desiredIdentitiesRef.current.get(request.clip.id) === identity
+        ) {
+          cacheRef.current.set(request.clip.id, { identity, media });
+        }
+      }
+      if (!current) return;
+      const currentPlan = planTimelineMediaRequests(
+        requestsRef.current,
+        cacheRef.current,
+      );
+      setResult({ key, clips: currentPlan.clips });
     });
     return () => {
       current = false;
     };
   }, [key]);
-  return currentTimelineMediaResult(result, key);
+  return result.key === key
+    ? currentTimelineMediaResult(result, key)
+    : renderPlan.clips;
 }

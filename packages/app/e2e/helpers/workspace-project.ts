@@ -3,6 +3,8 @@ import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
+import { createCanvas, loadImage } from "@napi-rs/canvas";
+
 import {
   AnnotationService,
   createProject,
@@ -209,10 +211,13 @@ export async function createWorkspaceProject(
           index % 2 === 0 ? -48 - index % 32 : 48 + index % 32),
       })),
     })}\n`);
-    const image = await readFile(resolve(
+    const preview = await loadImage(await readFile(resolve(
       import.meta.dirname,
       "../../../../templates/title-card/preview.png",
-    ));
+    )));
+    const canvas = createCanvas(preview.width, preview.height);
+    canvas.getContext("2d").drawImage(preview, 0, 0);
+    const image = await canvas.encode("jpeg", 90);
     for (const clip of created.currentProject.sequences[0]!.clips) {
       for (const sourceFrame of representativeSourceFrames(clip, 96)) {
         const paths = timelineFrameCachePaths(

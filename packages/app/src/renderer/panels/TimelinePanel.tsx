@@ -12,6 +12,7 @@ import { Panel } from "./Panel.js";
 import { TimelineClipMedia } from "./TimelineClipMedia.js";
 import {
   representativeSourceFrames,
+  timelineAssetMediaSemantics,
   timelineMediaRequestKey,
   type TimelineMediaRequest,
   useTimelineMedia,
@@ -389,7 +390,10 @@ export function TimelinePanel({
                 const asset = snapshot?.master.assets.find(({ id }) => id === clip.asset);
                 if (asset === undefined) return null;
                 const clipWidth = Math.max(36, timed.duration.frames * zoom);
-                const sourceFrames = representativeSourceFrames(clip, clipWidth);
+                const semantics = timelineAssetMediaSemantics(asset);
+                const sourceFrames = semantics.hasVideo
+                  ? representativeSourceFrames(clip, clipWidth)
+                  : [];
                 return (
                   <button
                     key={clip.id}
@@ -420,8 +424,8 @@ export function TimelinePanel({
                       durationFrames={clipDuration(clip)}
                       media={mediaByClip[clip.id] ?? {
                         frameUrls: sourceFrames.map(() => null),
-                        hasAudio: (asset.audio?.length ?? 0) > 0,
-                        hasVideo: asset.video !== undefined,
+                        hasAudio: semantics.hasAudio,
+                        hasVideo: semantics.hasVideo,
                         sourceFrames,
                         waveform: [],
                       }}

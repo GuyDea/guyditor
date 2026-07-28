@@ -143,14 +143,25 @@ test("shows filmstrips and waveforms on selected and unselected timeline clips",
     const second = launched.page.getByTestId("timeline-clip-clp_bbbbbbbbbb");
     await first.click();
 
-    await expect(first.getByTestId("timeline-filmstrip-clp_aaaaaaaaaa"))
-      .toBeVisible();
-    await expect(second.getByTestId("timeline-filmstrip-clp_bbbbbbbbbb"))
-      .toBeVisible();
-    await expect(first.getByTestId("timeline-waveform-clp_aaaaaaaaaa"))
-      .toBeVisible();
-    await expect(second.getByTestId("timeline-waveform-clp_bbbbbbbbbb"))
-      .toBeVisible();
+    for (const [clip, clipId] of [
+      [first, "clp_aaaaaaaaaa"],
+      [second, "clp_bbbbbbbbbb"],
+    ] as const) {
+      const filmstrip = clip.getByTestId(`timeline-filmstrip-${clipId}`);
+      const images = filmstrip.locator("img");
+      await expect(filmstrip).toBeVisible();
+      await expect(images).toHaveCount(1);
+      await expect.poll(() => images.evaluateAll((elements) =>
+        elements.every((element) =>
+          element instanceof HTMLImageElement &&
+          element.complete &&
+          element.naturalWidth > 0)))
+        .toBe(true);
+
+      const waveform = clip.getByTestId(`timeline-waveform-${clipId}`);
+      await expect(waveform).toHaveAttribute("data-state", "ready");
+      await expect(waveform.locator("path")).toHaveCount(1);
+    }
     await expect(second).toHaveAttribute("data-selected", "false");
   } finally {
     await launched.electronApp.close();
