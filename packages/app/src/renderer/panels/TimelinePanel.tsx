@@ -13,6 +13,7 @@ import { TimelineClipMedia } from "./TimelineClipMedia.js";
 import {
   representativeSourceFrames,
   timelineAssetMediaSemantics,
+  timelineMediaProjectScope,
   timelineMediaRequestKey,
   type TimelineMediaRequest,
   useTimelineMedia,
@@ -132,13 +133,22 @@ export function TimelinePanel({
     sequence?.clips ?? [],
     snapshot?.master.assets ?? [],
   );
+  const mediaScope = timelineMediaProjectScope(
+    snapshot?.projectPath,
+    snapshot?.master.project.id,
+  );
   const mediaKey = timelineMediaRequestKey(
+    mediaScope,
     snapshot?.revision ?? "closed",
     sequence?.id ?? "none",
     zoom,
     mediaRequests,
   );
-  const mediaByClip = useTimelineMedia(mediaRequests, mediaKey);
+  const mediaByClip = useTimelineMedia(
+    mediaScope,
+    mediaRequests,
+    mediaKey,
+  );
 
   useEffect(() => {
     const viewport = viewportRef.current;

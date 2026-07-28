@@ -6,6 +6,7 @@ import type { PeaksFile, PeaksTier } from "../../../../media/src/index.js";
 export const TIMELINE_FRAME_HEIGHT = 96 as const;
 export const MAX_TIMELINE_FRAMES = 12;
 export const PIXELS_PER_TIMELINE_FRAME = 96;
+export const MAX_TIMELINE_MEDIA_CACHE_ENTRIES = 64;
 
 export interface WaveformColumn {
   minimum: number;
@@ -34,6 +35,17 @@ export interface TimelineMediaResult {
 export interface TimelineMediaCacheEntry {
   identity: string;
   media: TimelineClipMediaState;
+}
+
+export interface TimelineMediaCache {
+  projectScope: string;
+  entries: Map<string, TimelineMediaCacheEntry>;
+}
+
+export interface TimelineMediaResolution {
+  identity: string;
+  media: TimelineClipMediaState;
+  request: TimelineMediaRequest;
 }
 
 export interface TimelineMediaRequestPlan {
@@ -162,15 +174,45 @@ export function representativeSourceFrames(
   ];
 }
 
-function timelineMediaRequestFields({
-  asset,
-  clip,
-  width,
-}: TimelineMediaRequest): Record<string, unknown> {
+function timelineMediaRequestFields(
+  projectScope: string,
+  { asset, clip, width }: TimelineMediaRequest,
+): Record<string, unknown> {
   return {
+    projectScope,
     clipId: clip.id,
-    assetId: asset.id,
-    sourceHash: asset.sha256,
+    asset: {
+      id: asset.id,
+      kind: asset.kind,
+      path: asset.path,
+      sourceHash: asset.sha256,
+      video: asset.video === undefined ? null : {
+        codec: asset.video.codec,
+        width: asset.video.width,
+        height: asset.video.height,
+        fps: asset.video.fps,
+        pixFmt: asset.video.pixFmt,
+        hasAlpha: asset.video.hasAlpha,
+        rotation: asset.video.rotation,
+        colorSpace: asset.video.colorSpace ?? null,
+        bitrate: asset.video.bitrate ?? null,
+      },
+      audio: (asset.audio ?? []).map((stream) => ({
+        index: stream.index,
+        codec: stream.codec,
+        sampleRate: stream.sampleRate,
+        channels: stream.channels,
+        layout: stream.layout,
+        bitrate: stream.bitrate ?? null,
+      })),
+      probe: {
+        fps: asset.probe.fps ?? null,
+        audio: asset.probe.audio === undefined ? null : {
+          rate: asset.probe.audio.rate,
+          channels: asset.probe.audio.channels,
+        },
+      },
+    },
     sourceIn: clip.source.in,
     sourceOut: clip.source.out,
     width,
@@ -179,23 +221,28 @@ function timelineMediaRequestFields({
 }
 
 export function timelineMediaRequestIdentity(
+  projectScope: string,
   request: TimelineMediaRequest,
 ): string {
-  return JSON.stringify(timelineMediaRequestFields(request));
+  return JSON.stringify(timelineMediaRequestFields(projectScope, request));
 }
 
 export function planTimelineMediaRequests(
+  projectScope: string,
   requests: readonly TimelineMediaRequest[],
-  cache: ReadonlyMap<string, TimelineMediaCacheEntry>,
+  cache: TimelineMediaCache,
 ): TimelineMediaRequestPlan {
   const clips: Record<string, TimelineClipMediaState> = {};
   const identities = new Map<string, string>();
   const missing: TimelineMediaRequest[] = [];
+  const entries = cache.projectScope === projectScope
+    ? cache.entries
+    : new Map<string, TimelineMediaCacheEntry>();
   for (const request of requests) {
-    const identity = timelineMediaRequestIdentity(request);
+    const identity = timelineMediaRequestIdentity(projectScope, request);
     const clipId = request.clip.id;
     identities.set(clipId, identity);
-    const cached = cache.get(clipId);
+    const cached = entries.get(clipId);
     if (cached?.identity === identity) {
       clips[clipId] = cached.media;
     } else {
@@ -205,17 +252,111 @@ export function planTimelineMediaRequests(
   return { clips, identities, missing };
 }
 
+export function createTimelineMediaCache(
+  projectScope: string,
+): TimelineMediaCache {
+  return { projectScope, entries: new Map() };
+}
+
+export function timelineMediaResultIsCacheable(
+  request: TimelineMediaRequest,
+  media: TimelineClipMediaState,
+): boolean {
+  const { hasAudio } = timelineAssetMediaSemantics(request.asset);
+  if (hasAudio && media.waveform.length === 0) return false;
+  if (request.asset.video !== undefined) {
+    const requestedFrames = representativeSourceFrames(
+      request.clip,
+      request.width,
+    );
+    if (
+      media.frameUrls.length !== requestedFrames.length ||
+      media.frameUrls.some((url) => url === null)
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+export function mergeTimelineMediaResolutions(
+  plan: TimelineMediaRequestPlan,
+  resolutions: readonly TimelineMediaResolution[],
+): Record<string, TimelineClipMediaState> {
+  const clips = { ...plan.clips };
+  for (const { identity, media, request } of resolutions) {
+    const clipId = request.clip.id;
+    if (plan.identities.get(clipId) === identity) {
+      clips[clipId] = media;
+    }
+  }
+  return clips;
+}
+
+export function updateTimelineMediaCache(
+  cache: TimelineMediaCache,
+  projectScope: string,
+  desiredIdentities: ReadonlyMap<string, string>,
+  resolutions: readonly TimelineMediaResolution[],
+  maximumEntries = MAX_TIMELINE_MEDIA_CACHE_ENTRIES,
+): TimelineMediaCache {
+  const entries = cache.projectScope === projectScope
+    ? new Map(cache.entries)
+    : new Map<string, TimelineMediaCacheEntry>();
+  for (const [clipId, identity] of desiredIdentities) {
+    const cached = entries.get(clipId);
+    if (cached === undefined) continue;
+    entries.delete(clipId);
+    if (cached.identity === identity) {
+      entries.set(clipId, cached);
+    }
+  }
+  for (const resolution of resolutions) {
+    const clipId = resolution.request.clip.id;
+    if (
+      desiredIdentities.get(clipId) !== resolution.identity ||
+      !timelineMediaResultIsCacheable(
+        resolution.request,
+        resolution.media,
+      )
+    ) {
+      continue;
+    }
+    entries.delete(clipId);
+    entries.set(clipId, {
+      identity: resolution.identity,
+      media: resolution.media,
+    });
+  }
+  while (entries.size > maximumEntries) {
+    const oldest = entries.keys().next().value as string | undefined;
+    if (oldest === undefined) break;
+    entries.delete(oldest);
+  }
+  return { projectScope, entries };
+}
+
+export function timelineMediaProjectScope(
+  projectPath: string | undefined,
+  projectId: string | undefined,
+): string {
+  return JSON.stringify([projectPath ?? null, projectId ?? null]);
+}
+
 export function timelineMediaRequestKey(
+  projectScope: string,
   revision: string,
   sequenceId: string,
   zoom: number,
   requests: readonly TimelineMediaRequest[],
 ): string {
   return JSON.stringify({
+    projectScope,
     revision,
     sequenceId,
     zoom,
-    requests: requests.map(timelineMediaRequestFields),
+    requests: requests.map((request) =>
+      timelineMediaRequestFields(projectScope, request)),
   });
 }
 
@@ -365,30 +506,44 @@ export async function loadTimelineMedia(
 }
 
 export function useTimelineMedia(
+  projectScope: string,
   requests: readonly TimelineMediaRequest[],
   key: string,
 ): Record<string, TimelineClipMediaState> {
-  const cacheRef = useRef(new Map<string, TimelineMediaCacheEntry>());
+  const cacheRef = useRef(createTimelineMediaCache(projectScope));
   const inFlightRef = useRef(
     new Map<string, Promise<TimelineClipMediaState | undefined>>(),
   );
-  const desiredIdentitiesRef = useRef(new Map<string, string>());
+  const scopeRef = useRef(projectScope);
+  scopeRef.current = projectScope;
   const [result, setResult] = useState<TimelineMediaResult>({
     key,
     clips: {},
   });
   const requestsRef = useRef(requests);
   requestsRef.current = requests;
-  const renderPlan = planTimelineMediaRequests(requests, cacheRef.current);
+  const renderPlan = planTimelineMediaRequests(
+    projectScope,
+    requests,
+    cacheRef.current,
+  );
   useEffect(() => {
     let current = true;
+    if (cacheRef.current.projectScope !== projectScope) {
+      cacheRef.current = createTimelineMediaCache(projectScope);
+      inFlightRef.current.clear();
+    }
     const plan = planTimelineMediaRequests(
+      projectScope,
       requestsRef.current,
       cacheRef.current,
     );
-    for (const [clipId, identity] of plan.identities) {
-      desiredIdentitiesRef.current.set(clipId, identity);
-    }
+    cacheRef.current = updateTimelineMediaCache(
+      cacheRef.current,
+      projectScope,
+      plan.identities,
+      [],
+    );
     setResult({ key, clips: plan.clips });
 
     const newRequests = plan.missing.filter((request) =>
@@ -423,20 +578,37 @@ export function useTimelineMedia(
       }));
     });
     void Promise.all(pending).then((entries) => {
-      for (const { identity, media, request } of entries) {
-        if (
-          media !== undefined &&
-          desiredIdentitiesRef.current.get(request.clip.id) === identity
-        ) {
-          cacheRef.current.set(request.clip.id, { identity, media });
-        }
+      const resolutions = entries.flatMap(({ identity, media, request }) =>
+        media === undefined ? [] : [{ identity, media, request }]);
+      if (
+        scopeRef.current === projectScope &&
+        cacheRef.current.projectScope === projectScope
+      ) {
+        const desired = planTimelineMediaRequests(
+          projectScope,
+          requestsRef.current,
+          cacheRef.current,
+        ).identities;
+        cacheRef.current = updateTimelineMediaCache(
+          cacheRef.current,
+          projectScope,
+          desired,
+          resolutions,
+        );
       }
       if (!current) return;
       const currentPlan = planTimelineMediaRequests(
+        projectScope,
         requestsRef.current,
         cacheRef.current,
       );
-      setResult({ key, clips: currentPlan.clips });
+      setResult({
+        key,
+        clips: mergeTimelineMediaResolutions(
+          currentPlan,
+          resolutions,
+        ),
+      });
     });
     return () => {
       current = false;

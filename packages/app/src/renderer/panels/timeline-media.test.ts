@@ -3,17 +3,27 @@ import { describe, expect, it, vi } from "vitest";
 import type { Asset, Clip } from "../../../../core/src/index.js";
 import type { PeaksFile } from "../../../../media/src/index.js";
 import {
+  createTimelineMediaCache,
   currentTimelineMediaResult,
   loadTimelineMedia,
+  MAX_TIMELINE_MEDIA_CACHE_ENTRIES,
+  mergeTimelineMediaResolutions,
   planTimelineMediaRequests,
   representativeSourceFrames,
   selectPeaksTier,
+  timelineMediaResultIsCacheable,
   timelineMediaRequestIdentity,
   timelineMediaRequestKey,
+  type TimelineMediaCache,
   type TimelineClipMediaState,
   type TimelineMediaRequest,
+  type TimelineMediaResolution,
+  updateTimelineMediaCache,
   waveformColumns,
 } from "./timeline-media.js";
+
+const PROJECT_SCOPE = '["/projects/alpha","prj_aaaaaaaaaa"]';
+const OTHER_PROJECT_SCOPE = '["/projects/beta","prj_bbbbbbbbbb"]';
 
 function clip(sourceIn = 120, sourceOut = 240): Clip {
   return {
@@ -102,27 +112,34 @@ describe("timeline media request planning", () => {
   const firstMedia = mediaState(12);
   const secondMedia = mediaState(36);
   const thirdMedia = mediaState(60);
-  const mediaCache = () => new Map([
-    [first.clip.id, {
-      identity: timelineMediaRequestIdentity(first),
-      media: firstMedia,
-    }],
-    [second.clip.id, {
-      identity: timelineMediaRequestIdentity(second),
-      media: secondMedia,
-    }],
-    [third.clip.id, {
-      identity: timelineMediaRequestIdentity(third),
-      media: thirdMedia,
-    }],
-  ]);
+  const mediaCache = (
+    projectScope = PROJECT_SCOPE,
+  ): TimelineMediaCache => ({
+    projectScope,
+    entries: new Map([
+      [first.clip.id, {
+        identity: timelineMediaRequestIdentity(PROJECT_SCOPE, first),
+        media: firstMedia,
+      }],
+      [second.clip.id, {
+        identity: timelineMediaRequestIdentity(PROJECT_SCOPE, second),
+        media: secondMedia,
+      }],
+      [third.clip.id, {
+        identity: timelineMediaRequestIdentity(PROJECT_SCOPE, third),
+        media: thirdMedia,
+      }],
+    ]),
+  });
 
   it("retains overlapping media and returns only added requests as missing", () => {
     const cache = mediaCache();
-    const plan = planTimelineMediaRequests([first, second, third], new Map([
-      [first.clip.id, cache.get(first.clip.id)!],
-      [second.clip.id, cache.get(second.clip.id)!],
-    ]));
+    cache.entries.delete(third.clip.id);
+    const plan = planTimelineMediaRequests(
+      PROJECT_SCOPE,
+      [first, second, third],
+      cache,
+    );
 
     expect(plan.clips).toEqual({
       [first.clip.id]: firstMedia,
@@ -134,17 +151,234 @@ describe("timeline media request planning", () => {
   it("returns a clip with changed media identity as missing", () => {
     const cache = mediaCache();
     const changedSecond = { ...second, width: 192 };
-    const plan = planTimelineMediaRequests([first, changedSecond], cache);
+    const plan = planTimelineMediaRequests(
+      PROJECT_SCOPE,
+      [first, changedSecond],
+      cache,
+    );
 
     expect(plan.clips).toEqual({ [first.clip.id]: firstMedia });
     expect(plan.missing.map(({ clip }) => clip.id)).toEqual([second.clip.id]);
   });
 
   it("includes cached media only for currently requested clips", () => {
-    const plan = planTimelineMediaRequests([second], mediaCache());
+    const plan = planTimelineMediaRequests(
+      PROJECT_SCOPE,
+      [second],
+      mediaCache(),
+    );
 
     expect(plan.clips).toEqual({ [second.clip.id]: secondMedia });
     expect(plan.missing).toEqual([]);
+    expect([...plan.identities.keys()]).toEqual([second.clip.id]);
+  });
+
+  it("invalidates identities when media capabilities or metadata change", () => {
+    const originalIdentity = timelineMediaRequestIdentity(
+      PROJECT_SCOPE,
+      first,
+    );
+    const variants: Asset[] = [
+      { ...first.asset, kind: "image" },
+      { ...first.asset, path: "media/relinked.mp4" },
+      {
+        ...first.asset,
+        video: { ...first.asset.video!, fps: "30/1" },
+      },
+      { ...first.asset, audio: [] },
+      {
+        ...first.asset,
+        probe: { ...first.asset.probe, fps: "30/1" },
+      },
+      {
+        ...first.asset,
+        probe: {
+          ...first.asset.probe,
+          audio: { rate: 44_100, channels: 2 },
+        },
+      },
+    ];
+
+    for (const asset of variants) {
+      expect(timelineMediaRequestIdentity(
+        PROJECT_SCOPE,
+        { ...first, asset },
+      )).not.toBe(originalIdentity);
+    }
+  });
+
+  it("canonicalizes probe audio metadata independent of property order", () => {
+    const rateFirst = {
+      ...first,
+      asset: {
+        ...first.asset,
+        probe: {
+          ...first.asset.probe,
+          audio: { rate: 48_000, channels: 2 },
+        },
+      },
+    };
+    const channelsFirst = {
+      ...first,
+      asset: {
+        ...first.asset,
+        probe: {
+          ...first.asset.probe,
+          audio: { channels: 2, rate: 48_000 },
+        },
+      },
+    };
+
+    expect(timelineMediaRequestIdentity(PROJECT_SCOPE, rateFirst))
+      .toBe(timelineMediaRequestIdentity(PROJECT_SCOPE, channelsFirst));
+  });
+
+  it("invalidates and clears cached media across project scopes", () => {
+    const cache = mediaCache();
+    const plan = planTimelineMediaRequests(
+      OTHER_PROJECT_SCOPE,
+      [first],
+      cache,
+    );
+
+    expect(plan.clips).toEqual({});
+    expect(plan.missing.map(({ clip }) => clip.id)).toEqual([first.clip.id]);
+    const reset = updateTimelineMediaCache(
+      cache,
+      OTHER_PROJECT_SCOPE,
+      plan.identities,
+      [],
+    );
+    expect(reset.projectScope).toBe(OTHER_PROJECT_SCOPE);
+    expect(reset.entries.size).toBe(0);
+  });
+
+  it("renders degraded results but leaves them retryable", () => {
+    const cache = createTimelineMediaCache(PROJECT_SCOPE);
+    const plan = planTimelineMediaRequests(
+      PROJECT_SCOPE,
+      [first],
+      cache,
+    );
+    const degraded = {
+      ...firstMedia,
+      frameUrls: [null],
+      waveform: [],
+    };
+    const resolution: TimelineMediaResolution = {
+      identity: plan.identities.get(first.clip.id)!,
+      media: degraded,
+      request: first,
+    };
+
+    expect(mergeTimelineMediaResolutions(plan, [resolution])).toEqual({
+      [first.clip.id]: degraded,
+    });
+    const updated = updateTimelineMediaCache(
+      cache,
+      PROJECT_SCOPE,
+      plan.identities,
+      [resolution],
+    );
+    expect(updated.entries.size).toBe(0);
+    expect(planTimelineMediaRequests(
+      PROJECT_SCOPE,
+      [first],
+      updated,
+    ).missing.map(({ clip }) => clip.id)).toEqual([first.clip.id]);
+  });
+
+  it("requires every requested audio and rich-video component before caching", () => {
+    expect(timelineMediaResultIsCacheable(first, firstMedia)).toBe(true);
+    expect(timelineMediaResultIsCacheable(first, {
+      ...firstMedia,
+      waveform: [],
+    })).toBe(false);
+    expect(timelineMediaResultIsCacheable(first, {
+      ...firstMedia,
+      frameUrls: [null],
+    })).toBe(false);
+
+    const probeOnlyAsset: Asset = {
+      ...first.asset,
+      probe: {
+        ...first.asset.probe,
+        audio: { rate: 48_000, channels: 1 },
+      },
+    };
+    delete probeOnlyAsset.video;
+    delete probeOnlyAsset.audio;
+    const probeOnly: TimelineMediaRequest = {
+      ...first,
+      asset: probeOnlyAsset,
+    };
+    expect(timelineMediaResultIsCacheable(probeOnly, {
+      ...firstMedia,
+      frameUrls: [null],
+    })).toBe(true);
+  });
+
+  it("bounds LRU retention and ignores late offscreen resolutions", () => {
+    const requests = Array.from(
+      { length: MAX_TIMELINE_MEDIA_CACHE_ENTRIES + 1 },
+      (_unused, index) => mediaRequest(
+        `clp_${String(index).padStart(10, "0")}`,
+        index * 24,
+        (index + 1) * 24,
+      ),
+    );
+    let cache = createTimelineMediaCache(PROJECT_SCOPE);
+    const initial = planTimelineMediaRequests(
+      PROJECT_SCOPE,
+      requests.slice(0, MAX_TIMELINE_MEDIA_CACHE_ENTRIES),
+      cache,
+    );
+    cache = updateTimelineMediaCache(
+      cache,
+      PROJECT_SCOPE,
+      initial.identities,
+      requests.slice(0, MAX_TIMELINE_MEDIA_CACHE_ENTRIES).map(
+        (request, index): TimelineMediaResolution => ({
+          identity: initial.identities.get(request.clip.id)!,
+          media: mediaState(index * 24 + 12),
+          request,
+        }),
+      ),
+    );
+
+    const last = requests.at(-1)!;
+    const lastPlan = planTimelineMediaRequests(
+      PROJECT_SCOPE,
+      [last],
+      cache,
+    );
+    cache = updateTimelineMediaCache(
+      cache,
+      PROJECT_SCOPE,
+      lastPlan.identities,
+      [{
+        identity: lastPlan.identities.get(last.clip.id)!,
+        media: mediaState(MAX_TIMELINE_MEDIA_CACHE_ENTRIES * 24 + 12),
+        request: last,
+      }],
+    );
+    expect(cache.entries.size).toBe(MAX_TIMELINE_MEDIA_CACHE_ENTRIES);
+    expect(cache.entries.has(requests[0]!.clip.id)).toBe(false);
+    expect(cache.entries.has(last.clip.id)).toBe(true);
+
+    const late = requests[0]!;
+    cache = updateTimelineMediaCache(
+      cache,
+      PROJECT_SCOPE,
+      lastPlan.identities,
+      [{
+        identity: timelineMediaRequestIdentity(PROJECT_SCOPE, late),
+        media: mediaState(12),
+        request: late,
+      }],
+    );
+    expect(cache.entries.has(late.clip.id)).toBe(false);
+    expect([...lastPlan.identities.keys()]).toEqual([last.clip.id]);
   });
 });
 
@@ -343,12 +577,14 @@ describe("timeline media loading", () => {
 
   it("rejects late results with a different timeline request key", () => {
     const first = timelineMediaRequestKey(
+      PROJECT_SCOPE,
       "rev_00001",
       "seq_aaaaaaaaaa",
       4,
       [],
     );
     const second = timelineMediaRequestKey(
+      PROJECT_SCOPE,
       "rev_00002",
       "seq_aaaaaaaaaa",
       4,
