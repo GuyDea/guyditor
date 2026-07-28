@@ -1099,16 +1099,90 @@ small { color: var(--muted); }
 .restyle-timeline-seams span[data-kind="punch-in"] { border-radius: 50%; background: #79b99a; transform: translateX(-50%); }
 .restyle-timeline-seams span[data-kind="none"] { background: #657077; transform: translateX(-50%); }
 .restyle-timeline-seams span[data-state="review"] { box-shadow: 0 0 0 2px rgb(223 125 115 / 80%); }
-.timeline-clips { position: relative; height: 68px; }
-.timeline-clip { position: absolute; top: 8px; height: 45px; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-content: start; gap: 5px; overflow: hidden; border-color: #3d687d; color: #dbe9ee; text-align: left; background: #234151; }
-.timeline-clip[data-selected="true"] { border-color: var(--amber); box-shadow: inset 0 0 0 1px var(--amber); }
-.timeline-clip > span { overflow: hidden; font: 600 var(--fs-label)/1 ui-monospace, monospace; text-overflow: ellipsis; white-space: nowrap; }
-.timeline-clip > small { font: 600 var(--fs-label)/1 ui-monospace, monospace; }
-.jumpcut-seam { position: absolute; z-index: 4; top: 2px; width: 15px; height: 58px; margin-left: -7px; padding: 0; border: 0; border-left: 1px dashed var(--amber); border-radius: 0; color: #17120a; background: transparent; }
+.timeline-clips { position: relative; height: 86px; }
+.timeline-clip {
+  position: absolute;
+  top: 8px;
+  height: 68px;
+  overflow: hidden;
+  padding: 0;
+  border-color: #3d687d;
+  color: #dbe9ee;
+  text-align: left;
+  background: #234151;
+}
+.timeline-clip[data-selected="true"] {
+  border-color: var(--amber);
+  box-shadow: inset 0 0 0 1px var(--amber);
+}
+.timeline-filmstrip {
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  display: flex;
+  pointer-events: none;
+}
+.timeline-filmstrip img,
+.timeline-filmstrip i {
+  min-width: 0;
+  flex: 1 1 0;
+  height: 100%;
+  object-fit: cover;
+  background: #234151;
+}
+.timeline-media-scrim {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(180deg, rgb(5 10 13 / 62%), transparent 34%),
+    rgb(5 11 14 / 20%);
+}
+.timeline-waveform {
+  position: absolute;
+  z-index: 2;
+  inset: 16px 4px 4px;
+  width: calc(100% - 8px);
+  height: calc(100% - 20px);
+  overflow: visible;
+  pointer-events: none;
+}
+.timeline-waveform path {
+  fill: none;
+  stroke: #b8dfec;
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+  filter: drop-shadow(0 0 1px #071014);
+}
+.timeline-waveform line {
+  stroke: #8ca4ae;
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+  vector-effect: non-scaling-stroke;
+}
+.timeline-clip-label,
+.timeline-clip-duration {
+  position: absolute;
+  z-index: 3;
+  top: 4px;
+  padding: 2px 4px;
+  color: #eef6f8;
+  background: rgb(7 13 16 / 82%);
+  font: 650 var(--fs-label)/1 ui-monospace, monospace;
+  pointer-events: none;
+}
+.timeline-clip-label {
+  left: 4px;
+  max-width: calc(100% - 48px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.timeline-clip-duration { right: 4px; }
+.jumpcut-seam { position: absolute; z-index: 4; top: 2px; width: 15px; height: 76px; margin-left: -7px; padding: 0; border: 0; border-left: 1px dashed var(--amber); border-radius: 0; color: #17120a; background: transparent; }
 .jumpcut-seam span { position: absolute; top: -1px; left: -7px; display: grid; place-items: center; width: 14px; height: 14px; border-radius: 2px; background: var(--amber); font: 800 var(--fs-body)/1 ui-monospace, monospace; box-shadow: 0 2px 8px #0009; }
 .jumpcut-seam:hover { border-left-color: #fff0c8; background: linear-gradient(90deg, transparent, rgb(242 184 75 / 12%)); }
-.waveform { grid-column: 1 / -1; height: 22px; display: flex; align-items: center; gap: 1px; opacity: .72; }
-.waveform i { width: 1px; min-width: 1px; background: #96c5d8; }
 .timeline-playhead { position: absolute; z-index: 3; top: -22px; bottom: -18px; width: 1px; background: var(--amber); pointer-events: none; }
 .timeline-playhead::before { content: ""; position: absolute; top: 0; left: -4px; border: 4px solid transparent; border-top-color: var(--amber); }
 .annotation-marker { position: absolute; z-index: 2; top: 1px; width: 5px; height: 5px; border-radius: 50%; background: var(--red); }
