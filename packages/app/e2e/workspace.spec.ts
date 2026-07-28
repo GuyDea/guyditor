@@ -72,6 +72,7 @@ test("keeps all project activity content inside its control", async () => {
               const childRect = child.getBoundingClientRect();
               return {
                 className: child.className,
+                gridArea: getComputedStyle(child).gridArea,
                 left: childRect.left,
                 right: childRect.right,
                 top: childRect.top,
@@ -91,13 +92,18 @@ test("keeps all project activity content inside its control", async () => {
         `global-progress grid areas at ${viewportLabel}`,
       ).toBe('"copy badge" "track track"');
       expect(
-        layout.children.map((child) => child.className),
-        `global-progress visible direct children at ${viewportLabel}`,
+        layout.children.map(({ className, gridArea }) => ({ className, gridArea })),
+        `global-progress visible direct child placement at ${viewportLabel}`,
       ).toEqual([
-        "global-progress-copy",
-        "global-progress-track",
-        "global-waiting-badge",
+        { className: "global-progress-copy", gridArea: "copy" },
+        { className: "global-progress-track", gridArea: "track" },
+        { className: "global-waiting-badge", gridArea: "badge" },
       ]);
+      const [copy, track, badge] = layout.children;
+      expect(track.left, `global-progress track left edge at ${viewportLabel}`)
+        .toBeCloseTo(copy.left, 5);
+      expect(track.right, `global-progress track right edge at ${viewportLabel}`)
+        .toBeCloseTo(badge.right, 5);
       for (const child of layout.children) {
         const childLabel = `${child.className} at ${viewportLabel}`;
         expect(child.left, `${childLabel} left edge`).toBeGreaterThanOrEqual(layout.control.left);
