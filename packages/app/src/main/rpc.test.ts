@@ -31,6 +31,7 @@ const structuralUniqueSurface: IpcSurface = {
         properties: {
           values: {
             type: "array",
+            maxItems: 2,
             uniqueItems: true,
             items: { type: "object" },
           },
@@ -216,6 +217,86 @@ describe("createRpcDispatcher", () => {
       },
     });
     expect(list).not.toHaveBeenCalled();
+  });
+
+  it("short-circuits unique and item traversal after maxItems fails", async () => {
+    const firstCycle: Record<string, unknown> = {};
+    firstCycle["self"] = firstCycle;
+    const secondCycle: Record<string, unknown> = {};
+    secondCycle["self"] = secondCycle;
+    const list = vi.fn(() => []);
+    const dispatch = createRpcDispatcher(
+      [structuralUniqueSurface],
+      () => ({ list }),
+    );
+
+    const response = await dispatch({
+      v: 1,
+      requestId: "req_jjjjjjjjjj",
+      service: "JobQueue",
+      method: "list",
+      params: { values: [firstCycle, secondCycle, {}] },
+    });
+
+    expect(response).toMatchObject({
+      ok: false,
+      error: {
+        code: "E_IPC_SCHEMA",
+        message: "/values must have at most 2 items",
+      },
+    });
+    if (response.ok) throw new Error("Expected bounded array validation to fail.");
+    expect(response.error.message).not.toContain("unique");
+    expect(list).not.toHaveBeenCalled();
+  });
+
+  it("rejects cyclic unique items inside the IPC schema envelope", async () => {
+    const cycle: Record<string, unknown> = {};
+    cycle["self"] = cycle;
+    const list = vi.fn(() => []);
+    const dispatch = createRpcDispatcher(
+      [structuralUniqueSurface],
+      () => ({ list }),
+    );
+
+    const response = await dispatch({
+      v: 1,
+      requestId: "req_kkkkkkkkkk",
+      service: "JobQueue",
+      method: "list",
+      params: { values: [cycle] },
+    });
+
+    expect(response).toMatchObject({
+      ok: false,
+      error: {
+        code: "E_IPC_SCHEMA",
+        message: expect.stringContaining("/values/0"),
+      },
+    });
+    if (response.ok) throw new Error("Expected cyclic array validation to fail.");
+    expect(response.error.message).toContain("acyclic JSON value");
+    expect(list).not.toHaveBeenCalled();
+  });
+
+  it("allows repeated acyclic references within a unique item", async () => {
+    const shared = { value: 1 };
+    const list = vi.fn(() => []);
+    const dispatch = createRpcDispatcher(
+      [structuralUniqueSurface],
+      () => ({ list }),
+    );
+
+    const response = await dispatch({
+      v: 1,
+      requestId: "req_llllllllll",
+      service: "JobQueue",
+      method: "list",
+      params: { values: [{ left: shared, right: shared }] },
+    });
+
+    expect(response).toMatchObject({ ok: true, result: [] });
+    expect(list).toHaveBeenCalledOnce();
   });
 
   it("dispatches valid bounded timeline frame requests", async () => {

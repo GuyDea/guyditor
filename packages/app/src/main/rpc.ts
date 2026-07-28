@@ -14,20 +14,54 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function jsonValuesEqual(left: unknown, right: unknown): boolean {
-  if (left === right) return true;
-  if (Array.isArray(left) || Array.isArray(right)) {
-    return Array.isArray(left) &&
-      Array.isArray(right) &&
-      left.length === right.length &&
-      left.every((entry, index) => jsonValuesEqual(entry, right[index]));
+function jsonFingerprint(value: unknown): string | undefined {
+  try {
+    return fingerprintJsonValue(value, new Set<object>());
+  } catch {
+    return undefined;
   }
-  if (!isRecord(left) || !isRecord(right)) return false;
-  const leftKeys = Object.keys(left);
-  const rightKeys = Object.keys(right);
-  return leftKeys.length === rightKeys.length && leftKeys.every((key) =>
-    Object.prototype.hasOwnProperty.call(right, key) &&
-    jsonValuesEqual(left[key], right[key]));
+}
+
+function fingerprintJsonValue(
+  value: unknown,
+  stack: Set<object>,
+): string | undefined {
+  if (value === null) return "null:null";
+  if (typeof value === "boolean") return `boolean:${String(value)}`;
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) return undefined;
+    return `number:${String(Object.is(value, -0) ? 0 : value)}`;
+  }
+  if (typeof value === "string") return `string:${JSON.stringify(value)}`;
+  if (!Array.isArray(value) && !isRecord(value)) return undefined;
+  if (stack.has(value)) return undefined;
+  stack.add(value);
+  try {
+    if (Array.isArray(value)) {
+      const entries: string[] = [];
+      for (let index = 0; index < value.length; index += 1) {
+        if (!Object.prototype.hasOwnProperty.call(value, index)) return undefined;
+        const fingerprint = fingerprintJsonValue(value[index], stack);
+        if (fingerprint === undefined) return undefined;
+        entries.push(fingerprint);
+      }
+      return `array:[${entries.join(",")}]`;
+    }
+    const prototype = Object.getPrototypeOf(value) as unknown;
+    if (
+      (prototype !== Object.prototype && prototype !== null) ||
+      Object.getOwnPropertySymbols(value).length > 0
+    ) return undefined;
+    const entries: string[] = [];
+    for (const key of Object.keys(value).sort()) {
+      const fingerprint = fingerprintJsonValue(value[key], stack);
+      if (fingerprint === undefined) return undefined;
+      entries.push(`${JSON.stringify(key)}:${fingerprint}`);
+    }
+    return `object:{${entries.join(",")}}`;
+  } finally {
+    stack.delete(value);
+  }
 }
 
 function schemaError(path: string, message: string): string {
@@ -91,17 +125,27 @@ function validateSchema(value: unknown, schema: JsonSchema, path = ""): string[]
     const maxItems = schema["maxItems"];
     if (typeof maxItems === "number" && value.length > maxItems) {
       errors.push(schemaError(path, `must have at most ${String(maxItems)} items`));
+      return errors;
     }
     if (schema["uniqueItems"] === true) {
+      const fingerprints = new Map<string, number>();
       value.forEach((entry, index) => {
-        const duplicateIndex = value
-          .slice(0, index)
-          .findIndex((candidate) => jsonValuesEqual(candidate, entry));
-        if (duplicateIndex >= 0) {
+        const fingerprint = jsonFingerprint(entry);
+        if (fingerprint === undefined) {
+          errors.push(schemaError(
+            `${path}/${String(index)}`,
+            "must be an acyclic JSON value",
+          ));
+          return;
+        }
+        const duplicateIndex = fingerprints.get(fingerprint);
+        if (duplicateIndex !== undefined) {
           errors.push(schemaError(
             `${path}/${String(index)}`,
             `must be unique; duplicates ${path}/${String(duplicateIndex)}`,
           ));
+        } else {
+          fingerprints.set(fingerprint, index);
         }
       });
     }
