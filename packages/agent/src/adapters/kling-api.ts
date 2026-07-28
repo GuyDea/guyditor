@@ -1,4 +1,8 @@
+import { createWriteStream } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import type { ReadableStream } from "node:stream/web";
 
 import type { RestyleRequest } from "./types.js";
 
@@ -47,19 +51,44 @@ function numberValue(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+/** A short, credential-free excerpt of a non-JSON body for the error message. */
+function errorSnippet(text: string): string {
+  const redacted = text.replace(/Bearer\s+\S+/giu, "Bearer <redacted>");
+  const collapsed = redacted.replace(/\s+/gu, " ").trim();
+  if (collapsed.length === 0) return "<empty body>";
+  return collapsed.length > 200 ? `${collapsed.slice(0, 200)}…` : collapsed;
+}
+
 function taskIdFrom(response: Record<string, unknown>): string | undefined {
   const data = record(response["data"]);
   return stringValue(response["task_id"]) ?? stringValue(data["task_id"]);
 }
 
-function stateFrom(value: unknown): KlingApiTask["state"] {
-  const normalized = String(value ?? "").toLowerCase();
-  if (["succeed", "succeeded", "success", "completed"].includes(normalized)) {
-    return "succeeded";
-  }
-  if (["failed", "error"].includes(normalized)) return "failed";
-  if (["processing", "running"].includes(normalized)) return "running";
-  return "queued";
+const SUCCEEDED_STATUSES = ["succeed", "succeeded", "success", "completed"];
+const FAILED_STATUSES = ["failed", "failure", "error", "cancelled", "canceled"];
+const RUNNING_STATUSES = ["processing", "running"];
+const PENDING_STATUSES = ["", "queued", "queueing", "pending", "submitted", "created"];
+
+interface ResolvedState {
+  state: KlingApiTask["state"];
+  /** The raw status when the provider reported one this client does not know. */
+  unrecognized?: string;
+}
+
+/**
+ * An unrecognized status resolves to `failed`, not `queued`. The poll loop
+ * treats `queued` as "keep waiting", so silently defaulting an unknown status
+ * would turn any wire-format drift (see the PROVIDER-VERIFY note below) into an
+ * unbounded wait instead of an actionable error. A *missing* status stays
+ * pending, because a task-creation acknowledgement may legitimately omit it.
+ */
+function stateFrom(value: unknown): ResolvedState {
+  const normalized = String(value ?? "").toLowerCase().trim();
+  if (SUCCEEDED_STATUSES.includes(normalized)) return { state: "succeeded" };
+  if (FAILED_STATUSES.includes(normalized)) return { state: "failed" };
+  if (RUNNING_STATUSES.includes(normalized)) return { state: "running" };
+  if (PENDING_STATUSES.includes(normalized)) return { state: "queued" };
+  return { state: "failed", unrecognized: normalized };
 }
 
 function taskFromResponse(response: Record<string, unknown>, fallbackTaskId: string): KlingApiTask {
@@ -70,14 +99,21 @@ function taskFromResponse(response: Record<string, unknown>, fallbackTaskId: str
     : [];
   const first = videos[0];
   const url = stringValue(first?.["url"] ?? result["video_url"]);
-  const state = stateFrom(data["task_status"] ?? response["task_status"] ?? response["status"]);
+  const { state, unrecognized } = stateFrom(
+    data["task_status"] ?? response["task_status"] ?? response["status"],
+  );
   return {
     taskId: taskIdFrom(response) ?? fallbackTaskId,
     state,
     progress: numberValue(data["progress"] ?? response["progress"]) ??
       (state === "succeeded" ? 1 : 0),
     ...(state === "failed"
-      ? { error: stringValue(data["task_status_msg"] ?? response["message"]) ?? "Kling task failed." }
+      ? {
+          error: unrecognized === undefined
+            ? stringValue(data["task_status_msg"] ?? response["message"]) ?? "Kling task failed."
+            : `Kling reported an unrecognized task status "${unrecognized}". ` +
+              "The provider wire format may have changed; see PROVIDER-VERIFY in kling-api.ts.",
+        }
       : {}),
     ...(url === undefined
       ? {}
@@ -123,14 +159,29 @@ export class HttpKlingApi implements KlingApi {
   }
 
   async #json(response: Response): Promise<Record<string, unknown>> {
-    const body = await response.json() as unknown;
+    // Read as text and check the status first: provider and gateway errors are
+    // routinely non-JSON (an HTML 502, an empty 429), and parsing before the
+    // status check replaced the real HTTP status with a JSON syntax error.
+    const text = await response.text();
+    let parsed: unknown;
+    let parseFailed = false;
+    try {
+      parsed = text.length === 0 ? undefined : JSON.parse(text) as unknown;
+    } catch {
+      parseFailed = true;
+    }
     if (!response.ok) {
-      const parsed = record(body);
+      const message = parseFailed || parsed === undefined
+        ? response.statusText.length > 0 ? response.statusText : errorSnippet(text)
+        : stringValue(record(parsed)["message"]) ?? response.statusText;
+      throw new Error(`Kling API ${String(response.status)}: ${message}`);
+    }
+    if (parseFailed || parsed === undefined) {
       throw new Error(
-        `Kling API ${String(response.status)}: ${stringValue(parsed["message"]) ?? response.statusText}`,
+        `Kling API ${String(response.status)} returned a body that is not JSON: ${errorSnippet(text)}`,
       );
     }
-    return record(body);
+    return record(parsed);
   }
 
   #headers(): Record<string, string> {
@@ -185,9 +236,28 @@ export class HttpKlingApi implements KlingApi {
     if (task.state !== "succeeded" || task.output === undefined) {
       throw new Error(`Kling task ${taskId} has no downloadable result.`);
     }
-    const response = await this.#fetch(task.output.url, { method: "GET" });
+    // The result URL comes from the provider response; only ever follow it over
+    // http(s) so a malformed or hostile payload cannot redirect the download at
+    // another scheme.
+    let resultUrl: URL;
+    try {
+      resultUrl = new URL(task.output.url);
+    } catch {
+      throw new Error(`Kling task ${taskId} returned a malformed result URL.`);
+    }
+    if (resultUrl.protocol !== "https:" && resultUrl.protocol !== "http:") {
+      throw new Error(
+        `Kling task ${taskId} returned a non-http(s) result URL (${resultUrl.protocol}).`,
+      );
+    }
+    const response = await this.#fetch(resultUrl.toString(), { method: "GET" });
     if (!response.ok) throw new Error(`Kling result download failed with ${String(response.status)}.`);
-    await writeFile(destination, Buffer.from(await response.arrayBuffer()));
+    // Stream to disk: a restyled 4K segment must not be buffered whole in memory.
+    if (response.body === null) {
+      await writeFile(destination, "");
+      return;
+    }
+    await pipeline(Readable.fromWeb(response.body as ReadableStream), createWriteStream(destination));
   }
 
   public async cancel(taskId: string): Promise<void> {
