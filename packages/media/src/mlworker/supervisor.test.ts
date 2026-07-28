@@ -140,7 +140,7 @@ describe("MlworkerSupervisor", () => {
 
     const [first, second] = await Promise.all([
       supervisor.runTask("transcribe", { taskId: "job_concurrent" }),
-      supervisor.runTask("vad", { taskId: "job_concurrent2" }),
+      supervisor.runTask("vad", { taskId: "job_secondtask" }),
     ]);
 
     expect(first).toMatchObject({ ok: true, value: { peakInFlight: 1 } });
@@ -151,16 +151,21 @@ describe("MlworkerSupervisor", () => {
     const script = await fakeWorker(OVERLAP_REPORTING_WORKER);
     const supervisor = supervisorFor(script);
 
+    const taskIds = [
+      "job_burstaaaaa",
+      "job_burstbbbbb",
+      "job_burstccccc",
+      "job_burstddddd",
+    ];
     const results = await Promise.all(
-      ["a", "b", "c", "d"].map(async (suffix) =>
-        supervisor.runTask("transcribe", { taskId: `job_burst000${suffix}` })),
+      taskIds.map(async (taskId) => supervisor.runTask("transcribe", { taskId })),
     );
 
     for (const result of results) {
       expect(result).toMatchObject({ ok: true, value: { peakInFlight: 1 } });
     }
     expect(results.map((result) => result.ok ? (result.value as { taskId: string }).taskId : ""))
-      .toEqual(["job_burst000a", "job_burst000b", "job_burst000c", "job_burst000d"]);
+      .toEqual(taskIds);
   });
 
   it("fails a queued task when the worker is stopped and does not respawn", async () => {
@@ -170,7 +175,7 @@ describe("MlworkerSupervisor", () => {
       onStateChange: (event) => states.push(event),
     });
 
-    const running = supervisor.runTask("transcribe", { taskId: "job_stopheld0" });
+    const running = supervisor.runTask("transcribe", { taskId: "job_stopheldaa" });
     while (supervisor.state !== "ready") {
       await new Promise<void>((resolveWait) => setTimeout(resolveWait, 5));
     }
@@ -195,10 +200,10 @@ describe("MlworkerSupervisor", () => {
     const supervisor = supervisorFor(script);
     const controller = new AbortController();
 
-    const running = supervisor.runTask("transcribe", { taskId: "job_holdslot0" });
+    const running = supervisor.runTask("transcribe", { taskId: "job_holdslotaa" });
     const queued = supervisor.runTask(
       "vad",
-      { taskId: "job_queued0000" },
+      { taskId: "job_queuedwait" },
       { signal: controller.signal },
     );
     controller.abort();
