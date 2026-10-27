@@ -45,6 +45,7 @@ export function terminalJob(
   queue: JobQueue,
   jobId: string,
   signal: AbortSignal,
+  options: { cancelOnAbort?: boolean } = {},
 ): Promise<JobRecord> {
   return new Promise((resolve, reject) => {
     let unsubscribe: () => void = () => undefined;
@@ -54,7 +55,7 @@ export function terminalJob(
       resolve(job);
     };
     const abort = (): void => {
-      queue.cancel(jobId);
+      if (options.cancelOnAbort ?? true) queue.cancel(jobId);
       unsubscribe();
       reject(new Error(`Cancelled while waiting for job ${jobId}.`));
     };
