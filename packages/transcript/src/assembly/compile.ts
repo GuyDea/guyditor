@@ -56,6 +56,19 @@ function neighbourBounds(
       nextStart = nextStart === null ? segStart : Math.min(nextStart, segStart);
     }
   }
+  // Inside a segment the nearest active words bound the padding too (whichever is tighter).
+  const firstStart = atRate(first.start, rate);
+  const lastEnd = atRate(last.end, rate);
+  for (const word of ctx.words.values()) {
+    if (word.assetId !== assetId || word.state !== "active") continue;
+    const start = atRate(word.start, rate);
+    const end = atRate(word.end, rate);
+    if (end <= firstStart && start < firstStart) {
+      prevEnd = prevEnd === null ? end : Math.max(prevEnd, end);
+    } else if (start >= lastEnd && end > lastEnd) {
+      nextStart = nextStart === null ? start : Math.min(nextStart, start);
+    }
+  }
   return { prevEnd, nextStart };
 }
 

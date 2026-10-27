@@ -72,6 +72,22 @@ describe("compileAssemblyPlan", () => {
     expect(r.value.cuts[0]?.out.frames).toBe(62); // 2.6 s * 24 = 62.4
   });
 
+  it("clamps padding at the neighbouring active words inside one segment", () => {
+    // Frame-aligned neighbours: w000000 ends at frame 23, w000003 starts at frame 71.
+    const words = new Map([
+      ["w000000", word(0.5, 23 / 24)], ["w000001", word(1, 2.5)], ["w000002", word(2.55, 2.9)],
+      ["w000003", word(71 / 24, 3.5)],
+      // A deleted word between the cut and its neighbour does not count.
+      ["w000004", { ...word(0.96, 0.99), state: "deleted" as const }],
+    ]);
+    const segments = [segment("C1.01", "w000000", "w000003", 0.5, 3.5)];
+    const r = compileAssemblyPlan(plan([["w000001", "w000002"]]), ctx({ words, segments }));
+    if (!r.ok) throw new Error(JSON.stringify(r.error));
+    // Unclamped: 1 s - 120 ms = frame 21, 2.9 s + 200 ms = frame 74.
+    expect(r.value.cuts[0]?.in.frames).toBe(23);
+    expect(r.value.cuts[0]?.out.frames).toBe(71);
+  });
+
   it("appends after existing clips", () => {
     const clip = { in: frames(0), out: frames(48) };
     const r = compileAssemblyPlan(plan([["w000001", "w000001"], ["w000002", "w000002"]]), ctx({ existingClips: [clip, clip] }));
