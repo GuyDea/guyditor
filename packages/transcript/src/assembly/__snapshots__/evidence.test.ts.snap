@@ -18,17 +18,17 @@ A completely different closing thought about gardens and rain.
 
 ## Footage
 
-## A1  cam_0001.mov   captured 2026-10-20T14:32:07Z (container)   dur 06:41
-### C1.01  00:00.000–00:03.340   group G1   script S001 (1.00)   conf 0.94
+## A1  cam_0001.mov   captured 2026-10-20T14:32:07Z (container)   dur 06:41   asset ast_aaaaaaaaaa
+### C1.01  00:00.000–00:03.340   words w000001–w000009   group G1   script S001 (1.00)   conf 0.94
 the quick brown fox jumps over the lazy dog
-### C1.02  00:06.000–00:06.300   conf 0.95   pause-before 2.7s   ASIDE?   spoken: "again"
+### C1.02  00:06.000–00:06.300   words w000010–w000010   conf 0.95   pause-before 2.7s   ASIDE?   spoken: "again"
 again
-### C1.03  00:09.000–00:10.440   conf 0.95   pause-before 2.7s   ASIDE?
+### C1.03  00:09.000–00:10.440   words w000011–w000014   conf 0.95   pause-before 2.7s   ASIDE?
 garden rain closing thought
 
-## A2  cam_0002.mov   captured 2026-10-20T14:40:00Z (file-mtime)   dur 01:05
+## A2  cam_0002.mov   captured 2026-10-20T14:40:00Z (file-mtime)   dur 01:05   asset ast_bbbbbbbbbb
 order-warning: capture time is the file modified time, not recorded in the container
-### C2.01  00:01.000–00:04.340   group G1   script S001 (1.00)   conf 0.30   LOW-CONF
+### C2.01  00:01.000–00:04.340   words w000100–w000108   group G1   script S001 (1.00)   conf 0.30   LOW-CONF
 the quick brown fox jumps over the lazy dog
 
 ## Groups
@@ -37,6 +37,6 @@ G1: C1.01, C2.01
 
 ## Notes
 
-- Asset a2 was captured later.
+- Asset ast_bbbbbbbbbb was captured later.
 "
 `;

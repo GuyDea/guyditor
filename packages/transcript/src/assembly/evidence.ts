@@ -38,6 +38,7 @@ const durationMs = (segment: CandidateSegment): number =>
 
 function segmentHeader(segment: CandidateSegment): string {
   const fields = [`### ${segment.id}  ${formatClipTime(segment.start)}–${formatClipTime(segment.end)}`];
+  fields.push(`words ${segment.fromWord}–${segment.toWord}`);
   if (segment.groupId !== null) fields.push(`group ${segment.groupId}`);
   if (segment.scriptMatch !== null) {
     fields.push(`script ${segment.scriptMatch.block} (${segment.scriptMatch.score.toFixed(2)})`);
@@ -67,7 +68,7 @@ export function renderEvidencePackage(input: EvidenceInput): AssemblyEvidence {
   lines.push("## Footage", "");
   for (const asset of input.assets) {
     lines.push(
-      `## A${asset.ordinal}  ${asset.fileName}   captured ${asset.capturedAt} (${asset.captureSource})   dur ${minutesSeconds(asset.durationMs)}`,
+      `## A${asset.ordinal}  ${asset.fileName}   captured ${asset.capturedAt} (${asset.captureSource})   dur ${minutesSeconds(asset.durationMs)}   asset ${asset.assetId}`,
     );
     if (asset.orderWarning !== null) lines.push(`order-warning: ${asset.orderWarning}`);
     for (const segment of input.segments.filter(({ assetId }) => assetId === asset.assetId)) {

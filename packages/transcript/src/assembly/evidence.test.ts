@@ -22,33 +22,40 @@ function again(assetId: string, ms: number): MarkerRecord {
 function fixture(withScript = true): EvidenceInput {
   const scriptBlocks = withScript ? parseScriptBlocks(SCRIPT) : [];
   const assets = orderAssets([
-    { assetId: "a1", fileName: "cam_0001.mov", capturedAt: "2026-10-20T14:32:07Z", captureSource: "container", durationMs: 401_000 },
-    { assetId: "a2", fileName: "cam_0002.mov", capturedAt: "2026-10-20T14:40:00Z", captureSource: "file-mtime", durationMs: 65_000 },
+    { assetId: "ast_aaaaaaaaaa", fileName: "cam_0001.mov", capturedAt: "2026-10-20T14:32:07Z", captureSource: "container", durationMs: 401_000 },
+    { assetId: "ast_bbbbbbbbbb", fileName: "cam_0002.mov", capturedAt: "2026-10-20T14:40:00Z", captureSource: "file-mtime", durationMs: 65_000 },
   ]);
   const raw = [
     ...segmentTranscript({
-      assetId: "a1", ordinal: 1, markers: [again("a1", 6000)],
-      sidecar: scriptedTranscript("a1", [
+      assetId: "ast_aaaaaaaaaa", ordinal: 1, markers: [again("ast_aaaaaaaaaa", 6000)],
+      sidecar: scriptedTranscript("ast_aaaaaaaaaa", [
         { atMs: 0, text: LINE, confidence: 0.94 },
         { atMs: 6000, text: "again" },
         { atMs: 9000, text: "garden rain closing thought" },
       ]),
     }),
     ...segmentTranscript({
-      assetId: "a2", ordinal: 2, markers: [],
-      sidecar: scriptedTranscript("a2", [{ atMs: 1000, text: LINE, confidence: 0.3 }], 48000, 100),
+      assetId: "ast_bbbbbbbbbb", ordinal: 2, markers: [],
+      sidecar: scriptedTranscript("ast_bbbbbbbbbb", [{ atMs: 1000, text: LINE, confidence: 0.3 }], 48000, 100),
     }),
   ];
   const { segments, groups } = groupSegments(raw, scriptBlocks);
   return {
     projectName: "Demo", language: "en", assets, segments, groups, scriptBlocks,
-    notes: ["Asset a2 was captured later."],
+    notes: ["Asset ast_bbbbbbbbbb was captured later."],
   };
 }
 
 describe("renderEvidencePackage", () => {
   it("renders the documented layout", () => {
     expect(renderEvidencePackage(fixture()).text).toMatchSnapshot();
+  });
+
+  it("cites asset and word ids", () => {
+    const { text } = renderEvidencePackage(fixture());
+    expect(text).toContain("asset ast_aaaaaaaaaa");
+    expect(text).toContain("asset ast_bbbbbbbbbb");
+    expect(text).toMatch(/words w\d{6}–w\d{6}/u);
   });
 
   it("omits the script section without a script", () => {
