@@ -131,3 +131,21 @@ export interface AssemblySession {
   tighteningJobId: string | null;
   error: string | null;
 }
+
+export type ContextFileKind = "text" | "image" | "pdf" | "other";
+
+export interface ContextFile {
+  label: string;
+  name: string;
+  path: string;
+  sha256: string;
+  bytes: number;
+  mime: string;
+  kind: ContextFileKind;
+  sent: boolean;
+  unsentReason: string | null;
+  pages: number | null;
+  role: "script" | "context";
+}
+
+export type ScriptChoice = { mode: "auto" } | { mode: "label"; label: string } | { mode: "none" };
