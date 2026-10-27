@@ -5,6 +5,7 @@ import {
   access,
   mkdtemp,
   mkdir,
+  copyFile,
   readdir,
   readFile,
   rm,
@@ -1021,6 +1022,10 @@ function annotationSidecar(annotated) {
 }
 
 async function createProjectTemplate(core, transcriptDomain, fixtureRoot, name) {
+  if (name === "assembly") {
+    await createAssemblyProjectTemplate(core, transcriptDomain, fixtureRoot);
+    return;
+  }
   if (name === "ac006") {
     await createAc006ProjectTemplate(core, transcriptDomain, fixtureRoot);
     return;
@@ -1461,6 +1466,171 @@ async function createAc003ProjectTemplate(core, fixtureRoot) {
     writeFile(path.join(root, "sidecars/transcript-speech.json"), transcriptText),
   ]);
   await writeFile(path.join(root, "presets/pre_aaaaaaaaaa@1.yaml"), presetText);
+}
+
+const ASSEMBLY_WORD_MS = 300;
+const ASSEMBLY_WORD_GAP_MS = 80;
+const ASSEMBLY_LETTERS = "abcdefghijklmnopqrstuvwxyz";
+
+/** Scripted transcript: one segment per utterance, 300 ms per word, 80 ms gap, confidence 0.95. */
+export function makeScriptedTranscriptFixture({
+  assetId,
+  rate = SAMPLE_RATE,
+  utterances,
+  wordOrdinalStart = 1,
+}) {
+  const at = (ms) => ({ rate, samples: Math.round((ms * rate) / 1000) });
+  const words = {};
+  let ordinal = wordOrdinalStart;
+  const segments = utterances.map((utterance, index) => {
+    const ids = utterance.text.split(/\s+/u).filter(Boolean).map((text, position) => {
+      const id = `w${String(ordinal).padStart(6, "0")}`;
+      ordinal += 1;
+      const startMs = utterance.atMs + position * (ASSEMBLY_WORD_MS + ASSEMBLY_WORD_GAP_MS);
+      words[id] = {
+        alignment: "ctc",
+        confidence: 0.95,
+        end: at(startMs + ASSEMBLY_WORD_MS),
+        origin: "asr",
+        punctAfter: "",
+        punctBefore: "",
+        start: at(startMs),
+        state: "active",
+        text,
+      };
+      return id;
+    });
+    return {
+      end: words[ids.at(-1)].end,
+      id: `seg_assembly${ASSEMBLY_LETTERS[index]}a`,
+      language: "en",
+      speaker: "spk_assemblyaa",
+      start: words[ids[0]].start,
+      words: ids,
+    };
+  });
+  return {
+    assetId,
+    audio: { channels: 1, rate, streamIndex: 0 },
+    language: "en",
+    languageProbability: 1,
+    provenance: {
+      alignment: null,
+      createdAt: FIXED_CREATED_AT,
+      engine: { model: "scripted", name: "guyditor-fixture-generator", version: FIXTURE_GENERATOR_VERSION },
+      jobId: "job_fixturezzz",
+    },
+    schema: "guyditor.transcript/v1",
+    segments,
+    speakers: [{ id: "spk_assemblyaa", label: "Speaker 1" }],
+    words,
+  };
+}
+
+const ASSEMBLY_LINE_ONE = "Could AI talk you into the dumbest decision of your life";
+const ASSEMBLY_CLIPS = [
+  { id: "ast_assemblyaa", file: "cam_01.mp4", offsetSeconds: 0, source: "screencast-1080p30-15s.mp4", frames: 450, utterances: [
+    { atMs: 500, text: ASSEMBLY_LINE_ONE },
+    { atMs: 6300, text: "again" },
+    { atMs: 8300, text: ASSEMBLY_LINE_ONE },
+  ] },
+  { id: "ast_assemblyab", file: "cam_02.mp4", offsetSeconds: 40, source: "bars-1080p30-10s.mp4", frames: 300, utterances: [
+    { atMs: 500, text: "Your gut says no mine did too" },
+  ] },
+  { id: "ast_assemblyac", file: "cam_03.mp4", offsetSeconds: 90, source: "bars-1080p30-10s.mp4", frames: 300, utterances: [
+    { atMs: 500, text: "Then I read a medical case from Switzerland" },
+  ] },
+];
+const ASSEMBLY_SCRIPT = [
+  "# Assembly fixture",
+  "",
+  "## 1. Hook",
+  "",
+  `> ${ASSEMBLY_LINE_ONE}`,
+  ">",
+  "> Your gut says no mine did too",
+  ">",
+  "> Then I read a medical case from Switzerland",
+  "",
+].join("\n");
+
+async function createAssemblyProjectTemplate(core, transcriptDomain, fixtureRoot) {
+  const root = path.join(fixtureRoot, "projects", "assembly");
+  await mkdir(path.join(root, "media"), { recursive: true });
+  await mkdir(path.join(fixtureRoot, "scripts"), { recursive: true });
+  await writeFile(path.join(fixtureRoot, "scripts/assembly.raw.md"), ASSEMBLY_SCRIPT);
+  const base = Date.parse("2026-10-20T10:00:00Z");
+  const assets = [];
+  for (const clip of ASSEMBLY_CLIPS) {
+    await copyFile(path.join(fixtureRoot, clip.source), path.join(root, "media", clip.file));
+    const asset = await fixtureAsset(root, `media/${clip.file}`, {
+      id: clip.id, kind: "video", container: "mov,mp4,m4a,3gp,3g2,mj2",
+      probe: { duration: { frames: clip.frames, fps: "30/1" }, width: 1920, height: 1080, fps: "30/1", ...(clip.frames === 300 ? { audio: { rate: 48_000, channels: 1 } } : {}) },
+      video: { codec: "h264", width: 1920, height: 1080, fps: "30/1", pixFmt: "yuv420p", hasAlpha: false, rotation: 0 },
+      ...(clip.frames === 300 ? { audio: [{ index: 1, codec: "aac", sampleRate: 48_000, channels: 1, layout: "mono" }] } : {}),
+      captureTime: { value: new Date(base + clip.offsetSeconds * 1000).toISOString().replace(".000", ""), source: "container" },
+    });
+    asset.path = `media/${clip.file}`;
+    assets.push(asset);
+  }
+  const annotations = core.serializeAnnotationSidecar(annotationSidecar(false));
+  let ordinal = 1;
+  const transcripts = ASSEMBLY_CLIPS.map((clip) => {
+    const sidecar = makeScriptedTranscriptFixture({
+      assetId: clip.id, utterances: clip.utterances, wordOrdinalStart: ordinal,
+    });
+    ordinal += Object.keys(sidecar.words).length;
+    return { clip, text: transcriptDomain.serializeTranscriptSidecar(sidecar) };
+  });
+  const model = {
+    format: "guyditor/v1",
+    revision: "rev_00001",
+    project: { id: "prj_aaaaaaaaaa", name: "AI assembly", created: FIXED_CREATED_AT },
+    settings: {
+      timeline: { fps: "30/1", width: 1920, height: 1080 },
+      audio: { sampleRate: 48_000, channels: 2 },
+      primaryDeliverable: "dlv_aaaaaaaaaa",
+    },
+    transcript: { nextWordOrdinal: ordinal },
+    assets,
+    beats: [],
+    sequences: [{ id: "seq_aaaaaaaaaa", name: "main", clips: [] }],
+    layers: [{
+      id: "lyr_aaaaaaaaaa", kind: "video", name: "a-roll", order: 0,
+      enabled: true, locked: false, sequence: "seq_aaaaaaaaaa",
+    }],
+    captions: [],
+    annotations: { sidecar: "annotations", summary: { open: 0, resolved: 0, rejected: 0, reopened: 0 } },
+    deliverables: [{
+      id: "dlv_aaaaaaaaaa", kind: "longform", name: "Assembly",
+      profile: "youtube-longform@1.0.0", sequenceId: "seq_aaaaaaaaaa", status: "draft",
+    }],
+    presets: [],
+    skills: [],
+    sidecars: [{
+      name: "annotations", path: "sidecars/annotations.yaml", schema: "guyditor.annotations/v1",
+      sha256: createHash("sha256").update(annotations).digest("hex"), inputs: [],
+    }, ...transcripts.map(({ clip, text }) => ({
+      name: `transcript-${clip.id}`,
+      path: `sidecars/transcripts/${clip.id}.transcript.json`,
+      schema: "guyditor.transcript/v1",
+      sha256: createHash("sha256").update(text).digest("hex"),
+      generatedBy: { tool: "guyditor-fixture-generator", version: FIXTURE_GENERATOR_VERSION, job: "job_fixturezzz" },
+      inputs: [{ asset: clip.id, sha256: assets.find(({ id }) => id === clip.id).sha256 }],
+    }))],
+  };
+  const created = await core.createProject(root, model, {
+    appVersion: "0.0.0-fixtures",
+    idFactory: (prefix) => `${prefix}_fixturezzz`,
+    now: () => new Date(FIXED_CREATED_AT),
+  });
+  if (!created.ok) throw created.error;
+  await mkdir(path.join(root, "sidecars/transcripts"), { recursive: true });
+  await Promise.all([
+    writeFile(path.join(root, "sidecars/annotations.yaml"), annotations),
+    ...transcripts.map(({ clip, text }) =>
+      writeFile(path.join(root, `sidecars/transcripts/${clip.id}.transcript.json`), text)),
+  ]);
 }
 
 async function createProjectTemplates(core, transcriptDomain, fixtureRoot) {
