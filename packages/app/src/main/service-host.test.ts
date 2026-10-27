@@ -2049,6 +2049,39 @@ describe("AppServiceHost", () => {
       await h.close();
     }
   });
+
+  it("rejecting an assembly proposal returns the session to conversing with the plan kept", async () => {
+    const h = await assemblyHost();
+    try {
+      const { id, call } = h;
+      const proposed = await call("Assembly", "createProposal", { sessionId: id }) as { proposalId: string };
+      await call("OperationEngine", "rejectProposal", { proposalId: proposed.proposalId });
+      expect(await call("Assembly", "get", { sessionId: id })).toMatchObject({
+        status: "conversing",
+        proposalId: null,
+        compiled: null,
+        plan: { status: "plan" },
+      });
+    } finally {
+      await h.close();
+    }
+  });
+
+  it("superseding an assembly proposal returns the session to conversing", async () => {
+    const h = await assemblyHost();
+    try {
+      const { id, call } = h;
+      const proposed = await call("Assembly", "createProposal", { sessionId: id }) as { proposalId: string };
+      await call("OperationEngine", "supersedeProposal", { proposalId: proposed.proposalId, instruction: "tweak" });
+      expect(await call("Assembly", "get", { sessionId: id })).toMatchObject({
+        status: "conversing",
+        proposalId: null,
+        plan: { status: "plan" },
+      });
+    } finally {
+      await h.close();
+    }
+  });
 });
 
 async function assemblyHost() {

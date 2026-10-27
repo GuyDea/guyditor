@@ -311,14 +311,15 @@ describe("send result handling", () => {
     expect(second).toEqual({ ...base, confirmToken: "tok", acknowledgeExternal: true });
   });
 
-  it("gates the Enter-key send on a conversing session with evidence, idle, and text", () => {
+  it("gates the Enter-key send on a conversing or planned session with evidence, idle, and text", () => {
     const ready = { status: "conversing" as const, hasEvidence: true, busy: false, pending: false, text: "hi" };
     expect(canSendMessage(ready)).toBe(true);
     expect(canSendMessage({ ...ready, text: "  " })).toBe(false);
     expect(canSendMessage({ ...ready, busy: true })).toBe(false);
     expect(canSendMessage({ ...ready, pending: true })).toBe(false);
     expect(canSendMessage({ ...ready, hasEvidence: false })).toBe(false);
-    expect(canSendMessage({ ...ready, status: "planned" })).toBe(false);
+    expect(canSendMessage({ ...ready, status: "planned" })).toBe(true);
+    expect(canSendMessage({ ...ready, status: "proposed" })).toBe(false);
     expect(canSendMessage({ ...ready, status: undefined })).toBe(false);
   });
 });

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 
 import { makeId } from "../../../core/src/index.js";
@@ -79,6 +79,9 @@ export type SendResult =
 const MAX_TURNS = 12;
 const SESSION_ID = /^asb_[a-z2-7]{10}$/u;
 const PREPARABLE: readonly AssemblySession["status"][] = ["created", "failed"];
+/** A planned session keeps talking: a new reply replaces the plan. */
+const SENDABLE: readonly AssemblySession["status"][] = ["conversing", "planned"];
+let tempCounter = 0;
 
 function invalidInput(detail: string): Error {
   return new Error(`E_ASSEMBLY_INVALID_INPUT: ${detail}`);
@@ -128,7 +131,11 @@ export class AssemblyService {
     const next: AssemblySession = { ...session, updatedAt: (this.#options.now?.() ?? new Date()).toISOString() };
     const text = serializeAssemblySession(next);
     await mkdir(join(this.#options.store.root, "sidecars/assembly"), { recursive: true });
-    await writeFile(this.#sessionPath(next.id), text, "utf8");
+    // tmp + rename: a crash mid-write never leaves a truncated session behind.
+    tempCounter += 1;
+    const temporary = `${this.#sessionPath(next.id)}.tmp-${String(process.pid)}-${String(tempCounter)}`;
+    await writeFile(temporary, text, "utf8");
+    await rename(temporary, this.#sessionPath(next.id));
     await registerDerivedSidecar(
       { appVersion: this.#options.appVersion, auditSink: this.#options.auditLog },
       this.#options.store,
@@ -166,8 +173,13 @@ export class AssemblyService {
   public async list(): Promise<AssemblySessionView[]> {
     const refs = this.#options.store.currentProject.sidecars
       .filter(({ schema }) => schema === "guyditor.assembly/v1");
-    const sessions = await Promise.all(refs.map(async ({ path }) =>
-      parseAssemblySession(await readFile(join(this.#options.store.root, path), "utf8"))));
+    const sessions = (await Promise.all(refs.map(async ({ path }) => {
+      try {
+        return [parseAssemblySession(await readFile(join(this.#options.store.root, path), "utf8"))];
+      } catch {
+        return []; // a corrupt or missing file must not hide the other sessions
+      }
+    }))).flat();
     return sessions.sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(assemblyView);
   }
 
@@ -274,7 +286,7 @@ export class AssemblyService {
 
   public async send(input: SendInput): Promise<SendResult> {
     const session = await this.#read(input.sessionId);
-    if (session.status !== "conversing" || session.evidence === null) {
+    if (!SENDABLE.includes(session.status) || session.evidence === null) {
       throw new Error(`E_ASSEMBLY_STATE: session ${session.id} is ${session.status} and cannot take a message`);
     }
     const userText = this.#userText(session, input);
@@ -383,7 +395,7 @@ export class AssemblyService {
       });
       record("ok", result.usage, estimateUsd(rate, result.usage));
       const turn = await this.#update(session.id, (current) =>
-        current.status === "conversing"
+        SENDABLE.includes(current.status)
           ? { ...current, messages: result.session.messages, status: result.session.status, plan: result.session.plan, error: null }
           : current);
       return { kind: "turn", session: assemblyView(turn) };
@@ -391,7 +403,7 @@ export class AssemblyService {
       if (!(error instanceof TurnError)) throw error;
       const failure = error;
       record("error", failure.usage, estimateUsd(rate, failure.usage));
-      await this.#update(session.id, (current) => current.status === "conversing"
+      await this.#update(session.id, (current) => SENDABLE.includes(current.status)
         ? { ...current, messages: failure.session.messages, error: failure.message }
         : current);
       throw new Error(failure.kind === "provider" ? `E_ASSEMBLY_PROVIDER: ${failure.message}` : failure.message);
@@ -500,6 +512,17 @@ export class AssemblyService {
         }
         await this.#persist(next);
       } catch { /* nothing more can be recorded; the accept must still succeed */ }
+    });
+  }
+
+  /** Reject/supersede hook: back to the conversation with the plan kept. Never throws. */
+  public onProposalRejected(proposalId: string): Promise<void> {
+    return this.#serialized(async () => {
+      try {
+        const found = await this.#sessionForProposal(proposalId);
+        if (found?.status !== "proposed") return;
+        await this.#persist({ ...found, status: "conversing", proposalId: null, compiled: null });
+      } catch { /* the reject itself must still succeed */ }
     });
   }
 

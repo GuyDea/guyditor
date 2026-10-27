@@ -46,7 +46,7 @@ export function canSendMessage(state: {
   pending: boolean;
   text: string;
 }): boolean {
-  return state.status === "conversing" && state.hasEvidence && !state.busy &&
+  return (state.status === "conversing" || state.status === "planned") && state.hasEvidence && !state.busy &&
     !state.pending && state.text.trim() !== "";
 }
 
@@ -412,7 +412,7 @@ export function AssemblePanel({
             placeholder="Tell the assistant what you want"
             aria-label="Message"
             data-testid="assembly-input"
-            disabled={!conversing}
+            disabled={!conversing && active?.status !== "planned"}
             onChange={(event) => setInput(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === "Enter" && canSend) void send({ text: input });

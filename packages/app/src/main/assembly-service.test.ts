@@ -447,7 +447,7 @@ describe("AssemblyService.send", () => {
     await expect(h.service.send({ sessionId: h.id, text: "  " })).rejects.toThrow("E_ASSEMBLY_INVALID_INPUT");
   });
 
-  it("rejects send outside conversing and closes the audit session on abandon", async () => {
+  it("takes a message from planned, rejects send once abandoned and closes the audit session", async () => {
     const h = await conversing({ externalCalls: "allow" });
     const asked = await h.service.send({ sessionId: h.id, text: "go" });
     if (asked.kind !== "turn") throw new Error("expected turn");
@@ -459,8 +459,13 @@ describe("AssemblyService.send", () => {
       .toBe("Instruction, drop it");
     expect(sent.status).toBe("planned");
     expect(sent.plan).not.toBeNull();
-    await expect(h.service.send({ sessionId: h.id, text: "more" })).rejects.toThrow("E_ASSEMBLY_STATE");
+    // A planned session keeps talking; the new reply replaces the plan.
+    const revised = await h.service.send({ sessionId: h.id, text: "more" });
+    if (revised.kind !== "turn") throw new Error("expected turn");
+    expect(revised.session.messages.filter(({ role }) => role === "user").at(-1)?.content).toBe("more");
+    expect(revised.session.messages.length).toBeGreaterThan(sent.messages.length);
     await h.service.abandon(h.id);
+    await expect(h.service.send({ sessionId: h.id, text: "again" })).rejects.toThrow("E_ASSEMBLY_STATE");
     const types = h.auditLog.readSession(sent.auditSessionId!).records.map((r) => r.type);
     expect(types).toContain("session.end");
   });
@@ -639,6 +644,25 @@ describe("AssemblyService proposals", () => {
     expect(view.status).toBe("accepted");
     expect(view.error).toMatch(/E_ASSEMBLY_FOLLOW_UP: disk full/);
     expect(h.queue.list({ kind: "assist.fillers.detect" })).toHaveLength(0);
+  });
+
+  it("a rejected proposal returns the session to conversing with the plan kept", async () => {
+    const h = await planned("off");
+    const { proposalId } = await h.service.createProposal(h.id);
+    await expect(h.service.onProposalRejected(proposalId)).resolves.toBeUndefined();
+    const view = await h.service.get(h.id);
+    expect(view).toMatchObject({ status: "conversing", proposalId: null, compiled: null });
+    expect(view.plan?.summary).toBe("Two lines.");
+    await expect(h.service.onProposalRejected("prp_unknown")).resolves.toBeUndefined();
+  });
+
+  it("list skips a truncated sibling session file", async () => {
+    const h = await harness();
+    const good = await h.service.create({ assetIds: [FIRST] });
+    const bad = await h.service.create({ assetIds: [SECOND] });
+    const ref = h.store.currentProject.sidecars.find(({ path }) => path.includes(bad.id))!;
+    await writeFile(join(h.root, ref.path), "{\"id\": \"asb_", "utf8");
+    expect((await h.service.list()).map(({ id }) => id)).toEqual([good.id]);
   });
 
   it("a corrupt session file does not break acceptance of another proposal", async () => {

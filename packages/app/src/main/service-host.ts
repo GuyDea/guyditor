@@ -2053,6 +2053,7 @@ export class WindowServiceHost {
       "creator",
     ));
     this.publisher.publish({ kind: "proposal.updated", proposalId });
+    await project.assembly.onProposalRejected(proposalId);
     return proposal;
   }
 
@@ -2072,6 +2073,7 @@ export class WindowServiceHost {
     }));
     this.publisher.publish({ kind: "proposal.updated", proposalId });
     this.publisher.publish({ kind: "proposal.updated", proposalId: proposal.id });
+    await project.assembly.onProposalRejected(proposalId);
     return proposal;
   }
 
