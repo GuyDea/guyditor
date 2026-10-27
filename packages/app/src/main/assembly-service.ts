@@ -257,23 +257,39 @@ export class AssemblyService {
     return transcriptSidecars(this.#options.store).then((sidecars) => {
       const words: ReplyContext["words"] = new Map();
       for (const sidecar of sidecars.filter(({ assetId }) => assetIds.includes(assetId))) {
-        for (const [id, word] of Object.entries(sidecar.words)) {
-          words.set(id, { assetId: sidecar.assetId, state: word.state, order: Number(id.replace(/\D/gu, "")) });
-        }
+        // Canonical order is transcript position: corrections mint fresh ids that do not sort by time.
+        sidecar.segments.flatMap(({ words: ids }) => ids).forEach((id, order) => {
+          const word = sidecar.words[id];
+          if (word !== undefined) words.set(id, { assetId: sidecar.assetId, state: word.state, order });
+        });
       }
       return { words, scriptBlocks: evidence.scriptBlocks, assetIds };
     });
   }
 
   public async send(input: SendInput): Promise<SendResult> {
-    const { aiSettings, store, costMeter } = this.#options;
-    let session = await this.#read(input.sessionId);
+    const session = await this.#read(input.sessionId);
     if (session.status !== "conversing" || session.evidence === null) {
       throw new Error(`E_ASSEMBLY_STATE: session ${session.id} is ${session.status} and cannot take a message`);
     }
-    const { evidence } = session;
     const userText = this.#userText(session, input);
     if (this.#sending.has(session.id)) throw new Error(`E_ASSEMBLY_STATE: session ${session.id} is already working`);
+    this.#sending.add(session.id);
+    try {
+      return await this.#sendGuarded(session, session.evidence, input, userText);
+    } finally {
+      this.#sending.delete(session.id);
+    }
+  }
+
+  async #sendGuarded(
+    start: AssemblySession,
+    evidence: AssemblyEvidence,
+    input: SendInput,
+    userText: string,
+  ): Promise<SendResult> {
+    const { aiSettings, store, costMeter } = this.#options;
+    let session = start;
     const { provider, model } = session.settings;
     const stub = provider === "stub";
     const externalCalls = aiSettings.externalCalls();
@@ -335,7 +351,6 @@ export class AssemblyService {
         estimated,
       };
     }
-    this.#sending.add(session.id);
     const startedAt = performance.now();
     const record = (outcome: "ok" | "error", usage: { inputTokens: number; outputTokens: number }, actualUsd: number) =>
       costMeter.record({
@@ -370,13 +385,11 @@ export class AssemblyService {
     } catch (error: unknown) {
       if (!(error instanceof TurnError)) throw error;
       const failure = error;
-      record("error", failure.usage, failure.kind === "provider" ? 0 : estimateUsd(rate, failure.usage));
+      record("error", failure.usage, estimateUsd(rate, failure.usage));
       await this.#update(session.id, (current) => current.status === "conversing"
         ? { ...current, messages: failure.session.messages, error: failure.message }
         : current);
       throw new Error(failure.kind === "provider" ? `E_ASSEMBLY_PROVIDER: ${failure.message}` : failure.message);
-    } finally {
-      this.#sending.delete(session.id);
     }
   }
 

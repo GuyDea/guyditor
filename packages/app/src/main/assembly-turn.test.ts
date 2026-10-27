@@ -70,6 +70,20 @@ describe("runAssemblyTurn", () => {
     expect(second.session.plan?.cuts).toHaveLength(1);
   });
 
+  it("keeps the tightening hint on the first message for every later turn", async () => {
+    const { deps, requests } = scripted(QUESTIONS, PLAN);
+    const first = await runAssemblyTurn(session("ask"), "go", deps);
+    await runAssemblyTurn(first.session, "keep it", deps);
+    expect(requests[1]!.messages[0]!.content).toBe("EVIDENCE\n\nTightening preference: ask me before planning. go");
+  });
+
+  it("sends the tightening hint on the retry after a provider failure", async () => {
+    const { deps, requests } = scripted(new Error("429"), PLAN);
+    const failure = await runAssemblyTurn(session("ask"), "go", deps).catch((error: unknown) => error) as TurnError;
+    await runAssemblyTurn(failure.session, "go", deps);
+    expect(requests[1]!.messages[0]!.content).toBe("EVIDENCE\n\nTightening preference: ask me before planning. go");
+  });
+
   it("retries once on an invalid reply then succeeds", async () => {
     const { deps, requests } = scripted(BAD, PLAN);
     const result = await runAssemblyTurn(session(), "go", deps);

@@ -453,4 +453,75 @@ describe("AssemblyService.send", () => {
     const again = await prepare(h, h.id);
     expect(again).toMatchObject({ messages: [], plan: null, compiled: null, proposalId: null, error: null });
   });
+
+  const PLAN_OF = (fromWord: string, toWord: string) => ({
+    status: "plan", summary: "s", tightening: null, flags: [],
+    cuts: [{ scriptBlock: null, scriptSentences: null, assetId: FIRST, fromWord, toWord, reason: "r" }],
+  });
+  const adapterOf = (complete: LlmAdapter["complete"]): typeof createLlmAdapter => () => ({
+    provider: "anthropic", complete, listModels: () => Promise.resolve([]),
+  });
+  const ok = (reply: unknown) => Promise.resolve({ reply, usage: { inputTokens: 1000, outputTokens: 100 } });
+
+  it("orders words by transcript position, not id ordinal", async () => {
+    const replies = [PLAN_OF("w000004", "w000099"), PLAN_OF("w000004", "w000099"), PLAN_OF("w000001", "w000004")];
+    const h = await conversing({
+      externalCalls: "allow",
+      adapterFactory: adapterOf(() => ok(replies.shift())),
+    });
+    const path = join(h.root, `sidecars/transcripts/${FIRST}.transcript.json`);
+    const sidecar = JSON.parse(await readFile(path, "utf8")) as {
+      words: Record<string, unknown>; segments: { words: string[] }[];
+    };
+    sidecar.words["w000099"] = sidecar.words["w000003"];
+    delete sidecar.words["w000003"];
+    sidecar.segments[0]!.words = sidecar.segments[0]!.words.map((id) => id === "w000003" ? "w000099" : id);
+    await writeFile(path, JSON.stringify(sidecar), "utf8");
+    // w000099 sits between w000002 and w000004, so w000004 -> w000099 is reversed (both replies rejected).
+    await expect(h.service.send({ sessionId: h.id, text: "go" })).rejects.toThrow(/E_ASSEMBLY_REPLY_INVALID/);
+    const valid = await h.service.send({ sessionId: h.id, text: "again" });
+    expect(valid.kind).toBe("turn");
+    expect((await h.service.get(h.id)).status).toBe("planned");
+  });
+
+  it("records the first attempt's spend when the retry hits a provider error", async () => {
+    let calls = 0;
+    const h = await conversing({
+      externalCalls: "allow", model: "claude-sonnet-5-5", rates: SEND_RATES,
+      adapterFactory: adapterOf(() => {
+        calls += 1;
+        return calls === 1 ? ok({ status: "nope" }) : Promise.reject(new LlmAdapterError("503", 503, true));
+      }),
+    });
+    await expect(h.service.send({ sessionId: h.id, text: "go" })).rejects.toThrow(/E_ASSEMBLY_PROVIDER/);
+    const records = h.auditLog.readSession((await h.service.get(h.id)).auditSessionId!).records;
+    const call = records.find((record) => record.type === "external.call") as unknown as
+      { outcome: string; units: { inputTokens: number }; costUsd: { actual?: number } };
+    expect(call.outcome).toBe("error");
+    expect(call.units.inputTokens).toBe(1000);
+    expect(call.costUsd.actual).toBeGreaterThan(0);
+  });
+
+  it("rejects a concurrent send with one audit session and one adapter call", async () => {
+    let calls = 0;
+    const h = await conversing({
+      externalCalls: "allow",
+      adapterFactory: adapterOf(async () => {
+        calls += 1;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        return { reply: PLAN_OF("w000001", "w000002"), usage: { inputTokens: 1, outputTokens: 1 } };
+      }),
+    });
+    const results = await Promise.allSettled([
+      h.service.send({ sessionId: h.id, text: "go" }),
+      h.service.send({ sessionId: h.id, text: "go" }),
+    ]);
+    expect(results.map(({ status }) => status).sort()).toEqual(["fulfilled", "rejected"]);
+    const rejected = results.find((r) => r.status === "rejected") as PromiseRejectedResult;
+    expect(String(rejected.reason)).toContain("E_ASSEMBLY_STATE");
+    expect(calls).toBe(1);
+    const view = await h.service.get(h.id);
+    const starts = h.auditLog.readSession(view.auditSessionId!).records.filter((r) => r.type === "session.start");
+    expect(starts).toHaveLength(1);
+  });
 });

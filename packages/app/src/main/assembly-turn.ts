@@ -65,7 +65,7 @@ export async function runAssemblyTurn(
     throw new Error(`E_ASSEMBLY_TURN_LIMIT: the conversation reached ${deps.maxTurns} turns`);
   }
   const now = deps.now ?? ((): string => new Date().toISOString());
-  const hint = session.settings.tightening === "ask" && !session.messages.some(({ role }) => role === "user");
+  const hint = session.settings.tightening === "ask";
   let current: AssemblySession = {
     ...session,
     messages: [...session.messages, { role: "user", content: userText, reply: null, usage: null, at: now() }],
