@@ -41,7 +41,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function terminalJob(
+export function terminalJob(
   queue: JobQueue,
   jobId: string,
   signal: AbortSignal,
@@ -56,7 +56,7 @@ function terminalJob(
     const abort = (): void => {
       queue.cancel(jobId);
       unsubscribe();
-      reject(new Error(`Filler detection was cancelled while waiting for VAD job ${jobId}.`));
+      reject(new Error(`Cancelled while waiting for job ${jobId}.`));
     };
     unsubscribe = queue.onChange(({ job }) => {
       if (job.jobId === jobId && ["done", "failed", "cancelled"].includes(job.state)) finish(job);

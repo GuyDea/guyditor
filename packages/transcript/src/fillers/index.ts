@@ -6,6 +6,7 @@ export {
   enqueueFillerDetection,
   parseFillerDetectionResult,
   registerFillerDetectionExecutor,
+  terminalJob,
 } from "./job.js";
 export type { FillerDetectionExecutorOptions } from "./job.js";
 export { compileFillerProposal } from "./proposal.js";
