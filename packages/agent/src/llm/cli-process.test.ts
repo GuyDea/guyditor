@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { cliVersion, failureError, runCli } from "./cli-process.js";
 import { LlmAdapterError } from "./types.js";
 import { fakeSpawn } from "./__fixtures__/fake-spawn.js";
@@ -36,18 +36,31 @@ describe("cli process", () => {
   });
 
   it("recognises a login failure", () => {
-    const error = failureError("codex", { code: 1, signal: null, stdout: "", stderr: "Not logged in. Run codex login", timedOut: false });
+    const error = failureError("codex", { code: 1, signal: null, stdout: "", stderr: "Not logged in. Run codex login", timedOut: false, timeoutMs: 1000 });
     expect(error.message).toBe("codex is not logged in — run `codex` once in a terminal");
     expect(error.retryable).toBe(false);
   });
 
   it("includes only the last 64 KB of output in a generic failure", () => {
     const stderr = `${"x".repeat(70_000)}END`;
-    const error = failureError("claude", { code: 2, signal: null, stdout: "", stderr, timedOut: false });
+    const error = failureError("claude", { code: 2, signal: null, stdout: "", stderr, timedOut: false, timeoutMs: 1000 });
     expect(error.message.startsWith("claude: exited with code 2")).toBe(true);
     expect(error.message).toContain("END");
     expect(error.message.length).toBeLessThan(66_000);
     expect(error.retryable).toBe(true);
+  });
+
+  it("cliVersion reports the version timeout it used", async () => {
+    vi.useFakeTimers();
+    try {
+      const { spawn, calls } = fakeSpawn({ hang: true });
+      const pending = cliVersion("claude", "claude", spawn);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(await pending).toEqual({ ok: false, message: "claude: timed out after 10 s" });
+      expect(calls[0]!.killed).toBe("SIGTERM");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("cliVersion returns the first stdout line or the failure", async () => {

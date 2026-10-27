@@ -33,6 +33,8 @@ export interface CliRun {
   stdout: string;
   stderr: string;
   timedOut: boolean;
+  /** The timeout runCli actually applied. */
+  timeoutMs: number;
 }
 
 function collect(stream: NodeJS.ReadableStream | null): () => string {
@@ -50,12 +52,13 @@ export function runCli(input: {
     const child = (input.spawn ?? defaultSpawn)(binary, args, { cwd, env: input.env ?? process.env });
     const stdout = collect(child.stdout);
     const stderr = collect(child.stderr);
+    const timeoutMs = input.timeoutMs ?? CLI_TIMEOUT_MS;
     let timedOut = false;
     let settled = false;
     const timer = setTimeout(() => {
       timedOut = true;
       child.kill("SIGTERM");
-    }, input.timeoutMs ?? CLI_TIMEOUT_MS);
+    }, timeoutMs);
 
     child.on("error", (error) => {
       if (settled) return;
@@ -69,7 +72,7 @@ export function runCli(input: {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      resolve({ code, signal, stdout: stdout(), stderr: stderr(), timedOut });
+      resolve({ code, signal, stdout: stdout(), stderr: stderr(), timedOut, timeoutMs });
     });
 
     // A closed pipe (child exited early) must not crash the process; close/error report the outcome.
@@ -80,7 +83,7 @@ export function runCli(input: {
 
 export function failureError(name: CliName, run: CliRun): LlmAdapterError {
   if (run.timedOut) {
-    return new LlmAdapterError(`${name}: timed out after ${CLI_TIMEOUT_MS / 1000} s`, null, true);
+    return new LlmAdapterError(`${name}: timed out after ${Math.round(run.timeoutMs / 1000)} s`, null, true);
   }
   if (LOGIN_PATTERN.test(run.stdout + run.stderr)) {
     return new LlmAdapterError(`${name} is not logged in — run \`${name}\` once in a terminal`, null, false);
