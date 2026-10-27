@@ -11,6 +11,11 @@ describe("assemblySystemPrompt", () => {
     expect(prompt).toContain("assembly_reply");
   });
 
+  it("describes the context files", () => {
+    expect(prompt).toContain("F<n> context files");
+    expect(prompt).toContain("## Context files");
+  });
+
   it("has no template leftovers", () => {
     expect(prompt).not.toMatch(/\{\{|\$\{|\{[a-zA-Z]+\}/u);
     expect(prompt).not.toContain("{");

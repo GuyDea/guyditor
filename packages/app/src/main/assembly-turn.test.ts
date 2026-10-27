@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { ASSEMBLY_REPLY_SCHEMA, createAssemblySession } from "../../../transcript/src/index.js";
 import type { AssemblySession, ReplyContext } from "../../../transcript/src/index.js";
+import { messageText, textMessage } from "../../../agent/src/index.js";
 import type { LlmAdapter, LlmCompletion, LlmRequest } from "../../../agent/src/index.js";
 
 import { runAssemblyTurn, TurnError } from "./assembly-turn.js";
@@ -52,7 +53,7 @@ describe("runAssemblyTurn", () => {
   it("first turn carries the evidence", async () => {
     const { deps, requests } = scripted(QUESTIONS);
     const result = await runAssemblyTurn(session(), "go", deps);
-    expect(requests[0]!.messages).toEqual([{ role: "user", content: "EVIDENCE\n\ngo" }]);
+    expect(requests[0]!.messages).toEqual([textMessage("user", "EVIDENCE\n\ngo")]);
     expect(requests[0]!.maxOutputTokens).toBe(16_000);
     expect(result.session.status).toBe("conversing");
     expect(result.session.messages.map(({ role }) => role)).toEqual(["user", "assistant"]);
@@ -63,10 +64,10 @@ describe("runAssemblyTurn", () => {
   it("prefixes the tightening hint once, sends the full history later and plans", async () => {
     const { deps, requests } = scripted(QUESTIONS, PLAN);
     const first = await runAssemblyTurn(session("ask"), "go", deps);
-    expect(requests[0]!.messages[0]!.content).toContain("Tightening preference: ask me before planning. go");
+    expect(messageText(requests[0]!.messages[0]!)).toContain("Tightening preference: ask me before planning. go");
     const second = await runAssemblyTurn(first.session, "keep it", deps);
     expect(requests[1]!.messages.map(({ role }) => role)).toEqual(["user", "assistant", "user"]);
-    expect(requests[1]!.messages[2]!.content).toBe("keep it");
+    expect(messageText(requests[1]!.messages[2]!)).toBe("keep it");
     expect(second.session.status).toBe("planned");
     expect(second.session.plan?.cuts).toHaveLength(1);
   });
@@ -75,14 +76,14 @@ describe("runAssemblyTurn", () => {
     const { deps, requests } = scripted(QUESTIONS, PLAN);
     const first = await runAssemblyTurn(session("ask"), "go", deps);
     await runAssemblyTurn(first.session, "keep it", deps);
-    expect(requests[1]!.messages[0]!.content).toBe("EVIDENCE\n\nTightening preference: ask me before planning. go");
+    expect(messageText(requests[1]!.messages[0]!)).toBe("EVIDENCE\n\nTightening preference: ask me before planning. go");
   });
 
   it("sends the tightening hint on the retry after a provider failure", async () => {
     const { deps, requests } = scripted(new Error("429"), PLAN);
     const failure = await runAssemblyTurn(session("ask"), "go", deps).catch((error: unknown) => error) as TurnError;
     await runAssemblyTurn(failure.session, "go", deps);
-    expect(requests[1]!.messages[0]!.content).toBe("EVIDENCE\n\nTightening preference: ask me before planning. go");
+    expect(messageText(requests[1]!.messages[0]!)).toBe("EVIDENCE\n\nTightening preference: ask me before planning. go");
   });
 
   it("retries once on an invalid reply then succeeds", async () => {
@@ -90,8 +91,8 @@ describe("runAssemblyTurn", () => {
     const result = await runAssemblyTurn(session(), "go", deps);
     expect(result.session.status).toBe("planned");
     expect(result.session.messages.filter(({ role }) => role === "validation")).toHaveLength(1);
-    expect(requests[1]!.messages.map(({ role }) => role)).toEqual(["user", "assistant", "user"]);
-    expect(requests[1]!.messages[2]!.content).toContain("w999999");
+    expect(requests[1]!.messages.map(({ role }) => role)).toEqual(["user", "assistant", "validation"]);
+    expect(messageText(requests[1]!.messages[2]!)).toContain("w999999");
     expect(result.usage).toEqual({ inputTokens: 20, outputTokens: 10 });
   });
 

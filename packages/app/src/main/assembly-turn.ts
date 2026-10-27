@@ -1,4 +1,5 @@
 import { ASSEMBLY_REPLY_TOKEN_ALLOWANCE } from "../../../agent/src/index.js";
+import { textMessage } from "../../../agent/src/index.js";
 import type { LlmAdapter, LlmMessage } from "../../../agent/src/index.js";
 import { validateAssemblyReply } from "../../../transcript/src/index.js";
 import type { AssemblyMessage, AssemblySession, ReplyContext } from "../../../transcript/src/index.js";
@@ -41,10 +42,10 @@ export function llmMessages(session: AssemblySession, hint = false): LlmMessage[
   const evidence = session.evidence?.text ?? "";
   let first = true;
   return session.messages.map(({ role, content }) => {
-    if (role === "assistant") return { role, content };
-    if (!first) return { role: "user", content };
+    if (role !== "user") return textMessage(role, content);
+    if (!first) return textMessage("user", content);
     first = false;
-    return { role: "user", content: `${evidence}\n\n${hint ? TIGHTENING_HINT : ""}${content}` };
+    return textMessage("user", `${evidence}\n\n${hint ? TIGHTENING_HINT : ""}${content}`);
   });
 }
 

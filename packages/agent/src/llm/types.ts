@@ -3,7 +3,33 @@ import { AnthropicLlmAdapter } from "./anthropic.js";
 import { OpenAiLlmAdapter } from "./openai.js";
 import { StubLlmAdapter } from "./stub.js";
 
-export interface LlmMessage { role: "user" | "assistant"; content: string }
+/** "validation" is a rejected-reply note; API adapters send it as a user turn. */
+export type LlmRole = "user" | "assistant" | "validation";
+
+export type LlmContentPart =
+  | { type: "text"; text: string }
+  | { type: "image"; mime: string; data: Uint8Array; label: string; name: string }
+  | { type: "pdf"; mime: "application/pdf"; data: Uint8Array; label: string; name: string };
+
+export interface LlmMessage { role: LlmRole; content: LlmContentPart[] }
+
+export function textMessage(role: LlmRole, text: string): LlmMessage {
+  return { role, content: [{ type: "text", text }] };
+}
+
+/** Text parts joined with newlines; images and PDFs contribute nothing. */
+export function messageText(message: LlmMessage): string {
+  return message.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n");
+}
+
+/** The text that introduces a binary part, e.g. "F2 (storyboard.png):". */
+export function partCaption(part: Exclude<LlmContentPart, { type: "text" }>): string {
+  return `${part.label} (${part.name}):`;
+}
+
+export function partBase64(part: Exclude<LlmContentPart, { type: "text" }>): string {
+  return Buffer.from(part.data).toString("base64");
+}
 
 export interface LlmRequest {
   model: string;
@@ -18,6 +44,8 @@ export interface LlmRequest {
 export interface LlmCompletion {
   reply: unknown;
   usage: { inputTokens: number; outputTokens: number };
+  /** Set only by CLI adapters, which report their own cost. */
+  reportedUsd?: number;
 }
 
 export class LlmAdapterError extends Error {

@@ -1,14 +1,23 @@
 import { describe, expect, it, vi } from "vitest";
 import { AnthropicLlmAdapter } from "./anthropic.js";
-import { createLlmAdapter, LlmAdapterError, type LlmRequest } from "./types.js";
+import { createLlmAdapter, LlmAdapterError, textMessage, type LlmMessage, type LlmRequest } from "./types.js";
 import { OpenAiLlmAdapter } from "./openai.js";
 
 const SCHEMA = { type: "object", properties: { a: { type: "string" } }, required: ["a"], additionalProperties: false };
 
+const FILES: LlmMessage = {
+  role: "user",
+  content: [
+    { type: "text", text: "hi" },
+    { type: "image", mime: "image/png", data: new Uint8Array([1, 2, 3]), label: "F2", name: "storyboard.png" },
+    { type: "pdf", mime: "application/pdf", data: new Uint8Array([1, 2, 3]), label: "F3", name: "deck.pdf" },
+  ],
+};
+
 function req(over: Partial<LlmRequest> = {}): LlmRequest {
   return {
     model: "claude-opus-5-5", effort: "medium", system: "SYS", maxOutputTokens: 1000,
-    messages: [{ role: "user", content: "hi" }], responseSchema: SCHEMA, ...over,
+    messages: [textMessage("user", "hi")], responseSchema: SCHEMA, ...over,
   };
 }
 
@@ -94,6 +103,29 @@ describe("AnthropicLlmAdapter", () => {
     const [url, init] = fetchFn.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe("https://api.anthropic.com/v1/models");
     expect(init.method).toBe("GET");
+  });
+
+  it("sends images and PDFs as base64 blocks captioned with their label", async () => {
+    const fetchFn = vi.fn(async () => reply({ content: [{ type: "tool_use", input: {} }], usage: { input_tokens: 0, output_tokens: 0 } }));
+    await new AnthropicLlmAdapter({ apiKey: "k", fetch: fetchFn as unknown as typeof fetch }).complete(req({ messages: [FILES] }));
+    const [, init] = fetchFn.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(init.body as string).messages[0].content).toEqual([
+      { type: "text", text: "hi" },
+      { type: "text", text: "F2 (storyboard.png):" },
+      { type: "image", source: { type: "base64", media_type: "image/png", data: "AQID" } },
+      { type: "text", text: "F3 (deck.pdf):" },
+      { type: "document", source: { type: "base64", media_type: "application/pdf", data: "AQID" } },
+    ]);
+  });
+
+  it("text-only messages stay plain strings and validation turns are sent as user", async () => {
+    const fetchFn = vi.fn(async () => reply({ content: [{ type: "tool_use", input: {} }], usage: { input_tokens: 0, output_tokens: 0 } }));
+    const messages = [textMessage("user", "a"), textMessage("assistant", "b"), textMessage("validation", "c")];
+    await new AnthropicLlmAdapter({ apiKey: "k", fetch: fetchFn as unknown as typeof fetch }).complete(req({ messages }));
+    const [, init] = fetchFn.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(init.body as string).messages).toEqual([
+      { role: "user", content: "a" }, { role: "assistant", content: "b" }, { role: "user", content: "c" },
+    ]);
   });
 
   it("createLlmAdapter returns the right class per provider", () => {

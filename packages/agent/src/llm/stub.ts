@@ -1,6 +1,6 @@
 import { estimateTokens } from "../../../transcript/src/index.js";
 import type { AssemblyCut, AssemblyFlag, AssemblyReply } from "../../../transcript/src/index.js";
-import type { LlmAdapter, LlmCompletion, LlmRequest } from "./types.js";
+import { messageText, type LlmAdapter, type LlmCompletion, type LlmRequest } from "./types.js";
 
 interface ParsedSegment {
   id: string;
@@ -109,11 +109,11 @@ export class StubLlmAdapter implements LlmAdapter {
   readonly provider = "stub" as const;
 
   complete(request: LlmRequest): Promise<LlmCompletion> {
-    const evidence = parseEvidence(request.messages.find(({ role }) => role === "user")?.content ?? "");
+    const evidence = parseEvidence(messageText(request.messages.find(({ role }) => role !== "assistant") ?? { role: "user", content: [] }));
     const firstTurn = !request.messages.some(({ role }) => role === "assistant");
     const aside = firstTurn ? evidence.segments.find((s) => s.aside) : undefined;
     const reply = aside ? question(aside) : plan(evidence);
-    const inputTokens = estimateTokens(request.system + request.messages.map((m) => m.content).join(""));
+    const inputTokens = estimateTokens(request.system + request.messages.map(messageText).join(""));
     return Promise.resolve({ reply, usage: { inputTokens, outputTokens: 200 } });
   }
 

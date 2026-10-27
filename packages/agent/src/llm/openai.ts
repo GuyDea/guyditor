@@ -2,7 +2,8 @@ import type { AssemblyEffort } from "../../../transcript/src/index.js";
 import { modelIds, requestJson, tokenCount } from "./http.js";
 import { ASSEMBLY_REASONING_BUDGET, TRUNCATED_REPLY_MESSAGE } from "./pricing.js";
 import {
-  LlmAdapterError, type LlmAdapter, type LlmAdapterOptions, type LlmCompletion, type LlmRequest,
+  LlmAdapterError, messageText, partBase64, partCaption,
+  type LlmAdapter, type LlmAdapterOptions, type LlmCompletion, type LlmMessage, type LlmRequest,
 } from "./types.js";
 
 type JsonSchema = Record<string, unknown>;
@@ -38,6 +39,22 @@ export function toOpenAiStrictSchema(schema: Readonly<JsonSchema>): JsonSchema {
   };
 }
 
+function wireMessage({ role, content }: LlmMessage): { role: "user" | "assistant"; content: unknown } {
+  const wireRole = role === "assistant" ? "assistant" : "user";
+  if (content.every((part) => part.type === "text")) return { role: wireRole, content: messageText({ role, content }) };
+  return {
+    role: wireRole,
+    content: content.flatMap((part) => {
+      if (part.type === "text") return [{ type: "input_text", text: part.text }];
+      const caption = { type: "input_text", text: partCaption(part) };
+      const url = `data:${part.mime};base64,${partBase64(part)}`;
+      return [caption, part.type === "pdf"
+        ? { type: "input_file", filename: part.name, file_data: url }
+        : { type: "input_image", image_url: url }];
+    }),
+  };
+}
+
 interface OpenAiOutput { content?: Array<{ type?: string; text?: unknown }> }
 
 export class OpenAiLlmAdapter implements LlmAdapter {
@@ -55,7 +72,7 @@ export class OpenAiLlmAdapter implements LlmAdapter {
     const body = {
       model: request.model,
       instructions: request.system,
-      input: request.messages,
+      input: request.messages.map(wireMessage),
       reasoning: { effort: EFFORT[request.effort] },
       // OpenAI counts reasoning tokens against max_output_tokens, so the effort budget rides on top.
       max_output_tokens: ASSEMBLY_REASONING_BUDGET[request.effort] + request.maxOutputTokens,

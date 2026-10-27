@@ -1,8 +1,22 @@
 import { modelIds, requestJson, tokenCount } from "./http.js";
 import { ASSEMBLY_REASONING_BUDGET, TRUNCATED_REPLY_MESSAGE } from "./pricing.js";
 import {
-  LlmAdapterError, type LlmAdapter, type LlmAdapterOptions, type LlmCompletion, type LlmRequest,
+  LlmAdapterError, messageText, partBase64, partCaption,
+  type LlmAdapter, type LlmAdapterOptions, type LlmCompletion, type LlmMessage, type LlmRequest,
 } from "./types.js";
+
+function wireMessage({ role, content }: LlmMessage): { role: "user" | "assistant"; content: unknown } {
+  const wireRole = role === "assistant" ? "assistant" : "user";
+  if (content.every((part) => part.type === "text")) return { role: wireRole, content: messageText({ role, content }) };
+  return {
+    role: wireRole,
+    content: content.flatMap((part) => {
+      if (part.type === "text") return [{ type: "text", text: part.text }];
+      const source = { type: "base64", media_type: part.mime, data: partBase64(part) };
+      return [{ type: "text", text: partCaption(part) }, { type: part.type === "pdf" ? "document" : "image", source }];
+    }),
+  };
+}
 
 interface AnthropicBlock { type?: string; name?: string; input?: unknown }
 
@@ -23,7 +37,7 @@ export class AnthropicLlmAdapter implements LlmAdapter {
       model: request.model,
       max_tokens: budget + request.maxOutputTokens,
       system: request.system,
-      messages: request.messages,
+      messages: request.messages.map(wireMessage),
       thinking: { type: "enabled", budget_tokens: budget },
       tools: [{ name: "assembly_reply", description: "Return the assembly reply.", input_schema: request.responseSchema }],
       tool_choice: { type: "auto" },

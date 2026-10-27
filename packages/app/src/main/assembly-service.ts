@@ -15,6 +15,7 @@ import {
   ASSEMBLY_OUTPUT_TOKEN_ESTIMATE,
   createLlmAdapter as defaultAdapterFactory,
   estimateUsd,
+  messageText,
   resolveRate,
   SessionManager,
 } from "../../../agent/src/index.js";
@@ -347,7 +348,7 @@ export class AssemblyService {
     const history = llmMessages({
       ...session,
       messages: [...session.messages, { role: "user", content: userText, reply: null, usage: null, at: "" }],
-    }).map(({ content }) => content).join("");
+    }).map(messageText).join("");
     const units = { inputTokens: estimateTokens(system + history), outputTokens: ASSEMBLY_OUTPUT_TOKEN_ESTIMATE };
     const estimate: CostEstimate = {
       adapterId: `llm.${provider}`,
