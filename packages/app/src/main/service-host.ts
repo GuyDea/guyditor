@@ -47,12 +47,10 @@ import {
 } from "../../../media/src/index.js";
 import type { KeyQcJobPayload, KeyQcReport, MlworkerTrackResult, SubjectTrackAnalysis } from "../../../media/src/index.js";
 import {
-  compileFillerProposal,
   createAnnotationTranscriptSource,
   createTranscriptWordLookup,
   detectSpokenTakeMarkers,
   enqueueFillerDetection,
-  parseFillerDetectionResult,
   planPickupSplice,
   registerFillerDetectionExecutor,
   TranscriptEngine,
@@ -60,7 +58,6 @@ import {
 } from "../../../transcript/src/index.js";
 import { assessSourceRangeContinuity } from "../../../transcript/src/continuity.js";
 import type { TranscribeResult } from "../../../transcript/src/index.js";
-import { loadTranscriptWorkspace } from "../../../transcript/src/operations.js";
 import {
   renderFramingPreviewStrip,
   RenderService,
@@ -131,6 +128,7 @@ import {
   recoveryService,
 } from "./recovery-service.js";
 import { ProjectWorkspaceStateStore } from "./project-workspace-state.js";
+import { createFillerProposal } from "./filler-follow-up.js";
 import type { ProjectServices } from "./project-services.js";
 import { createProjectDialog } from "./project-creation.js";
 import { history, transcriptSidecars } from "./project-readers.js";
@@ -1064,8 +1062,11 @@ export class WindowServiceHost {
           });
         }
         if (job.state === "done" && job.kind === "assist.fillers.detect") {
-          runFollowUp(job, (project, completed) =>
-            this.#createFillerProposal(project, completed));
+          runFollowUp(job, (project, completed) => createFillerProposal({
+            appVersion: this.#app.appVersion,
+            auditSink: this.#app.auditLog,
+            publish: (event) => this.publisher.publish(event),
+          }, project, completed));
         }
         if (job.state === "done" && job.kind === "transcribe") {
           runFollowUp(job, (project, completed) =>
@@ -2339,37 +2340,6 @@ export class WindowServiceHost {
       kind: "project.revision",
       revision: project.store.currentProject.revision,
     });
-  }
-
-  async #createFillerProposal(
-    project: ProjectServices,
-    job: JobRecord,
-  ): Promise<void> {
-    const detected = parseFillerDetectionResult(job.payload);
-    if (detected.candidates.length === 0) return;
-    const workspace = resultValue(await loadTranscriptWorkspace(project.store, (prefix) => {
-      if (prefix === "seg" || prefix === "spk") {
-        return `${prefix}_${makeId("txn").slice(4)}`;
-      }
-      return makeId(prefix);
-    }));
-    const resolvers = new AnchorResolverRegistry();
-    resolvers.registerWordLookup(createTranscriptWordLookup(workspace.sidecars));
-    const engine = new OperationEngine(project.store.currentProject, {
-      appVersion: this.#app.appVersion,
-      committer: project.store,
-      proposalStore: project.store,
-      operationDispatcher: workspace.dispatcher,
-      templateProvider: project.templates,
-      anchorResolvers: resolvers,
-      auditSink: this.#app.auditLog,
-    });
-    const proposal = resultValue(await compileFillerProposal(detected.candidates, {
-      engine,
-      selectedCandidateIds: detected.candidates.map(({ id }) => id),
-      idFactory: makeId,
-    }));
-    this.publisher.publish({ kind: "proposal.updated", proposalId: proposal.id });
   }
 
   async #readAnalysis<Value>(
