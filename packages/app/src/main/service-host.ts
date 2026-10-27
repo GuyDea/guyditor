@@ -147,6 +147,9 @@ import {
   createProjectTemplateServices,
   templateAuthoringIpc,
 } from "./template-authoring-service.js";
+import { AiSettingsService } from "./ai-settings-service.js";
+import { DEFAULT_SETTINGS } from "./settings.js";
+import type { AiSettings, UserSettings } from "./settings.js";
 
 interface AppHostSettings {
   auditRetentionDays: number;
@@ -154,6 +157,9 @@ interface AppHostSettings {
   maxConcurrentJobs: number | "auto";
   rightsRequirementLevel?: RightsPolicy["requirementLevel"];
   restyleAdapter?: KlingAdapterConfig & { enabled: boolean };
+  ai?: AiSettings;
+  externalCalls?: UserSettings["network"]["externalCalls"];
+  encryptionAvailable?: boolean;
 }
 
 export interface AppServiceHostOptions {
@@ -354,6 +360,7 @@ export class AppServiceHost {
   public readonly costMeter: CostMeter;
   public readonly mlworker: MlworkerSupervisor;
   public readonly credentials: CredentialStore;
+  public readonly aiSettings: AiSettingsService;
   public readonly skillRegistry: SkillRegistry;
   readonly #options: AppServiceHostOptions;
   readonly #windows = new Set<WindowServiceHost>();
@@ -362,6 +369,13 @@ export class AppServiceHost {
     this.#options = options;
     this.credentials = options.credentials ?? new FileCredentialStore({
       userDir: options.userDirectory,
+    });
+    this.aiSettings = new AiSettingsService({
+      userDirectory: options.userDirectory,
+      credentials: this.credentials,
+      initial: options.settings.ai ?? structuredClone(DEFAULT_SETTINGS.ai),
+      externalCalls: options.settings.externalCalls ?? DEFAULT_SETTINGS.network.externalCalls,
+      encryptionAvailable: options.settings.encryptionAvailable ?? false,
     });
     this.auditLog = new AuditLog({
       userDir: options.userDirectory,
@@ -1071,7 +1085,8 @@ export class WindowServiceHost {
       project === undefined ||
       service === "ProjectStore" ||
       service === "AuditLog" ||
-      service === "CostMeter"
+      service === "CostMeter" ||
+      service === "AiSettings"
     ) return resolved;
     return this.#bindProjectService(project, resolved);
   }
@@ -1818,6 +1833,8 @@ export class WindowServiceHost {
         return project === undefined
           ? undefined
           : templateAuthoringIpc(project.templateAuthoring);
+      case "AiSettings":
+        return this.#app.aiSettings.surface();
       case "AuditLog":
         return {
           readSession: ({ sessionId }: { sessionId: string }) => this.#app.auditLog.readSession(sessionId),

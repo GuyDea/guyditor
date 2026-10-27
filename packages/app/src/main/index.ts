@@ -350,6 +350,9 @@ async function startApplication(): Promise<void> {
       maxConcurrentJobs: startup.settings.performance.maxConcurrentJobs,
       rightsRequirementLevel: startup.settings.rights.requirementLevel,
       restyleAdapter: startup.settings.adapters.restyle.kling,
+      ai: startup.settings.ai,
+      externalCalls: startup.settings.network.externalCalls,
+      encryptionAvailable: safeStorage.isEncryptionAvailable(),
     },
   });
   registerIpc();

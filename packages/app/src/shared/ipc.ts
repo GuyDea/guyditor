@@ -16,7 +16,7 @@ export type ServiceName =
   | "CompositorModel" | "RenderService" | "JobQueue" | "AgentGateway"
   | "AuditLog" | "CostMeter" | "BackupService" | "DeliverableService"
   | "AnnotationService" | "SkillRegistry" | "AdapterRegistry" | "CaptureWatcher"
-  | "GenerationService" | "TemplateAuthoringService";
+  | "GenerationService" | "TemplateAuthoringService" | "AiSettings";
 
 export interface IpcRequest {
   v: 1;
@@ -201,3 +201,5 @@ declare global {
     guyditor: GuyditorApi;
   }
 }
+
+export type { AiSettingsView } from "../main/ai-settings-service.js";

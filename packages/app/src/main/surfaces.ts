@@ -111,7 +111,60 @@ const skillIdVersionParams: JsonSchema = {
   additionalProperties: false,
 };
 
+const aiProviderParam: JsonSchema = { type: "string", enum: ["anthropic", "openai"] };
+const aiProviderParams: JsonSchema = {
+  type: "object",
+  required: ["provider"],
+  properties: { provider: aiProviderParam },
+  additionalProperties: false,
+};
+const aiSettingsSurface: IpcSurface = {
+  service: "AiSettings",
+  methods: {
+    get: { paramsSchema: emptyParams, resultSchema: anyResult, budgetMs: 20 },
+    update: {
+      paramsSchema: {
+        type: "object",
+        properties: {
+          provider: aiProviderParam,
+          model: { type: "string", minLength: 1 },
+          effort: { type: "string", enum: ["low", "medium", "high", "max"] },
+          tightening: { type: "string", enum: ["ask", "gentle", "off"] },
+          rates: {
+            type: "object",
+            additionalProperties: {
+              type: "object",
+              required: ["inputPerMTok", "outputPerMTok"],
+              properties: {
+                inputPerMTok: { type: "number", minimum: 0 },
+                outputPerMTok: { type: "number", minimum: 0 },
+              },
+              additionalProperties: false,
+            },
+          },
+        },
+        additionalProperties: false,
+      },
+      resultSchema: anyResult,
+      budgetMs: 20,
+    },
+    listModels: { paramsSchema: aiProviderParams, resultSchema: anyResult, budgetMs: 50 },
+    setKey: {
+      paramsSchema: {
+        type: "object",
+        required: ["provider", "key"],
+        properties: { provider: aiProviderParam, key: { type: "string", minLength: 1 } },
+        additionalProperties: false,
+      },
+      resultSchema: anyResult,
+      budgetMs: 20,
+    },
+    clearKey: { paramsSchema: aiProviderParams, resultSchema: anyResult, budgetMs: 20 },
+  },
+};
+
 export const IPC_SURFACES: readonly IpcSurface[] = Object.freeze([
+  aiSettingsSurface,
   {
     service: "ProjectStore",
     methods: {

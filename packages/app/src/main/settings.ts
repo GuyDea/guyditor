@@ -1,5 +1,17 @@
-import { readFile, rename } from "node:fs/promises";
+import { readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+
+import { DEFAULT_LLM_RATES } from "../../../agent/src/index.js";
+import type { LlmRate } from "../../../agent/src/index.js";
+import type { AssemblyEffort, TighteningMode } from "../../../transcript/src/index.js";
+
+export interface AiSettings {
+  provider: "anthropic" | "openai";
+  model: string;
+  effort: AssemblyEffort;
+  tightening: TighteningMode;
+  rates: Record<string, LlmRate>;
+}
 
 export interface UserSettings {
   schema: 1;
@@ -36,6 +48,7 @@ export interface UserSettings {
       };
     };
   };
+  ai: AiSettings;
   dataBoundaries?: unknown;
 }
 
@@ -64,6 +77,13 @@ export const DEFAULT_SETTINGS = Object.freeze({
     cumulative: { warnUsd: 100, capUsd: null },
   },
   rights: { requirementLevel: "warn" },
+  ai: {
+    provider: "anthropic",
+    model: "claude-opus-5-5",
+    effort: "high",
+    tightening: "ask",
+    rates: { ...DEFAULT_LLM_RATES },
+  },
   adapters: {
     restyle: {
       kling: {
@@ -128,4 +148,19 @@ export async function loadSettings(
       warning: `Invalid settings were recovered to ${recoveredPath}; defaults are active.`,
     };
   }
+}
+
+/** Replaces only the `ai` key of settings.json (unknown keys kept), atomically. */
+export async function saveAiSettings(userDirectory: string, ai: AiSettings): Promise<void> {
+  const settingsPath = join(userDirectory, "settings.json");
+  let current: Record<string, unknown> = {};
+  try {
+    const parsed = JSON.parse(await readFile(settingsPath, "utf8")) as unknown;
+    if (isRecord(parsed)) current = parsed;
+  } catch (error: unknown) {
+    if (!isMissing(error)) throw error;
+  }
+  const temporary = `${settingsPath}.tmp-${String(process.pid)}`;
+  await writeFile(temporary, `${JSON.stringify({ ...current, ai }, null, 2)}\n`, "utf8");
+  await rename(temporary, settingsPath);
 }

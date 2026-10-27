@@ -151,4 +151,15 @@ describe("workspace IPC surfaces", () => {
     }
     expect(methods.get("JobQueue")?.get("overview")?.budgetMs).toBe(20);
   });
+
+  it("exposes the AI settings methods", () => {
+    const ai = IPC_SURFACES.find(({ service }) => service === "AiSettings");
+    expect(Object.keys(ai?.methods ?? {}).sort()).toEqual([
+      "clearKey",
+      "get",
+      "listModels",
+      "setKey",
+      "update",
+    ]);
+  });
 });
