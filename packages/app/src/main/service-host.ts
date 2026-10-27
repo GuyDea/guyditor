@@ -54,7 +54,6 @@ import {
   planPickupSplice,
   registerFillerDetectionExecutor,
   TranscriptEngine,
-  buildWordTimelineMap,
 } from "../../../transcript/src/index.js";
 import { assessSourceRangeContinuity } from "../../../transcript/src/continuity.js";
 import type { TranscribeResult } from "../../../transcript/src/index.js";
@@ -100,7 +99,6 @@ import type {
   OtioExportOptions,
   PublishMetadata,
   PublishFileResult,
-  RestylePlanningSignals,
   ShortCandidate,
 } from "../../../deliver/src/index.js";
 
@@ -128,6 +126,8 @@ import {
   recoveryService,
 } from "./recovery-service.js";
 import { ProjectWorkspaceStateStore } from "./project-workspace-state.js";
+import { registerDerivedSidecar as registerDerivedSidecarFor } from "./derived-sidecar.js";
+import { planningSignals } from "./restyle-planning-signals.js";
 import { createFillerProposal } from "./filler-follow-up.js";
 import type { ProjectServices } from "./project-services.js";
 import { createProjectDialog } from "./project-creation.js";
@@ -280,102 +280,6 @@ async function acceptedRestylePlan(
   if (reference === undefined) return null;
   const parsed = parseRestylePlan(await readFile(join(store.root, reference.path), "utf8"));
   return resultValue(parsed);
-}
-
-function framesAtFps(
-  time: { num: number; den: number },
-  fps: string,
-): number {
-  const match = /^(\d+)\/([1-9]\d*)$/u.exec(fps);
-  if (match === null) throw new Error(`Timeline fps ${fps} is invalid.`);
-  return Math.round(time.num / time.den * Number(match[1]) / Number(match[2]));
-}
-
-function restyleAnalysisSignals(value: unknown): Pick<
-  RestylePlanningSignals,
-  "vadSilences" | "lowMotionFrames"
-> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return { vadSilences: [], lowMotionFrames: [] };
-  }
-  const record = value as Record<string, unknown>;
-  const vadSilences = Array.isArray(record["vadSilences"])
-    ? record["vadSilences"].flatMap((entry) => {
-        if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return [];
-        const range = entry as Record<string, unknown>;
-        return Number.isSafeInteger(range["startFrame"]) && Number.isSafeInteger(range["endFrame"])
-          ? [{ startFrame: Number(range["startFrame"]), endFrame: Number(range["endFrame"]) }]
-          : [];
-      })
-    : [];
-  const lowMotionFrames = Array.isArray(record["lowMotionFrames"])
-    ? record["lowMotionFrames"].filter((frame): frame is number =>
-        typeof frame === "number" && Number.isSafeInteger(frame) && frame >= 0)
-    : [];
-  return { vadSilences, lowMotionFrames };
-}
-
-async function planningSignals(
-  store: ProjectStore,
-  deliverableId: string,
-): Promise<RestylePlanningSignals> {
-  const project = store.currentProject;
-  const deliverable = project.deliverables.find(({ id }) => id === deliverableId);
-  if (deliverable === undefined) throw new Error(`Deliverable ${deliverableId} does not exist.`);
-  const sources = project.layers.filter(({ enabled, sequence }) =>
-    enabled && sequence === deliverable.sequenceId).map(({ id }) => id);
-  const sidecars = await transcriptSidecars(store);
-  const timeline = buildWordTimelineMap({
-    project,
-    sequenceId: deliverable.sequenceId,
-    sidecars,
-    track: {
-      id: "restyle-planning",
-      name: "Restyle planning",
-      sourceLayerIds: sources,
-      preset: { presetId: "restyle-planning", version: 1 },
-      styleOverrides: {},
-      breakOverrides: [],
-      emphasisOverrides: [],
-      timingOffsets: [],
-      enabled: true,
-    },
-  });
-  let analysis: Pick<RestylePlanningSignals, "vadSilences" | "lowMotionFrames"> = {
-    vadSilences: [],
-    lowMotionFrames: [],
-  };
-  try {
-    analysis = restyleAnalysisSignals(JSON.parse(await readFile(
-      join(store.root, "sidecars/analysis/restyle-signals.json"),
-      "utf8",
-    )) as unknown);
-  } catch {
-    // Word gaps remain the deterministic fallback when analysis is unavailable.
-  }
-  const resolvers = new AnchorResolverRegistry();
-  resolvers.registerWordLookup(createTranscriptWordLookup(sidecars));
-  const beats = await Promise.all(project.beats.map(async (beat) => {
-    const resolved = await resolveAnchor(
-      project,
-      beat.anchor,
-      deliverable.sequenceId,
-      resolvers.dependencies(),
-    );
-    return resolved.ok && resolved.value.status === "resolved" && resolved.value.timeline !== undefined
-      ? { id: beat.id, frame: resolved.value.timeline.frames }
-      : undefined;
-  }));
-  return {
-    words: timeline.instances.map((word) => ({
-      id: word.wordId,
-      startFrame: framesAtFps(word.start, project.settings.timeline.fps),
-      endFrame: framesAtFps(word.end, project.settings.timeline.fps),
-    })),
-    beats: beats.flatMap((beat) => beat === undefined ? [] : [beat]),
-    vadSilences: analysis.vadSilences,
-    lowMotionFrames: analysis.lowMotionFrames,
-  };
 }
 
 async function activeProposals(store: ProjectStore): Promise<Proposal[]> {
@@ -697,22 +601,11 @@ export class WindowServiceHost {
       context.reportProgress(1);
       return { path, count: candidates.length };
     });
-    const registerDerivedSidecar = async (sidecar: SidecarRef): Promise<void> => {
-      resultValue(await new OperationEngine(store.currentProject, {
+    const registerDerivedSidecar = (sidecar: SidecarRef): Promise<void> =>
+      registerDerivedSidecarFor({
         appVersion: this.#app.appVersion,
-        committer: store,
         auditSink: this.#app.auditLog,
-      }).execute([{
-        op: "sidecar.register",
-        params: { name: sidecar.name, sidecar },
-      }], {
-        baseRevision: store.currentProject.revision,
-        origin: "system",
-        dryRun: false,
-        recordUndo: false,
-        instruction: { kind: "ui-direct", text: `Register derived sidecar ${sidecar.name}` },
-      }));
-    };
+      }, store, sidecar);
     jobs.registerExecutor("reframe", async (job, context) => {
       const payload = jsonRecord(job.payload);
       const deliverableId = payload?.["deliverableId"];
