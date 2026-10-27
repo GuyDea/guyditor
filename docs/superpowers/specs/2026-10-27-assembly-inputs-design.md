@@ -34,7 +34,8 @@ separate small fix, not part of this design.
   paragraphs) drives take-to-script-block matching; the creator can change or clear it.
 - G4. A provider can be connected via **API key** or **local CLI**; a CLI turn produces the
   same validated reply, goes through the same external-send gate, and shows up in the
-  audit log; it records $0 cost and no token usage.
+  audit log; it records what the CLI reports (`claude`: token usage and cost as reported;
+  `codex`: nothing, recorded as $0 — see §4.3).
 - G5. Clear failures: CLI missing / not logged in / timed out / returned non-JSON each
   give a one-line message in the panel; nothing hangs.
 
@@ -198,17 +199,25 @@ can look at an image or PDF; stdin is text) with no `--add-dir` beyond cwd; Code
 configuration, the builder reports it rather than widening the envelope.
 
 **Claude Code CLI** (`claude 2.1.x`): one invocation per turn:
-`claude -p --bare --no-session-persistence --tools Read --output-format json
+`claude -p --safe-mode --restricted --no-session-persistence --tools Read --output-format json
 --json-schema <schema> --model <model> --effort <low|medium|high|max>
---append-system-prompt-file <tmp>` with the conversation rendered to a single text prompt
+--append-system-prompt <text>` with the conversation rendered to a single text prompt
 on stdin (turns prefixed `Creator:` / `Assistant:` / `Validation:`), images and PDFs
 referenced by their file name in cwd with an instruction to read them. The JSON envelope's
 structured result is the reply; a missing or non-conforming result →
 `LlmAdapterError("claude returned no structured reply", null, true)`.
+Why these flags (checked against `claude --help` 2.1.309): `--bare` is **not** used because it
+restricts Anthropic auth to `ANTHROPIC_API_KEY` and never reads the OAuth login — which would
+defeat the point of the CLI path for a subscription user. `--safe-mode` keeps auth working
+while disabling CLAUDE.md, hooks, plugins, skills and MCP servers; `--restricted` drops the
+code-running tools and WebFetch, ignores user/project/local settings files and confines the
+file tools to the working directory; `--tools Read` leaves only Read. The system prompt is
+passed inline (under 8 KB) rather than via a temp file.
 
 **Codex CLI** (`codex-cli 0.159.x`): `codex exec --ephemeral --skip-git-repo-check
 --sandbox read-only -C <contextDir> -m <model> -c model_reasoning_effort=<effort>
---output-schema <tmp schema> -o <tmp out> -i <image>… "<prompt>"`; the prompt carries the
+--output-schema <tmp schema> -o <tmp out> -i <image>… -` (the prompt on stdin, since the
+evidence can exceed the 128 KB single-argument limit); the prompt carries the
 system prompt, the rendered conversation and the PDF/text file names (PDFs by path only —
 Codex has no PDF input; the evidence notes `(attached by path for CLI providers)`). The
 last message file is parsed as the reply.
