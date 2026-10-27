@@ -4,3 +4,4 @@ export * from "./script.js";
 export * from "./segments.js";
 export * from "./evidence.js";
 export * from "./reply.js";
+export * from "./compile.js";
