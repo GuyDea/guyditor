@@ -235,10 +235,10 @@ describe("Assemble helpers", () => {
     expect(usageLine(session())).toBeNull();
     expect(cutRange(undefined)).toBe("—");
     const segment = {
-      assetId: "ast_a", fromWord: "w1", toWord: "w4",
+      assetId: "ast_aaaaaaaaaa", fromWord: "w000001", toWord: "w000004",
       start: { samples: 48_000 * 5, rate: 48_000 }, end: { samples: 48_000 * 12, rate: 48_000 },
     } as unknown as CandidateSegment;
-    expect(cutRange(undefined, { assetId: "ast_a", fromWord: "w1", toWord: "w4" } as never, [segment]))
+    expect(cutRange(undefined, { assetId: "ast_aaaaaaaaaa", fromWord: "w000001", toWord: "w000004" } as never, [segment]))
       .toBe("00:05–00:12");
   });
 });
