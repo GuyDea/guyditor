@@ -10,6 +10,7 @@ import type {
   AssemblySessionView,
   ProjectSnapshot,
 } from "../../shared/ipc.js";
+import { useJobsStore } from "../state/jobs.js";
 import { useWorkspaceStore } from "../state/view-state.js";
 import {
   activeSession,
@@ -269,6 +270,16 @@ describe("Assemble panel", () => {
     expect(html).toContain('data-testid="assembly-file-remove-F1"');
     expect(tag(html, "assembly-file-F2")).toContain("1,600");
     expect(row(html, "assembly-file-F3")).toContain("not sent — unsupported type");
+    const unreasoned = render({
+      initialSessions: [session({
+        status: "created",
+        evidence: null,
+        inputs: {
+          assetIds: ["ast_aaaaaaaaaa"], files: [{ ...BUDGET, unsentReason: null }], script: { mode: "auto" }, nextFileLabel: 4,
+        },
+      })],
+    });
+    expect(row(unreasoned, "assembly-file-F3")).toContain("not sent — not supported");
     for (const id of ["assembly-add-files", "assembly-file-path", "assembly-file-path-add", "assembly-script-select"]) {
       expect(html).toContain(`data-testid="${id}"`);
     }
@@ -294,22 +305,53 @@ describe("Assemble panel", () => {
     expect(tag(html, "assembly-asset-ast_aaaaaaaaaa")).toContain("disabled");
   });
 
+  it("locks the inputs while a prepare job runs, before the session shows preparing", () => {
+    // Static rendering reads the store's initial state (the same seam the rail state uses above).
+    const { jobs } = useJobsStore.getInitialState();
+    jobs.push({
+      jobId: "job_aaaaaaaaaa", kind: "assembly.prepare", state: "running", progress: 0, dependsOn: [],
+      title: "Analyze footage for assembly", cancellable: true, createdAt: "2026-10-27T10:00:00.000Z",
+    });
+    try {
+      const html = render({ initialSessions: [session({ status: "created", evidence: null })] });
+      expect(tag(html, "assembly-add-files")).toContain("disabled");
+      expect(tag(html, "assembly-script-select")).toContain("disabled");
+      expect(tag(html, "assembly-asset-ast_aaaaaaaaaa")).toContain("disabled");
+    } finally {
+      jobs.length = 0;
+    }
+  });
+
   it("labels footage in capture order and from the evidence", () => {
     const assets = [
       { id: "ast_aaaaaaaaaa", path: "media/a.mov", captureTime: { value: "2026-10-27T11:00:00.000Z", source: "container" } },
       { id: "ast_bbbbbbbbbb", path: "media/b.mov", captureTime: { value: "2026-10-27T10:00:00.000Z", source: "container" } },
       { id: "ast_cccccccccc", path: "media/c.mov" },
     ] as unknown as Asset[];
+    const created = "2026-10-27T12:00:00.000Z";
 
-    expect([...assetLabels(assets, ["ast_aaaaaaaaaa", "ast_bbbbbbbbbb"], null)]).toEqual([
+    expect([...assetLabels(assets, ["ast_aaaaaaaaaa", "ast_bbbbbbbbbb"], null, created)]).toEqual([
       ["ast_aaaaaaaaaa", "A2"], ["ast_bbbbbbbbbb", "A1"], ["ast_cccccccccc", "—"],
+    ]);
+    // No capture time: the main process orders it by the project's creation time, after the others.
+    expect([...assetLabels(assets, ["ast_cccccccccc", "ast_aaaaaaaaaa", "ast_bbbbbbbbbb"], null, created)]).toEqual([
+      ["ast_aaaaaaaaaa", "A2"], ["ast_bbbbbbbbbb", "A1"], ["ast_cccccccccc", "A3"],
     ]);
     const evidence = session().evidence!;
     expect(assetLabels(assets, ["ast_aaaaaaaaaa", "ast_bbbbbbbbbb"], {
       ...evidence,
       assets: [{ ...evidence.assets[0]!, assetId: "ast_aaaaaaaaaa", ordinal: 1 }],
-    })).toEqual(new Map([["ast_aaaaaaaaaa", "A1"], ["ast_bbbbbbbbbb", "—"], ["ast_cccccccccc", "—"]]));
+    }, created)).toEqual(new Map([["ast_aaaaaaaaaa", "A1"], ["ast_bbbbbbbbbb", "—"], ["ast_cccccccccc", "—"]]));
     expect(render()).toMatch(/data-testid="assembly-asset-label-ast_aaaaaaaaaa"[^>]*>A1</u);
+  });
+
+  it("disables the script select while nothing is selected and no session exists", () => {
+    const html = renderToStaticMarkup(createElement(AssemblePanel, {
+      ...props(),
+      snapshot: { ...snapshot(), master: { ...snapshot().master, assets: [] } },
+    }));
+    expect(tag(html, "assembly-script-select")).toContain("disabled");
+    expect(tag(render(), "assembly-script-select")).not.toContain("disabled");
   });
 
   it("shows the new external notice", () => {
@@ -454,6 +496,7 @@ describe("assembly inputs helpers", () => {
     expect(unsentNotice([OUTLINE], [OUTLINE, BUDGET])).toBe("F3 budget.xlsx: not sent — unsupported type");
     expect(unsentNotice([OUTLINE, BUDGET], [OUTLINE, BUDGET])).toBeNull();
     expect(unsentNotice([], [OUTLINE])).toBeNull();
+    expect(unsentNotice([], [{ ...BUDGET, unsentReason: null }])).toBe("F3 budget.xlsx: not sent — not supported");
   });
 
   it("explains how images and PDFs are counted in the estimate", () => {
@@ -461,6 +504,8 @@ describe("assembly inputs helpers", () => {
       .toBe("Counted as 1,600 input tokens in the cost estimate");
     expect(fileRowTitle(file({ label: "F4", name: "deck.pdf", kind: "pdf", pages: 3 })))
       .toBe("Counted as 2,000 input tokens per page (3 pages)");
+    expect(fileRowTitle(file({ label: "F5", name: "scan.pdf", kind: "pdf", pages: null })))
+      .toBe("Counted as 2,000 input tokens per page");
     expect(fileRowTitle(OUTLINE)).toBeUndefined();
   });
 });

@@ -95,18 +95,23 @@ export function usageLine(session: AssemblySessionView): string | null {
   return `${String(tokens)} tokens · $${usd.toFixed(2)}${estimated}`;
 }
 
-/** `A<n>` per footage asset: evidence ordinals once analysed, else the selection in capture order; unselected → `—`. */
+/**
+ * `A<n>` per footage asset: evidence ordinals once analysed, else the selection in the main process's
+ * `orderAssets` order (capture time, falling back to the project's creation time, then file name); unselected → `—`.
+ */
 export function assetLabels(
   assets: readonly Asset[],
   selectedIds: readonly string[],
   evidence: AssemblySessionView["evidence"],
+  projectCreated: string,
 ): Map<string, string> {
   const ordinals = new Map<string, number>();
   if (evidence === null) {
-    const key = (asset: Asset): [string, string] => [asset.captureTime?.value ?? "", asset.path.split("/").pop() ?? ""];
-    const compare = (a: string, b: string): number => a < b ? -1 : a > b ? 1 : 0;
+    const captured = (asset: Asset): number => Date.parse(asset.captureTime?.value ?? projectCreated);
+    const name = (asset: Asset): string => asset.path.split("/").pop() ?? "";
+    const byName = (a: Asset, b: Asset): number => name(a) < name(b) ? -1 : name(a) > name(b) ? 1 : 0;
     assets.filter(({ id }) => selectedIds.includes(id))
-      .sort((a, b) => compare(key(a)[0], key(b)[0]) || compare(key(a)[1], key(b)[1]))
+      .sort((a, b) => captured(a) - captured(b) || byName(a, b))
       .forEach(({ id }, index) => ordinals.set(id, index + 1));
   } else {
     for (const { assetId, ordinal } of evidence.assets) ordinals.set(assetId, ordinal);
@@ -120,15 +125,22 @@ export function assetLabels(
 /** Hover text for attachments the cost estimate counts at a flat rate. */
 export function fileRowTitle(file: ContextFile): string | undefined {
   if (file.kind === "image") return "Counted as 1,600 input tokens in the cost estimate";
-  if (file.kind === "pdf") return `Counted as 2,000 input tokens per page (${String(file.pages)} pages)`;
+  if (file.kind === "pdf") {
+    return `Counted as 2,000 input tokens per page${file.pages === null ? "" : ` (${String(file.pages)} pages)`}`;
+  }
   return undefined;
+}
+
+/** Why a file stays on this machine; the service always gives a reason, this covers a missing one. */
+function unsentReason(file: ContextFile): string {
+  return file.unsentReason ?? "not supported";
 }
 
 /** Names the files an attach added that will not reach the model, or null when every new file is sent. */
 export function unsentNotice(before: readonly ContextFile[], after: readonly ContextFile[]): string | null {
   const known = new Set(before.map(({ label }) => label));
   const unsent = after.filter(({ label, sent }) => !known.has(label) && !sent)
-    .map(({ label, name, unsentReason }) => `${label} ${name}: not sent — ${unsentReason ?? "not supported"}`);
+    .map((file) => `${file.label} ${file.name}: not sent — ${unsentReason(file)}`);
   return unsent.length === 0 ? null : unsent.join("; ");
 }
 
@@ -197,8 +209,9 @@ export function AssemblePanel({
   );
   const active = activeSession(sessions);
   const selectedIds = active?.inputs.assetIds ?? assets.map(({ id }) => id).filter((id) => !deselected.has(id));
-  const editable = active === null || INPUTS_EDITABLE.includes(active.status);
   const preparing = isPreparing(jobs) || active?.status === "preparing";
+  // The queued prepare job locks the inputs before the reload brings back status `preparing`.
+  const editable = !preparing && (active === null || INPUTS_EDITABLE.includes(active.status));
 
   const reload = useCallback(async (): Promise<void> => {
     try {
@@ -379,7 +392,7 @@ export function AssemblePanel({
   const summary = active === null ? null : evidenceSummary(active);
   const usage = active === null ? null : usageLine(active);
   const plan = active?.plan ?? null;
-  const labels = assetLabels(assets, selectedIds, active?.evidence ?? null);
+  const labels = assetLabels(assets, selectedIds, active?.evidence ?? null, snapshot?.master.project.created ?? "");
   const files = active?.inputs.files ?? [];
   const canAttach = snapshot !== null && editable && selectedIds.length > 0 && !busy;
 
@@ -421,7 +434,7 @@ export function AssemblePanel({
               <span>{file.name}</span>
               <span>{file.kind}</span>
               <span>{formatBytes(file.bytes)}</span>
-              {file.sent ? null : <span>not sent — {file.unsentReason}</span>}
+              {file.sent ? null : <span>not sent — {unsentReason(file)}</span>}
               {editable ? (
                 <button
                   type="button"
@@ -469,7 +482,7 @@ export function AssemblePanel({
           <select
             data-testid="assembly-script-select"
             value={active === null ? "auto" : scriptValue(active.inputs.script)}
-            disabled={snapshot === null || !editable || busy}
+            disabled={!canAttach}
             onChange={(event) => {
               const script = scriptChoice(event.target.value);
               void editInputs((session) => window.guyditor.call<AssemblySessionView>(
