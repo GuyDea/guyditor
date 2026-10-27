@@ -155,6 +155,7 @@ describe("workspace IPC surfaces", () => {
   it("exposes the AI settings methods", () => {
     const ai = IPC_SURFACES.find(({ service }) => service === "AiSettings");
     expect(Object.keys(ai?.methods ?? {}).sort()).toEqual([
+      "checkCli",
       "clearKey",
       "get",
       "listModels",

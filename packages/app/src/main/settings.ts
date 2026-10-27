@@ -2,7 +2,7 @@ import { readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { DEFAULT_LLM_RATES } from "../../../agent/src/index.js";
-import type { LlmRate } from "../../../agent/src/index.js";
+import type { LlmRate, LlmTransport } from "../../../agent/src/index.js";
 import type { AssemblyEffort, TighteningMode } from "../../../transcript/src/index.js";
 
 export interface AiSettings {
@@ -11,6 +11,8 @@ export interface AiSettings {
   effort: AssemblyEffort;
   tightening: TighteningMode;
   rates: Record<string, LlmRate>;
+  transport: { anthropic: LlmTransport; openai: LlmTransport };
+  cli: { claudePath: string; codexPath: string };
 }
 
 export interface UserSettings {
@@ -83,6 +85,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
     effort: "high",
     tightening: "ask",
     rates: { ...DEFAULT_LLM_RATES },
+    transport: { anthropic: "api", openai: "api" },
+    cli: { claudePath: "claude", codexPath: "codex" },
   },
   adapters: {
     restyle: {

@@ -29,6 +29,8 @@ const SETTINGS: AiSettingsView = {
   effort: "high",
   tightening: "ask",
   rates: { "claude-opus-5-5": { inputPerMTok: 5, outputPerMTok: 25 } },
+  transport: { anthropic: "api", openai: "api" },
+  cli: { claudePath: "claude", codexPath: "codex" },
   keys: { anthropic: true, openai: false },
   externalCalls: "ask",
   encryptionAvailable: true,

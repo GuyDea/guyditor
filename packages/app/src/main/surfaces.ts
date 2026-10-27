@@ -130,6 +130,22 @@ const aiSettingsSurface: IpcSurface = {
           model: { type: "string", minLength: 1 },
           effort: { type: "string", enum: ["low", "medium", "high", "max"] },
           tightening: { type: "string", enum: ["ask", "gentle", "off"] },
+          transport: {
+            type: "object",
+            properties: {
+              anthropic: { type: "string", enum: ["api", "cli"] },
+              openai: { type: "string", enum: ["api", "cli"] },
+            },
+            additionalProperties: false,
+          },
+          cli: {
+            type: "object",
+            properties: {
+              claudePath: { type: "string", minLength: 1 },
+              codexPath: { type: "string", minLength: 1 },
+            },
+            additionalProperties: false,
+          },
           rates: {
             type: "object",
             additionalProperties: {
@@ -160,6 +176,7 @@ const aiSettingsSurface: IpcSurface = {
       budgetMs: 20,
     },
     clearKey: { paramsSchema: aiProviderParams, resultSchema: anyResult, budgetMs: 20 },
+    checkCli: { paramsSchema: aiProviderParams, resultSchema: anyResult, budgetMs: 15_000 },
   },
 };
 
