@@ -2,6 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { CandidateSegment } from "../../../../transcript/src/assembly/types.js";
 import { projectFixture } from "../../../../core/src/project/test-fixtures.js";
 import type {
   AiSettingsView,
@@ -233,6 +234,12 @@ describe("Assemble helpers", () => {
     expect(evidenceSummary(session())).toBe("1 clip · 0 segments · 0 repeat groups · script: no script");
     expect(usageLine(session())).toBeNull();
     expect(cutRange(undefined)).toBe("—");
+    const segment = {
+      assetId: "ast_a", fromWord: "w1", toWord: "w4",
+      start: { samples: 48_000 * 5, rate: 48_000 }, end: { samples: 48_000 * 12, rate: 48_000 },
+    } as unknown as CandidateSegment;
+    expect(cutRange(undefined, { assetId: "ast_a", fromWord: "w1", toWord: "w4" } as never, [segment]))
+      .toBe("00:05–00:12");
   });
 });
 

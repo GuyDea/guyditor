@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import type { CompiledCut } from "../../../../transcript/src/assembly/types.js";
+import type {
+  AssemblyCut,
+  CandidateSegment,
+  CompiledCut,
+} from "../../../../transcript/src/assembly/types.js";
 import type {
   AiSettingsView,
   AssemblySessionView,
@@ -64,10 +68,21 @@ function frameSeconds(time: CompiledCut["in"]): number {
   return time.frames / ((numerator ?? 24) / (denominator ?? 1));
 }
 
-export function cutRange(compiled: CompiledCut | undefined): string {
-  return compiled === undefined
+export function cutRange(
+  compiled: CompiledCut | undefined,
+  cut?: AssemblyCut,
+  segments: readonly CandidateSegment[] = [],
+): string {
+  if (compiled !== undefined) {
+    return `${clock(frameSeconds(compiled.in))}–${clock(frameSeconds(compiled.out))}`;
+  }
+  const first = segments.find(({ assetId, fromWord }) =>
+    assetId === cut?.assetId && fromWord === cut.fromWord);
+  const last = segments.find(({ assetId, toWord }) =>
+    assetId === cut?.assetId && toWord === cut.toWord);
+  return first === undefined || last === undefined
     ? "—"
-    : `${clock(frameSeconds(compiled.in))}–${clock(frameSeconds(compiled.out))}`;
+    : `${clock(first.start.samples / first.start.rate)}–${clock(last.end.samples / last.end.rate)}`;
 }
 
 function isPreparing(jobs: JobStatus[]): boolean {
@@ -395,7 +410,7 @@ export function AssemblePanel({
                   <tr key={`${cut.assetId}-${cut.fromWord}-${String(i)}`} data-testid={`assembly-cut-${String(i)}`}>
                     <td>{cut.scriptBlock ?? "—"}</td>
                     <td>{name}</td>
-                    <td>{cutRange(active.compiled?.[i])}</td>
+                    <td>{cutRange(active.compiled?.[i], cut, active.evidence?.segments)}</td>
                     <td>
                       {cut.reason}{" "}
                       {plan.flags.filter(({ cutIndex }) => cutIndex === i).map((flag) => (
