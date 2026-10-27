@@ -31,12 +31,13 @@ interface TimedWord { id: string; word: TranscriptWord; start: number; end: numb
 
 const seconds = (time: SampleTime): number => time.samples / time.rate;
 
-function markerSeconds(marker: MarkerRecord): number | null {
+function markerTiming(marker: MarkerRecord): { at: number; frameSeconds: number } | null {
   const match = /^([0-9]+)(?:\/([1-9][0-9]*))?$/u.exec(marker.at.fps);
   if (match === null) return null;
   const fps = Number(match[1]) / Number(match[2] ?? 1);
+  if (!(fps > 0)) return null;
   const frame = "frame" in marker.at ? marker.at.frame : marker.at.start;
-  return frame / fps;
+  return { at: frame / fps, frameSeconds: 1 / fps };
 }
 
 function activeWords(sidecar: TranscriptSidecar): TimedWord[] {
@@ -53,17 +54,27 @@ function activeWords(sidecar: TranscriptSidecar): TimedWord[] {
   return out;
 }
 
-/** Index of the word a spoken marker starts, or null when it falls inside a word or outside the speech. */
+/** Index of the word a spoken marker starts, or null when no word start is within one frame. */
 function markerWordIndex(marker: MarkerRecord, words: readonly TimedWord[]): number | null {
   const anchored = marker.anchor?.startsWith("word:") === true
     ? words.findIndex(({ id }) => id === marker.anchor!.slice(5))
     : -1;
   if (anchored >= 0) return anchored;
-  const at = markerSeconds(marker);
-  if (at === null) return null;
-  const index = words.findIndex(({ end }) => end > at);
-  if (index < 0) return null;
-  return at <= words[index]!.start + WORD_EDGE_EPSILON_S ? index : null;
+  const timing = markerTiming(marker);
+  if (timing === null) return null;
+  const { at } = timing;
+  const tolerance = timing.frameSeconds + WORD_EDGE_EPSILON_S;
+  const next = words.findIndex(({ end }) => end > at);
+  // In a gap (or exactly at a word start): the marker precedes that word.
+  if (next >= 0 && at <= words[next]!.start + WORD_EDGE_EPSILON_S) return next;
+  // Frame quantisation can land the marker slightly inside a word: snap to the nearest word start.
+  let nearest: number | null = null;
+  let distance = tolerance;
+  words.forEach(({ start }, index) => {
+    const d = Math.abs(start - at);
+    if (d <= distance) { nearest = index; distance = d; }
+  });
+  return nearest;
 }
 
 function joinText(words: readonly TimedWord[]): string {
@@ -198,7 +209,13 @@ export function groupSegments(
 }
 
 export function orderAssets(
-  assets: { assetId: string; fileName: string; capturedAt: string; captureSource: "container" | "file-mtime" }[],
+  assets: {
+    assetId: string;
+    fileName: string;
+    capturedAt: string;
+    captureSource: "container" | "file-mtime";
+    durationMs: number;
+  }[],
 ): EvidenceAsset[] {
   const byName = (a: { fileName: string }, b: { fileName: string }): number =>
     a.fileName < b.fileName ? -1 : a.fileName > b.fileName ? 1 : 0;
@@ -224,7 +241,7 @@ export function orderAssets(
       fileName: asset.fileName,
       capturedAt: asset.capturedAt,
       captureSource: asset.captureSource,
-      durationMs: 0,
+      durationMs: asset.durationMs,
       orderWarning: warnings.length === 0 ? null : warnings.join("; "),
     };
   });

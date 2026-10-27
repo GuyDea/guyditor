@@ -32,6 +32,17 @@ describe("segmentTranscript", () => {
     expect(segments[0]?.text).toBe(LINE);
   });
 
+  it.each([["15 ms after the word start", 2215], ["40 ms before the word", 2160]])(
+    "tolerates an off-grid marker time (%s)", (_label, ms) => {
+      const sidecar = scriptedTranscript("a1", [
+        { atMs: 0, text: LINE }, { atMs: 2200, text: "again" }, { atMs: 3000, text: LINE },
+      ]);
+      const marker = { ...spoken("a1", 0, "again"), at: { frame: (ms * 30) / 1000, fps: "30/1" } };
+      const segments = segmentTranscript({ assetId: "a1", ordinal: 1, sidecar, markers: [marker] });
+      expect(segments).toHaveLength(3);
+      expect(segments[1]?.markerPhrases).toContain("again");
+    });
+
   it("flags low confidence", () => {
     const sidecar = scriptedTranscript("a1", [{ atMs: 0, text: LINE, confidence: 0.3 }]);
     const [segment] = segmentTranscript({ assetId: "a1", ordinal: 1, sidecar, markers: [] });
@@ -87,18 +98,20 @@ describe("scoreScriptMatch", () => {
 describe("orderAssets", () => {
   it("orders clips by capture time with warnings", () => {
     const ordered = orderAssets([
-      { assetId: "c", fileName: "C.mp4", capturedAt: "2026-01-01T10:05:00Z", captureSource: "container" },
-      { assetId: "b", fileName: "B.mp4", capturedAt: "2026-01-01T10:00:00Z", captureSource: "container" },
-      { assetId: "a", fileName: "A.mp4", capturedAt: "2026-01-01T10:00:00Z", captureSource: "container" },
+      { assetId: "c", fileName: "C.mp4", capturedAt: "2026-01-01T10:05:00Z", captureSource: "container", durationMs: 1000 },
+      { assetId: "b", fileName: "B.mp4", capturedAt: "2026-01-01T10:00:00Z", captureSource: "container", durationMs: 1000 },
+      { assetId: "a", fileName: "A.mp4", capturedAt: "2026-01-01T10:00:00Z", captureSource: "container", durationMs: 1000 },
     ]);
     expect(ordered.map((a) => a.assetId)).toEqual(["a", "b", "c"]);
     expect(ordered.map((a) => a.ordinal)).toEqual([1, 2, 3]);
+    expect(ordered.map((a) => a.durationMs)).toEqual([1000, 1000, 1000]);
     expect(ordered[0]?.orderWarning).toMatch(/same capture time/);
     expect(ordered[1]?.orderWarning).toMatch(/same capture time/);
     expect(ordered[2]?.orderWarning).toBeNull();
     const mtime = orderAssets([
-      { assetId: "x", fileName: "X.mp4", capturedAt: "2026-01-01T10:00:00Z", captureSource: "file-mtime" },
+      { assetId: "x", fileName: "X.mp4", capturedAt: "2026-01-01T10:00:00Z", captureSource: "file-mtime", durationMs: 2500 },
     ]);
     expect(mtime[0]?.orderWarning).toMatch(/modified time/);
+    expect(mtime[0]?.durationMs).toBe(2500);
   });
 });
