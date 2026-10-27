@@ -127,7 +127,7 @@ describe("contextFileNotes", () => {
     expect(scriptNote).toMatchObject({ role: "script", text: null, note: "rendered as the script blocks above" });
     expect(longNote).toMatchObject({ role: "context", words: 1240, note: null });
     const { text } = renderEvidencePackage({ ...fixture(false, []), contextFiles: [scriptNote!, longNote!] });
-    expect(text).toContain("### F1  script.md   text   2 words   role: script\n");
+    expect(text).toContain("### F1  script.md   text   2 words   role: script   (rendered as the script blocks above)\n");
     expect(text).toContain("### F2  notes.md   text   1,240 words   role: context\n");
   });
 
@@ -139,7 +139,9 @@ describe("contextFileNotes", () => {
       note: "chosen as the script but has no quoted paragraphs; shown inline",
     });
     const { text } = renderEvidencePackage({ ...fixture(false, []), contextFiles: [note!] });
-    expect(text).toContain("### F1  notes.md   text   3 words   role: script\nplain words only\n");
+    expect(text).toContain(
+      "### F1  notes.md   text   3 words   role: script   (chosen as the script but has no quoted paragraphs; shown inline)\nplain words only\n",
+    );
   });
 
   it("describes a pdf by transport", () => {

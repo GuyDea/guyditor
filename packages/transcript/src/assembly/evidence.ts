@@ -63,7 +63,9 @@ export function contextFileNotes(
 
 function contextFileLines(file: EvidenceContextFile): string[] {
   if (file.words !== null) {
-    const header = `### ${file.label}  ${file.name}   ${file.kind}   ${file.words.toLocaleString("en-US")} words   role: ${file.role}`;
+    const note = file.note === null ? "" : `   (${file.note})`;
+    const header =
+      `### ${file.label}  ${file.name}   ${file.kind}   ${file.words.toLocaleString("en-US")} words   role: ${file.role}${note}`;
     return file.text === null ? [header] : [header, file.text.trimEnd()];
   }
   return [`### ${file.label}  ${file.name}   ${file.kind}   ${formatBytes(file.bytes)}   (${file.note ?? ""})`];

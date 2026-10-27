@@ -242,6 +242,7 @@ describe("AssemblyService", () => {
     expect(session.inputs.files[1]?.role).toBe("context");
     expect(session.evidence?.scriptBlocks.length).toBeGreaterThanOrEqual(1);
     expect(session.evidence?.text).toContain("## Context files");
+    expect(session.evidence?.text).toMatch(/### F1 {2}script\.md {3}text {3}\d+ words {3}role: script {3}\(rendered as the script blocks above\)\n/u);
     expect(session.evidence?.text).toContain("### F2  dot.png   image");
     expect(session.evidence?.notes).toContain("script: F1 script.md");
 
@@ -270,7 +271,9 @@ describe("AssemblyService", () => {
     expect(session.inputs.files[0]?.role).toBe("script");
     const text = session.evidence?.text ?? "";
     const contextFiles = text.slice(text.indexOf("## Context files"), text.indexOf("## Footage"));
-    expect(contextFiles).toContain("### F1  notes.md   text   3 words   role: script\nplain words only\n");
+    expect(contextFiles).toContain(
+      "### F1  notes.md   text   3 words   role: script   (chosen as the script but has no quoted paragraphs; shown inline)\nplain words only\n",
+    );
   });
 
   it("prepare fails naming a context file that went missing", async () => {

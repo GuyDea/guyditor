@@ -214,10 +214,10 @@ export async function prepareSession(
     const texts = await readContextTexts(deps.store.root, started.inputs.files);
     const textOf = (file: ContextFile): string => texts.get(file.label) ?? "";
     const script = resolveScript(started.inputs.files, started.inputs.script, textOf);
-    const files = started.inputs.files.map((file): ContextFile =>
-      ({ ...file, role: file.label === script?.label ? "script" : "context" }));
+    const withRole = (file: ContextFile): ContextFile =>
+      ({ ...file, role: file.label === script?.label ? "script" : "context" });
     const resolved = await deps.updateSession(sessionId, transition((current) =>
-      ({ ...current, inputs: { ...current.inputs, files } })));
+      ({ ...current, inputs: { ...current.inputs, files: current.inputs.files.map(withRole) } })));
     if (resolved.status === "abandoned") return resolved;
     const evidence = await build(deps, resolved, script, textOf, signal, reportProgress);
     return await deps.updateSession(sessionId, transition((current) =>
