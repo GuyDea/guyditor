@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { AnnotationService, createProject, makeId, parseAnnotationSidecar } from "../../../core/src/index.js";
+import { AnnotationService, createProject, makeId, OperationEngine, parseAnnotationSidecar } from "../../../core/src/index.js";
 import type {
   AuditSink,
   IdPrefix,
@@ -166,7 +166,7 @@ describe("createFillerProposal", () => {
     expect(publish).not.toHaveBeenCalled();
   });
 
-  it("scoped results only compile kept candidates and add review markers", async () => {
+  it("scoped results commit review markers before the proposal so it accepts cleanly", async () => {
     const store = await transcribedProject();
     const { deps, project, publish } = harness(store);
     const reviewed = {
@@ -181,7 +181,7 @@ describe("createFillerProposal", () => {
       rule: "filler.review",
       evidence: "Possible filler: one.",
       warnings: [],
-      defaultSelected: true,
+      defaultSelected: false,
       reviewRequired: true,
     };
     await createFillerProposal(deps, project, job({
@@ -192,21 +192,83 @@ describe("createFillerProposal", () => {
         keptRanges: [{
           assetId: "ast_aaaaaaaaaa",
           start: { samples: 0, rate: 48_000 },
-          end: { samples: 100_000, rate: 48_000 },
+          end: { samples: 960_000, rate: 48_000 },
         }],
       },
     } as unknown as JsonValue));
     const event = publish.mock.calls[0]![0] as { proposalId: string };
     const proposal = valueOf(await store.readProposal(event.proposalId));
-    expect(proposal.operations).toHaveLength(1);
-    const text = await readFile(join(store.root, "sidecars/annotations.yaml"), "utf8");
-    const { annotations } = parseAnnotationSidecar(text);
-    expect(annotations).toHaveLength(1);
-    expect(annotations[0]).toMatchObject({
+    // The filler is never cut in a scoped (gentle) run; the pause is.
+    expect(proposal.operations.some(({ op }) => op === "transcript.range.remove")).toBe(false);
+    expect(proposal.operations.some(({ op }) => op.startsWith("clip."))).toBe(true);
+    // Not stale: nothing was committed between creation and acceptance.
+    expect(proposal.baseRevision).toBe(store.currentProject.revision);
+    const annotations = project.annotations;
+    const engine = new OperationEngine(store.currentProject, {
+      appVersion: "0.0.0-test",
+      committer: { commit: (model, transaction) => annotations.commitAccepted(store, model, transaction) },
+      proposalStore: store,
+      auditSink: deps.auditSink,
+    });
+    valueOf(await engine.acceptProposal(proposal.id, "creator"));
+    const after = parseAnnotationSidecar(await readFile(join(store.root, "sidecars/annotations.yaml"), "utf8"));
+    expect(after.annotations).toHaveLength(1);
+    expect(after.annotations[0]).toMatchObject({
       author: { kind: "agent" },
       body: "review: Possible filler: one.",
       anchor: { kind: "word", wordId: "w000001" },
     });
+  });
+
+  it("scoped results never select fillers but keep pauses and repeats", async () => {
+    const store = await transcribedProject();
+    const { deps, project, publish } = harness(store);
+    const filler = {
+      id: "fil_filler0001",
+      kind: "filler",
+      wordRange: { fromWord: "w000001", toWord: "w000001" },
+      sourceRange: {
+        assetId: "ast_aaaaaaaaaa",
+        start: { samples: 24_000, rate: 48_000 },
+        end: { samples: 48_000, rate: 48_000 },
+      },
+      rule: "filler.um",
+      evidence: "Filler: one.",
+      warnings: [],
+      defaultSelected: false,
+    };
+    const repeat = {
+      ...filler,
+      id: "fil_repeat0001",
+      kind: "repeat",
+      wordRange: { fromWord: "w000002", toWord: "w000002" },
+      sourceRange: {
+        assetId: "ast_aaaaaaaaaa",
+        start: { samples: 120_000, rate: 48_000 },
+        end: { samples: 139_200, rate: 48_000 },
+      },
+      rule: "repeat.word",
+      evidence: "Repeat: two.",
+    };
+    await createFillerProposal(deps, project, job({
+      candidates: [PAUSE, filler, repeat],
+      reviewWindows: [],
+      scope: {
+        assemblySessionId: "asb_aaaaaaaaaa",
+        keptRanges: [{
+          assetId: "ast_aaaaaaaaaa",
+          start: { samples: 0, rate: 48_000 },
+          end: { samples: 960_000, rate: 48_000 },
+        }],
+      },
+    } as unknown as JsonValue));
+    const event = publish.mock.calls[0]![0] as { proposalId: string };
+    const proposal = valueOf(await store.readProposal(event.proposalId));
+    const removed = proposal.operations
+      .filter(({ op }) => op === "transcript.range.remove")
+      .map(({ params }) => (params["wordRange"] as { fromWord: string }).fromWord);
+    expect(removed).toEqual(["w000002"]);
+    expect(proposal.operations.some(({ op }) => op.startsWith("clip."))).toBe(true);
   });
 });
 

@@ -35,15 +35,20 @@ export function withinKeptRanges(candidate: FillerCandidate, scope: FillerScope 
     && end.samples / end.rate <= kept.end.samples / kept.end.rate);
 }
 
-async function addReviewMarkers(
+/**
+ * Review-marker operations for flagged candidates. They are committed before the proposal is
+ * created: neither the transcript dispatcher (create) nor the compositor dispatcher plus
+ * `commitAccepted` (accept) can apply `annotation.create`, so they cannot ride inside it.
+ */
+function reviewMarkerOperations(
   project: ProjectServices,
   candidates: readonly FillerCandidate[],
-): Promise<void> {
+): OperationInput[] {
   const model = project.store.currentProject;
   const deliverable = model.deliverables.find(({ id }) => id === model.settings.primaryDeliverable);
-  if (deliverable === undefined) return;
+  if (deliverable === undefined) return [];
   const now = new Date().toISOString();
-  const operations: OperationInput[] = candidates.flatMap((candidate) => {
+  return candidates.flatMap((candidate) => {
     if (candidate.reviewRequired !== true || candidate.wordRange === undefined) return [];
     const annotation: Annotation = {
       id: makeId("ann"),
@@ -62,8 +67,15 @@ async function addReviewMarkers(
     };
     return [{ op: "annotation.create", params: { annotation } }];
   });
-  if (operations.length === 0) return;
-  resultValue(await project.annotations.execute(project.store, operations, { origin: "system", dryRun: false }));
+}
+
+/** Gentle (scoped) tightening never removes um/uh: only default-selected pauses, repeats and false starts. */
+function selectedCandidateIds(candidates: readonly FillerCandidate[], scope: FillerScope | undefined): string[] {
+  return candidates
+    .filter((candidate) => scope === undefined
+      || (candidate.kind !== "filler"
+        && (candidate.defaultSelected || candidate.kind === "repeat" || candidate.kind === "false-start")))
+    .map(({ id }) => id);
 }
 
 export async function createFillerProposal(
@@ -73,8 +85,12 @@ export async function createFillerProposal(
 ): Promise<void> {
   const parsed = parseFillerDetectionResult(job.payload);
   const candidates = parsed.candidates.filter((candidate) => withinKeptRanges(candidate, parsed.scope));
-  const detected = { ...parsed, candidates };
-  if (detected.candidates.length === 0) return;
+  const selected = selectedCandidateIds(candidates, parsed.scope);
+  const markers = reviewMarkerOperations(project, candidates);
+  if (markers.length > 0) {
+    resultValue(await project.annotations.execute(project.store, markers, { origin: "system", dryRun: false }));
+  }
+  if (selected.length === 0) return;
   const workspace = resultValue(await loadTranscriptWorkspace(project.store, (prefix) => {
     if (prefix === "seg" || prefix === "spk") {
       return `${prefix}_${makeId("txn").slice(4)}`;
@@ -92,11 +108,10 @@ export async function createFillerProposal(
     anchorResolvers: resolvers,
     auditSink: deps.auditSink,
   });
-  const proposal = resultValue(await compileFillerProposal(detected.candidates, {
+  const proposal = resultValue(await compileFillerProposal(candidates, {
     engine,
-    selectedCandidateIds: detected.candidates.map(({ id }) => id),
+    selectedCandidateIds: selected,
     idFactory: makeId,
   }));
-  await addReviewMarkers(project, detected.candidates);
   deps.publish({ kind: "proposal.updated", proposalId: proposal.id });
 }
