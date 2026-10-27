@@ -42,6 +42,8 @@ Only the evidence text and conversation are sent to the provider; `network.exter
 - Single camera only; the model is not told about separate audio recordings.
 - Prepare waits for in-flight transcription but does not start it (import does).
 - Real-provider calls were not exercised by automated tests (stub only).
+- Review markers and the gentle-tightening proposal are created when the assembly proposal is accepted, not at Create proposal.
+- The conversation stops after 12 assistant replies; if still a question there is no plan and the creator must Start over.
 - Assembly proposals are born stale; each accept needs one rebase ("Rebase + accept").
 
 ## Migration
