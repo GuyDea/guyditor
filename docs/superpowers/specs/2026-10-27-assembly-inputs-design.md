@@ -216,8 +216,8 @@ passed inline (under 8 KB) rather than via a temp file.
 
 **Codex CLI** (`codex-cli 0.159.x`): `codex exec --ephemeral --skip-git-repo-check
 --sandbox read-only -C <contextDir> -m <model> -c model_reasoning_effort=<effort>
---output-schema <tmp schema> -o <tmp out> -i <image>… -` (the prompt on stdin, since the
-evidence can exceed the 128 KB single-argument limit); the prompt carries the
+--output-schema <tmp schema> -o <tmp out> -i <image>…` (no prompt argument: codex reads the instructions from the piped
+stdin, which keeps the evidence off the argv size limit); the prompt carries the
 system prompt, the rendered conversation and the PDF/text file names (PDFs by path only —
 Codex has no PDF input; the evidence notes `(attached by path for CLI providers)`). The
 last message file is parsed as the reply.

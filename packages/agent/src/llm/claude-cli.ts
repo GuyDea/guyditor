@@ -51,7 +51,7 @@ export class ClaudeCliAdapter implements LlmAdapter {
       throw new LlmAdapterError(`claude: returned non-JSON output\n${run.stdout.slice(0, CLI_OUTPUT_EXCERPT)}`, null, true);
     }
     const envelope: ClaudeEnvelope = parsed !== null && typeof parsed === "object" ? parsed : {};
-    if (envelope.is_error === true) throw new LlmAdapterError(`claude: ${envelope.result ?? envelope.subtype}`, null, true);
+    if (envelope.is_error === true) throw new LlmAdapterError(`claude: ${envelope.result ?? envelope.subtype ?? "error"}`, null, true);
     const output = envelope.structured_output;
     if (output === null || typeof output !== "object" || !("reply" in output)) {
       throw new LlmAdapterError("claude returned no structured reply", null, true);

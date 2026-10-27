@@ -37,8 +37,8 @@ export class CodexCliAdapter implements LlmAdapter {
           "exec", "--ephemeral", "--skip-git-repo-check", "--sandbox", "read-only", "-C", cwd,
           "-m", request.model, "-c", `model_reasoning_effort=${CODEX_EFFORT[request.effort]}`,
           "--output-schema", schemaPath, "-o", replyPath,
+          // No prompt argument: codex reads it from stdin. Images stay last — `-i` takes several values.
           ...images.flatMap((file) => ["-i", join(cwd, file)]),
-          "-",
         ],
         cwd,
         stdin,

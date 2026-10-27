@@ -77,6 +77,7 @@ describe("ClaudeCliAdapter", () => {
       { stdout: "hello" },
       { stdout: '{"type":"result","result":"prose"}' },
       { stdout: '{"is_error":true,"result":"boom"}' },
+      { stdout: '{"is_error":true}' },
     );
     const nonJson = await failure(claude.complete(req()));
     expect(nonJson.message).toMatch(/^claude: returned non-JSON/);
@@ -85,7 +86,9 @@ describe("ClaudeCliAdapter", () => {
     expect(prose.message).toBe("claude returned no structured reply");
     const boom = await failure(claude.complete(req()));
     expect(boom.message).toBe("claude: boom");
-    expect([nonJson, prose, boom].map((error) => error.retryable)).toEqual([true, true, true]);
+    const bare = await failure(claude.complete(req()));
+    expect(bare.message).toBe("claude: error");
+    expect([nonJson, prose, boom, bare].map((error) => error.retryable)).toEqual([true, true, true, true]);
   });
 
   it("maps not-found, login, exit code and timeout", async () => {

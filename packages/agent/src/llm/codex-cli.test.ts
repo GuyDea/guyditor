@@ -66,7 +66,7 @@ describe("CodexCliAdapter", () => {
     expect(args).toEqual([
       "exec", "--ephemeral", "--skip-git-repo-check", "--sandbox", "read-only", "-C", "/ctx",
       "-m", "gpt-5.5", "-c", "model_reasoning_effort=high", "--output-schema", schemaPath, "-o", replyPath,
-      "-i", join("/ctx", "F2-storyboard.png"), "-",
+      "-i", join("/ctx", "F2-storyboard.png"),
     ]);
     expect(calls[0]!.cwd).toBe("/ctx");
     expect(calls[0]!.stdin.startsWith("SYS\n\n")).toBe(true);
@@ -79,7 +79,8 @@ describe("CodexCliAdapter", () => {
   it("omits image and PDF hints for a text-only conversation", async () => {
     const { codex, calls } = adapter(writesReply('{"reply":{"a":"x"}}'));
     await codex.complete(req());
-    expect(calls[0]!.args.at(-1)).toBe("-");
+    expect(calls[0]!.args.at(-1)).toBe(argAfter(calls[0]!.args, "-o"));
+    expect(calls[0]!.args).not.toContain("-");
     expect(calls[0]!.args).not.toContain("-i");
     expect(calls[0]!.stdin).toBe("SYS\n\nCreator: hi\n\nAnswer only with JSON matching the output schema.");
   });
