@@ -1,3 +1,4 @@
+export * from "./llm/index.js";
 export { AuditLog } from "./audit-log.js";
 export type { AuditLogOptions } from "./audit-log.js";
 export { SessionManager } from "./session.js";
