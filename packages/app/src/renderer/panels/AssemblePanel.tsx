@@ -19,7 +19,36 @@ import { AiSettingsSection } from "./AiSettingsSection.js";
 import { Panel } from "./Panel.js";
 import type { WorkspacePanelProps } from "./types.js";
 
-type Pending = Exclude<SendResult, { kind: "turn" }> & { input: SendInput };
+type Pending = Exclude<SendResult, { kind: "turn" }> & { resend: SendInput };
+
+/** What a non-turn `send` result means for the next request. */
+export function nextSendPayload(
+  base: SendInput,
+  result: SendResult,
+): { payload: SendInput | null; notice: string | null } {
+  switch (result.kind) {
+    case "confirm-cost":
+      return { payload: { ...base, confirmToken: result.confirmToken }, notice: null };
+    case "acknowledge-external":
+      return { payload: { ...base, acknowledgeExternal: true }, notice: null };
+    case "blocked":
+      return { payload: null, notice: result.message };
+    case "turn":
+      return { payload: null, notice: null };
+  }
+}
+
+/** Whether the message box may send right now (button click and Enter key). */
+export function canSendMessage(state: {
+  status: AssemblySessionView["status"] | undefined;
+  hasEvidence: boolean;
+  busy: boolean;
+  pending: boolean;
+  text: string;
+}): boolean {
+  return state.status === "conversing" && state.hasEvidence && !state.busy &&
+    !state.pending && state.text.trim() !== "";
+}
 
 export interface AssemblePanelProps extends WorkspacePanelProps {
   /** Test seams: `renderToStaticMarkup` does not run the mount fetch. */
@@ -197,7 +226,7 @@ export function AssemblePanel({
         setPending(null);
         setInput("");
       } else {
-        setPending({ ...result, input: payload });
+        setPending({ ...result, resend: nextSendPayload(payload, result).payload ?? payload });
       }
     } catch (error: unknown) {
       setNotice(errorMessage(error));
@@ -229,8 +258,13 @@ export function AssemblePanel({
     .reverse().find(({ role }) => role === "assistant");
   const lastQuestions = lastAssistant?.reply?.status === "questions" ? lastAssistant.reply.questions : [];
   const conversing = active?.status === "conversing";
-  const canSend = conversing && active.evidence !== null && !busy &&
-    pending === null && input.trim() !== "";
+  const canSend = canSendMessage({
+    status: active?.status,
+    hasEvidence: active?.evidence != null,
+    busy,
+    pending: pending !== null,
+    text: input,
+  });
   const summary = active === null ? null : evidenceSummary(active);
   const usage = active === null ? null : usageLine(active);
   const plan = active?.plan ?? null;
@@ -353,7 +387,7 @@ export function AssemblePanel({
               type="button"
               className="primary-action"
               data-testid="assembly-confirm-cost"
-              onClick={() => void send({ ...pending.input, confirmToken: pending.confirmToken })}
+              onClick={() => void send(pending.resend)}
             >Confirm ${pending.estimatedUsd.toFixed(2)}</button>
           </div>
         ) : null}
@@ -364,7 +398,7 @@ export function AssemblePanel({
               type="button"
               className="primary-action"
               data-testid="assembly-acknowledge"
-              onClick={() => void send({ ...pending.input, acknowledgeExternal: true })}
+              onClick={() => void send(pending.resend)}
             >I understand — continue</button>
           </div>
         ) : null}

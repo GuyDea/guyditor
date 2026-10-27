@@ -138,7 +138,7 @@ interface CollapsedWorkspaceLayout {
   schema: typeof LAYOUT_SCHEMA;
   regions: Record<DockRegionId, LayoutRegion>;
   splitters: SplitterPositions;
-  collapsed: Record<DockPanelId, boolean>;
+  collapsed: Record<PreAssembleDockPanelId, boolean> & { assemble?: boolean };
 }
 
 interface PreAssembleLayoutRegion {
@@ -553,7 +553,9 @@ function isCollapsedWorkspaceLayout(
   });
   if (new Set(panels).size !== panels.length) return false;
   if (!hasValidSplitters(splitters)) return false;
-  return DOCK_PANEL_IDS.every((panelId) => typeof collapsed[panelId] === "boolean");
+  return PRE_ASSEMBLE_DOCK_PANEL_IDS.every(
+    (panelId) => typeof collapsed[panelId] === "boolean",
+  );
 }
 
 function isPreOnboardingWorkspaceLayout(
@@ -624,7 +626,7 @@ export function parseLayout(
     return migratePreAssembleLayout(value, fallbackPhase);
   }
   if (isCollapsedWorkspaceLayout(value)) {
-    return migrateCollapsedLayout(value);
+    return migrateCollapsedLayout(value, fallbackPhase);
   }
   if (!isWorkspaceLayout(value)) return createDefaultLayout(fallbackPhase);
   const next = cloneLayout(value);
@@ -659,23 +661,39 @@ function parseWorkflowLayouts(value: unknown): WorkflowLayouts | null {
 
 function migrateCollapsedLayout(
   previous: CollapsedWorkspaceLayout,
+  phase: WorkflowPhase,
 ): WorkspaceLayout {
   const splitters = { ...previous.splitters };
   for (const splitter of SPLITTER_IDS) {
     splitters[splitter] = clampSplitterValue(splitter, splitters[splitter]);
   }
-  return {
-    schema: LAYOUT_SCHEMA,
-    regions: Object.fromEntries(DOCK_REGION_IDS.map((regionId) => [
-      regionId,
-      {
-        panelIds: [...previous.regions[regionId].panelIds],
-        activePanelId: previous.regions[regionId].activePanelId,
+  const regions = Object.fromEntries(DOCK_REGION_IDS.map((regionId) => [
+    regionId,
+    {
+      panelIds: [...previous.regions[regionId].panelIds],
+      activePanelId: previous.regions[regionId].activePanelId,
+    },
+  ])) as Record<DockRegionId, LayoutRegion>;
+  const placed = DOCK_REGION_IDS.some(
+    (regionId) => regions[regionId].panelIds.includes("assemble"),
+  );
+  if (placed || typeof previous.collapsed.assemble === "boolean") {
+    return {
+      schema: LAYOUT_SCHEMA,
+      regions,
+      splitters,
+      railCollapsed: {
+        ...previous.collapsed,
+        assemble: previous.collapsed.assemble ?? false,
       },
-    ])) as Record<DockRegionId, LayoutRegion>,
+    };
+  }
+  return migratePreAssembleLayout({
+    schema: LAYOUT_SCHEMA,
+    regions: regions as Record<DockRegionId, PreAssembleLayoutRegion>,
     splitters,
     railCollapsed: { ...previous.collapsed },
-  };
+  }, phase);
 }
 
 function migratePreOnboardingLayout(

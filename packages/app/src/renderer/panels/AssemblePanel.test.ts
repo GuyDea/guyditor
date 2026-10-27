@@ -14,7 +14,9 @@ import {
   activeSession,
   AssemblePanel,
   cutRange,
+  canSendMessage,
   evidenceSummary,
+  nextSendPayload,
   settingsSummary,
   usageLine,
 } from "./AssemblePanel.js";
@@ -274,5 +276,49 @@ describe("AI settings section", () => {
 
     expect(html).toContain("No key");
     expect(html).toContain("Keys will not persist across restarts on this system.");
+  });
+});
+
+describe("send result handling", () => {
+  const base = { sessionId: "asb_aaaaaaaaaa", text: "hello" };
+
+  it("turns the confirm-cost result into a resend carrying the token", () => {
+    const next = nextSendPayload(base, {
+      kind: "confirm-cost", message: "m", confirmToken: "tok", estimatedUsd: 1, estimated: true,
+    });
+    expect(next).toEqual({ payload: { ...base, confirmToken: "tok" }, notice: null });
+  });
+
+  it("turns acknowledge-external into a resend with the flag", () => {
+    const next = nextSendPayload(base, { kind: "acknowledge-external", provider: "anthropic", notice: "n" });
+    expect(next).toEqual({ payload: { ...base, acknowledgeExternal: true }, notice: null });
+  });
+
+  it("surfaces blocked as a message with no resend, and a turn as nothing", () => {
+    expect(nextSendPayload(base, { kind: "blocked", message: "No external calls." }))
+      .toEqual({ payload: null, notice: "No external calls." });
+    expect(nextSendPayload(base, { kind: "turn", session: session() }))
+      .toEqual({ payload: null, notice: null });
+  });
+
+  it("keeps both the token and the flag when confirm-cost is followed by acknowledge-external", () => {
+    const first = nextSendPayload(base, {
+      kind: "confirm-cost", message: "m", confirmToken: "tok", estimatedUsd: 1, estimated: false,
+    }).payload!;
+    const second = nextSendPayload(first, {
+      kind: "acknowledge-external", provider: "openai", notice: "n",
+    }).payload;
+    expect(second).toEqual({ ...base, confirmToken: "tok", acknowledgeExternal: true });
+  });
+
+  it("gates the Enter-key send on a conversing session with evidence, idle, and text", () => {
+    const ready = { status: "conversing" as const, hasEvidence: true, busy: false, pending: false, text: "hi" };
+    expect(canSendMessage(ready)).toBe(true);
+    expect(canSendMessage({ ...ready, text: "  " })).toBe(false);
+    expect(canSendMessage({ ...ready, busy: true })).toBe(false);
+    expect(canSendMessage({ ...ready, pending: true })).toBe(false);
+    expect(canSendMessage({ ...ready, hasEvidence: false })).toBe(false);
+    expect(canSendMessage({ ...ready, status: "planned" })).toBe(false);
+    expect(canSendMessage({ ...ready, status: undefined })).toBe(false);
   });
 });

@@ -443,6 +443,49 @@ describe("workspace renderer state", () => {
     }
   });
 
+  it("migrates a collapsed-keyed layout that contains help without resetting it", () => {
+    const base = createDefaultLayouts();
+    const prior = structuredClone(base) as unknown as {
+      layouts: Record<string, {
+        collapsed?: Record<string, boolean>;
+        railCollapsed?: Record<string, boolean>;
+        regions: Record<string, { activePanelId: string | null; panelIds: string[] }>;
+        splitters: Record<string, number>;
+      }>;
+    };
+    for (const layout of Object.values(prior.layouts)) {
+      layout.collapsed = { ...layout.railCollapsed };
+      delete layout.collapsed["assemble"];
+      delete layout.railCollapsed;
+      for (const region of Object.values(layout.regions)) {
+        region.panelIds = region.panelIds.filter((panelId) => panelId !== "assemble");
+        if (region.activePanelId === "assemble") region.activePanelId = region.panelIds[0] ?? null;
+      }
+      layout.regions["right-bottom"]!.panelIds.push("help");
+      layout.regions["right-bottom"]!.activePanelId ??= "help";
+    }
+    prior.layouts.cut!.splitters.left = 377;
+    prior.layouts.cut!.regions["right-top"]!.panelIds = ["agent"];
+    prior.layouts.cut!.regions["right-top"]!.activePanelId = "agent";
+    const storage = memoryStorage({
+      [LAYOUT_STORAGE_KEY]: JSON.stringify({
+        schema: "layout/v2",
+        projects: { "/project": prior },
+      }),
+    });
+
+    const migrated = loadProjectLayouts("/project", storage);
+
+    expect(migrated.layouts.cut.splitters.left).toBe(377);
+    expect(migrated.layouts.cut.regions["right-top"].panelIds).toEqual(["agent", "assemble"]);
+    expect(migrated.layouts.cut.regions["right-bottom"].panelIds).toContain("help");
+    expect(migrated.layouts.ingest.regions["right-bottom"].panelIds).toEqual(["help", "assemble"]);
+    expect(migrated.layouts.polish.regions["right-bottom"].panelIds).toEqual(["inspector", "help"]);
+    for (const phase of WORKFLOW_PHASES) {
+      expect(migrated.layouts[phase].railCollapsed.assemble).toBe(false);
+    }
+  });
+
   it("keeps a current layout untouched when assemble was moved out of every region", () => {
     const current = createDefaultLayouts();
     current.layouts.cut = assignPanel(current.layouts.cut, "assemble", "left");
