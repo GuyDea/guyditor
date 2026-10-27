@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { cliVersion, failureError, runCli } from "./cli-process.js";
+import { CLI_KILL_GRACE_MS, cliVersion, failureError, runCli } from "./cli-process.js";
 import { LlmAdapterError } from "./types.js";
 import { fakeSpawn } from "./__fixtures__/fake-spawn.js";
 
@@ -33,6 +33,39 @@ describe("cli process", () => {
     expect(run.timedOut).toBe(true);
     expect(calls[0]!.killed).toBe("SIGTERM");
     expect(failureError("codex", run).message).toMatch(/^codex: timed out/);
+  });
+
+  it("sends SIGKILL after the grace period when SIGTERM is ignored and leaves no timer behind", async () => {
+    vi.useFakeTimers();
+    try {
+      const { spawn, calls } = fakeSpawn({ hang: true, ignoreSigterm: true });
+      let settled = false;
+      const pending = runCli({ name: "codex", binary: "codex", args: [], cwd: "/ctx", timeoutMs: 10, spawn })
+        .finally(() => { settled = true; });
+      await vi.advanceTimersByTimeAsync(10);
+      expect(calls[0]!.kills).toEqual(["SIGTERM"]);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(CLI_KILL_GRACE_MS);
+      expect(calls[0]!.kills).toEqual(["SIGTERM", "SIGKILL"]);
+      expect(await pending).toMatchObject({ timedOut: true, signal: "SIGKILL" });
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("clears the kill timer when the child exits on SIGTERM", async () => {
+    vi.useFakeTimers();
+    try {
+      const { spawn, calls } = fakeSpawn({ hang: true });
+      const pending = runCli({ name: "codex", binary: "codex", args: [], cwd: "/ctx", timeoutMs: 10, spawn });
+      await vi.advanceTimersByTimeAsync(10);
+      expect(await pending).toMatchObject({ timedOut: true, signal: "SIGTERM" });
+      expect(calls[0]!.kills).toEqual(["SIGTERM"]);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("recognises a login failure", () => {

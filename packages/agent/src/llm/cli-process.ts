@@ -20,6 +20,8 @@ export type SpawnFn = (
 
 export const CLI_TIMEOUT_MS = 300_000;
 export const CLI_OUTPUT_EXCERPT = 65_536;
+/** How long a timed-out CLI gets to exit on SIGTERM before it is sent SIGKILL. */
+export const CLI_KILL_GRACE_MS = 5_000;
 const VERSION_TIMEOUT_MS = 10_000;
 const LOGIN_PATTERN = /not logged in|unauthorized|please run \/login|run codex login/i;
 
@@ -55,15 +57,23 @@ export function runCli(input: {
     const timeoutMs = input.timeoutMs ?? CLI_TIMEOUT_MS;
     let timedOut = false;
     let settled = false;
+    let killTimer: NodeJS.Timeout | undefined;
+    // A CLI that ignores SIGTERM (or a grandchild holding stdout open) would otherwise never close.
     const timer = setTimeout(() => {
       timedOut = true;
       child.kill("SIGTERM");
+      // The kill can close the child synchronously; then there is nothing left to escalate.
+      if (!settled) killTimer = setTimeout(() => child.kill("SIGKILL"), CLI_KILL_GRACE_MS);
     }, timeoutMs);
+    const clearTimers = (): void => {
+      clearTimeout(timer);
+      clearTimeout(killTimer);
+    };
 
     child.on("error", (error) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      clearTimers();
       reject(error.code === "ENOENT"
         ? new LlmAdapterError(`${name} not found — install it or set its path in AI settings`, null, false)
         : new LlmAdapterError(`${name}: ${error.message}`, null, true));
@@ -71,7 +81,7 @@ export function runCli(input: {
     child.on("close", (code, signal) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      clearTimers();
       resolve({ code, signal, stdout: stdout(), stderr: stderr(), timedOut, timeoutMs });
     });
 

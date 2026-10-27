@@ -8,12 +8,17 @@ export interface FakeRun {
   code?: number | null;
   error?: NodeJS.ErrnoException;
   hang?: boolean;
+  /** kill("SIGTERM") is recorded but does not close; only SIGKILL ends the run. */
+  ignoreSigterm?: boolean;
   onSpawn?: (binary: string, args: readonly string[], cwd: string) => void;
 }
 
 export interface FakeSpawn {
   spawn: SpawnFn;
-  calls: { binary: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv; stdin: string; killed: NodeJS.Signals | null }[];
+  calls: {
+    binary: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv; stdin: string;
+    killed: NodeJS.Signals | null; kills: NodeJS.Signals[];
+  }[];
 }
 
 /** Each spawn consumes the next run; no real process is ever started. */
@@ -21,7 +26,10 @@ export function fakeSpawn(...runs: FakeRun[]): FakeSpawn {
   const calls: FakeSpawn["calls"] = [];
   const spawn: SpawnFn = (binary, args, options) => {
     const run = runs[calls.length] ?? {};
-    const call = { binary, args: [...args], cwd: options.cwd, env: options.env, stdin: "", killed: null as NodeJS.Signals | null };
+    const call = {
+      binary, args: [...args], cwd: options.cwd, env: options.env, stdin: "",
+      killed: null as NodeJS.Signals | null, kills: [] as NodeJS.Signals[],
+    };
     calls.push(call);
     run.onSpawn?.(binary, args, options.cwd);
 
@@ -42,6 +50,8 @@ export function fakeSpawn(...runs: FakeRun[]): FakeSpawn {
       stdout, stderr, stdin,
       kill(signal: NodeJS.Signals = "SIGTERM"): boolean {
         call.killed = signal;
+        call.kills.push(signal);
+        if (run.ignoreSigterm === true && signal === "SIGTERM") return true;
         close(null, signal);
         return true;
       },
