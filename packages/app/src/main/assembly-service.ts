@@ -31,10 +31,18 @@ import {
   reviewMarkerAnnotations,
   serializeAssemblySession,
 } from "../../../transcript/src/index.js";
-import type { AssemblyEvidence, AssemblyProvider, CompiledCut, AssemblySession, ReplyContext } from "../../../transcript/src/index.js";
+import type {
+  AssemblyEvidence,
+  AssemblyProvider,
+  CompiledCut,
+  AssemblySession,
+  ReplyContext,
+  ScriptChoice,
+} from "../../../transcript/src/index.js";
 
 import type { GdEventWithoutSeq } from "../shared/ipc.js";
 import type { AiSettingsService } from "./ai-settings-service.js";
+import { attachContextFiles, detachContextFile } from "./assembly-files.js";
 import type { PrepareDeps } from "./assembly-prepare.js";
 import { assemblyTarget, compileContext, keptRanges, proposalReason, rederiveStarts } from "./assembly-proposal.js";
 import { llmMessages, runAssemblyTurn, TurnError } from "./assembly-turn.js";
@@ -60,6 +68,8 @@ export interface AssemblyServiceOptions {
   idFactory?: IdFactory;
   adapterFactory?: typeof createLlmAdapter;
   environment?: NodeJS.ProcessEnv;
+  /** The native multi-file picker; absent in tests and headless runs. */
+  pickFiles?: () => Promise<string[]>;
 }
 
 export type SendInput = {
@@ -198,16 +208,20 @@ export class AssemblyService {
     return assemblyView(await this.#read(sessionId));
   }
 
-  public async create(input: { assetIds: string[] }): Promise<AssemblySessionView> {
-    const { store } = this.#options;
-    if (input.assetIds.length === 0) throw invalidInput("at least one asset is required");
-    for (const assetId of input.assetIds) {
-      const asset = store.currentProject.assets.find(({ id }) => id === assetId);
+  #checkAssets(assetIds: readonly string[]): void {
+    if (assetIds.length === 0) throw invalidInput("at least one asset is required");
+    if (new Set(assetIds).size !== assetIds.length) throw invalidInput("an asset is listed twice");
+    for (const assetId of assetIds) {
+      const asset = this.#options.store.currentProject.assets.find(({ id }) => id === assetId);
       if (asset === undefined) throw invalidInput(`asset ${assetId} does not exist`);
       if (asset.kind !== "video" && asset.kind !== "audio") {
         throw invalidInput(`asset ${assetId} is ${asset.kind}, not speech-bearing`);
       }
     }
+  }
+
+  public async create(input: { assetIds: string[] }): Promise<AssemblySessionView> {
+    this.#checkAssets(input.assetIds);
     const session = createAssemblySession({
       id: (this.#options.idFactory ?? makeId)("asb"),
       now: (this.#options.now?.() ?? new Date()).toISOString(),
@@ -216,6 +230,74 @@ export class AssemblyService {
     });
     await this.#serialized(() => this.#persist(session));
     return assemblyView(session);
+  }
+
+  /** Reads a session whose inputs may still change: only before Analyze, or after a failed one. Call inside #serialized. */
+  async #readEditable(sessionId: string): Promise<AssemblySession> {
+    const session = await this.#read(sessionId);
+    if (!PREPARABLE.includes(session.status)) {
+      throw new Error(
+        `E_ASSEMBLY_STATE: session ${sessionId} is ${session.status}; inputs can only change before Analyze (Start over to change them)`,
+      );
+    }
+    return session;
+  }
+
+  #editInputs(
+    sessionId: string,
+    change: (session: AssemblySession) => Promise<Partial<AssemblySession["inputs"]>> | Partial<AssemblySession["inputs"]>,
+  ): Promise<AssemblySessionView> {
+    return this.#serialized(async () => {
+      const session = await this.#readEditable(sessionId);
+      const inputs = { ...session.inputs, ...await change(session) };
+      return assemblyView(await this.#persist({ ...session, inputs }));
+    });
+  }
+
+  public pickContextFiles(): Promise<string[]> {
+    return this.#options.pickFiles?.() ?? Promise.resolve([]);
+  }
+
+  /** Copies the files into the session (labels `F<n>`, never reused). */
+  public addFiles(sessionId: string, paths: string[]): Promise<AssemblySessionView> {
+    return this.#editInputs(sessionId, (session) => attachContextFiles(this.#options.store.root, session, paths));
+  }
+
+  /** Drops a file and its copy; removing the chosen script falls back to automatic detection. */
+  public removeFile(sessionId: string, label: string): Promise<AssemblySessionView> {
+    return this.#serialized(async () => {
+      const session = await this.#readEditable(sessionId);
+      const file = session.inputs.files.find((candidate) => candidate.label === label);
+      if (file === undefined) throw invalidInput(`no attached file ${label}`);
+      const { script } = session.inputs;
+      const next = await this.#persist({
+        ...session,
+        inputs: {
+          ...session.inputs,
+          files: session.inputs.files.filter((candidate) => candidate !== file),
+          script: script.mode === "label" && script.label === label ? { mode: "auto" } : script,
+        },
+      });
+      // After the persist: a crash in between leaves an orphan copy, never a listed file without one.
+      await detachContextFile(this.#options.store.root, file);
+      return assemblyView(next);
+    });
+  }
+
+  public setScript(sessionId: string, script: ScriptChoice): Promise<AssemblySessionView> {
+    return this.#editInputs(sessionId, ({ inputs }) => {
+      if (script.mode === "label" && !inputs.files.some(({ label, kind }) => label === script.label && kind === "text")) {
+        throw invalidInput(`${script.label} is not an attached text file`);
+      }
+      return { script };
+    });
+  }
+
+  public setAssets(sessionId: string, assetIds: string[]): Promise<AssemblySessionView> {
+    return this.#editInputs(sessionId, () => {
+      this.#checkAssets(assetIds);
+      return { assetIds: [...assetIds] };
+    });
   }
 
   public prepare(sessionId: string): Promise<JobStatus> {
@@ -533,6 +615,11 @@ export class AssemblyService {
       send: (params: SendInput) => this.send(params),
       abandon: ({ sessionId }: { sessionId: string }) => this.abandon(sessionId),
       createProposal: ({ sessionId }: { sessionId: string }) => this.createProposal(sessionId),
+      pickContextFiles: () => this.pickContextFiles(),
+      addFiles: ({ sessionId, paths }: { sessionId: string; paths: string[] }) => this.addFiles(sessionId, paths),
+      removeFile: ({ sessionId, label }: { sessionId: string; label: string }) => this.removeFile(sessionId, label),
+      setScript: ({ sessionId, script }: { sessionId: string; script: ScriptChoice }) => this.setScript(sessionId, script),
+      setAssets: ({ sessionId, assetIds }: { sessionId: string; assetIds: string[] }) => this.setAssets(sessionId, assetIds),
     };
   }
 }

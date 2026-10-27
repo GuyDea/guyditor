@@ -280,6 +280,14 @@ async function createWindow(initialProjectPath?: string): Promise<BrowserWindow>
       });
       return selected.canceled ? [] : selected.filePaths;
     },
+    chooseContextFiles: async () => {
+      const selected = await dialog.showOpenDialog(window, {
+        title: "Add context files",
+        buttonLabel: "Add",
+        properties: ["openFile", "multiSelections"],
+      });
+      return selected.canceled ? [] : selected.filePaths;
+    },
     chooseTemplate: async () => {
       const selected = await dialog.showOpenDialog(window, {
         title: "Import template package",

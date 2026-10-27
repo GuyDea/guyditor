@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -10,13 +10,7 @@ import type { BudgetConfig, LlmAdapter } from "../../../agent/src/index.js";
 import { AnnotationService, createProject, JobQueue, OperationEngine, parseAnnotationSidecar } from "../../../core/src/index.js";
 import type { ProjectStore, Result } from "../../../core/src/index.js";
 import { projectFixture } from "../../../core/src/project/test-fixtures.js";
-import {
-  classifyContextFile,
-  contextFilePath,
-  serializeTranscriptSidecar,
-  terminalJob,
-} from "../../../transcript/src/index.js";
-import type { ContextFile } from "../../../transcript/src/index.js";
+import { contextFilePath, serializeTranscriptSidecar, terminalJob } from "../../../transcript/src/index.js";
 import { scriptedTranscript } from "../../../transcript/src/assembly/__fixtures__/scripted-transcript.js";
 
 import type { AiSettingsService } from "./ai-settings-service.js";
@@ -92,6 +86,7 @@ async function harness(options: {
   now?: () => Date;
   send?: SendOptions;
   proposals?: { tightening: "ask" | "gentle" | "off" };
+  pickFiles?: () => Promise<string[]>;
 } = {}) {
   const root = await mkdtemp(join(tmpdir(), "guyditor-assembly-"));
   roots.push(root);
@@ -154,6 +149,7 @@ async function harness(options: {
     environment: {},
     ...(sendOptions?.adapterFactory === undefined ? {} : { adapterFactory: sendOptions.adapterFactory }),
     ...(options.now === undefined ? {} : { now: options.now }),
+    ...(options.pickFiles === undefined ? {} : { pickFiles: options.pickFiles }),
   });
   return { root, store, queue, publish, service, auditLog, annotations, ai };
 }
@@ -165,38 +161,23 @@ const DOT = Buffer.from(
   "base64",
 );
 
-/** Copies files into the session's context directory and records them; Task 7 replaces this with addFiles. */
-async function seedFiles(
-  h: Awaited<ReturnType<typeof harness>>,
-  id: string,
-  files: { name: string; bytes: Uint8Array }[],
-): Promise<void> {
-  const deps = h.service.prepareDeps();
-  const start = (await deps.readSession(id)).inputs.nextFileLabel;
-  const seeded: ContextFile[] = [];
-  for (const [index, { name, bytes }] of files.entries()) {
-    const label = `F${String(start + index)}`;
-    const path = contextFilePath(id, label, name);
-    await mkdir(join(h.root, `sidecars/context/${id}`), { recursive: true });
-    await writeFile(join(h.root, path), bytes);
-    const { kind, mime, pages, sent, unsentReason } = classifyContextFile(name, bytes);
-    seeded.push({
-      label, name, path, sha256: createHash("sha256").update(bytes).digest("hex"), bytes: bytes.length,
-      mime, kind, sent, unsentReason, pages, role: "context",
-    });
-  }
-  await deps.updateSession(id, (current) => ({
-    ...current,
-    inputs: {
-      ...current.inputs,
-      files: [...current.inputs.files, ...seeded],
-      nextFileLabel: current.inputs.nextFileLabel + files.length,
-    },
-  }));
+/** Writes a file outside the project, where the creator's picker would find it; returns its absolute path. */
+async function fixture(h: Awaited<ReturnType<typeof harness>>, name: string, bytes: string | Uint8Array): Promise<string> {
+  const path = join(h.root, "outside", name);
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, bytes);
+  return path;
+}
+
+/** A `%PDF-1.4` buffer of exactly `bytes` bytes. */
+function pdfOf(bytes: number): Buffer {
+  const pdf = Buffer.alloc(bytes, 0x20);
+  pdf.write("%PDF-1.4\n", 0, "latin1");
+  return pdf;
 }
 
 async function withScript(h: Awaited<ReturnType<typeof harness>>, id: string): Promise<void> {
-  await seedFiles(h, id, [{ name: "script.md", bytes: Buffer.from(SCRIPT, "utf8") }]);
+  await h.service.addFiles(id, [await fixture(h, "script.md", SCRIPT)]);
 }
 
 const prepare = (h: Awaited<ReturnType<typeof harness>>, id: string) =>
@@ -235,7 +216,7 @@ describe("AssemblyService", () => {
   it("prepare resolves the script from the attached files, sets roles and lists them in the evidence", async () => {
     const h = await harness();
     const { id } = await h.service.create({ assetIds: [FIRST, SECOND] });
-    await seedFiles(h, id, [{ name: "script.md", bytes: Buffer.from(SCRIPT, "utf8") }, { name: "dot.png", bytes: DOT }]);
+    await h.service.addFiles(id, [await fixture(h, "script.md", SCRIPT), await fixture(h, "dot.png", DOT)]);
     const session = await prepare(h, id);
     expect(session.status).toBe("conversing");
     expect(session.inputs.files[0]?.role).toBe("script");
@@ -247,9 +228,8 @@ describe("AssemblyService", () => {
     expect(session.evidence?.notes).toContain("script: F1 script.md");
 
     const again = await h.service.create({ assetIds: [FIRST] });
-    await seedFiles(h, again.id, [{ name: "script.md", bytes: Buffer.from(SCRIPT, "utf8") }]);
-    await h.service.prepareDeps().updateSession(again.id, (current) =>
-      ({ ...current, inputs: { ...current.inputs, script: { mode: "none" } } }));
+    await withScript(h, again.id);
+    await h.service.setScript(again.id, { mode: "none" });
     const none = await prepare(h, again.id);
     expect(none.evidence?.scriptBlocks).toHaveLength(0);
     expect(none.evidence?.notes).toContain("script: none");
@@ -259,9 +239,8 @@ describe("AssemblyService", () => {
   it("prepare notes an explicit script without quoted paragraphs", async () => {
     const h = await harness();
     const { id } = await h.service.create({ assetIds: [FIRST] });
-    await seedFiles(h, id, [{ name: "notes.md", bytes: Buffer.from("plain words only\n", "utf8") }]);
-    await h.service.prepareDeps().updateSession(id, (current) =>
-      ({ ...current, inputs: { ...current.inputs, script: { mode: "label", label: "F1" } } }));
+    await h.service.addFiles(id, [await fixture(h, "notes.md", "plain words only\n")]);
+    await h.service.setScript(id, { mode: "label", label: "F1" });
     const session = await prepare(h, id);
     expect(session.evidence?.scriptBlocks).toHaveLength(0);
     expect(session.evidence?.notes).toEqual(expect.arrayContaining([
@@ -345,6 +324,119 @@ describe("AssemblyService", () => {
     const listed = await h.service.list();
     expect(listed.map(({ id }) => id)).toEqual([second.id, first.id]);
     expect(listed[1]!.status).toBe("abandoned");
+  });
+
+  describe("context files", () => {
+    const sha256 = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
+
+    it("addFiles copies, hashes and labels files monotonically", async () => {
+      const h = await harness();
+      const { id } = await h.service.create({ assetIds: [FIRST] });
+      const added = await h.service.addFiles(id, [await fixture(h, "script.md", SCRIPT), await fixture(h, "notes.md", "notes\n")]);
+      expect(added.inputs.files.map(({ label }) => label)).toEqual(["F1", "F2"]);
+      expect(added.inputs.nextFileLabel).toBe(3);
+      const [script] = added.inputs.files;
+      expect(script).toMatchObject({
+        name: "script.md", path: `sidecars/context/${id}/F1-script.md`, kind: "text", sent: true, role: "context",
+      });
+      const copy = await readFile(join(h.root, `sidecars/context/${id}/F1-script.md`));
+      expect(copy.toString("utf8")).toBe(SCRIPT);
+      expect(script?.sha256).toBe(sha256(copy));
+      expect(script?.bytes).toBe(copy.length);
+
+      const removed = await h.service.removeFile(id, "F1");
+      expect(removed.inputs.files.map(({ label }) => label)).toEqual(["F2"]);
+      await expect(readFile(join(h.root, `sidecars/context/${id}/F1-script.md`))).rejects.toThrow(/ENOENT/);
+      const again = await h.service.addFiles(id, [await fixture(h, "script.md", SCRIPT)]);
+      expect(again.inputs.files.map(({ label }) => label)).toEqual(["F2", "F3"]);
+      expect(again.inputs.nextFileLabel).toBe(4);
+      await expect(h.service.removeFile(id, "F1")).rejects.toThrow("E_ASSEMBLY_INVALID_INPUT");
+    });
+
+    it("files with the same basename get distinct paths", async () => {
+      const h = await harness();
+      const { id } = await h.service.create({ assetIds: [FIRST] });
+      const view = await h.service.addFiles(id, [await fixture(h, "a/notes.md", "a\n"), await fixture(h, "b/notes.md", "b\n")]);
+      expect(view.inputs.files.map(({ path }) => path)).toEqual([
+        `sidecars/context/${id}/F1-notes.md`,
+        `sidecars/context/${id}/F2-notes.md`,
+      ]);
+      expect(await readFile(join(h.root, view.inputs.files[0]!.path), "utf8")).toBe("a\n");
+      expect(await readFile(join(h.root, view.inputs.files[1]!.path), "utf8")).toBe("b\n");
+    });
+
+    it("refuses attachments beyond the 20 MB turn total with the running total", async () => {
+      const h = await harness();
+      const { id } = await h.service.create({ assetIds: [FIRST] });
+      await h.service.addFiles(id, [await fixture(h, "big1.pdf", pdfOf(15 * 1_048_576))]);
+      await expect(h.service.addFiles(id, [await fixture(h, "big2.pdf", pdfOf(6 * 1_048_576))])).rejects.toThrow(
+        "E_ASSEMBLY_FILES_TOO_LARGE: adding big2.pdf (6.0 MB) would put attached files at 21.0 MB; the limit is 20 MB",
+      );
+      const view = await h.service.get(id);
+      expect(view.inputs.files).toHaveLength(1);
+      expect(view.inputs.nextFileLabel).toBe(2);
+    });
+
+    it("a failing path in a batch attaches none of it", async () => {
+      const h = await harness();
+      const { id } = await h.service.create({ assetIds: [FIRST] });
+      const missing = join(h.root, "outside", "missing.md");
+      await expect(h.service.addFiles(id, [await fixture(h, "notes.md", "n\n"), missing]))
+        .rejects.toThrow(`E_ASSEMBLY_INVALID_INPUT: ${missing} is not a readable file`);
+      expect((await h.service.get(id)).inputs).toMatchObject({ files: [], nextFileLabel: 1 });
+      await expect(readFile(join(h.root, `sidecars/context/${id}/F1-notes.md`))).rejects.toThrow(/ENOENT/);
+    });
+
+    it("unsent files are kept and say why", async () => {
+      const h = await harness();
+      const { id } = await h.service.create({ assetIds: [FIRST] });
+      const view = await h.service.addFiles(id, [await fixture(h, "budget.xlsx", Buffer.from("PK\u0003\u0004sheet", "latin1"))]);
+      expect(view.inputs.files[0]).toMatchObject({ name: "budget.xlsx", sent: false, unsentReason: "unsupported type" });
+      await expect(readFile(join(h.root, `sidecars/context/${id}/F1-budget.xlsx`))).resolves.toBeDefined();
+    });
+
+    it("setScript, removing the chosen script, and setAssets", async () => {
+      const h = await harness();
+      const { id } = await h.service.create({ assetIds: [FIRST] });
+      await h.service.addFiles(id, [await fixture(h, "script.md", SCRIPT), await fixture(h, "dot.png", DOT)]);
+      expect((await h.service.setScript(id, { mode: "label", label: "F1" })).inputs.script)
+        .toEqual({ mode: "label", label: "F1" });
+      await expect(h.service.setScript(id, { mode: "label", label: "F2" })).rejects.toThrow(/E_ASSEMBLY_INVALID_INPUT/);
+      await expect(h.service.setScript(id, { mode: "label", label: "F9" })).rejects.toThrow(/E_ASSEMBLY_INVALID_INPUT/);
+      expect((await h.service.removeFile(id, "F1")).inputs.script).toEqual({ mode: "auto" });
+      expect((await h.service.setAssets(id, [SECOND])).inputs.assetIds).toEqual([SECOND]);
+      await expect(h.service.setAssets(id, ["ast_cccccccccc"])).rejects.toThrow(/E_ASSEMBLY_INVALID_INPUT/);
+      await expect(h.service.setAssets(id, [])).rejects.toThrow(/E_ASSEMBLY_INVALID_INPUT/);
+      await expect(h.service.setAssets(id, [FIRST, FIRST])).rejects.toThrow(/E_ASSEMBLY_INVALID_INPUT/);
+      expect((await h.service.get(id)).inputs.assetIds).toEqual([SECOND]);
+    });
+
+    it("inputs are read-only from preparing on", async () => {
+      const h = await harness();
+      const { id } = await h.service.create({ assetIds: [FIRST] });
+      await withScript(h, id);
+      await prepare(h, id);
+      const path = await fixture(h, "notes.md", "n\n");
+      await expect(h.service.addFiles(id, [path])).rejects.toThrow(
+        `E_ASSEMBLY_STATE: session ${id} is conversing; inputs can only change before Analyze (Start over to change them)`,
+      );
+      await expect(h.service.removeFile(id, "F1")).rejects.toThrow(/E_ASSEMBLY_STATE/);
+      await expect(h.service.setScript(id, { mode: "none" })).rejects.toThrow(/E_ASSEMBLY_STATE/);
+      await expect(h.service.setAssets(id, [SECOND])).rejects.toThrow(/E_ASSEMBLY_STATE/);
+
+      const failed = await harness({ transcripts: "none" });
+      const other = await failed.service.create({ assetIds: [FIRST] });
+      expect((await prepare(failed, other.id)).status).toBe("failed");
+      const added = await failed.service.addFiles(other.id, [await fixture(failed, "notes.md", "n\n")]);
+      expect(added.inputs.files.map(({ label }) => label)).toEqual(["F1"]);
+    });
+
+    it("pickContextFiles returns the dialog's paths", async () => {
+      const picked = await harness({ pickFiles: async () => ["/a.md"] });
+      await expect(picked.service.pickContextFiles()).resolves.toEqual(["/a.md"]);
+      const plain = await harness();
+      await expect(plain.service.pickContextFiles()).resolves.toEqual([]);
+    });
   });
 
   describe("waiting for transcription", () => {

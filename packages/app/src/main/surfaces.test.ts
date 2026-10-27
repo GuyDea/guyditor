@@ -168,12 +168,17 @@ describe("workspace IPC surfaces", () => {
     const assembly = IPC_SURFACES.find(({ service }) => service === "Assembly");
     expect(Object.keys(assembly?.methods ?? {}).sort()).toEqual([
       "abandon",
+      "addFiles",
       "create",
       "createProposal",
       "get",
       "list",
+      "pickContextFiles",
       "prepare",
+      "removeFile",
       "send",
+      "setAssets",
+      "setScript",
     ]);
     const create = assembly?.methods["create"]?.paramsSchema as { properties: Record<string, unknown> };
     expect(create.properties).not.toHaveProperty("scriptPath");
