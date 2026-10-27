@@ -133,12 +133,16 @@ describe("getting-started checklist reducer", () => {
 
 describe("welcomeVisible", () => {
   it("always shows welcome when no project is open", () => {
-    expect(welcomeVisible({ projectOpen: false, onboardingWants: false })).toBe(true);
-    expect(welcomeVisible({ projectOpen: false, onboardingWants: true })).toBe(true);
+    expect(welcomeVisible({ projectOpen: false, onboardingWants: false, loaded: true })).toBe(true);
+    expect(welcomeVisible({ projectOpen: false, onboardingWants: true, loaded: true })).toBe(true);
   });
 
   it("follows onboarding once a project is open", () => {
-    expect(welcomeVisible({ projectOpen: true, onboardingWants: false })).toBe(false);
-    expect(welcomeVisible({ projectOpen: true, onboardingWants: true })).toBe(true);
+    expect(welcomeVisible({ projectOpen: true, onboardingWants: false, loaded: true })).toBe(false);
+    expect(welcomeVisible({ projectOpen: true, onboardingWants: true, loaded: true })).toBe(true);
+  });
+
+  it("stays hidden until the first project snapshot has loaded", () => {
+    expect(welcomeVisible({ projectOpen: false, onboardingWants: true, loaded: false })).toBe(false);
   });
 });

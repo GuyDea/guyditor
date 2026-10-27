@@ -108,7 +108,9 @@ export function shouldShowWelcome(storage: Storage): boolean {
 export function welcomeVisible(input: {
   projectOpen: boolean;
   onboardingWants: boolean;
+  loaded: boolean;
 }): boolean {
+  if (!input.loaded) return false;
   return !input.projectOpen || input.onboardingWants;
 }
 

@@ -140,6 +140,7 @@ export function App(): React.JSX.Element {
   const [welcomeOpen, setWelcomeOpen] = useState(
     () => shouldShowWelcome(window.localStorage),
   );
+  const [snapshotLoaded, setSnapshotLoaded] = useState(false);
   const [tourOpen, setTourOpen] = useState(false);
   const [tourStop, setTourStop] = useState<string | null>(null);
   const [transcripts, setTranscripts] = useState<TranscriptSidecar[]>([]);
@@ -781,7 +782,7 @@ export function App(): React.JSX.Element {
       if (active && result.applied && result.warning !== undefined) {
         setNotice(result.warning);
       }
-    }).catch(() => undefined);
+    }).catch(() => undefined).finally(() => setSnapshotLoaded(true));
     const offState = window.guyditor.on("job.state", (event) => {
       const contextKey = projectSnapshotContextKey(
         useProjectMirror.getState().snapshot,
@@ -1155,7 +1156,11 @@ export function App(): React.JSX.Element {
       <p className="global-notice" role="status" data-testid="shell-status">
         {snapshot === null ? "Open a project to begin" : notice}
       </p>
-      {welcomeVisible({ projectOpen: snapshot !== null, onboardingWants: welcomeOpen }) ? (
+      {welcomeVisible({
+        projectOpen: snapshot !== null,
+        onboardingWants: welcomeOpen,
+        loaded: snapshotLoaded,
+      }) ? (
         <WelcomeSurface
           onCreateProject={() => welcomeProjectAction("create")}
           onOpenProject={() => welcomeProjectAction("open")}
