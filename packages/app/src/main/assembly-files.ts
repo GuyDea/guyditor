@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 
 import {
   classifyContextFile,
+  classifyOversizedContextFile,
   CONTEXT_FILE_CAPS,
   contextFilePath,
   formatBytes,
@@ -14,6 +15,7 @@ import type { AssemblySession, ContextFile } from "../../../transcript/src/index
 /**
  * Copies `paths` into `sidecars/context/<session>/`, classified and labelled `F<n>` in order.
  * All or nothing: a failing path removes the copies this call already wrote. The caller persists the result.
+ * A file over the largest cap can never be sent, so it is listed unsent without being read, hashed or copied.
  */
 export async function attachContextFiles(
   root: string,
@@ -25,18 +27,28 @@ export async function attachContextFiles(
   const written: ContextFile[] = [];
   try {
     for (const source of paths) {
+      const unreadable = new Error(`E_ASSEMBLY_INVALID_INPUT: ${source} is not a readable file`);
+      const size = await stat(source).then((info) => (info.isFile() ? info.size : null), () => null);
+      if (size === null) throw unreadable;
+      const name = basename(source);
+      const label = `F${String(nextFileLabel)}`;
+      const path = contextFilePath(session.id, label, name);
+      if (size > CONTEXT_FILE_CAPS.pdfBytes) {
+        // Not read, so not hashed; the copy never exists and detachContextFile tolerates that.
+        files.push({ label, name, path, sha256: "", bytes: size, ...classifyOversizedContextFile(name), role: "context" });
+        nextFileLabel += 1;
+        continue;
+      }
       let bytes: Buffer;
       try {
         bytes = await readFile(source);
       } catch {
-        throw new Error(`E_ASSEMBLY_INVALID_INPUT: ${source} is not a readable file`);
+        throw unreadable;
       }
-      const name = basename(source);
-      const label = `F${String(nextFileLabel)}`;
       const file: ContextFile = {
         label,
         name,
-        path: contextFilePath(session.id, label, name),
+        path,
         sha256: createHash("sha256").update(bytes).digest("hex"),
         bytes: bytes.length,
         ...classifyContextFile(name, bytes),

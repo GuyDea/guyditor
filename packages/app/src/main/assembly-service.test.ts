@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, stat, writeFile, mkdir } from "node:fs/promises";
+import { mkdtemp, open, readFile, rm, stat, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -396,6 +396,41 @@ describe("AssemblyService", () => {
       const view = await h.service.addFiles(id, [await fixture(h, "budget.xlsx", Buffer.from("PK\u0003\u0004sheet", "latin1"))]);
       expect(view.inputs.files[0]).toMatchObject({ name: "budget.xlsx", sent: false, unsentReason: "unsupported type" });
       await expect(readFile(join(h.root, `sidecars/context/${id}/F1-budget.xlsx`))).resolves.toBeDefined();
+    });
+
+    it("a file over every cap is listed unsent without being read or copied", async () => {
+      const h = await harness();
+      const { id } = await h.service.create({ assetIds: [FIRST] });
+      const sparse = async (name: string): Promise<string> => {
+        const path = await fixture(h, name, "");
+        const handle = await open(path, "r+");
+        await handle.truncate(33 * 1_048_576);
+        await handle.close();
+        return path;
+      };
+      const view = await h.service.addFiles(id, [await sparse("IMG_0001.mov"), await sparse("scan.pdf")]);
+      expect(view.inputs.files).toEqual([
+        {
+          label: "F1", name: "IMG_0001.mov", path: `sidecars/context/${id}/F1-IMG_0001.mov`, sha256: "",
+          bytes: 33 * 1_048_576, mime: "application/octet-stream", kind: "other", sent: false,
+          unsentReason: "unsupported type", pages: null, role: "context",
+        },
+        expect.objectContaining({ label: "F2", kind: "pdf", sent: false, unsentReason: "over 32 MB", sha256: "" }),
+      ]);
+      await expect(stat(join(h.root, `sidecars/context/${id}/F1-IMG_0001.mov`))).rejects.toThrow(/ENOENT/);
+      await expect(stat(join(h.root, `sidecars/context/${id}/F2-scan.pdf`))).rejects.toThrow(/ENOENT/);
+      expect((await h.service.get(id)).inputs.files.map(({ label }) => label)).toEqual(["F1", "F2"]);
+      expect((await h.service.removeFile(id, "F1")).inputs.files.map(({ label }) => label)).toEqual(["F2"]);
+    });
+
+    it("a directory is not a readable file", async () => {
+      const h = await harness();
+      const { id } = await h.service.create({ assetIds: [FIRST] });
+      const folder = join(h.root, "outside", "clips");
+      await mkdir(folder, { recursive: true });
+      await expect(h.service.addFiles(id, [await fixture(h, "notes.md", "n\n"), folder]))
+        .rejects.toThrow(`E_ASSEMBLY_INVALID_INPUT: ${folder} is not a readable file`);
+      expect((await h.service.get(id)).inputs).toMatchObject({ files: [], nextFileLabel: 1 });
     });
 
     it("setScript, removing the chosen script, and setAssets", async () => {

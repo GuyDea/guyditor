@@ -29,8 +29,16 @@ const TEXT_MIME: Readonly<Record<string, string>> = {
   vtt: "text/vtt",
 };
 
+const IMAGE_MIME: Readonly<Record<string, string>> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+};
+
 export const TEXT_EXTENSIONS: ReadonlySet<string> = new Set(Object.keys(TEXT_MIME));
-export const IMAGE_EXTENSIONS: ReadonlySet<string> = new Set(["png", "jpg", "jpeg", "gif", "webp"]);
+export const IMAGE_EXTENSIONS: ReadonlySet<string> = new Set(Object.keys(IMAGE_MIME));
 
 export interface Classified {
   kind: ContextFileKind;
@@ -148,6 +156,17 @@ export function classifyContextFile(name: string, bytes: Uint8Array): Classified
     if (pages > CONTEXT_FILE_CAPS.pdfPages) return unsent("pdf", "application/pdf", pages, "over 100 pages");
     return { kind: "pdf", mime: "application/pdf", pages, sent: true, unsentReason: null };
   }
+  return unsent("other", OTHER_MIME, null, "unsupported type");
+}
+
+/**
+ * A file larger than every cap is never sent, so it is classified from its extension alone without reading it.
+ */
+export function classifyOversizedContextFile(name: string): Classified {
+  const ext = extensionOf(name);
+  if (TEXT_EXTENSIONS.has(ext)) return unsent("text", TEXT_MIME[ext] as string, null, "over 200 KB");
+  if (IMAGE_EXTENSIONS.has(ext)) return unsent("image", IMAGE_MIME[ext] as string, null, "over 5 MB");
+  if (ext === "pdf") return unsent("pdf", "application/pdf", null, "over 32 MB");
   return unsent("other", OTHER_MIME, null, "unsupported type");
 }
 

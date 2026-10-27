@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   classifyContextFile,
+  classifyOversizedContextFile,
   contextFilePath,
   formatBytes,
   resolveScript,
@@ -127,6 +128,19 @@ describe("classifyContextFile", () => {
       pages: 101,
       sent: false,
       unsentReason: "over 100 pages",
+    });
+  });
+});
+
+describe("classifyOversizedContextFile", () => {
+  it("classifies by extension alone with each kind's byte cap as the reason", () => {
+    expect(classifyOversizedContextFile("notes.MD")).toEqual({
+      kind: "text", mime: "text/markdown", pages: null, sent: false, unsentReason: "over 200 KB",
+    });
+    expect(classifyOversizedContextFile("still.jpg")).toMatchObject({ kind: "image", mime: "image/jpeg", unsentReason: "over 5 MB" });
+    expect(classifyOversizedContextFile("deck.pdf")).toMatchObject({ kind: "pdf", mime: "application/pdf", unsentReason: "over 32 MB" });
+    expect(classifyOversizedContextFile("IMG_0001.mov")).toEqual({
+      kind: "other", mime: "application/octet-stream", pages: null, sent: false, unsentReason: "unsupported type",
     });
   });
 });
