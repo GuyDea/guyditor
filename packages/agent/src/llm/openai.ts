@@ -1,5 +1,6 @@
 import type { AssemblyEffort } from "../../../transcript/src/index.js";
 import { modelIds, requestJson, tokenCount } from "./http.js";
+import { ASSEMBLY_REASONING_BUDGET, TRUNCATED_REPLY_MESSAGE } from "./pricing.js";
 import {
   LlmAdapterError, type LlmAdapter, type LlmAdapterOptions, type LlmCompletion, type LlmRequest,
 } from "./types.js";
@@ -56,12 +57,17 @@ export class OpenAiLlmAdapter implements LlmAdapter {
       instructions: request.system,
       input: request.messages,
       reasoning: { effort: EFFORT[request.effort] },
-      max_output_tokens: request.maxOutputTokens,
+      // OpenAI counts reasoning tokens against max_output_tokens, so the effort budget rides on top.
+      max_output_tokens: ASSEMBLY_REASONING_BUDGET[request.effort] + request.maxOutputTokens,
       text: { format: { type: "json_schema", name: "assembly_reply", schema: toOpenAiStrictSchema(request.responseSchema), strict: true } },
     };
     const json = await requestJson(this.options, `${this.baseUrl}/v1/responses`, {
       method: "POST", headers: this.headers(), body: JSON.stringify(body), ...(request.signal ? { signal: request.signal } : {}),
     });
+    const incomplete = (json.incomplete_details ?? {}) as { reason?: unknown };
+    if (json.status === "incomplete" && incomplete.reason === "max_output_tokens") {
+      throw new LlmAdapterError(TRUNCATED_REPLY_MESSAGE, null, false);
+    }
     const output = Array.isArray(json.output) ? (json.output as OpenAiOutput[]) : [];
     const text = output
       .flatMap((item) => item.content ?? [])

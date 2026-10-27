@@ -1,4 +1,4 @@
-import { ASSEMBLY_OUTPUT_TOKEN_ESTIMATE } from "../../../agent/src/index.js";
+import { ASSEMBLY_REPLY_TOKEN_ALLOWANCE } from "../../../agent/src/index.js";
 import type { LlmAdapter, LlmMessage } from "../../../agent/src/index.js";
 import { validateAssemblyReply } from "../../../transcript/src/index.js";
 import type { AssemblyMessage, AssemblySession, ReplyContext } from "../../../transcript/src/index.js";
@@ -81,7 +81,7 @@ export async function runAssemblyTurn(
         system: deps.system,
         messages: llmMessages(current, hint),
         responseSchema: deps.schema,
-        maxOutputTokens: ASSEMBLY_OUTPUT_TOKEN_ESTIMATE,
+        maxOutputTokens: ASSEMBLY_REPLY_TOKEN_ALLOWANCE,
         ...(deps.signal === undefined ? {} : { signal: deps.signal }),
       });
     } catch (error: unknown) {

@@ -1,10 +1,8 @@
-import type { AssemblyEffort } from "../../../transcript/src/index.js";
 import { modelIds, requestJson, tokenCount } from "./http.js";
+import { ASSEMBLY_REASONING_BUDGET, TRUNCATED_REPLY_MESSAGE } from "./pricing.js";
 import {
   LlmAdapterError, type LlmAdapter, type LlmAdapterOptions, type LlmCompletion, type LlmRequest,
 } from "./types.js";
-
-const BUDGET: Record<AssemblyEffort, number> = { low: 2048, medium: 8192, high: 16384, max: 32768 };
 
 interface AnthropicBlock { type?: string; name?: string; input?: unknown }
 
@@ -20,7 +18,7 @@ export class AnthropicLlmAdapter implements LlmAdapter {
   }
 
   async complete(request: LlmRequest): Promise<LlmCompletion> {
-    const budget = BUDGET[request.effort];
+    const budget = ASSEMBLY_REASONING_BUDGET[request.effort];
     const body = {
       model: request.model,
       max_tokens: budget + request.maxOutputTokens,
@@ -33,6 +31,7 @@ export class AnthropicLlmAdapter implements LlmAdapter {
     const json = await requestJson(this.options, `${this.baseUrl}/v1/messages`, {
       method: "POST", headers: this.headers(), body: JSON.stringify(body), ...(request.signal ? { signal: request.signal } : {}),
     });
+    if (json.stop_reason === "max_tokens") throw new LlmAdapterError(TRUNCATED_REPLY_MESSAGE, null, false);
     const content = Array.isArray(json.content) ? (json.content as AnthropicBlock[]) : [];
     const call = content.find((block) => block.type === "tool_use");
     if (!call) throw new LlmAdapterError("model did not call assembly_reply", null, true);

@@ -49,7 +49,7 @@ describe("OpenAiLlmAdapter", () => {
     expect(init.headers).toEqual({ authorization: "Bearer sk-test", "content-type": "application/json" });
     expect(JSON.parse(init.body as string)).toEqual({
       model: "gpt-5.5", instructions: "SYS", input: [{ role: "user", content: "hi" }],
-      reasoning: { effort: "high" }, max_output_tokens: 1000,
+      reasoning: { effort: "high" }, max_output_tokens: 32768 + 1000,
       text: { format: { type: "json_schema", name: "assembly_reply", schema: toOpenAiStrictSchema(SCHEMA), strict: true } },
     });
   });
@@ -61,6 +61,30 @@ describe("OpenAiLlmAdapter", () => {
     await adapter.complete(req({ effort: "medium" }));
     const efforts = fetchFn.mock.calls.map((c) => JSON.parse(((c as unknown as [string, RequestInit])[1].body) as string).reasoning.effort);
     expect(efforts).toEqual(["low", "medium"]);
+  });
+
+  it.each([["low", 2048], ["medium", 8192], ["high", 16384], ["max", 32768]] as const)(
+    "caps output at the %s reasoning budget plus the reply allowance",
+    async (effort, budget) => {
+      const fetchFn = vi.fn(async () => ok('{"reply":{}}'));
+      await new OpenAiLlmAdapter({ apiKey: "k", fetch: fetchFn as unknown as typeof fetch }).complete(req({ effort }));
+      const body = JSON.parse(((fetchFn.mock.calls[0] as unknown as [string, RequestInit])[1].body) as string);
+      expect(body.max_output_tokens).toBe(budget + 1000);
+    },
+  );
+
+  it("reports an incomplete max_output_tokens response as a non-retryable truncation", async () => {
+    const fetchFn = vi.fn(async () => new Response(JSON.stringify({
+      status: "incomplete",
+      incomplete_details: { reason: "max_output_tokens" },
+      output: [{ content: [{ type: "output_text", text: '{"reply":{"sta' }] }],
+      usage: { input_tokens: 5, output_tokens: 9 },
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+    const err = await new OpenAiLlmAdapter({ apiKey: "k", fetch: fetchFn as unknown as typeof fetch })
+      .complete(req()).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(LlmAdapterError);
+    expect(err).toMatchObject({ status: null, retryable: false });
+    expect((err as Error).message).toMatch(/^E_ASSEMBLY_REPLY_TRUNCATED: /u);
   });
 
   it("parses output_text json", async () => {

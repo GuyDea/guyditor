@@ -1,4 +1,4 @@
-import type { AssemblyProvider } from "../../../transcript/src/index.js";
+import type { AssemblyEffort, AssemblyProvider } from "../../../transcript/src/index.js";
 
 export interface LlmRate { inputPerMTok: number; outputPerMTok: number }
 
@@ -23,7 +23,20 @@ export const DEFAULT_LLM_RATES: Readonly<Record<string, LlmRate>> = {
   "gpt-5.4-mini": { inputPerMTok: 0.75, outputPerMTok: 4.5 },
 };
 
+/** Typical reply size, used only for the pre-call cost estimate (not as a cap). */
 export const ASSEMBLY_OUTPUT_TOKEN_ESTIMATE = 4000;
+
+/** Visible-reply token cap per turn; adapters add the reasoning budget on top. */
+export const ASSEMBLY_REPLY_TOKEN_ALLOWANCE = 16_000;
+
+/** Reasoning budget per effort: Anthropic thinking `budget_tokens`; OpenAI's share of `max_output_tokens`. */
+export const ASSEMBLY_REASONING_BUDGET: Readonly<Record<AssemblyEffort, number>> = {
+  low: 2048, medium: 8192, high: 16384, max: 32768,
+};
+
+/** The message both adapters use when the provider stopped at the output cap. */
+export const TRUNCATED_REPLY_MESSAGE =
+  "E_ASSEMBLY_REPLY_TRUNCATED: the reply hit the output-token limit before it finished; try a lower effort or a shorter request";
 
 const total = (rate: LlmRate): number => rate.inputPerMTok + rate.outputPerMTok;
 

@@ -70,6 +70,18 @@ describe("AnthropicLlmAdapter", () => {
     expect(await down.complete(req()).catch((e: unknown) => e)).toMatchObject({ message: "ECONNRESET", status: null, retryable: true });
   });
 
+  it("reports stop_reason max_tokens as a non-retryable truncation", async () => {
+    const fetchFn = vi.fn(async () => reply({
+      stop_reason: "max_tokens",
+      content: [{ type: "thinking", thinking: "..." }, { type: "tool_use", name: "assembly_reply", input: { a: "x" } }],
+      usage: { input_tokens: 1, output_tokens: 9192 },
+    }));
+    const err = await new AnthropicLlmAdapter({ apiKey: "k", fetch: fetchFn as unknown as typeof fetch }).complete(req()).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(LlmAdapterError);
+    expect(err).toMatchObject({ status: null, retryable: false });
+    expect((err as Error).message).toMatch(/^E_ASSEMBLY_REPLY_TRUNCATED: /u);
+  });
+
   it("fails when no tool call", async () => {
     const fetchFn = vi.fn(async () => reply({ content: [{ type: "text", text: "hi" }], usage: { input_tokens: 1, output_tokens: 1 } }));
     const err = await new AnthropicLlmAdapter({ apiKey: "k", fetch: fetchFn as unknown as typeof fetch }).complete(req()).catch((e: unknown) => e);

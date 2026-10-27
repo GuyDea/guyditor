@@ -53,6 +53,7 @@ describe("runAssemblyTurn", () => {
     const { deps, requests } = scripted(QUESTIONS);
     const result = await runAssemblyTurn(session(), "go", deps);
     expect(requests[0]!.messages).toEqual([{ role: "user", content: "EVIDENCE\n\ngo" }]);
+    expect(requests[0]!.maxOutputTokens).toBe(16_000);
     expect(result.session.status).toBe("conversing");
     expect(result.session.messages.map(({ role }) => role)).toEqual(["user", "assistant"]);
     expect(result.session.messages[0]!.content).toBe("go");
