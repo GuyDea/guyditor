@@ -2,6 +2,7 @@ export {
   DEFAULT_FILLER_RULE_SET,
   detectFillerCandidates,
 } from "./detect.js";
+export { GENTLE_FILLER_RULE_SET } from "./gentle.js";
 export {
   enqueueFillerDetection,
   parseFillerDetectionResult,
@@ -18,6 +19,7 @@ export type {
   FillerProposalPolicy,
   FillerReviewWindow,
   FillerRuleSet,
+  FillerScope,
   ProtectedSourceRange,
   SourceSampleRange,
   VadActivity,

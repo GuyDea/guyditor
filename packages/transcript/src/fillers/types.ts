@@ -62,9 +62,16 @@ export interface FillerReviewWindow extends SourceSampleRange {
   candidateIds: string[];
 }
 
+/** Restricts a detection run to ranges an assembly kept; carried through the job into its result. */
+export interface FillerScope {
+  assemblySessionId: string;
+  keptRanges: SourceSampleRange[];
+}
+
 export interface FillerDetectionResult {
   candidates: FillerCandidate[];
   reviewWindows: FillerReviewWindow[];
+  scope?: FillerScope;
 }
 
 export interface DetectFillerCandidatesInput {
@@ -80,6 +87,7 @@ export interface DetectFillerCandidatesInput {
 export interface EnqueueFillerDetectionInput {
   assetIds?: string[];
   fillerRules?: FillerRuleSet;
+  scope?: FillerScope;
 }
 
 export interface FillerProposalPolicy {

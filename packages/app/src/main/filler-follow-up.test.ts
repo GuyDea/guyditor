@@ -1,10 +1,11 @@
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createProject, makeId } from "../../../core/src/index.js";
+import { AnnotationService, createProject, makeId, parseAnnotationSidecar } from "../../../core/src/index.js";
 import type {
   AuditSink,
   IdPrefix,
@@ -16,10 +17,12 @@ import type {
 import { projectFixture } from "../../../core/src/project/test-fixtures.js";
 import { TranscriptEngine } from "../../../transcript/src/index.js";
 
-import { createFillerProposal } from "./filler-follow-up.js";
+import type { FillerCandidate } from "../../../transcript/src/index.js";
+import { createFillerProposal, withinKeptRanges } from "./filler-follow-up.js";
 import type { FillerFollowUpDeps } from "./filler-follow-up.js";
 import type { ProjectServices } from "./project-services.js";
 
+const EMPTY_ANNOTATIONS = "format: guyditor.annotations/v1\nannotations: []\n";
 const roots: string[] = [];
 
 afterEach(async () => {
@@ -63,7 +66,11 @@ async function transcribedProject(): Promise<ProjectStore> {
       out: { frames: 480, fps: "24/1" },
     },
   }];
+  model.skills = [];
+  model.sidecars[0]!.inputs = [];
+  model.sidecars[0]!.sha256 = createHash("sha256").update(EMPTY_ANNOTATIONS).digest("hex");
   const store = valueOf(await createProject(root, model));
+  await writeFile(join(root, "sidecars/annotations.yaml"), EMPTY_ANNOTATIONS, "utf8");
   const transcript = new TranscriptEngine({
     idFactory: domainId,
     now: () => new Date("2026-07-19T00:00:00Z"),
@@ -103,7 +110,8 @@ function harness(store: ProjectStore) {
     auditSink: { record: vi.fn() } as unknown as AuditSink,
     publish,
   };
-  const project = { store, templates: undefined } as unknown as ProjectServices;
+  const annotations = new AnnotationService({ appVersion: "0.0.0-test" });
+  const project = { store, templates: undefined, annotations } as unknown as ProjectServices;
   return { deps, project, publish };
 }
 
@@ -156,5 +164,71 @@ describe("createFillerProposal", () => {
     await expect(createFillerProposal(deps, project, job({ nope: true })))
       .rejects.toThrow("assist.fillers.detect result is invalid");
     expect(publish).not.toHaveBeenCalled();
+  });
+
+  it("scoped results only compile kept candidates and add review markers", async () => {
+    const store = await transcribedProject();
+    const { deps, project, publish } = harness(store);
+    const reviewed = {
+      id: "fil_review0001",
+      kind: "filler",
+      wordRange: { fromWord: "w000001", toWord: "w000001" },
+      sourceRange: {
+        assetId: "ast_aaaaaaaaaa",
+        start: { samples: 24_000, rate: 48_000 },
+        end: { samples: 48_000, rate: 48_000 },
+      },
+      rule: "filler.review",
+      evidence: "Possible filler: one.",
+      warnings: [],
+      defaultSelected: true,
+      reviewRequired: true,
+    };
+    await createFillerProposal(deps, project, job({
+      candidates: [reviewed, PAUSE],
+      reviewWindows: [],
+      scope: {
+        assemblySessionId: "asb_aaaaaaaaaa",
+        keptRanges: [{
+          assetId: "ast_aaaaaaaaaa",
+          start: { samples: 0, rate: 48_000 },
+          end: { samples: 100_000, rate: 48_000 },
+        }],
+      },
+    } as unknown as JsonValue));
+    const event = publish.mock.calls[0]![0] as { proposalId: string };
+    const proposal = valueOf(await store.readProposal(event.proposalId));
+    expect(proposal.operations).toHaveLength(1);
+    const text = await readFile(join(store.root, "sidecars/annotations.yaml"), "utf8");
+    const { annotations } = parseAnnotationSidecar(text);
+    expect(annotations).toHaveLength(1);
+    expect(annotations[0]).toMatchObject({
+      author: { kind: "agent" },
+      body: "review: Possible filler: one.",
+      anchor: { kind: "word", wordId: "w000001" },
+    });
+  });
+});
+
+describe("withinKeptRanges", () => {
+  const candidate = (assetId: string, start: number, end: number) => ({
+    sourceRange: { assetId, start: { samples: start, rate: 48_000 }, end: { samples: end, rate: 48_000 } },
+  }) as FillerCandidate;
+  const scope = {
+    assemblySessionId: "asb_aaaaaaaaaa",
+    keptRanges: [{
+      assetId: "ast_aaaaaaaaaa",
+      start: { samples: 1_000, rate: 24_000 },
+      end: { samples: 2_000, rate: 24_000 },
+    }],
+  };
+
+  it("accepts inside and rejects outside and other assets", () => {
+    expect(withinKeptRanges(candidate("ast_aaaaaaaaaa", 3_000, 4_000), undefined)).toBe(true);
+    // 1000/24000 s = 2000/48000 s; sample rates differ, comparison is in seconds.
+    expect(withinKeptRanges(candidate("ast_aaaaaaaaaa", 2_000, 4_000), scope)).toBe(true);
+    expect(withinKeptRanges(candidate("ast_aaaaaaaaaa", 1_999, 4_000), scope)).toBe(false);
+    expect(withinKeptRanges(candidate("ast_aaaaaaaaaa", 2_000, 4_001), scope)).toBe(false);
+    expect(withinKeptRanges(candidate("ast_bbbbbbbbbb", 2_000, 4_000), scope)).toBe(false);
   });
 });

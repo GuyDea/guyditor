@@ -25,6 +25,7 @@ import type {
   FillerDetectionResult,
   FillerReviewWindow,
   FillerRuleSet,
+  FillerScope,
   ProtectedSourceRange,
   VadActivity,
 } from "./types.js";
@@ -229,8 +230,36 @@ function parseRules(value: unknown): FillerRuleSet {
   return structuredClone(value) as unknown as FillerRuleSet;
 }
 
+function scopeJson(scope: FillerScope): JsonValue {
+  return {
+    assemblySessionId: scope.assemblySessionId,
+    keptRanges: scope.keptRanges.map((range) => ({
+      assetId: range.assetId,
+      start: { ...range.start },
+      end: { ...range.end },
+    })),
+  };
+}
+
+function parseScope(value: unknown): FillerScope | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value) || typeof value["assemblySessionId"] !== "string" || !Array.isArray(value["keptRanges"])) {
+    throw new TypeError("assist.fillers.detect scope is invalid.");
+  }
+  return {
+    assemblySessionId: value["assemblySessionId"],
+    keptRanges: value["keptRanges"].map((range: unknown) => {
+      if (!isRecord(range) || typeof range["assetId"] !== "string") {
+        throw new TypeError("assist.fillers.detect scope range is invalid.");
+      }
+      return { assetId: range["assetId"], start: sampleTime(range["start"]), end: sampleTime(range["end"]) };
+    }),
+  };
+}
+
 function resultJson(result: FillerDetectionResult): JsonValue {
   return {
+    ...(result.scope === undefined ? {} : { scope: scopeJson(result.scope) }),
     candidates: result.candidates.map((candidate) => ({
       id: candidate.id,
       kind: candidate.kind,
@@ -298,6 +327,7 @@ export function registerFillerDetectionExecutor(
       throw new TypeError("assist.fillers.detect assetIds must be a string array.");
     }
     const rules = parseRules(job.payload["fillerRules"]);
+    const scope = parseScope(job.payload["scope"]);
     const workspace = await loadTranscriptWorkspace(options.project, (prefix) => {
       if (prefix === "seg") return "seg_aaaaaaaaaa";
       if (prefix === "spk") return "spk_aaaaaaaaaa";
@@ -309,7 +339,11 @@ export function registerFillerDetectionExecutor(
     if (!workspace.ok) throw workspace.error;
     const selected = workspace.value.sidecars.filter(({ assetId }) =>
       requestedAssets === undefined || requestedAssets.includes(assetId));
-    const combined: FillerDetectionResult = { candidates: [], reviewWindows: [] };
+    const combined: FillerDetectionResult = {
+      candidates: [],
+      reviewWindows: [],
+      ...(scope === undefined ? {} : { scope }),
+    };
     for (const [index, sidecar] of selected.entries()) {
       const vad = queue.enqueue({
         kind: "vad",
@@ -355,6 +389,7 @@ export function enqueueFillerDetection(
       ...(input.fillerRules === undefined
         ? {}
         : { fillerRules: rulesJson(input.fillerRules) }),
+      ...(input.scope === undefined ? {} : { scope: scopeJson(input.scope) }),
     },
   });
 }
@@ -418,8 +453,10 @@ export function parseFillerDetectionResult(value: JsonValue): FillerDetectionRes
   if (!isRecord(value) || !Array.isArray(value["candidates"]) || !Array.isArray(value["reviewWindows"])) {
     throw new TypeError("assist.fillers.detect result is invalid.");
   }
+  const scope = parseScope(value["scope"]);
   return {
     candidates: value["candidates"].map(parsedCandidate),
     reviewWindows: value["reviewWindows"].map(parsedWindow),
+    ...(scope === undefined ? {} : { scope }),
   };
 }
