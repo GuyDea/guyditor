@@ -120,6 +120,7 @@ import {
 } from "./generation-service.js";
 import { skillRegistryService } from "./skill-service.js";
 import { AssemblyService } from "./assembly-service.js";
+import { isRebaseSafeAssemblyProposal } from "./assembly-proposal.js";
 import { registerAssemblyPrepareExecutor } from "./assembly-prepare.js";
 import { publicJobStatus } from "./job-status.js";
 import { TakeComparisonService } from "./take-comparison-service.js";
@@ -1977,13 +1978,12 @@ export class WindowServiceHost {
     if (
       current.baseRevision !== project.store.currentProject.revision &&
       current.operations.length > 0 &&
-      current.operations.every(({ op }) =>
+      (isRebaseSafeAssemblyProposal(current, project.store.currentProject) || current.operations.every(({ op }) =>
         op === "restyle.segment.approve" ||
         op === "clip.split" ||
-        op === "clip.insert" ||
         op === "clip.punchin.set" ||
         op === "clip.source.switch" ||
-        op === "transition.set")
+        op === "transition.set"))
     ) {
       const rebased = resultValue(await this.#coreEngine(project).supersedeProposal(
         current.id,

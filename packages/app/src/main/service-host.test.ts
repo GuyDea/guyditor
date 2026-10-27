@@ -2007,6 +2007,51 @@ describe("AppServiceHost", () => {
   });
 
   it("accepting an assembly proposal marks flagged cuts and queues gentle tightening", async () => {
+    const h = await assemblyHost();
+    try {
+      const { id, call } = h;
+      const proposed = await call("Assembly", "createProposal", { sessionId: id }) as { proposalId: string };
+      // An unrelated revision bump (another session persist) must not block acceptance.
+      await call("Assembly", "abandon", { sessionId: h.otherId });
+      const accepted = await call("OperationEngine", "acceptProposal", { proposalId: proposed.proposalId }) as Proposal;
+      expect(accepted.status).toBe("accepted");
+      const session = await call("Assembly", "get", { sessionId: id }) as
+        { status: string; compiled: { timelineStart: unknown }[]; tighteningJobId: string };
+      expect(session.status).toBe("accepted");
+      const clips = h.windowHost.snapshot().master.sequences[0]!.clips;
+      expect(clips.map(({ id: clipId }) => clipId).slice(0, 2)).toEqual(["clp_aaaaaaaaaa", "clp_bbbbbbbbbb"]);
+      expect(clips).toHaveLength(3);
+      const sidecar = parseAnnotationSidecar(await readFile(join(h.root, "sidecars/annotations.yaml"), "utf8"));
+      expect(sidecar.annotations).toHaveLength(1);
+      expect(sidecar.annotations[0]).toMatchObject({
+        author: { kind: "agent" },
+        anchor: { kind: "timeline", frame: session.compiled[0]!.timelineStart },
+      });
+      const jobs = await call("JobQueue", "list", { kind: "assist.fillers.detect" }) as { jobId: string }[];
+      expect(jobs.map(({ jobId }) => jobId)).toContain(session.tighteningJobId);
+    } finally {
+      await h.close();
+    }
+  });
+
+  it("rejects an assembly proposal as stale when the cut position was edited", async () => {
+    const h = await assemblyHost();
+    try {
+      const { id, call } = h;
+      const proposed = await call("Assembly", "createProposal", { sessionId: id }) as { proposalId: string };
+      await call("OperationEngine", "execute", {
+        operations: [{ op: "clip.remove", params: { clipId: "clp_bbbbbbbbbb", evidence: "test" } }],
+      });
+      await expect(call("OperationEngine", "acceptProposal", { proposalId: proposed.proposalId }))
+        .rejects.toThrow();
+      expect(await call("Assembly", "get", { sessionId: id })).toMatchObject({ status: "proposed" });
+    } finally {
+      await h.close();
+    }
+  });
+});
+
+async function assemblyHost() {
     vi.stubEnv("GUYDITOR_ASSEMBLY_STUB", "1");
     const root = await mkdtemp(join(tmpdir(), "guyditor-host-assembly-"));
     const userDirectory = await mkdtemp(join(tmpdir(), "guyditor-host-user-"));
@@ -2054,41 +2099,33 @@ describe("AppServiceHost", () => {
     const windowHost = appHost.createWindowHost({
       publisher: new WindowEventPublisher(() => undefined),
     });
-    try {
-      await windowHost.openProject(root);
-      const call = async (service: "AiSettings" | "Assembly" | "OperationEngine" | "JobQueue", method: string, params: unknown): Promise<unknown> => {
-        const fn = windowHost.resolveService(service)?.[method];
-        if (typeof fn !== "function") throw new Error(`${service}.${method} is unavailable`);
-        return Reflect.apply(fn, undefined, [params]);
-      };
-      await call("AiSettings", "update", { tightening: "gentle" });
-      const { id } = await call("Assembly", "create", { assetIds: ["ast_aaaaaaaaaa", "ast_bbbbbbbbbb"] }) as { id: string };
-      await call("Assembly", "prepare", { sessionId: id });
-      await vi.waitFor(async () => {
-        expect(await call("Assembly", "get", { sessionId: id })).toMatchObject({ status: "conversing" });
-      }, { timeout: 15_000 });
-      await call("Assembly", "send", { sessionId: id, text: "assemble" });
-      const proposed = await call("Assembly", "createProposal", { sessionId: id }) as { proposalId: string };
-      const accepted = await call("OperationEngine", "acceptProposal", { proposalId: proposed.proposalId }) as Proposal;
-      expect(accepted.status).toBe("accepted");
-      const session = await call("Assembly", "get", { sessionId: id }) as
-        { status: string; compiled: { timelineStart: unknown }[]; tighteningJobId: string };
-      expect(session.status).toBe("accepted");
-      const sidecar = parseAnnotationSidecar(await readFile(join(root, "sidecars/annotations.yaml"), "utf8"));
-      expect(sidecar.annotations).toHaveLength(1);
-      expect(sidecar.annotations[0]).toMatchObject({
-        author: { kind: "agent" },
-        anchor: { kind: "timeline", frame: session.compiled[0]!.timelineStart },
-      });
-      const jobs = await call("JobQueue", "list", { kind: "assist.fillers.detect" }) as { jobId: string }[];
-      expect(jobs.map(({ jobId }) => jobId)).toContain(session.tighteningJobId);
-    } finally {
-      vi.unstubAllEnvs();
-      await windowHost.close();
-      await appHost.close();
-    }
-  });
-});
+    await windowHost.openProject(root);
+    const call = async (service: "AiSettings" | "Assembly" | "OperationEngine" | "JobQueue", method: string, params: unknown): Promise<unknown> => {
+      const fn = windowHost.resolveService(service)?.[method];
+      if (typeof fn !== "function") throw new Error(`${service}.${method} is unavailable`);
+      return Reflect.apply(fn, undefined, [params]);
+    };
+    await call("AiSettings", "update", { tightening: "gentle" });
+    const { id } = await call("Assembly", "create", { assetIds: ["ast_aaaaaaaaaa", "ast_bbbbbbbbbb"] }) as { id: string };
+    const other = await call("Assembly", "create", { assetIds: ["ast_aaaaaaaaaa"] }) as { id: string };
+    await call("Assembly", "prepare", { sessionId: id });
+    await vi.waitFor(async () => {
+      expect(await call("Assembly", "get", { sessionId: id })).toMatchObject({ status: "conversing" });
+    }, { timeout: 15_000 });
+    await call("Assembly", "send", { sessionId: id, text: "assemble" });
+    return {
+      id,
+      otherId: other.id,
+      root,
+      call,
+      windowHost,
+      close: async () => {
+        vi.unstubAllEnvs();
+        await windowHost.close();
+        await appHost.close();
+      },
+    };
+}
 
 function testAppHost(userDirectory: string): AppServiceHost {
   return new AppServiceHost({

@@ -152,7 +152,7 @@ async function harness(options: {
   });
   const scriptPath = join(root, "script.md");
   await writeFile(scriptPath, "# Intro\n\nWelcome to the channel. Today we talk about tea.\n", "utf8");
-  return { root, store, queue, publish, service, scriptPath, auditLog };
+  return { root, store, queue, publish, service, scriptPath, auditLog, annotations };
 }
 
 const prepare = (h: Awaited<ReturnType<typeof harness>>, id: string) =>
@@ -628,5 +628,26 @@ describe("AssemblyService proposals", () => {
     expect((await h.service.get(h.id)).status).toBe("accepted");
     expect(h.queue.list({ kind: "assist.fillers.detect" })).toHaveLength(0);
     await h.service.onProposalAccepted("prp_zzzzzzzzzz"); // unknown proposals are ignored
+  });
+
+  it("a failing marker commit still accepts and records E_ASSEMBLY_FOLLOW_UP", async () => {
+    const h = await planned("gentle");
+    const { proposalId } = await h.service.createProposal(h.id);
+    vi.spyOn(h.annotations, "execute").mockRejectedValue(new Error("disk full"));
+    await expect(h.service.onProposalAccepted(proposalId)).resolves.toBeUndefined();
+    const view = await h.service.get(h.id);
+    expect(view.status).toBe("accepted");
+    expect(view.error).toMatch(/E_ASSEMBLY_FOLLOW_UP: disk full/);
+    expect(h.queue.list({ kind: "assist.fillers.detect" })).toHaveLength(0);
+  });
+
+  it("a corrupt session file does not break acceptance of another proposal", async () => {
+    const h = await planned("off");
+    const { proposalId } = await h.service.createProposal(h.id);
+    const refs = h.store.currentProject.sidecars.filter(({ schema }) => schema === "guyditor.assembly/v1");
+    await writeFile(join(h.root, refs[0]!.path), "{ not json", "utf8");
+    const other = await h.service.create({ assetIds: [SECOND] });
+    await expect(h.service.onProposalAccepted(proposalId)).resolves.toBeUndefined();
+    expect((await h.service.get(other.id)).status).toBe("created");
   });
 });

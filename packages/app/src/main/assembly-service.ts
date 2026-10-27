@@ -31,12 +31,12 @@ import {
   reviewMarkerAnnotations,
   serializeAssemblySession,
 } from "../../../transcript/src/index.js";
-import type { AssemblyEvidence, AssemblyProvider, AssemblySession, ReplyContext } from "../../../transcript/src/index.js";
+import type { AssemblyEvidence, AssemblyProvider, CompiledCut, AssemblySession, ReplyContext } from "../../../transcript/src/index.js";
 
 import type { GdEventWithoutSeq } from "../shared/ipc.js";
 import type { AiSettingsService } from "./ai-settings-service.js";
 import type { PrepareDeps } from "./assembly-prepare.js";
-import { assemblyTarget, compileContext, keptRanges, proposalReason } from "./assembly-proposal.js";
+import { assemblyTarget, compileContext, keptRanges, proposalReason, rederiveStarts } from "./assembly-proposal.js";
 import { llmMessages, runAssemblyTurn, TurnError } from "./assembly-turn.js";
 import { registerDerivedSidecar } from "./derived-sidecar.js";
 import { publicJobStatus } from "./job-status.js";
@@ -440,46 +440,66 @@ export class AssemblyService {
     });
   }
 
-  /** Acceptance hook: review markers for flagged cuts, then the gentle tightening pass when it applies. */
+  /** Newest-first lookup of the session that owns a proposal; unreadable session files are skipped. */
+  async #sessionForProposal(proposalId: string): Promise<AssemblySession | undefined> {
+    const { store } = this.#options;
+    const refs = store.currentProject.sidecars.filter(({ schema }) => schema === "guyditor.assembly/v1");
+    for (const { path } of refs) {
+      try {
+        const candidate = parseAssemblySession(await readFile(join(store.root, path), "utf8"));
+        if (candidate.proposalId === proposalId) return candidate;
+      } catch { /* a corrupt or missing file cannot own this proposal */ }
+    }
+    return undefined;
+  }
+
+  /** Review markers for flagged cuts, then the gentle tightening job when it applies. Returns the job id. */
+  async #followUp(session: AssemblySession, cuts: CompiledCut[]): Promise<string | null> {
+    const { store, project } = this.#options;
+    const target = assemblyTarget(store.currentProject);
+    const { provider, model } = session.settings;
+    const markers = reviewMarkerAnnotations(rederiveStarts(store.currentProject, target.sequenceId, cuts), {
+      sequenceId: target.sequenceId,
+      deliverableId: target.deliverableId,
+      aspect: target.aspect,
+      authorId: `${provider}:${model}`,
+      now: (this.#options.now?.() ?? new Date()).toISOString(),
+      idFactory: (prefix) => (this.#options.idFactory ?? makeId)(prefix),
+    });
+    if (markers.length > 0) {
+      // Agent-origin batches may only commit through a proposal; the marker authorship is in the literal.
+      const marked = await project.annotations.execute(
+        store,
+        markers.map((annotation) => ({ op: "annotation.create", params: { annotation } })),
+        { origin: "system", dryRun: false },
+      );
+      if (!marked.ok) throw new Error(`${marked.error.code}: ${marked.error.message}`);
+    }
+    if ((session.plan?.tightening ?? session.settings.tightening) !== "gentle") return null;
+    return enqueueFillerDetection(project.jobs, {
+      assetIds: [...new Set(cuts.map(({ assetId }) => assetId))],
+      fillerRules: GENTLE_FILLER_RULE_SET,
+      scope: { assemblySessionId: session.id, keptRanges: keptRanges(cuts, await transcriptSidecars(store)) },
+    }).jobId;
+  }
+
+  /** Acceptance hook. Never throws: the proposal is already accepted, so failures are recorded on the session. */
   public onProposalAccepted(proposalId: string): Promise<void> {
     return this.#serialized(async () => {
-      const { store, project } = this.#options;
-      const refs = store.currentProject.sidecars.filter(({ schema }) => schema === "guyditor.assembly/v1");
-      const sessions = await Promise.all(refs.map(async ({ path }) =>
-        parseAssemblySession(await readFile(join(store.root, path), "utf8"))));
-      const found = sessions.find((candidate) => candidate.proposalId === proposalId);
-      if (found?.status !== "proposed" || found.compiled === null) return;
-      const session = await this.#persist({ ...found, status: "accepted" });
-      const cuts = found.compiled;
-      if (session.auditSessionId !== null) {
-        try { this.#audit.close(session.auditSessionId); } catch { /* not open in this run */ }
-      }
-      const target = assemblyTarget(store.currentProject);
-      const { provider, model } = session.settings;
-      const markers = reviewMarkerAnnotations(cuts, {
-        sequenceId: target.sequenceId,
-        deliverableId: target.deliverableId,
-        aspect: target.aspect,
-        authorId: `${provider}:${model}`,
-        now: (this.#options.now?.() ?? new Date()).toISOString(),
-        idFactory: (prefix) => (this.#options.idFactory ?? makeId)(prefix),
-      });
-      if (markers.length > 0) {
-        // Agent-origin batches may only commit through a proposal; the marker authorship is in the literal.
-        const marked = await project.annotations.execute(
-          store,
-          markers.map((annotation) => ({ op: "annotation.create", params: { annotation } })),
-          { origin: "system", dryRun: false },
-        );
-        if (!marked.ok) throw new Error(`${marked.error.code}: ${marked.error.message}`);
-      }
-      if ((session.plan?.tightening ?? session.settings.tightening) !== "gentle") return;
-      const job = enqueueFillerDetection(project.jobs, {
-        assetIds: [...new Set(cuts.map(({ assetId }) => assetId))],
-        fillerRules: GENTLE_FILLER_RULE_SET,
-        scope: { assemblySessionId: session.id, keptRanges: keptRanges(cuts, await transcriptSidecars(store)) },
-      });
-      await this.#persist({ ...session, tighteningJobId: job.jobId });
+      try {
+        const found = await this.#sessionForProposal(proposalId);
+        if (found?.status !== "proposed" || found.compiled === null) return;
+        if (found.auditSessionId !== null) {
+          try { this.#audit.close(found.auditSessionId); } catch { /* not open in this run */ }
+        }
+        let next: AssemblySession = { ...found, status: "accepted" };
+        try {
+          next = { ...next, tighteningJobId: await this.#followUp(found, found.compiled) };
+        } catch (error: unknown) {
+          next = { ...next, error: `E_ASSEMBLY_FOLLOW_UP: ${error instanceof Error ? error.message : String(error)}` };
+        }
+        await this.#persist(next);
+      } catch { /* nothing more can be recorded; the accept must still succeed */ }
     });
   }
 
