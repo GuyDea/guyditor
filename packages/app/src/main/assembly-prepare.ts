@@ -19,7 +19,8 @@ import type {
 export interface PrepareDeps {
   store: ProjectStore;
   readSession: (id: string) => Promise<AssemblySession>;
-  writeSession: (session: AssemblySession) => Promise<void>;
+  /** Read-modify-write under the service's write queue; returns the stored result. */
+  updateSession: (id: string, change: (current: AssemblySession) => AssemblySession) => Promise<AssemblySession>;
   transcripts: () => Promise<TranscriptSidecar[]>;
   markers: (assetId: string) => Promise<MarkerRecord[]>;
   jobs: JobQueue;
@@ -106,7 +107,7 @@ async function gather(
     let sidecar = transcripts.find(({ assetId }) => assetId === asset.id);
     const waitFor = sidecar === undefined ? pendingTranscribe(deps.jobs, asset.id) : undefined;
     if (waitFor !== undefined) {
-      const finished = await terminalJob(deps.jobs, waitFor, signal);
+      const finished = await terminalJob(deps.jobs, waitFor, signal, { cancelOnAbort: false });
       if (finished.state === "done") sidecar = await awaitSidecar(deps, asset.id, signal);
     }
     if (sidecar === undefined) {
@@ -166,26 +167,30 @@ async function build(
   });
 }
 
+/** Keeps an abandon that landed while preparation was running. */
+function transition(change: (current: AssemblySession) => AssemblySession) {
+  return (current: AssemblySession): AssemblySession =>
+    current.status === "abandoned" ? current : change(current);
+}
+
 export async function prepareSession(
   deps: PrepareDeps,
   sessionId: string,
   signal: AbortSignal,
   reportProgress: (progress: number) => void,
 ): Promise<AssemblySession> {
-  let session: AssemblySession = { ...await deps.readSession(sessionId), status: "preparing", error: null };
-  await deps.writeSession(session);
+  const started = await deps.updateSession(sessionId, transition((current) =>
+    ({ ...current, status: "preparing", error: null })));
+  if (started.status === "abandoned") return started;
   try {
-    const evidence = await build(deps, session, signal, reportProgress);
-    session = { ...session, evidence, status: "conversing" };
+    const evidence = await build(deps, started, signal, reportProgress);
+    return await deps.updateSession(sessionId, transition((current) =>
+      ({ ...current, evidence, status: "conversing" })));
   } catch (error: unknown) {
-    session = {
-      ...session,
-      status: "failed",
-      error: error instanceof Error ? error.message : String(error),
-    };
+    const message = error instanceof Error ? error.message : String(error);
+    return deps.updateSession(sessionId, transition((current) =>
+      ({ ...current, status: "failed", error: message })));
   }
-  await deps.writeSession(session);
-  return session;
 }
 
 export function registerAssemblyPrepareExecutor(queue: JobQueue, deps: PrepareDeps): void {

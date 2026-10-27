@@ -499,6 +499,44 @@ describe("AppServiceHost", () => {
     await appHost.close();
   });
 
+  it("wires the Assembly service and its prepare executor per project", async () => {
+    const root = await mkdtemp(join(tmpdir(), "guyditor-host-assembly-"));
+    const userDirectory = await mkdtemp(join(tmpdir(), "guyditor-host-assembly-user-"));
+    const created = await createProject(root, projectFixture());
+    if (!created.ok) throw created.error;
+    const appHost = testAppHost(userDirectory);
+    const windowHost = appHost.createWindowHost({
+      publisher: new WindowEventPublisher(() => undefined),
+    });
+    try {
+      await windowHost.openProject(root);
+      const service = windowHost.resolveService("Assembly");
+      const create = service?.["create"];
+      const prepare = service?.["prepare"];
+      const get = service?.["get"];
+      if (typeof create !== "function" || typeof prepare !== "function" || typeof get !== "function") {
+        throw new Error("Assembly IPC is unavailable.");
+      }
+      const view = await Reflect.apply(create, service, [{ assetIds: ["ast_aaaaaaaaaa"] }]) as
+        { id: string; status: string };
+      expect(view.status).toBe("created");
+      const job = await Reflect.apply(prepare, service, [{ sessionId: view.id }]) as { kind: string };
+      expect(job.kind).toBe("assembly.prepare");
+      // The executor is registered when the session leaves "preparing" (no transcript here, so it fails cleanly).
+      await vi.waitFor(async () => {
+        const current = await Reflect.apply(get, service, [{ sessionId: view.id }]) as { status: string };
+        expect(current.status).toBe("failed");
+      }, { timeout: 5000 });
+    } finally {
+      await windowHost.close();
+      await appHost.close();
+      await Promise.all([
+        rm(root, { recursive: true, force: true }),
+        rm(userDirectory, { recursive: true, force: true }),
+      ]);
+    }
+  });
+
   it("routes take comparison through the persistent project job queue", async () => {
     const source = await readFile(new URL("./take-comparison-service.ts", import.meta.url), "utf8");
     expect(source).toContain('registerExecutor("assist.takes.compare"');

@@ -5,6 +5,7 @@ import { basename, join } from "node:path";
 import { makeId } from "../../../core/src/index.js";
 import type {
   IdFactory,
+  JobRecord,
   JobStatus,
   OperationEngine,
   ProjectStore,
@@ -46,7 +47,7 @@ export interface AssemblyServiceOptions {
 }
 
 const SESSION_ID = /^asb_[a-z2-7]{10}$/u;
-const PREPARABLE: readonly AssemblySession["status"][] = ["created", "failed", "conversing"];
+const PREPARABLE: readonly AssemblySession["status"][] = ["created", "failed"];
 
 function invalidInput(detail: string): Error {
   return new Error(`E_ASSEMBLY_INVALID_INPUT: ${detail}`);
@@ -88,27 +89,37 @@ export class AssemblyService {
     return parseAssemblySession(text);
   }
 
-  /** Rewrites the session file and re-registers the sidecar (registering an existing name replaces it). */
-  #write(session: AssemblySession): Promise<void> {
-    return this.#serialized(async () => {
-      const next: AssemblySession = { ...session, updatedAt: (this.#options.now?.() ?? new Date()).toISOString() };
-      const text = serializeAssemblySession(next);
-      await mkdir(join(this.#options.store.root, "sidecars/assembly"), { recursive: true });
-      await writeFile(this.#sessionPath(next.id), text, "utf8");
-      await registerDerivedSidecar(
-        { appVersion: this.#options.appVersion, auditSink: this.#options.auditLog },
-        this.#options.store,
-        assemblySidecarRef(next, text),
-      );
-      this.#options.publish({ kind: "assembly.updated", sessionId: next.id });
-    });
+  /** Rewrites the session file and re-registers the sidecar (registering an existing name replaces it). Call inside #serialized. */
+  async #persist(session: AssemblySession): Promise<AssemblySession> {
+    const next: AssemblySession = { ...session, updatedAt: (this.#options.now?.() ?? new Date()).toISOString() };
+    const text = serializeAssemblySession(next);
+    await mkdir(join(this.#options.store.root, "sidecars/assembly"), { recursive: true });
+    await writeFile(this.#sessionPath(next.id), text, "utf8");
+    await registerDerivedSidecar(
+      { appVersion: this.#options.appVersion, auditSink: this.#options.auditLog },
+      this.#options.store,
+      assemblySidecarRef(next, text),
+    );
+    this.#options.publish({ kind: "assembly.updated", sessionId: next.id });
+    return next;
+  }
+
+  #update(id: string, change: (current: AssemblySession) => AssemblySession): Promise<AssemblySession> {
+    return this.#serialized(async () => this.#persist(change(await this.#read(id))));
+  }
+
+  #liveJob(sessionId: string): JobRecord | undefined {
+    return this.#options.project.jobs.list({ kind: "assembly.prepare", state: ["queued", "running"] })
+      .find(({ payload }) =>
+        typeof payload === "object" && payload !== null && !Array.isArray(payload)
+        && payload["sessionId"] === sessionId);
   }
 
   public prepareDeps(): PrepareDeps {
     return {
       store: this.#options.store,
       readSession: (id) => this.#read(id),
-      writeSession: (session) => this.#write(session),
+      updateSession: (id, change) => this.#update(id, change),
       transcripts: () => transcriptSidecars(this.#options.store),
       markers: async (assetId) =>
         (await this.#options.project.captureMetadata.list())
@@ -169,35 +180,37 @@ export class AssemblyService {
       assetIds: input.assetIds,
       script,
     });
-    await this.#write(session);
+    await this.#serialized(() => this.#persist(session));
     return assemblyView(session);
   }
 
-  public async prepare(sessionId: string): Promise<JobStatus> {
-    const session = await this.#read(sessionId);
-    if (!PREPARABLE.includes(session.status)) {
-      throw new Error(`E_ASSEMBLY_STATE: session ${sessionId} is ${session.status} and cannot be prepared`);
-    }
-    // Mark preparing before enqueueing so a second prepare call is rejected; a fresh start discards messages.
-    await this.#write({
-      ...session,
-      status: "preparing",
-      error: null,
-      evidence: null,
-      messages: [],
-      plan: null,
-      compiled: null,
+  public prepare(sessionId: string): Promise<JobStatus> {
+    return this.#serialized(async () => {
+      const session = await this.#read(sessionId);
+      // An interrupted run leaves "preparing" behind with no live job; that is recoverable.
+      const recoverable = session.status === "preparing" && this.#liveJob(sessionId) === undefined;
+      if (!PREPARABLE.includes(session.status) && !recoverable) {
+        throw new Error(`E_ASSEMBLY_STATE: session ${sessionId} is ${session.status} and cannot be prepared`);
+      }
+      await this.#persist({ ...session, status: "preparing", error: null });
+      try {
+        return publicJobStatus(this.#options.project.jobs.enqueue({
+          kind: "assembly.prepare",
+          title: "Analyze footage for assembly",
+          payload: { sessionId },
+          cancellable: true,
+        }));
+      } catch (error: unknown) {
+        await this.#persist(session);
+        throw error;
+      }
     });
-    return publicJobStatus(this.#options.project.jobs.enqueue({
-      kind: "assembly.prepare",
-      title: "Analyze footage for assembly",
-      payload: { sessionId },
-      cancellable: true,
-    }));
   }
 
   public async abandon(sessionId: string): Promise<AssemblySessionView> {
-    await this.#write({ ...await this.#read(sessionId), status: "abandoned" });
+    await this.#update(sessionId, (current) => ({ ...current, status: "abandoned" }));
+    const live = this.#liveJob(sessionId);
+    if (live !== undefined) this.#options.project.jobs.cancel(live.jobId);
     return this.get(sessionId);
   }
 
