@@ -653,7 +653,7 @@ describe("AssemblyService proposals", () => {
     const view = await h.service.get(h.id);
     expect(view).toMatchObject({ status: "conversing", proposalId: null, compiled: null });
     expect(view.plan?.summary).toBe("Two lines.");
-    await expect(h.service.onProposalRejected("prp_unknown")).resolves.toBeUndefined();
+    await expect(h.service.onProposalRejected("prp_zzzzzzzzzz")).resolves.toBeUndefined();
   });
 
   it("list skips a truncated sibling session file", async () => {
@@ -661,7 +661,7 @@ describe("AssemblyService proposals", () => {
     const good = await h.service.create({ assetIds: [FIRST] });
     const bad = await h.service.create({ assetIds: [SECOND] });
     const ref = h.store.currentProject.sidecars.find(({ path }) => path.includes(bad.id))!;
-    await writeFile(join(h.root, ref.path), "{\"id\": \"asb_", "utf8");
+    await writeFile(join(h.root, ref.path), "{\"id\": \"as", "utf8");
     expect((await h.service.list()).map(({ id }) => id)).toEqual([good.id]);
   });
 
