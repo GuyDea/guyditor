@@ -96,13 +96,6 @@ export function AiSettingsSection({
     }
   }
 
-  function setRate(model: string, field: "inputPerMTok" | "outputPerMTok", value: string): void {
-    const parsed = Number(value);
-    const current = settings.rates[model] ?? { inputPerMTok: 0, outputPerMTok: 0 };
-    if (!Number.isFinite(parsed) || parsed < 0) return;
-    void update({ rates: { ...settings.rates, [model]: { ...current, [field]: parsed } } });
-  }
-
   return (
     <div className="ai-settings" data-testid="ai-settings">
       <div className="filter-row" role="radiogroup" aria-label="AI provider">
@@ -227,38 +220,6 @@ export function AiSettingsSection({
           Keys will not persist across restarts on this system.
         </small>
       )}
-      <table className="ai-rates">
-        <thead>
-          <tr><th>Model</th><th>$ / M in</th><th>$ / M out</th></tr>
-        </thead>
-        <tbody>
-          {Object.entries(settings.rates).map(([model, rate]) => (
-            <tr key={model} data-testid={`ai-rate-${model}`}>
-              <td>{model}</td>
-              <td>
-                <input
-                  type="number"
-                  min={0}
-                  step="0.01"
-                  aria-label={`${model} input rate`}
-                  defaultValue={rate.inputPerMTok}
-                  onBlur={(event) => setRate(model, "inputPerMTok", event.target.value)}
-                />
-              </td>
-              <td>
-                <input
-                  type="number"
-                  min={0}
-                  step="0.01"
-                  aria-label={`${model} output rate`}
-                  defaultValue={rate.outputPerMTok}
-                  onBlur={(event) => setRate(model, "outputPerMTok", event.target.value)}
-                />
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
     </div>
   );
 }

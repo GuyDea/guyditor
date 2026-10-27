@@ -398,14 +398,14 @@ describe("AI settings section", () => {
     }));
   }
 
-  it("renders provider, model, effort, tightening, key and rate controls", () => {
+  it("renders provider, model, effort, tightening, key controls", () => {
     const html = renderSettings(SETTINGS);
 
     for (const id of [
       "ai-provider-anthropic", "ai-provider-openai", "ai-model", "ai-effort",
       "ai-tightening", "ai-key", "ai-key-save", "ai-key-clear", "ai-key-status",
-      "ai-rate-claude-opus-5-5",
     ]) expect(html).toContain(`data-testid="${id}"`);
+    expect(html).not.toContain('data-testid="ai-rate-');
     expect(html).toContain("Key saved ✓");
     expect(html).not.toContain("Keys will not persist");
   });
