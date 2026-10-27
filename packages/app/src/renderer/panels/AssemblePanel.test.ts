@@ -388,12 +388,13 @@ describe("Assemble helpers", () => {
 });
 
 describe("AI settings section", () => {
-  function renderSettings(settings: AiSettingsView): string {
+  function renderSettings(settings: AiSettingsView, initialCliStatus?: string): string {
     return renderToStaticMarkup(createElement(AiSettingsSection, {
       settings,
       onSettings: vi.fn(),
       setNotice: vi.fn(),
       initialModels: ["claude-opus-5-5"],
+      ...(initialCliStatus === undefined ? {} : { initialCliStatus }),
     }));
   }
 
@@ -407,6 +408,24 @@ describe("AI settings section", () => {
     ]) expect(html).toContain(`data-testid="${id}"`);
     expect(html).toContain("Key saved ✓");
     expect(html).not.toContain("Keys will not persist");
+  });
+
+  it("shows the key field for API and the CLI path and Check for local CLI", () => {
+    const api = renderSettings(SETTINGS);
+    expect(tag(api, "ai-transport-api")).toContain("checked");
+    expect(api).toContain('data-testid="ai-key"');
+    expect(api).not.toContain('data-testid="ai-cli-path"');
+
+    const cli = renderSettings(
+      { ...SETTINGS, transport: { anthropic: "cli", openai: "api" } },
+      "claude 2.1.309 (Claude Code) ✓",
+    );
+    expect(tag(cli, "ai-transport-cli")).toContain("checked");
+    expect(cli).toContain("local CLI (claude)");
+    expect(tag(cli, "ai-cli-path")).toContain('value="claude"');
+    expect(cli).toContain('data-testid="ai-cli-check"');
+    expect(cli).not.toContain('data-testid="ai-key"');
+    expect(cli).toMatch(/data-testid="ai-cli-status"[^>]*>claude 2\.1\.309 \(Claude Code\) ✓</u);
   });
 
   it("shows the no-key and unencrypted-storage states", () => {
