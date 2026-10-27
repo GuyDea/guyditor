@@ -38,7 +38,7 @@ test("persists splitter resize, collapse, and docked tabs across an app relaunch
     await first.page.getByTestId("dock-tab-transcript")
       .dragTo(first.page.getByTestId("dock-tab-agent"));
     await expect(first.page.getByTestId("dock-tabs-right-top").getByRole("tab"))
-      .toHaveText(["TTranscript", "AAgent"]);
+      .toHaveText(["TTranscript", "AAgent", "AAssemble"]);
 
     await first.electronApp.close();
     if (first.projectPath === undefined) throw new Error("Relaunch fixture path was missing.");
@@ -56,7 +56,7 @@ test("persists splitter resize, collapse, and docked tabs across an app relaunch
       "true",
     );
     await expect(second.page.getByTestId("dock-tabs-right-top").getByRole("tab"))
-      .toHaveText(["TTranscript", "AAgent"]);
+      .toHaveText(["TTranscript", "AAgent", "AAssemble"]);
 
     await second.page.getByTestId("tool-rail-entry-media").click();
     await expect(second.page.getByTestId("media-panel")).toBeVisible();
