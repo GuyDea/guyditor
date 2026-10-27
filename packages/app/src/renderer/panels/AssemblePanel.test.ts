@@ -2,7 +2,8 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { CandidateSegment } from "../../../../transcript/src/assembly/types.js";
+import type { CandidateSegment, ContextFile } from "../../../../transcript/src/assembly/types.js";
+import type { Asset } from "../../../../core/src/index.js";
 import { projectFixture } from "../../../../core/src/project/test-fixtures.js";
 import type {
   AiSettingsView,
@@ -13,11 +14,14 @@ import { useWorkspaceStore } from "../state/view-state.js";
 import {
   activeSession,
   AssemblePanel,
+  assetLabels,
   cutRange,
   canSendMessage,
   evidenceSummary,
+  fileRowTitle,
   nextSendPayload,
   settingsSummary,
+  unsentNotice,
   usageLine,
 } from "./AssemblePanel.js";
 import { AiSettingsSection } from "./AiSettingsSection.js";
@@ -100,6 +104,35 @@ function props(overrides: Partial<AssemblePanelProps> = {}): AssemblePanelProps 
   };
 }
 
+function file(overrides: Partial<ContextFile> & Pick<ContextFile, "label" | "name" | "kind">): ContextFile {
+  return {
+    path: `sidecars/context/asb_aaaaaaaaaa/${overrides.label}-${overrides.name}`,
+    sha256: "x",
+    bytes: 1229,
+    mime: "text/markdown",
+    sent: true,
+    unsentReason: null,
+    pages: null,
+    role: "context",
+    ...overrides,
+  };
+}
+
+const OUTLINE = file({ label: "F1", name: "outline.md", kind: "text" });
+const BUDGET = file({
+  label: "F3", name: "budget.xlsx", kind: "other", bytes: 20_480, sent: false, unsentReason: "unsupported type",
+});
+
+/** The opening tag of the element carrying `testId`. */
+function tag(html: string, testId: string): string {
+  return new RegExp(`<[a-z]+[^>]*data-testid="${testId}"[^>]*>`, "u").exec(html)?.[0] ?? "";
+}
+
+/** The markup of the list row carrying `testId`, up to its closing `</li>`. */
+function row(html: string, testId: string): string {
+  return new RegExp(`<li[^>]*data-testid="${testId}"[^>]*>.*?</li>`, "u").exec(html)?.[0] ?? "";
+}
+
 function render(overrides: Partial<AssemblePanelProps> = {}): string {
   return renderToStaticMarkup(createElement(AssemblePanel, props(overrides)));
 }
@@ -116,7 +149,6 @@ describe("Assemble panel", () => {
     expect(html).toContain("P14");
     expect(html).not.toContain('data-testid="assembly-script-path"');
     expect(html).toContain("anthropic · claude-opus-5-5 · high · tightening: ask");
-    expect(html).toContain("Sends the transcript and script text to anthropic. Never audio or video.");
     expect(html).toMatch(/data-testid="assembly-analyze"[^>]*disabled/u);
     expect(html).not.toContain('data-testid="assembly-abandon"');
   });
@@ -218,6 +250,72 @@ describe("Assemble panel", () => {
     expect(render()).toMatch(/data-testid="assembly-send"[^>]*disabled/u);
     expect(render({ initialSessions: [session({ status: "created", evidence: null })] }))
       .toMatch(/data-testid="assembly-input"[^>]*disabled/u);
+  });
+
+  it("renders file rows with labels, sizes, reasons and remove buttons while created", () => {
+    const image = file({ label: "F2", name: "board.png", kind: "image", bytes: 1_153_434, mime: "image/png" });
+    const html = render({
+      initialSessions: [session({
+        status: "created",
+        evidence: null,
+        inputs: {
+          assetIds: ["ast_aaaaaaaaaa"], files: [OUTLINE, image, BUDGET], script: { mode: "auto" }, nextFileLabel: 4,
+        },
+      })],
+    });
+
+    const outline = row(html, "assembly-file-F1");
+    for (const text of ["F1", "outline.md", "text", "1.2 KB"]) expect(outline).toContain(text);
+    expect(html).toContain('data-testid="assembly-file-remove-F1"');
+    expect(tag(html, "assembly-file-F2")).toContain("1,600");
+    expect(row(html, "assembly-file-F3")).toContain("not sent — unsupported type");
+    for (const id of ["assembly-add-files", "assembly-file-path", "assembly-file-path-add", "assembly-script-select"]) {
+      expect(html).toContain(`data-testid="${id}"`);
+    }
+    for (const value of ["auto", "none", "F1"]) expect(html).toContain(`value="${value}"`);
+    expect(html).toContain("Auto — first Markdown with quoted lines");
+    expect(html).toContain("F1 outline.md");
+    expect(html).toContain('data-testid="assembly-abandon"');
+  });
+
+  it("locks the inputs once analysed", () => {
+    const html = render({
+      initialSessions: [session({
+        inputs: { assetIds: ["ast_aaaaaaaaaa"], files: [OUTLINE], script: { mode: "auto" }, nextFileLabel: 2 },
+      })],
+    });
+
+    expect(html).toContain('data-testid="assembly-file-F1"');
+    expect(html).not.toContain('data-testid="assembly-file-remove-');
+    expect(tag(html, "assembly-add-files")).toContain("disabled");
+    expect(tag(html, "assembly-file-path")).toContain("disabled");
+    expect(tag(html, "assembly-file-path-add")).toContain("disabled");
+    expect(tag(html, "assembly-script-select")).toContain("disabled");
+    expect(tag(html, "assembly-asset-ast_aaaaaaaaaa")).toContain("disabled");
+  });
+
+  it("labels footage in capture order and from the evidence", () => {
+    const assets = [
+      { id: "ast_aaaaaaaaaa", path: "media/a.mov", captureTime: { value: "2026-10-27T11:00:00.000Z", source: "container" } },
+      { id: "ast_bbbbbbbbbb", path: "media/b.mov", captureTime: { value: "2026-10-27T10:00:00.000Z", source: "container" } },
+      { id: "ast_cccccccccc", path: "media/c.mov" },
+    ] as unknown as Asset[];
+
+    expect([...assetLabels(assets, ["ast_aaaaaaaaaa", "ast_bbbbbbbbbb"], null)]).toEqual([
+      ["ast_aaaaaaaaaa", "A2"], ["ast_bbbbbbbbbb", "A1"], ["ast_cccccccccc", "—"],
+    ]);
+    const evidence = session().evidence!;
+    expect(assetLabels(assets, ["ast_aaaaaaaaaa", "ast_bbbbbbbbbb"], {
+      ...evidence,
+      assets: [{ ...evidence.assets[0]!, assetId: "ast_aaaaaaaaaa", ordinal: 1 }],
+    })).toEqual(new Map([["ast_aaaaaaaaaa", "A1"], ["ast_bbbbbbbbbb", "—"], ["ast_cccccccccc", "—"]]));
+    expect(render()).toMatch(/data-testid="assembly-asset-label-ast_aaaaaaaaaa"[^>]*>A1</u);
+  });
+
+  it("shows the new external notice", () => {
+    expect(render()).toContain(
+      "Sends the transcript, the conversation and the files you attach to anthropic. Never your footage.",
+    );
   });
 });
 
@@ -323,5 +421,46 @@ describe("send result handling", () => {
     expect(canSendMessage({ ...ready, status: "planned" })).toBe(true);
     expect(canSendMessage({ ...ready, status: "proposed" })).toBe(false);
     expect(canSendMessage({ ...ready, status: undefined })).toBe(false);
+  });
+});
+
+describe("assembly inputs helpers", () => {
+  function turn(usd: number): AssemblySessionView["messages"][number] {
+    return { role: "assistant", content: "{}", at: "t", reply: null, usage: { inputTokens: 100, outputTokens: 20, usd, estimated: false } };
+  }
+  const cli = session().settings;
+
+  it("usage line for cli turns", () => {
+    const claude = session({ settings: { ...cli, transport: "cli" }, messages: [turn(0)] });
+    expect(usageLine(claude)).toBe("via claude (no cost reported)");
+    const codex = session({ settings: { ...cli, provider: "openai", transport: "cli" }, messages: [turn(0)] });
+    expect(usageLine(codex)).toBe("via codex (no cost reported)");
+    const reported = session({ settings: { ...cli, transport: "cli" }, messages: [turn(0.42)] });
+    expect(usageLine(reported)).toBe("120 tokens · $0.42");
+  });
+
+  it("summarises the script by label", () => {
+    const evidence = session().evidence!;
+    const blocks = Array.from({ length: 12 }, (_, n) => ({ id: `B${String(n + 1)}`, section: "", text: "", sentences: [] }));
+    const scripted = session({
+      inputs: { assetIds: ["ast_aaaaaaaaaa"], files: [{ ...OUTLINE, role: "script" }], script: { mode: "auto" }, nextFileLabel: 2 },
+      evidence: { ...evidence, scriptBlocks: blocks },
+    });
+    expect(evidenceSummary(scripted)).toContain("script: F1 (12 blocks)");
+    expect(evidenceSummary(session())).toContain("no script");
+  });
+
+  it("notices files that will not be sent at attach time", () => {
+    expect(unsentNotice([OUTLINE], [OUTLINE, BUDGET])).toBe("F3 budget.xlsx: not sent — unsupported type");
+    expect(unsentNotice([OUTLINE, BUDGET], [OUTLINE, BUDGET])).toBeNull();
+    expect(unsentNotice([], [OUTLINE])).toBeNull();
+  });
+
+  it("explains how images and PDFs are counted in the estimate", () => {
+    expect(fileRowTitle(file({ label: "F2", name: "board.png", kind: "image" })))
+      .toBe("Counted as 1,600 input tokens in the cost estimate");
+    expect(fileRowTitle(file({ label: "F4", name: "deck.pdf", kind: "pdf", pages: 3 })))
+      .toBe("Counted as 2,000 input tokens per page (3 pages)");
+    expect(fileRowTitle(OUTLINE)).toBeUndefined();
   });
 });
