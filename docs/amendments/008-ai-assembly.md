@@ -26,6 +26,8 @@ Only the evidence text and conversation are sent to the provider; `network.exter
 (`allow|ask|block`) is honoured; every call is cost-metered and audited
 (`external.call` + `cost.charge`); keys live in the OS-encrypted store.
 
+Context files, the script dropdown and the local-CLI transport are added by [Amendment 009](009-assembly-inputs.md).
+
 ## New persisted names
 
 - Sidecar `guyditor.assembly/v1` at `sidecars/assembly/<asb_id>.json`; script copy at

@@ -25,6 +25,13 @@ To resume: open Claude Code in this directory and say "continue the Guyditor bui
   proposal with review markers, optional gentle tightening, privacy/cost/audit
   gates, `asb` sessions. Real-provider calls are unexercised by automated tests
   (stub only). See `docs/amendments/008-ai-assembly.md`.
+- **Amendment 009 (assembly inputs) is implemented on `feat/assembly-inputs`**
+  (not yet merged): context files on an assembly session (`F1…` labels, caps,
+  Script dropdown, read-only after Analyze) and a per-provider **Connect via**
+  API key / local CLI switch (`claude`, `codex`, confined to the session's
+  context directory; cost recorded as reported). Real CLI runs are manual and
+  still pending (`docs/dogfood/2026-10-27-assembly-cli.md`, ASM-007 `partial`).
+  See `docs/amendments/009-assembly-inputs.md`.
 - **Amendment 003 (motion design system) is COMPLETE and merged** (3e305f7):
   primitives/v1 (word-timed text reveals, springs, charts, cutouts, textures),
   SVG/font/Lottie brand assets (deterministic in-house Lottie subset interpreter
