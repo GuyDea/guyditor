@@ -246,6 +246,7 @@ export function MediaBrowserPanel({
         onDragOver={(event) => event.preventDefault()}
         onDrop={(event) => {
           event.preventDefault();
+          if (snapshot === null) return;
           const paths = [...event.dataTransfer.files].flatMap((file) => {
             const resolved = window.guyditor.pathForFile(file);
             return resolved === "" ? [] : [resolved];
@@ -258,11 +259,14 @@ export function MediaBrowserPanel({
           type="button"
           className="primary-action"
           data-testid="media-ingest-picker"
+          disabled={snapshot === null}
           onClick={() => void pickAndIngest()}
         >
           Import files
         </button>
-        <span>or drop media here</span>
+        {snapshot === null
+          ? <span className="empty-copy">Open a project to import media.</span>
+          : <span>or drop media here</span>}
       </div>
       <div className="path-ingest">
         <input
