@@ -27,5 +27,7 @@ export interface WorkspacePanelProps {
   refreshRestylePlan: () => Promise<void>;
   refreshExportReport: () => Promise<void>;
   onProposalResolved?: (status: "accepted" | "rejected") => void;
+  /** Bumped by App on every `assembly.updated` event. */
+  assemblyVersion?: number;
   setNotice: (notice: string) => void;
 }

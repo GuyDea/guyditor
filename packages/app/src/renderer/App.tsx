@@ -21,6 +21,7 @@ import { GuidedTour } from "./GuidedTour.js";
 import { MasterToolRail } from "./MasterToolRail.js";
 import { WelcomeSurface } from "./WelcomeSurface.js";
 import { WorkflowPhaseTabs } from "./WorkflowPhaseTabs.js";
+import { AssemblePanel } from "./panels/AssemblePanel.js";
 import { BrollPanel } from "./panels/BrollPanel.js";
 import { GraphicsPanel } from "./panels/GraphicsPanel.js";
 import { HelpPanel } from "./panels/HelpPanel.js";
@@ -141,6 +142,7 @@ export function App(): React.JSX.Element {
   const [tourOpen, setTourOpen] = useState(false);
   const [tourStop, setTourStop] = useState<string | null>(null);
   const [transcripts, setTranscripts] = useState<TranscriptSidecar[]>([]);
+  const [assemblyVersion, setAssemblyVersion] = useState(0);
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
   const [proposals, setProposals] = useState<Proposal[]>([]);
   const [skills, setSkills] = useState<SkillManifest[]>([]);
@@ -798,6 +800,9 @@ export function App(): React.JSX.Element {
       if (event.job.state === "done" && event.job.kind === "transcribe") {
         void refreshProject();
       }
+      if (event.job.kind === "assembly.prepare") {
+        void refreshProject();
+      }
       if (event.job.kind === "restyle.generate") {
         void Promise.all([refreshProposals(), refreshRestylePlan()]);
       }
@@ -818,6 +823,9 @@ export function App(): React.JSX.Element {
     });
     const offProposal = window.guyditor.on("proposal.updated", () => {
       void Promise.all([refreshProposals(), refreshOverview()]);
+    });
+    const offAssembly = window.guyditor.on("assembly.updated", () => {
+      setAssemblyVersion((version) => version + 1);
     });
     const offAnnotation = window.guyditor.on("annotation.updated", () => {
       void Promise.all([refreshAnnotations(), refreshOverview()]);
@@ -848,6 +856,7 @@ export function App(): React.JSX.Element {
       offProgress();
       offRevision();
       offProposal();
+      offAssembly();
       offAnnotation();
       offWatcher();
     };
@@ -1072,6 +1081,7 @@ export function App(): React.JSX.Element {
     refreshSkills,
     refreshRestylePlan,
     refreshExportReport,
+    assemblyVersion,
     onProposalResolved: (status) => applyChecklistSignal({
       kind: "proposal.resolved",
       status,
@@ -1091,6 +1101,7 @@ export function App(): React.JSX.Element {
     timeline: <TimelinePanel {...panelProps} />,
     status: <StatusStripPanel {...panelProps} />,
     publish: <PublishPanel {...panelProps} />,
+    assemble: <AssemblePanel {...panelProps} />,
     help: (
       <HelpPanel
         onboarding={onboarding}
