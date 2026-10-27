@@ -162,4 +162,15 @@ describe("workspace IPC surfaces", () => {
       "update",
     ]);
   });
+
+  it("exposes the assembly session methods", () => {
+    const assembly = IPC_SURFACES.find(({ service }) => service === "Assembly");
+    expect(Object.keys(assembly?.methods ?? {}).sort()).toEqual([
+      "abandon",
+      "create",
+      "get",
+      "list",
+      "prepare",
+    ]);
+  });
 });

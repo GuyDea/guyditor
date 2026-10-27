@@ -16,7 +16,7 @@ export type ServiceName =
   | "CompositorModel" | "RenderService" | "JobQueue" | "AgentGateway"
   | "AuditLog" | "CostMeter" | "BackupService" | "DeliverableService"
   | "AnnotationService" | "SkillRegistry" | "AdapterRegistry" | "CaptureWatcher"
-  | "GenerationService" | "TemplateAuthoringService" | "AiSettings";
+  | "GenerationService" | "TemplateAuthoringService" | "AiSettings" | "Assembly";
 
 export interface IpcRequest {
   v: 1;
@@ -120,6 +120,7 @@ export type GdEvent =
   | { kind: "project.revision";   seq: number; revision: string }        // "rev_00017"
   | { kind: "proposal.updated";   seq: number; proposalId: string }      // "prp_..."
   | { kind: "annotation.updated"; seq: number; annotationId: string }
+  | { kind: "assembly.updated";   seq: number; sessionId: string }       // "asb_..."
   | { kind: "watcher.ingested";   seq: number; assetIds: string[] }
   | { kind: "mlworker.state";     seq: number; state: "starting"|"ready"|"restarting"|"unavailable" }
   | { kind: "capability.changed"; seq: number; report: CapabilityReport }
@@ -203,3 +204,4 @@ declare global {
 }
 
 export type { AiSettingsView } from "../main/ai-settings-service.js";
+export type { AssemblySessionView } from "../main/assembly-service.js";

@@ -163,8 +163,42 @@ const aiSettingsSurface: IpcSurface = {
   },
 };
 
+const assemblySessionParams: JsonSchema = {
+  type: "object",
+  required: ["sessionId"],
+  properties: { sessionId: { type: "string", pattern: "^asb_[a-z2-7]{10}$" } },
+  additionalProperties: false,
+};
+const assemblySurface: IpcSurface = {
+  service: "Assembly",
+  methods: {
+    list: { paramsSchema: emptyParams, resultSchema: { type: "array" }, budgetMs: 20 },
+    create: {
+      paramsSchema: {
+        type: "object",
+        required: ["assetIds"],
+        properties: {
+          assetIds: {
+            type: "array",
+            minItems: 1,
+            items: { type: "string", pattern: "^ast_[a-z2-7]{10}$" },
+          },
+          scriptPath: { type: "string", minLength: 1 },
+        },
+        additionalProperties: false,
+      },
+      resultSchema: anyResult,
+      budgetMs: 20,
+    },
+    prepare: { paramsSchema: assemblySessionParams, resultSchema: anyResult, budgetMs: 20 },
+    get: { paramsSchema: assemblySessionParams, resultSchema: anyResult, budgetMs: 20 },
+    abandon: { paramsSchema: assemblySessionParams, resultSchema: anyResult, budgetMs: 20 },
+  },
+};
+
 export const IPC_SURFACES: readonly IpcSurface[] = Object.freeze([
   aiSettingsSurface,
+  assemblySurface,
   {
     service: "ProjectStore",
     methods: {

@@ -26,6 +26,7 @@ import type {
 } from "../../../agent/src/index.js";
 
 import type { RecoveryServices } from "./recovery-service.js";
+import type { AssemblyService } from "./assembly-service.js";
 import type { TakeComparisonService } from "./take-comparison-service.js";
 import type { MatteService } from "./matte-service.js";
 import type { OtioService } from "./otio-service.js";
@@ -55,6 +56,7 @@ export interface ProjectServices extends RecoveryServices {
   generation: GenerationExecutionService;
   restyle: RestyleExecutionService;
   takeComparisons: TakeComparisonService;
+  assembly: AssemblyService;
   followUps: TaskScope;
   unsubscribeJobs: () => void;
 }

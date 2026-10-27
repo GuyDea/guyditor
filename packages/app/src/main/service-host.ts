@@ -105,7 +105,6 @@ import type {
 import type {
   ExecuteRequest,
   ExecuteResult,
-  JobStatus,
   ServiceName,
 } from "../shared/ipc.js";
 import type { IpcService } from "./rpc.js";
@@ -120,6 +119,9 @@ import {
   registerBuiltInGenerationAdapters,
 } from "./generation-service.js";
 import { skillRegistryService } from "./skill-service.js";
+import { AssemblyService } from "./assembly-service.js";
+import { registerAssemblyPrepareExecutor } from "./assembly-prepare.js";
+import { publicJobStatus } from "./job-status.js";
 import { TakeComparisonService } from "./take-comparison-service.js";
 import {
   createRecoveryServices,
@@ -210,23 +212,6 @@ function projectAudioPath(store: ProjectStore, assetId: string): string {
 
 function inverseOperations(result: OperationBatchResult): OperationInput[] {
   return result.applied.slice().reverse().flatMap(({ inverse }) => inverse);
-}
-
-function publicJobStatus(job: JobRecord): JobStatus {
-  return {
-    jobId: job.jobId,
-    kind: job.kind,
-    state: job.state,
-    progress: job.progress,
-    dependsOn: [...job.dependsOn],
-    ...(job.error === undefined ? {} : { error: job.error }),
-    title: job.title,
-    cancellable: job.cancellable,
-    createdAt: job.createdAt,
-    ...(job.startedAt === undefined ? {} : { startedAt: job.startedAt }),
-    ...(job.finishedAt === undefined ? {} : { finishedAt: job.finishedAt }),
-    ...(job.etaSeconds === undefined ? {} : { etaSeconds: job.etaSeconds }),
-  };
 }
 
 function emptyJobOverview(): JobOverview {
@@ -1041,6 +1026,17 @@ export class WindowServiceHost {
       onProposal: (proposalId) =>
         this.publisher.publish({ kind: "proposal.updated", proposalId }),
     });
+    const assembly = new AssemblyService({
+      project: { jobs, captureMetadata },
+      store,
+      engine: () => this.#projectContext.engine(store),
+      aiSettings: this.#app.aiSettings,
+      auditLog: this.#app.auditLog,
+      costMeter: this.#app.costMeter,
+      appVersion: this.#app.appVersion,
+      publish: (event) => this.publisher.publish(event),
+    });
+    registerAssemblyPrepareExecutor(jobs, assembly.prepareDeps());
     openedProject.value = {
       store,
       workspace,
@@ -1063,6 +1059,7 @@ export class WindowServiceHost {
       generation,
       restyle,
       takeComparisons,
+      assembly,
       followUps,
       ...recovery,
       unsubscribeJobs,
@@ -1829,6 +1826,8 @@ export class WindowServiceHost {
           }),
           exportReport: () => latestExportReport(project.store),
         };
+      case "Assembly":
+        return project === undefined ? undefined : project.assembly.surface();
       case "TemplateAuthoringService":
         return project === undefined
           ? undefined
