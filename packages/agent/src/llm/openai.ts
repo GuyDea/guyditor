@@ -20,9 +20,21 @@ function convert(node: unknown): unknown {
   return out;
 }
 
-/** Deep copy with oneOf -> anyOf and keywords OpenAI strict mode rejects removed; our validator still enforces them. */
+/**
+ * Deep copy with oneOf -> anyOf and keywords OpenAI strict mode rejects removed (our validator still
+ * enforces them), wrapped as `{ reply: <schema> }` because strict mode needs an object root.
+ * `$defs` is hoisted to the new root so `#/$defs/...` refs keep resolving.
+ */
 export function toOpenAiStrictSchema(schema: Readonly<JsonSchema>): JsonSchema {
-  return convert(schema) as JsonSchema;
+  const { $schema, $defs, ...inner } = convert(schema) as JsonSchema;
+  return {
+    ...($schema === undefined ? {} : { $schema }),
+    ...($defs === undefined ? {} : { $defs }),
+    type: "object",
+    properties: { reply: inner },
+    required: ["reply"],
+    additionalProperties: false,
+  };
 }
 
 interface OpenAiOutput { content?: Array<{ type?: string; text?: unknown }> }
@@ -62,6 +74,10 @@ export class OpenAiLlmAdapter implements LlmAdapter {
     } catch {
       throw new LlmAdapterError("non-JSON reply", null, true);
     }
+    if (reply === null || typeof reply !== "object" || !("reply" in reply)) {
+      throw new LlmAdapterError("reply envelope missing", null, true);
+    }
+    reply = (reply as { reply: unknown }).reply;
     const usage = (json.usage ?? {}) as { input_tokens?: unknown; output_tokens?: unknown };
     return { reply, usage: { inputTokens: tokenCount(usage.input_tokens), outputTokens: tokenCount(usage.output_tokens) } };
   }

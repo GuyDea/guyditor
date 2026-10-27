@@ -39,7 +39,7 @@ function count(node: unknown, key: string): number {
 
 describe("OpenAiLlmAdapter", () => {
   it("sends reasoning effort and strict json schema", async () => {
-    const fetchFn = vi.fn(async () => ok("{}"));
+    const fetchFn = vi.fn(async () => ok('{"reply":{}}'));
     const signal = new AbortController().signal;
     await new OpenAiLlmAdapter({ apiKey: "sk-test", fetch: fetchFn as unknown as typeof fetch }).complete(req({ effort: "max", signal }));
     const [url, init] = fetchFn.mock.calls[0] as unknown as [string, RequestInit];
@@ -50,12 +50,12 @@ describe("OpenAiLlmAdapter", () => {
     expect(JSON.parse(init.body as string)).toEqual({
       model: "gpt-5.5", instructions: "SYS", input: [{ role: "user", content: "hi" }],
       reasoning: { effort: "high" }, max_output_tokens: 1000,
-      text: { format: { type: "json_schema", name: "assembly_reply", schema: SCHEMA, strict: true } },
+      text: { format: { type: "json_schema", name: "assembly_reply", schema: toOpenAiStrictSchema(SCHEMA), strict: true } },
     });
   });
 
   it("maps effort low and medium straight through", async () => {
-    const fetchFn = vi.fn(async () => ok("{}"));
+    const fetchFn = vi.fn(async () => ok('{"reply":{}}'));
     const adapter = new OpenAiLlmAdapter({ apiKey: "k", fetch: fetchFn as unknown as typeof fetch });
     await adapter.complete(req({ effort: "low" }));
     await adapter.complete(req({ effort: "medium" }));
@@ -65,7 +65,7 @@ describe("OpenAiLlmAdapter", () => {
 
   it("parses output_text json", async () => {
     const fetchFn = vi.fn(async () => reply({
-      output: [{ type: "message", content: [{ type: "output_text", text: '{"a":' }, { type: "refusal", text: "x" }, { type: "output_text", text: '"x"}' }] }],
+      output: [{ type: "message", content: [{ type: "output_text", text: '{"reply":{"a":' }, { type: "refusal", text: "x" }, { type: "output_text", text: '"x"}}' }] }],
       usage: { input_tokens: 5, output_tokens: 6 },
     }));
     const out = await new OpenAiLlmAdapter({ apiKey: "k", fetch: fetchFn as unknown as typeof fetch }).complete(req());
@@ -83,6 +83,12 @@ describe("OpenAiLlmAdapter", () => {
       .complete(req()).catch((e: unknown) => e);
     expect((bad as Error).message).toMatch(/non-JSON/);
     expect(bad).toMatchObject({ status: null, retryable: true });
+  });
+
+  it("fails when the reply envelope is missing", async () => {
+    const err = await new OpenAiLlmAdapter({ apiKey: "k", fetch: (async () => ok('{"a":"x"}')) as unknown as typeof fetch })
+      .complete(req()).catch((e: unknown) => e);
+    expect(err).toMatchObject({ message: "reply envelope missing", status: null, retryable: true });
   });
 
   it("lists models sorted", async () => {
@@ -103,9 +109,15 @@ describe("toOpenAiStrictSchema", () => {
       expect(anyKey(out, k)).toBe(false);
     }
     expect(anyKey(out, "anyOf")).toBe(true);
-    expect(count(out, "additionalProperties")).toBe(count(ASSEMBLY_REPLY_SCHEMA, "additionalProperties"));
-    expect(count(out, "required")).toBe(count(ASSEMBLY_REPLY_SCHEMA, "required"));
-    expect(count(out, "additionalProperties")).toBeGreaterThan(0);
+    expect(out.type).toBe("object");
+    expect(Object.keys(out.properties as object)).toEqual(["reply"]);
+    expect(out.required).toEqual(["reply"]);
+    expect(out.additionalProperties).toBe(false);
+    expect(out.$defs).toBeDefined();
+    expect((out.properties as { reply: Record<string, unknown> }).reply.$defs).toBeUndefined();
+    // wrapper adds one additionalProperties and one required; every original one survives
+    expect(count(out, "additionalProperties")).toBe(count(ASSEMBLY_REPLY_SCHEMA, "additionalProperties") + 1);
+    expect(count(out, "required")).toBe(count(ASSEMBLY_REPLY_SCHEMA, "required") + 1);
     expect(JSON.stringify(out).includes('"additionalProperties":true')).toBe(false);
   });
 });
