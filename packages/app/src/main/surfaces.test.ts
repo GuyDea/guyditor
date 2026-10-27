@@ -171,6 +171,7 @@ describe("workspace IPC surfaces", () => {
       "get",
       "list",
       "prepare",
+      "send",
     ]);
   });
 });

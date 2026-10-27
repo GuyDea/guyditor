@@ -193,6 +193,23 @@ const assemblySurface: IpcSurface = {
     prepare: { paramsSchema: assemblySessionParams, resultSchema: anyResult, budgetMs: 20 },
     get: { paramsSchema: assemblySessionParams, resultSchema: anyResult, budgetMs: 20 },
     abandon: { paramsSchema: assemblySessionParams, resultSchema: anyResult, budgetMs: 20 },
+    send: {
+      paramsSchema: {
+        type: "object",
+        required: ["sessionId"],
+        properties: {
+          sessionId: { type: "string", pattern: "^asb_[a-z2-7]{10}$" },
+          text: { type: "string" },
+          optionIndex: { type: "integer", minimum: 0 },
+          questionId: { type: "string" },
+          confirmToken: { type: "string" },
+          acknowledgeExternal: { type: "boolean" },
+        },
+        additionalProperties: false,
+      },
+      resultSchema: anyResult,
+      budgetMs: 50,
+    },
   },
 };
 

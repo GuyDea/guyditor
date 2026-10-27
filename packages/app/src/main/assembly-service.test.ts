@@ -5,8 +5,9 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { AuditLog, CostMeter, createLlmAdapter, DEFAULT_BUDGETS, LlmAdapterError } from "../../../agent/src/index.js";
+import type { BudgetConfig, LlmAdapter } from "../../../agent/src/index.js";
 import { createProject, JobQueue } from "../../../core/src/index.js";
-import type { AuditLog, CostMeter } from "../../../agent/src/index.js";
 import type { ProjectStore, Result } from "../../../core/src/index.js";
 import { projectFixture } from "../../../core/src/project/test-fixtures.js";
 import {
@@ -22,12 +23,14 @@ import { registerDerivedSidecar } from "./derived-sidecar.js";
 import type { ProjectServices } from "./project-services.js";
 
 const roots: string[] = [];
+const closers: (() => void)[] = [];
 const queues: JobQueue[] = [];
 const SECOND = "ast_bbbbbbbbbb";
 const FIRST = "ast_aaaaaaaaaa";
 
 afterEach(async () => {
   for (const queue of queues.splice(0)) queue.close();
+  for (const close of closers.splice(0)) close();
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
@@ -72,7 +75,19 @@ async function addTranscript(
   );
 }
 
-async function harness(options: { transcripts?: "both" | "none" | "silent-second"; now?: () => Date } = {}) {
+interface SendOptions {
+  externalCalls: "allow" | "ask" | "block";
+  budgets?: BudgetConfig;
+  rates?: Record<string, { inputPerMTok: number; outputPerMTok: number }>;
+  model?: string;
+  adapterFactory?: typeof createLlmAdapter;
+}
+
+async function harness(options: {
+  transcripts?: "both" | "none" | "silent-second";
+  now?: () => Date;
+  send?: SendOptions;
+} = {}) {
   const root = await mkdtemp(join(tmpdir(), "guyditor-assembly-"));
   roots.push(root);
   const model = projectFixture();
@@ -87,23 +102,38 @@ async function harness(options: { transcripts?: "both" | "none" | "silent-second
   const { queue } = JobQueue.open(":memory:");
   queues.push(queue);
   const publish = vi.fn();
+  const sendOptions = options.send;
+  const userDir = join(root, "user");
+  const auditLog = sendOptions === undefined
+    ? { record: vi.fn() } as unknown as AuditLog
+    : new AuditLog({ userDir });
+  const costMeter = sendOptions === undefined
+    ? {} as unknown as CostMeter
+    : CostMeter.open({ userDir, auditLog, budgets: sendOptions.budgets ?? DEFAULT_BUDGETS });
+  if (sendOptions !== undefined) closers.push(() => costMeter.close());
   const service = new AssemblyService({
     project: { jobs: queue, captureMetadata: { list: async () => [] } } as unknown as ProjectServices,
     store,
     engine: () => { throw new Error("unused"); },
     aiSettings: {
-      current: () => ({ provider: "anthropic", model: "m1", effort: "medium", tightening: "ask", rates: {} }),
+      current: () => ({
+        provider: "anthropic", model: sendOptions?.model ?? "m1", effort: "medium", tightening: "ask",
+        rates: sendOptions?.rates ?? {},
+      }),
+      externalCalls: () => sendOptions?.externalCalls ?? "allow",
+      apiKey: () => Promise.resolve("sk-test"),
     } as unknown as AiSettingsService,
-    auditLog: { record: vi.fn() } as unknown as AuditLog,
-    costMeter: {} as unknown as CostMeter,
+    auditLog,
+    costMeter,
     appVersion: "0.0.0-test",
     publish,
     environment: {},
+    ...(sendOptions?.adapterFactory === undefined ? {} : { adapterFactory: sendOptions.adapterFactory }),
     ...(options.now === undefined ? {} : { now: options.now }),
   });
   const scriptPath = join(root, "script.md");
   await writeFile(scriptPath, "# Intro\n\nWelcome to the channel. Today we talk about tea.\n", "utf8");
-  return { root, store, queue, publish, service, scriptPath };
+  return { root, store, queue, publish, service, scriptPath, auditLog };
 }
 
 const prepare = (h: Awaited<ReturnType<typeof harness>>, id: string) =>
@@ -303,5 +333,124 @@ describe("AssemblyService", () => {
       await h.service.abandon(id);
       expect(h.queue.get(status.jobId)?.state).toBe("cancelled");
     });
+  });
+});
+
+const stubFactory: typeof createLlmAdapter = () => createLlmAdapter("stub", { apiKey: "" });
+const SEND_RATES = { "claude-sonnet-5-5": { inputPerMTok: 2, outputPerMTok: 10 } };
+
+async function conversing(send: SendOptions) {
+  const h = await harness({ send: { adapterFactory: stubFactory, ...send } });
+  const { id } = await h.service.create({ assetIds: [FIRST, SECOND], scriptPath: h.scriptPath });
+  await prepare(h, id);
+  return { ...h, id };
+}
+
+describe("AssemblyService.send", () => {
+  it("blocks when externalCalls is block", async () => {
+    const h = await conversing({ externalCalls: "block" });
+    await expect(h.service.send({ sessionId: h.id, text: "go" })).resolves.toMatchObject({ kind: "blocked" });
+    expect((await h.service.get(h.id)).messages).toHaveLength(0);
+  });
+
+  it("asks for acknowledgement once when externalCalls is ask", async () => {
+    const h = await conversing({ externalCalls: "ask" });
+    const first = await h.service.send({ sessionId: h.id, text: "go" });
+    expect(first).toMatchObject({ kind: "acknowledge-external", provider: "anthropic" });
+    const second = await h.service.send({ sessionId: h.id, text: "go", acknowledgeExternal: true });
+    expect(second.kind).toBe("turn");
+    expect((await h.service.get(h.id)).externalAcknowledged).toBe(true);
+    const third = await h.service.send({ sessionId: h.id, text: "again" });
+    expect(third.kind).toBe("turn");
+  });
+
+  it("surfaces a cost warning and proceeds with the token", async () => {
+    const h = await conversing({
+      externalCalls: "allow",
+      model: "claude-sonnet-5-5",
+      rates: SEND_RATES,
+      budgets: { ...DEFAULT_BUDGETS, task: { warnUsd: 0, capUsd: null } },
+    });
+    const warned = await h.service.send({ sessionId: h.id, text: "go" });
+    expect(warned).toMatchObject({ kind: "confirm-cost", estimated: false });
+    if (warned.kind !== "confirm-cost") throw new Error("expected confirm-cost");
+    expect(warned.estimatedUsd).toBeGreaterThan(0);
+    expect((await h.service.get(h.id)).messages).toHaveLength(0);
+    const result = await h.service.send({ sessionId: h.id, text: "go", confirmToken: warned.confirmToken });
+    expect(result.kind).toBe("turn");
+  });
+
+  it("records external.call and cost.charge in the audit log", async () => {
+    const h = await conversing({ externalCalls: "allow", model: "claude-sonnet-5-5", rates: SEND_RATES });
+    const result = await h.service.send({ sessionId: h.id, text: "go" });
+    if (result.kind !== "turn") throw new Error("expected turn");
+    const auditId = result.session.auditSessionId!;
+    expect(auditId).toMatch(/^ses_/u);
+    const records = h.auditLog.readSession(auditId).records;
+    const call = records.find((record) => record.type === "external.call");
+    expect(call).toMatchObject({ provider: "anthropic", purpose: "assembly", outcome: "ok" });
+    expect((call as { dataClassesSent: string[] }).dataClassesSent).toContain("transcript");
+    expect(records.some((record) => record.type === "cost.charge")).toBe(true);
+    expect(result.session.messages.at(-1)?.usage?.usd).toBeGreaterThan(0);
+  });
+
+  it("keeps the session conversing on a provider error", async () => {
+    let calls = 0;
+    const flaky: typeof createLlmAdapter = () => {
+      const stub = createLlmAdapter("stub", { apiKey: "" });
+      return {
+        provider: "anthropic",
+        listModels: () => stub.listModels(),
+        complete: (request) => {
+          calls += 1;
+          if (calls === 1) return Promise.reject(new LlmAdapterError("429", 429, true));
+          return stub.complete(request);
+        },
+      } satisfies LlmAdapter;
+    };
+    const h = await conversing({ externalCalls: "allow", adapterFactory: flaky });
+    await expect(h.service.send({ sessionId: h.id, text: "go" })).rejects.toThrow(/E_ASSEMBLY_PROVIDER/);
+    const view = await h.service.get(h.id);
+    expect(view.status).toBe("conversing");
+    expect(view.error).toMatch(/429/);
+    expect(view.messages.map(({ role }) => role)).toEqual(["user"]);
+    const retry = await h.service.send({ sessionId: h.id, text: "go" });
+    expect(retry.kind).toBe("turn");
+    expect((await h.service.get(h.id)).error).toBeNull();
+    const call = h.auditLog.readSession(view.auditSessionId!).records.filter((r) => r.type === "external.call");
+    expect(call.map((r) => (r as { outcome: string }).outcome)).toEqual(["error", "ok"]);
+  });
+
+  it("rejects an option with no question to answer and empty text", async () => {
+    const h = await conversing({ externalCalls: "allow" });
+    await expect(h.service.send({ sessionId: h.id, optionIndex: 9, questionId: "Q1" }))
+      .rejects.toThrow("E_ASSEMBLY_INVALID_INPUT");
+    await expect(h.service.send({ sessionId: h.id, text: "  " })).rejects.toThrow("E_ASSEMBLY_INVALID_INPUT");
+  });
+
+  it("rejects send outside conversing and closes the audit session on abandon", async () => {
+    const h = await conversing({ externalCalls: "allow" });
+    const asked = await h.service.send({ sessionId: h.id, text: "go" });
+    if (asked.kind !== "turn") throw new Error("expected turn");
+    expect(asked.session.status).toBe("conversing");
+    const answered = await h.service.send({ sessionId: h.id, optionIndex: 0, questionId: "Q1" });
+    expect(answered.kind).toBe("turn");
+    const sent = await h.service.get(h.id);
+    expect(sent.messages.filter(({ role }) => role === "user").map(({ content }) => content).at(-1))
+      .toBe("Instruction, drop it");
+    expect(sent.status).toBe("planned");
+    expect(sent.plan).not.toBeNull();
+    await expect(h.service.send({ sessionId: h.id, text: "more" })).rejects.toThrow("E_ASSEMBLY_STATE");
+    await h.service.abandon(h.id);
+    const types = h.auditLog.readSession(sent.auditSessionId!).records.map((r) => r.type);
+    expect(types).toContain("session.end");
+  });
+
+  it("a re-prepare clears stale conversation data", async () => {
+    const h = await conversing({ externalCalls: "allow" });
+    await h.service.send({ sessionId: h.id, text: "go" });
+    await h.service.prepareDeps().updateSession(h.id, (current) => ({ ...current, status: "failed" }));
+    const again = await prepare(h, h.id);
+    expect(again).toMatchObject({ messages: [], plan: null, compiled: null, proposalId: null, error: null });
   });
 });

@@ -204,4 +204,4 @@ declare global {
 }
 
 export type { AiSettingsView } from "../main/ai-settings-service.js";
-export type { AssemblySessionView } from "../main/assembly-service.js";
+export type { AssemblySessionView, SendInput, SendResult } from "../main/assembly-service.js";

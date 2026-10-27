@@ -10,18 +10,29 @@ import type {
   OperationEngine,
   ProjectStore,
 } from "../../../core/src/index.js";
-import type { AuditLog, CostMeter, createLlmAdapter } from "../../../agent/src/index.js";
 import {
+  assemblySystemPrompt,
+  ASSEMBLY_OUTPUT_TOKEN_ESTIMATE,
+  createLlmAdapter as defaultAdapterFactory,
+  estimateUsd,
+  resolveRate,
+  SessionManager,
+} from "../../../agent/src/index.js";
+import type { AuditLog, CostEstimate, CostMeter, CostContext, createLlmAdapter } from "../../../agent/src/index.js";
+import {
+  ASSEMBLY_REPLY_SCHEMA,
   assemblySidecarRef,
   createAssemblySession,
   parseAssemblySession,
+  estimateTokens,
   serializeAssemblySession,
 } from "../../../transcript/src/index.js";
-import type { AssemblyEvidence, AssemblySession } from "../../../transcript/src/index.js";
+import type { AssemblyEvidence, AssemblyProvider, AssemblySession, ReplyContext } from "../../../transcript/src/index.js";
 
 import type { GdEventWithoutSeq } from "../shared/ipc.js";
 import type { AiSettingsService } from "./ai-settings-service.js";
 import type { PrepareDeps } from "./assembly-prepare.js";
+import { llmMessages, runAssemblyTurn, TurnError } from "./assembly-turn.js";
 import { registerDerivedSidecar } from "./derived-sidecar.js";
 import { publicJobStatus } from "./job-status.js";
 import { transcriptSidecars } from "./project-readers.js";
@@ -46,6 +57,21 @@ export interface AssemblyServiceOptions {
   environment?: NodeJS.ProcessEnv;
 }
 
+export type SendInput = {
+  sessionId: string;
+  text?: string;
+  optionIndex?: number;
+  questionId?: string;
+  confirmToken?: string;
+  acknowledgeExternal?: boolean;
+};
+export type SendResult =
+  | { kind: "turn"; session: AssemblySessionView }
+  | { kind: "confirm-cost"; message: string; confirmToken: string; estimatedUsd: number; estimated: boolean }
+  | { kind: "blocked"; message: string }
+  | { kind: "acknowledge-external"; provider: AssemblyProvider; notice: string };
+
+const MAX_TURNS = 12;
 const SESSION_ID = /^asb_[a-z2-7]{10}$/u;
 const PREPARABLE: readonly AssemblySession["status"][] = ["created", "failed"];
 
@@ -62,10 +88,13 @@ export function assemblyView(session: AssemblySession): AssemblySessionView {
 
 export class AssemblyService {
   readonly #options: AssemblyServiceOptions;
+  readonly #audit: SessionManager;
+  readonly #sending = new Set<string>();
   #queue: Promise<unknown> = Promise.resolve();
 
   public constructor(options: AssemblyServiceOptions) {
     this.#options = options;
+    this.#audit = new SessionManager(options.auditLog);
   }
 
   #serialized<T>(task: () => Promise<T>): Promise<T> {
@@ -207,8 +236,155 @@ export class AssemblyService {
     });
   }
 
+  /** The creator's words for this turn: free text, or the option they picked from the last questions reply. */
+  #userText(session: AssemblySession, input: SendInput): string {
+    if (input.optionIndex === undefined) {
+      const text = input.text?.trim() ?? "";
+      if (text === "") throw invalidInput("a message is required");
+      return text;
+    }
+    const last = session.messages.at(-1)?.reply;
+    const question = last?.status === "questions"
+      ? last.questions.find(({ id }) => id === input.questionId)
+      : undefined;
+    const option = question?.options?.[input.optionIndex];
+    if (option === undefined) throw invalidInput("that option does not belong to the open question");
+    return option;
+  }
+
+  #replyContext(session: AssemblySession, evidence: AssemblyEvidence): Promise<ReplyContext> {
+    const assetIds = evidence.assets.map(({ assetId }) => assetId);
+    return transcriptSidecars(this.#options.store).then((sidecars) => {
+      const words: ReplyContext["words"] = new Map();
+      for (const sidecar of sidecars.filter(({ assetId }) => assetIds.includes(assetId))) {
+        for (const [id, word] of Object.entries(sidecar.words)) {
+          words.set(id, { assetId: sidecar.assetId, state: word.state, order: Number(id.replace(/\D/gu, "")) });
+        }
+      }
+      return { words, scriptBlocks: evidence.scriptBlocks, assetIds };
+    });
+  }
+
+  public async send(input: SendInput): Promise<SendResult> {
+    const { aiSettings, store, costMeter } = this.#options;
+    let session = await this.#read(input.sessionId);
+    if (session.status !== "conversing" || session.evidence === null) {
+      throw new Error(`E_ASSEMBLY_STATE: session ${session.id} is ${session.status} and cannot take a message`);
+    }
+    const { evidence } = session;
+    const userText = this.#userText(session, input);
+    if (this.#sending.has(session.id)) throw new Error(`E_ASSEMBLY_STATE: session ${session.id} is already working`);
+    const { provider, model } = session.settings;
+    const stub = provider === "stub";
+    const externalCalls = aiSettings.externalCalls();
+    if (!stub) {
+      if (externalCalls === "block") {
+        return { kind: "blocked", message: "External AI calls are blocked in settings." };
+      }
+      if (externalCalls === "ask" && !session.externalAcknowledged) {
+        if (input.acknowledgeExternal !== true) {
+          return {
+            kind: "acknowledge-external",
+            provider,
+            notice: `Sends the transcript and script text to ${provider}. Never audio or video.`,
+          };
+        }
+        session = await this.#update(session.id, (current) => ({ ...current, externalAcknowledged: true }));
+      }
+    }
+    let apiKey = "";
+    if (!stub) {
+      apiKey = (await aiSettings.apiKey(provider)) ?? "";
+      if (apiKey === "") throw new Error(`E_AI_KEY_MISSING: no API key for ${provider}`);
+    }
+    const adapter = (this.#options.adapterFactory ?? defaultAdapterFactory)(provider, { apiKey });
+    const projectId = store.currentProject.project.id;
+    let auditSessionId = session.auditSessionId;
+    if (auditSessionId === null) {
+      auditSessionId = this.#audit.open({
+        projectId,
+        director: { profileId: "assembly", modelLabel: `${provider}/${model}`, locality: stub ? "local" : "remote" },
+        policySnapshot: { externalCalls },
+      }).sessionId;
+      const opened = auditSessionId;
+      session = await this.#update(session.id, (current) => ({ ...current, auditSessionId: opened }));
+    }
+    const system = assemblySystemPrompt();
+    const { rate, estimated } = resolveRate(aiSettings.current().rates, provider, model);
+    const history = llmMessages({
+      ...session,
+      messages: [...session.messages, { role: "user", content: userText, reply: null, usage: null, at: "" }],
+    }).map(({ content }) => content).join("");
+    const units = { inputTokens: estimateTokens(system + history), outputTokens: ASSEMBLY_OUTPUT_TOKEN_ESTIMATE };
+    const estimate: CostEstimate = {
+      adapterId: `llm.${provider}`,
+      currency: "USD",
+      amount: estimateUsd(rate, units),
+      units,
+      confidence: estimated ? "heuristic" : "pricebook",
+    };
+    const context: CostContext = { sessionId: auditSessionId, projectId, taskId: session.id, initiator: "creator" };
+    const verdict = costMeter.preflight(estimate, context, input.confirmToken);
+    if (verdict.verdict === "blocked") return { kind: "blocked", message: verdict.message };
+    if (verdict.verdict === "warn") {
+      return {
+        kind: "confirm-cost",
+        message: verdict.message,
+        confirmToken: verdict.confirmToken,
+        estimatedUsd: estimate.amount,
+        estimated,
+      };
+    }
+    this.#sending.add(session.id);
+    const startedAt = performance.now();
+    const record = (outcome: "ok" | "error", usage: { inputTokens: number; outputTokens: number }, actualUsd: number) =>
+      costMeter.record({
+        context,
+        estimate,
+        provider,
+        purpose: "assembly",
+        dataClassesSent: ["prompt", "transcript"],
+        payloadSummary: { promptChars: system.length + history.length, transcriptWords: evidence.segments.reduce((n, { text }) => n + text.split(/\s+/u).length, 0) },
+        units: usage,
+        actualUsd,
+        outcome,
+        durationMs: Math.round(performance.now() - startedAt),
+      });
+    try {
+      const replyContext = await this.#replyContext(session, evidence);
+      const result = await runAssemblyTurn(session, userText, {
+        adapter,
+        system,
+        schema: ASSEMBLY_REPLY_SCHEMA,
+        context: replyContext,
+        maxTurns: MAX_TURNS,
+        now: () => (this.#options.now?.() ?? new Date()).toISOString(),
+        price: (usage) => ({ usd: estimateUsd(rate, usage), estimated }),
+      });
+      record("ok", result.usage, estimateUsd(rate, result.usage));
+      const turn = await this.#update(session.id, (current) =>
+        current.status === "conversing"
+          ? { ...current, messages: result.session.messages, status: result.session.status, plan: result.session.plan, error: null }
+          : current);
+      return { kind: "turn", session: assemblyView(turn) };
+    } catch (error: unknown) {
+      if (!(error instanceof TurnError)) throw error;
+      const failure = error;
+      record("error", failure.usage, failure.kind === "provider" ? 0 : estimateUsd(rate, failure.usage));
+      await this.#update(session.id, (current) => current.status === "conversing"
+        ? { ...current, messages: failure.session.messages, error: failure.message }
+        : current);
+      throw new Error(failure.kind === "provider" ? `E_ASSEMBLY_PROVIDER: ${failure.message}` : failure.message);
+    } finally {
+      this.#sending.delete(session.id);
+    }
+  }
+
   public async abandon(sessionId: string): Promise<AssemblySessionView> {
-    await this.#update(sessionId, (current) => ({ ...current, status: "abandoned" }));
+    const abandoned = await this.#update(sessionId, (current) => ({ ...current, status: "abandoned" }));
+    if (abandoned.auditSessionId !== null) {
+      try { this.#audit.close(abandoned.auditSessionId); } catch { /* not open in this run */ }
+    }
     const live = this.#liveJob(sessionId);
     if (live !== undefined) this.#options.project.jobs.cancel(live.jobId);
     return this.get(sessionId);
@@ -220,6 +396,7 @@ export class AssemblyService {
       create: (params: { assetIds: string[]; scriptPath?: string }) => this.create(params),
       prepare: ({ sessionId }: { sessionId: string }) => this.prepare(sessionId),
       get: ({ sessionId }: { sessionId: string }) => this.get(sessionId),
+      send: (params: SendInput) => this.send(params),
       abandon: ({ sessionId }: { sessionId: string }) => this.abandon(sessionId),
     };
   }

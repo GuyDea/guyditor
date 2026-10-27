@@ -180,7 +180,10 @@ export async function prepareSession(
   reportProgress: (progress: number) => void,
 ): Promise<AssemblySession> {
   const started = await deps.updateSession(sessionId, transition((current) =>
-    ({ ...current, status: "preparing", error: null })));
+    ({
+      ...current, status: "preparing", error: null, evidence: null, messages: [], plan: null,
+      compiled: null, proposalId: null, tighteningJobId: null,
+    })));
   if (started.status === "abandoned") return started;
   try {
     const evidence = await build(deps, started, signal, reportProgress);
