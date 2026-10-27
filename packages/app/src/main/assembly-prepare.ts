@@ -23,6 +23,7 @@ export interface PrepareDeps {
   transcripts: () => Promise<TranscriptSidecar[]>;
   markers: (assetId: string) => Promise<MarkerRecord[]>;
   jobs: JobQueue;
+  transcriptWait?: { intervalMs: number; deadlineMs: number };
 }
 
 interface Prepared {
@@ -52,6 +53,38 @@ function pendingTranscribe(jobs: JobQueue, assetId: string): string | undefined 
       && payload["assetId"] === assetId)?.jobId;
 }
 
+const DEFAULT_TRANSCRIPT_WAIT = { intervalMs: 250, deadlineMs: 15_000 };
+
+function sleep(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const abort = (): void => {
+      clearTimeout(timer);
+      reject(new Error("Cancelled while waiting for a transcript."));
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", abort);
+      resolve();
+    }, ms);
+    signal.addEventListener("abort", abort, { once: true });
+  });
+}
+
+/** The transcript sidecar is written by a host follow-up shortly after the transcribe job is done. */
+async function awaitSidecar(
+  deps: PrepareDeps,
+  assetId: string,
+  signal: AbortSignal,
+): Promise<TranscriptSidecar | undefined> {
+  const { intervalMs, deadlineMs } = deps.transcriptWait ?? DEFAULT_TRANSCRIPT_WAIT;
+  const deadline = Date.now() + deadlineMs;
+  for (;;) {
+    signal.throwIfAborted();
+    const found = (await deps.transcripts()).find((sidecar) => sidecar.assetId === assetId);
+    if (found !== undefined || Date.now() >= deadline) return found;
+    await sleep(intervalMs, signal);
+  }
+}
+
 async function gather(
   deps: PrepareDeps,
   session: AssemblySession,
@@ -59,7 +92,7 @@ async function gather(
   reportProgress: (progress: number) => void,
   notes: string[],
 ): Promise<{ prepared: Prepared[]; language: string }> {
-  let transcripts = await deps.transcripts();
+  const transcripts = await deps.transcripts();
   const language = transcripts[0]?.language ?? "und";
   const assets = session.inputs.assetIds.map((id) => {
     const asset = deps.store.currentProject.assets.find((candidate) => candidate.id === id);
@@ -73,9 +106,8 @@ async function gather(
     let sidecar = transcripts.find(({ assetId }) => assetId === asset.id);
     const waitFor = sidecar === undefined ? pendingTranscribe(deps.jobs, asset.id) : undefined;
     if (waitFor !== undefined) {
-      await terminalJob(deps.jobs, waitFor, signal);
-      transcripts = await deps.transcripts();
-      sidecar = transcripts.find(({ assetId }) => assetId === asset.id);
+      const finished = await terminalJob(deps.jobs, waitFor, signal);
+      if (finished.state === "done") sidecar = await awaitSidecar(deps, asset.id, signal);
     }
     if (sidecar === undefined) {
       notes.push(`${fileName}: no transcript — run transcription first`);

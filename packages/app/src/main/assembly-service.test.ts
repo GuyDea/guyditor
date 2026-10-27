@@ -194,4 +194,47 @@ describe("AssemblyService", () => {
     expect(listed.map(({ id }) => id)).toEqual([second.id, first.id]);
     expect(listed[1]!.status).toBe("abandoned");
   });
+
+  describe("waiting for transcription", () => {
+    async function waitHarness(neverAppears: boolean) {
+      const h = await harness();
+      const { id } = await h.service.create({ assetIds: [FIRST, SECOND] });
+      const base = h.service.prepareDeps();
+      const all = await base.transcripts();
+      const withoutSecond = all.filter(({ assetId }) => assetId !== SECOND);
+      let calls = 0;
+      let release: () => void = () => undefined;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      h.queue.registerExecutor("transcribe", async () => { await gate; });
+      const job = h.queue.enqueue({
+        kind: "transcribe", title: "t", payload: { assetId: SECOND }, cancellable: true,
+      });
+      const deps = {
+        ...base,
+        transcripts: async () => {
+          calls += 1;
+          return neverAppears || calls <= 2 ? withoutSecond : all;
+        },
+        transcriptWait: { intervalMs: 5, deadlineMs: neverAppears ? 40 : 5000 },
+      };
+      const running = prepareSession(deps, id, new AbortController().signal, () => undefined);
+      await vi.waitFor(() => expect(calls).toBeGreaterThanOrEqual(1));
+      release();
+      await terminalJob(h.queue, job.jobId, new AbortController().signal);
+      return running;
+    }
+
+    it("polls for the sidecar after the transcribe job is done", async () => {
+      const session = await waitHarness(false);
+      expect(session.status).toBe("conversing");
+      expect(session.evidence?.assets.map(({ assetId }) => assetId)).toContain(SECOND);
+      expect(session.evidence?.notes.join("\n") ?? "").not.toMatch(/no transcript/);
+    });
+
+    it("notes the missing transcript once the deadline passes", async () => {
+      const session = await waitHarness(true);
+      expect(session.status).toBe("conversing");
+      expect(session.evidence?.notes.join("\n")).toMatch(/no transcript/);
+    });
+  });
 });
