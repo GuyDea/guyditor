@@ -27,9 +27,28 @@ export const DOCK_PANEL_IDS = [
   "broll",
   "storage",
   "help",
+  "assemble",
 ] as const;
 
 export type DockPanelId = typeof DOCK_PANEL_IDS[number];
+
+const PRE_ASSEMBLE_DOCK_PANEL_IDS = [
+  "media",
+  "preview",
+  "transcript",
+  "inspector",
+  "agent",
+  "timeline",
+  "status",
+  "graphics",
+  "publish",
+  "skills",
+  "broll",
+  "storage",
+  "help",
+] as const;
+
+type PreAssembleDockPanelId = typeof PRE_ASSEMBLE_DOCK_PANEL_IDS[number];
 
 const PRE_ONBOARDING_DOCK_PANEL_IDS = [
   "media",
@@ -120,6 +139,18 @@ interface CollapsedWorkspaceLayout {
   regions: Record<DockRegionId, LayoutRegion>;
   splitters: SplitterPositions;
   collapsed: Record<DockPanelId, boolean>;
+}
+
+interface PreAssembleLayoutRegion {
+  panelIds: PreAssembleDockPanelId[];
+  activePanelId: PreAssembleDockPanelId | null;
+}
+
+interface PreAssembleWorkspaceLayout {
+  schema: typeof LAYOUT_SCHEMA;
+  regions: Record<DockRegionId, PreAssembleLayoutRegion>;
+  splitters: SplitterPositions;
+  railCollapsed: Record<PreAssembleDockPanelId, boolean>;
 }
 
 interface PreOnboardingLayoutRegion {
@@ -214,7 +245,7 @@ const PANEL_PLACEMENTS: Record<
     "center-top": ["storage"],
     "center-bottom": [],
     "right-top": [],
-    "right-bottom": [],
+    "right-bottom": ["assemble"],
     "bottom-timeline": [],
     "bottom-status": ["status"],
   },
@@ -222,7 +253,7 @@ const PANEL_PLACEMENTS: Record<
     left: [],
     "center-top": ["preview"],
     "center-bottom": ["transcript"],
-    "right-top": ["agent"],
+    "right-top": ["agent", "assemble"],
     "right-bottom": [],
     "bottom-timeline": ["timeline"],
     "bottom-status": [],
@@ -413,6 +444,11 @@ function isPreOnboardingDockPanelId(value: unknown): value is PreOnboardingDockP
     (PRE_ONBOARDING_DOCK_PANEL_IDS as readonly string[]).includes(value);
 }
 
+function isPreAssembleDockPanelId(value: unknown): value is PreAssembleDockPanelId {
+  return typeof value === "string" &&
+    (PRE_ASSEMBLE_DOCK_PANEL_IDS as readonly string[]).includes(value);
+}
+
 function isLegacyDockPanelId(value: unknown): value is LegacyDockPanelId {
   return typeof value === "string" &&
     (LEGACY_DOCK_PANEL_IDS as readonly string[]).includes(value);
@@ -423,6 +459,14 @@ function isRegion(value: unknown): value is LayoutRegion {
   if (!value.panelIds.every(isDockPanelId)) return false;
   return value.activePanelId === null ||
     isDockPanelId(value.activePanelId) && value.panelIds.includes(value.activePanelId);
+}
+
+function isPreAssembleRegion(value: unknown): value is PreAssembleLayoutRegion {
+  if (!isRecord(value) || !Array.isArray(value.panelIds)) return false;
+  if (!value.panelIds.every(isPreAssembleDockPanelId)) return false;
+  return value.activePanelId === null ||
+    isPreAssembleDockPanelId(value.activePanelId) &&
+      value.panelIds.includes(value.activePanelId);
 }
 
 function isPreOnboardingRegion(value: unknown): value is PreOnboardingLayoutRegion {
@@ -462,6 +506,32 @@ function isWorkspaceLayout(value: unknown): value is WorkspaceLayout {
   if (new Set(panels).size !== panels.length) return false;
   if (!hasValidSplitters(splitters)) return false;
   return DOCK_PANEL_IDS.every(
+    (panelId) => typeof railCollapsed[panelId] === "boolean",
+  );
+}
+
+function isPreAssembleWorkspaceLayout(
+  value: unknown,
+): value is PreAssembleWorkspaceLayout {
+  if (!isRecord(value) || value.schema !== LAYOUT_SCHEMA) return false;
+  if (!isRecord(value.regions) || !isRecord(value.splitters) ||
+    !isRecord(value.railCollapsed)) {
+    return false;
+  }
+  const regions = value.regions;
+  const splitters = value.splitters;
+  const railCollapsed = value.railCollapsed;
+  if (!DOCK_REGION_IDS.every((regionId) => isPreAssembleRegion(regions[regionId]))) {
+    return false;
+  }
+  const panels = DOCK_REGION_IDS.flatMap((regionId) => {
+    const region = regions[regionId];
+    return isPreAssembleRegion(region) ? region.panelIds : [];
+  });
+  if (new Set(panels).size !== panels.length) return false;
+  if (!hasValidSplitters(splitters)) return false;
+  if ("assemble" in railCollapsed) return false;
+  return PRE_ASSEMBLE_DOCK_PANEL_IDS.every(
     (panelId) => typeof railCollapsed[panelId] === "boolean",
   );
 }
@@ -545,7 +615,13 @@ export function parseLayout(
   fallbackPhase: WorkflowPhase = "cut",
 ): WorkspaceLayout {
   if (isPreOnboardingWorkspaceLayout(value)) {
-    return migratePreOnboardingLayout(value, fallbackPhase);
+    return migratePreAssembleLayout(
+      migratePreOnboardingLayout(value),
+      fallbackPhase,
+    );
+  }
+  if (isPreAssembleWorkspaceLayout(value)) {
+    return migratePreAssembleLayout(value, fallbackPhase);
   }
   if (isCollapsedWorkspaceLayout(value)) {
     return migrateCollapsedLayout(value);
@@ -567,7 +643,8 @@ function parseWorkflowLayouts(value: unknown): WorkflowLayouts | null {
   if (!WORKFLOW_PHASES.every((phase) =>
     isWorkspaceLayout(layouts[phase]) ||
     isCollapsedWorkspaceLayout(layouts[phase]) ||
-    isPreOnboardingWorkspaceLayout(layouts[phase]))) {
+    isPreOnboardingWorkspaceLayout(layouts[phase]) ||
+    isPreAssembleWorkspaceLayout(layouts[phase]))) {
     return null;
   }
   return {
@@ -603,14 +680,41 @@ function migrateCollapsedLayout(
 
 function migratePreOnboardingLayout(
   previous: PreOnboardingWorkspaceLayout,
+): PreAssembleWorkspaceLayout {
+  const regions = Object.fromEntries(DOCK_REGION_IDS.map((regionId) => [
+    regionId,
+    {
+      panelIds: [
+        ...previous.regions[regionId].panelIds,
+        ...(regionId === "right-bottom" ? ["help" as const] : []),
+      ],
+      activePanelId: previous.regions[regionId].activePanelId,
+    },
+  ])) as Record<DockRegionId, PreAssembleLayoutRegion>;
+  const splitters = { ...previous.splitters };
+  for (const splitter of SPLITTER_IDS) {
+    splitters[splitter] = clampSplitterValue(splitter, splitters[splitter]);
+  }
+  return {
+    schema: LAYOUT_SCHEMA,
+    regions,
+    splitters,
+    railCollapsed: { ...previous.collapsed, help: true },
+  };
+}
+
+function migratePreAssembleLayout(
+  previous: PreAssembleWorkspaceLayout,
   phase: WorkflowPhase,
 ): WorkspaceLayout {
   const migrated = createDefaultLayout(phase);
   for (const regionId of DOCK_REGION_IDS) {
+    const assembleHere = (phase === "cut" && regionId === "right-top") ||
+      (phase === "ingest" && regionId === "right-bottom");
     migrated.regions[regionId] = {
       panelIds: [
         ...previous.regions[regionId].panelIds,
-        ...(regionId === "right-bottom" ? ["help" as const] : []),
+        ...(assembleHere ? ["assemble" as const] : []),
       ],
       activePanelId: previous.regions[regionId].activePanelId,
     };
@@ -618,10 +722,10 @@ function migratePreOnboardingLayout(
   for (const splitter of SPLITTER_IDS) {
     migrated.splitters[splitter] = clampSplitterValue(splitter, previous.splitters[splitter]);
   }
-  for (const panelId of PRE_ONBOARDING_DOCK_PANEL_IDS) {
-    migrated.railCollapsed[panelId] = previous.collapsed[panelId];
+  for (const panelId of PRE_ASSEMBLE_DOCK_PANEL_IDS) {
+    migrated.railCollapsed[panelId] = previous.railCollapsed[panelId];
   }
-  migrated.railCollapsed.help = true;
+  migrated.railCollapsed.assemble = false;
   return migrated;
 }
 

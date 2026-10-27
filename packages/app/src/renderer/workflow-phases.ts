@@ -68,6 +68,7 @@ export function panelBadgeCounts(
     broll: 0,
     storage: 0,
     help: 0,
+    assemble: 0,
   };
 }
 

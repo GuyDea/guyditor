@@ -229,6 +229,7 @@ describe("workspace renderer state", () => {
     });
     expect(panelBadgeCounts(overview)).toEqual({
       agent: 2,
+      assemble: 0,
       broll: 0,
       graphics: 0,
       help: 0,
@@ -316,8 +317,8 @@ describe("workspace renderer state", () => {
   it("creates five curated defaults while keeping every panel rail-reachable", () => {
     const defaults = createDefaultLayouts();
     const expandedByPhase = {
-      ingest: ["media", "status", "storage"],
-      cut: ["preview", "transcript", "agent", "timeline"],
+      ingest: ["assemble", "media", "status", "storage"],
+      cut: ["preview", "transcript", "agent", "assemble", "timeline"],
       polish: ["preview", "transcript", "inspector", "agent", "graphics"],
       review: ["media", "preview", "agent"],
       publish: ["status", "publish"],
@@ -348,7 +349,9 @@ describe("workspace renderer state", () => {
   it("loads layouts persisted before Amendment 006 without losing their panels", () => {
     const complete = createDefaultLayouts();
     for (const phase of WORKFLOW_PHASES) {
-      for (const panelId of DOCK_PANEL_IDS.filter((candidate) => candidate !== "help")) {
+      for (const panelId of DOCK_PANEL_IDS.filter(
+        (candidate) => candidate !== "help" && candidate !== "assemble",
+      )) {
         const present = Object.values(complete.layouts[phase].regions)
           .some(({ panelIds }) => panelIds.includes(panelId));
         if (!present) {
@@ -372,6 +375,11 @@ describe("workspace renderer state", () => {
       layout.collapsed = { ...layout.railCollapsed };
       delete layout.railCollapsed;
       delete layout.collapsed["help"];
+      delete layout.collapsed["assemble"];
+      for (const region of Object.values(layout.regions)) {
+        region.panelIds = region.panelIds.filter((panelId) => panelId !== "assemble");
+        if (region.activePanelId === "assemble") region.activePanelId = null;
+      }
     }
     prior.layouts.cut!.splitters.left = 377;
     const storage = memoryStorage({
@@ -389,11 +397,69 @@ describe("workspace renderer state", () => {
       for (const regionId of Object.keys(prior.layouts[phase]!.regions)) {
         expect(migrated.layouts[phase].regions[
           regionId as keyof typeof migrated.layouts[typeof phase]["regions"]
-        ].panelIds.filter((panelId) => panelId !== "help"))
+        ].panelIds.filter((panelId) => panelId !== "help" && panelId !== "assemble"))
           .toEqual(prior.layouts[phase]!.regions[regionId]!.panelIds);
       }
       expect(migrated.layouts[phase].regions["right-bottom"].panelIds).toContain("help");
     }
+  });
+
+  it("migrates a pre-assemble layout without resetting regions", () => {
+    const current = createDefaultLayouts();
+    const prior = structuredClone(current) as unknown as {
+      layouts: Record<string, {
+        railCollapsed: Record<string, boolean>;
+        regions: Record<string, { activePanelId: string | null; panelIds: string[] }>;
+        splitters: Record<string, number>;
+      }>;
+    };
+    for (const layout of Object.values(prior.layouts)) {
+      delete layout.railCollapsed["assemble"];
+      for (const region of Object.values(layout.regions)) {
+        region.panelIds = region.panelIds.filter((panelId) => panelId !== "assemble");
+        if (region.activePanelId === "assemble") region.activePanelId = null;
+      }
+    }
+    prior.layouts.cut!.splitters.left = 377;
+    prior.layouts.cut!.regions["right-top"]!.panelIds = ["agent"];
+    prior.layouts.cut!.regions["right-top"]!.activePanelId = "agent";
+    const storage = memoryStorage({
+      [LAYOUT_STORAGE_KEY]: JSON.stringify({
+        schema: "layout/v2",
+        projects: { "/project": prior },
+      }),
+    });
+
+    const migrated = loadProjectLayouts("/project", storage);
+
+    expect(migrated.layouts.cut.splitters.left).toBe(377);
+    expect(migrated.layouts.cut.regions["right-top"].panelIds).toEqual(["agent", "assemble"]);
+    expect(migrated.layouts.cut.regions["right-top"].activePanelId).toBe("agent");
+    expect(migrated.layouts.cut.regions["center-top"].panelIds).toEqual(["preview"]);
+    expect(migrated.layouts.ingest.regions["right-bottom"].panelIds).toEqual(["assemble"]);
+    expect(migrated.layouts.polish.regions["right-top"].panelIds).toEqual(["agent"]);
+    for (const phase of WORKFLOW_PHASES) {
+      expect(migrated.layouts[phase].railCollapsed.assemble).toBe(false);
+    }
+  });
+
+  it("keeps a current layout untouched when assemble was moved out of every region", () => {
+    const current = createDefaultLayouts();
+    current.layouts.cut = assignPanel(current.layouts.cut, "assemble", "left");
+    const stripped = structuredClone(current);
+    stripped.layouts.polish.railCollapsed.assemble = true;
+    const storage = memoryStorage({
+      [LAYOUT_STORAGE_KEY]: JSON.stringify({
+        schema: "layout/v2",
+        projects: { "/project": stripped },
+      }),
+    });
+
+    const loaded = loadProjectLayouts("/project", storage);
+
+    expect(loaded.layouts.cut.regions.left.panelIds).toContain("assemble");
+    expect(loaded.layouts.polish.regions["right-top"].panelIds).toEqual(["agent"]);
+    expect(loaded.layouts.polish.railCollapsed.assemble).toBe(true);
   });
 
   it("migrates layout/v1 into Cut while the other phases use v2 defaults", () => {

@@ -26,7 +26,7 @@ export interface ToolRailGroup {
 
 export const TOOL_RAIL_GROUPS: readonly ToolRailGroup[] = [
   { id: "ingest", label: "Ingest", panelIds: ["media", "broll"] },
-  { id: "cut", label: "Cut", panelIds: ["transcript", "timeline"] },
+  { id: "cut", label: "Cut", panelIds: ["transcript", "assemble", "timeline"] },
   { id: "polish", label: "Polish", panelIds: ["preview", "graphics", "skills"] },
   { id: "review", label: "Review", panelIds: ["agent"] },
   { id: "publish", label: "Publish", panelIds: ["status", "publish"] },
@@ -47,6 +47,7 @@ export const PANEL_HOME_REGIONS: Record<DockPanelId, DockRegionId> = {
   broll: "left",
   storage: "center-top",
   help: "right-bottom",
+  assemble: "right-top",
 };
 
 export const PANEL_LABELS: Record<DockPanelId, { icon: string; name: string }> = {
@@ -63,6 +64,7 @@ export const PANEL_LABELS: Record<DockPanelId, { icon: string; name: string }> =
   broll: { icon: "B", name: "B-roll" },
   storage: { icon: "D", name: "Storage" },
   help: { icon: "?", name: "Help" },
+  assemble: { icon: "A", name: "Assemble" },
 };
 
 export function panelRegion(

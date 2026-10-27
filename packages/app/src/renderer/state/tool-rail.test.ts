@@ -8,6 +8,7 @@ import {
 } from "./layout-state.js";
 import {
   PANEL_HOME_REGIONS,
+  PANEL_LABELS,
   TOOL_RAIL_GROUPS,
   toolRailPanelState,
   togglePanelFromRail,
@@ -39,6 +40,12 @@ describe("master tool rail state", () => {
     expect(new Set(grouped).size).toBe(DOCK_PANEL_IDS.length);
     expect([...grouped].sort()).toEqual([...DOCK_PANEL_IDS].sort());
     expect(Object.keys(PANEL_HOME_REGIONS).sort()).toEqual([...DOCK_PANEL_IDS].sort());
+  });
+
+  it("registers the Assemble panel", () => {
+    expect(PANEL_LABELS.assemble.name).toBe("Assemble");
+    expect(createDefaultLayouts().layouts.cut.regions["right-top"].panelIds)
+      .toContain("assemble");
   });
 
   it("derives expanded-here, collapsed, and in-another-tab-only states", () => {
