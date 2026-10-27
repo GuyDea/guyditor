@@ -361,6 +361,7 @@ export function AssemblePanel({
                   type="button"
                   data-testid={`assembly-jump-${String(n)}`}
                   onClick={() => question.about && void jumpToWordRange(
+                    snapshot?.master,
                     question.about.assetId,
                     question.about.fromWord,
                     question.about.toWord,
