@@ -56,7 +56,8 @@ export function terminalJob(
       resolve(job);
     };
     const abort = (): void => {
-      if (options.cancelOnAbort ?? true) queue.cancel(jobId);
+      // Closing the project aborts waiters after the queue is already closed.
+      if (options.cancelOnAbort ?? true) { try { queue.cancel(jobId); } catch { /* queue closed */ } }
       unsubscribe();
       reject(new Error(`Cancelled while waiting for job ${jobId}.`));
     };

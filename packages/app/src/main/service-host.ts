@@ -1027,7 +1027,7 @@ export class WindowServiceHost {
         this.publisher.publish({ kind: "proposal.updated", proposalId }),
     });
     const assembly = new AssemblyService({
-      project: { jobs, captureMetadata },
+      project: { jobs, captureMetadata, annotations },
       store,
       engine: () => this.#projectContext.engine(store),
       aiSettings: this.#app.aiSettings,
@@ -1980,6 +1980,7 @@ export class WindowServiceHost {
       current.operations.every(({ op }) =>
         op === "restyle.segment.approve" ||
         op === "clip.split" ||
+        op === "clip.insert" ||
         op === "clip.punchin.set" ||
         op === "clip.source.switch" ||
         op === "transition.set")
@@ -2041,6 +2042,7 @@ export class WindowServiceHost {
       kind: "project.revision",
       revision: project.store.currentProject.revision,
     });
+    await project.assembly.onProposalAccepted(proposalId);
     return proposal;
   }
 

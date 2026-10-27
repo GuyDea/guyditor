@@ -193,6 +193,7 @@ const assemblySurface: IpcSurface = {
     prepare: { paramsSchema: assemblySessionParams, resultSchema: anyResult, budgetMs: 20 },
     get: { paramsSchema: assemblySessionParams, resultSchema: anyResult, budgetMs: 20 },
     abandon: { paramsSchema: assemblySessionParams, resultSchema: anyResult, budgetMs: 20 },
+    createProposal: { paramsSchema: assemblySessionParams, resultSchema: anyResult, budgetMs: 200 },
     send: {
       paramsSchema: {
         type: "object",

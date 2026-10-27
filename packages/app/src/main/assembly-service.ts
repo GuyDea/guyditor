@@ -22,9 +22,13 @@ import type { AuditLog, CostEstimate, CostMeter, CostContext, createLlmAdapter }
 import {
   ASSEMBLY_REPLY_SCHEMA,
   assemblySidecarRef,
+  compileAssemblyPlan,
   createAssemblySession,
+  enqueueFillerDetection,
+  GENTLE_FILLER_RULE_SET,
   parseAssemblySession,
   estimateTokens,
+  reviewMarkerAnnotations,
   serializeAssemblySession,
 } from "../../../transcript/src/index.js";
 import type { AssemblyEvidence, AssemblyProvider, AssemblySession, ReplyContext } from "../../../transcript/src/index.js";
@@ -32,6 +36,7 @@ import type { AssemblyEvidence, AssemblyProvider, AssemblySession, ReplyContext 
 import type { GdEventWithoutSeq } from "../shared/ipc.js";
 import type { AiSettingsService } from "./ai-settings-service.js";
 import type { PrepareDeps } from "./assembly-prepare.js";
+import { assemblyTarget, compileContext, keptRanges, proposalReason } from "./assembly-proposal.js";
 import { llmMessages, runAssemblyTurn, TurnError } from "./assembly-turn.js";
 import { registerDerivedSidecar } from "./derived-sidecar.js";
 import { publicJobStatus } from "./job-status.js";
@@ -43,7 +48,7 @@ export type AssemblySessionView = Omit<AssemblySession, "evidence"> & {
 };
 
 export interface AssemblyServiceOptions {
-  project: Pick<ProjectServices, "jobs" | "captureMetadata">;
+  project: Pick<ProjectServices, "jobs" | "captureMetadata" | "annotations">;
   store: ProjectStore;
   engine: () => Pick<OperationEngine, "createProposal" | "execute">;
   aiSettings: AiSettingsService;
@@ -393,6 +398,91 @@ export class AssemblyService {
     }
   }
 
+  public createProposal(sessionId: string): Promise<{ proposalId: string; session: AssemblySessionView }> {
+    return this.#serialized(async () => {
+      const session = await this.#read(sessionId);
+      if (session.status === "proposed") {
+        throw new Error(`E_ASSEMBLY_STATE: session ${sessionId} already has proposal ${session.proposalId ?? ""}`);
+      }
+      const { plan, evidence } = session;
+      if (session.status !== "planned" || plan === null || evidence === null) {
+        throw new Error(`E_ASSEMBLY_NOT_PLANNED: session ${sessionId} is ${session.status}; it has no plan to propose`);
+      }
+      const { store } = this.#options;
+      const compiled = compileAssemblyPlan(
+        plan,
+        compileContext(store.currentProject, session, await transcriptSidecars(store)),
+      );
+      if (!compiled.ok) throw new Error(`${compiled.error.code}: ${compiled.error.message}`);
+      const { provider, model } = session.settings;
+      const created = await this.#options.engine().createProposal({
+        operations: compiled.value.operations,
+        instruction: { kind: "user-text", text: plan.summary },
+        actor: { kind: "agent", id: `${provider}:${model}`, model },
+        ...(session.auditSessionId === null ? {} : { sessionId: session.auditSessionId }),
+        reason: {
+          text: proposalReason(plan),
+          sources: [
+            { kind: "media-evidence", ref: evidence.sha256 },
+            { kind: "instruction", ref: session.id },
+          ],
+        },
+        addresses: [],
+      });
+      if (!created.ok) throw new Error(`${created.error.code}: ${created.error.message}`);
+      const next = await this.#persist({
+        ...session,
+        status: "proposed",
+        proposalId: created.value.id,
+        compiled: compiled.value.cuts,
+      });
+      return { proposalId: created.value.id, session: assemblyView(next) };
+    });
+  }
+
+  /** Acceptance hook: review markers for flagged cuts, then the gentle tightening pass when it applies. */
+  public onProposalAccepted(proposalId: string): Promise<void> {
+    return this.#serialized(async () => {
+      const { store, project } = this.#options;
+      const refs = store.currentProject.sidecars.filter(({ schema }) => schema === "guyditor.assembly/v1");
+      const sessions = await Promise.all(refs.map(async ({ path }) =>
+        parseAssemblySession(await readFile(join(store.root, path), "utf8"))));
+      const found = sessions.find((candidate) => candidate.proposalId === proposalId);
+      if (found?.status !== "proposed" || found.compiled === null) return;
+      const session = await this.#persist({ ...found, status: "accepted" });
+      const cuts = found.compiled;
+      if (session.auditSessionId !== null) {
+        try { this.#audit.close(session.auditSessionId); } catch { /* not open in this run */ }
+      }
+      const target = assemblyTarget(store.currentProject);
+      const { provider, model } = session.settings;
+      const markers = reviewMarkerAnnotations(cuts, {
+        sequenceId: target.sequenceId,
+        deliverableId: target.deliverableId,
+        aspect: target.aspect,
+        authorId: `${provider}:${model}`,
+        now: (this.#options.now?.() ?? new Date()).toISOString(),
+        idFactory: (prefix) => (this.#options.idFactory ?? makeId)(prefix),
+      });
+      if (markers.length > 0) {
+        // Agent-origin batches may only commit through a proposal; the marker authorship is in the literal.
+        const marked = await project.annotations.execute(
+          store,
+          markers.map((annotation) => ({ op: "annotation.create", params: { annotation } })),
+          { origin: "system", dryRun: false },
+        );
+        if (!marked.ok) throw new Error(`${marked.error.code}: ${marked.error.message}`);
+      }
+      if ((session.plan?.tightening ?? session.settings.tightening) !== "gentle") return;
+      const job = enqueueFillerDetection(project.jobs, {
+        assetIds: [...new Set(cuts.map(({ assetId }) => assetId))],
+        fillerRules: GENTLE_FILLER_RULE_SET,
+        scope: { assemblySessionId: session.id, keptRanges: keptRanges(cuts, await transcriptSidecars(store)) },
+      });
+      await this.#persist({ ...session, tighteningJobId: job.jobId });
+    });
+  }
+
   public async abandon(sessionId: string): Promise<AssemblySessionView> {
     const abandoned = await this.#update(sessionId, (current) => ({ ...current, status: "abandoned" }));
     if (abandoned.auditSessionId !== null) {
@@ -411,6 +501,7 @@ export class AssemblyService {
       get: ({ sessionId }: { sessionId: string }) => this.get(sessionId),
       send: (params: SendInput) => this.send(params),
       abandon: ({ sessionId }: { sessionId: string }) => this.abandon(sessionId),
+      createProposal: ({ sessionId }: { sessionId: string }) => this.createProposal(sessionId),
     };
   }
 }

@@ -75,7 +75,7 @@ describe("assist.fillers.detect scope", () => {
     }));
     const { queue } = JobQueue.open(":memory:");
     queues.push(queue);
-    queue.registerExecutor("vad", () => ({ speech: [{ start: 0.5, end: 1 }], silence: [] }));
+    queue.registerExecutor("vad", () => Promise.resolve({ speech: [{ start: 0.5, end: 1 }], silence: [] }));
     registerFillerDetectionExecutor(queue, { project: store, audioPath: () => "unused.wav" });
     const scoped = enqueueFillerDetection(queue, { scope: SCOPE });
     const done = await terminalJob(queue, scoped.jobId, new AbortController().signal);

@@ -18,6 +18,7 @@ import {
   createProject,
   JobQueue,
   OperationEngine,
+  parseAnnotationSidecar,
   serializeTakeComparison,
   takeComparisonSidecarRef,
 } from "../../../core/src/index.js";
@@ -2002,6 +2003,89 @@ describe("AppServiceHost", () => {
         rm(rootB, { recursive: true, force: true }),
         rm(userDirectory, { recursive: true, force: true }),
       ]);
+    }
+  });
+
+  it("accepting an assembly proposal marks flagged cuts and queues gentle tightening", async () => {
+    vi.stubEnv("GUYDITOR_ASSEMBLY_STUB", "1");
+    const root = await mkdtemp(join(tmpdir(), "guyditor-host-assembly-"));
+    const userDirectory = await mkdtemp(join(tmpdir(), "guyditor-host-user-"));
+    const model = projectFixture();
+    const audio = [{ index: 0, codec: "pcm_s16le", sampleRate: 48_000, channels: 1, layout: "mono" as const }];
+    model.assets[0]!.audio = audio;
+    model.assets[0]!.probe.audio = { rate: 48_000, channels: 1 };
+    model.assets.push({ ...structuredClone(model.assets[0]!), id: "ast_bbbbbbbbbb", path: "media/b.mov", sha256: "b".repeat(64) });
+    const emptyAnnotations = "format: guyditor.annotations/v1\nannotations: []\n";
+    model.sidecars[0]!.inputs = [];
+    model.sidecars[0]!.sha256 = createHash("sha256").update(emptyAnnotations).digest("hex");
+    const created = await createProject(root, model);
+    if (!created.ok) throw created.error;
+    await writeFile(join(root, "sidecars/annotations.yaml"), emptyAnnotations, "utf8");
+    const transcript = new TranscriptEngine({
+      appVersion: "0.0.0-test",
+      idFactory: (prefix) => prefix === "spk" ? "spk_aaaaaaaaaa" :
+        prefix === "seg" ? "seg_aaaaaaaaaa" : `${prefix}_bbbbbbbbbb`,
+    });
+    for (const assetId of ["ast_aaaaaaaaaa", "ast_bbbbbbbbbb"]) {
+      const word = (text: string, from: number) => ({
+        text,
+        start: { samples: from, rate: 48_000 },
+        end: { samples: from + 20_000, rate: 48_000 },
+        probability: 0.9,
+      });
+      const added = await transcript.createFromTranscription(created.value, assetId, {
+        language: "en",
+        languageProbability: 1,
+        engine: { name: "fixture", version: "1", model: "tiny" },
+        jobId: "job_aaaaaaaaaa",
+        segments: [{
+          index: 0,
+          start: { samples: 0, rate: 48_000 },
+          end: { samples: 150_000, rate: 48_000 },
+          text: "welcome to the channel",
+          avgLogprob: 0,
+          noSpeechProb: 0,
+          words: [word("welcome", 0), word("to", 24_000), word("the", 48_000), word("channel", 72_000)],
+        }],
+      });
+      if (!added.ok) throw added.error;
+    }
+    const appHost = testAppHost(userDirectory);
+    const windowHost = appHost.createWindowHost({
+      publisher: new WindowEventPublisher(() => undefined),
+    });
+    try {
+      await windowHost.openProject(root);
+      const call = async (service: "AiSettings" | "Assembly" | "OperationEngine" | "JobQueue", method: string, params: unknown): Promise<unknown> => {
+        const fn = windowHost.resolveService(service)?.[method];
+        if (typeof fn !== "function") throw new Error(`${service}.${method} is unavailable`);
+        return Reflect.apply(fn, undefined, [params]);
+      };
+      await call("AiSettings", "update", { tightening: "gentle" });
+      const { id } = await call("Assembly", "create", { assetIds: ["ast_aaaaaaaaaa", "ast_bbbbbbbbbb"] }) as { id: string };
+      await call("Assembly", "prepare", { sessionId: id });
+      await vi.waitFor(async () => {
+        expect(await call("Assembly", "get", { sessionId: id })).toMatchObject({ status: "conversing" });
+      }, { timeout: 15_000 });
+      await call("Assembly", "send", { sessionId: id, text: "assemble" });
+      const proposed = await call("Assembly", "createProposal", { sessionId: id }) as { proposalId: string };
+      const accepted = await call("OperationEngine", "acceptProposal", { proposalId: proposed.proposalId }) as Proposal;
+      expect(accepted.status).toBe("accepted");
+      const session = await call("Assembly", "get", { sessionId: id }) as
+        { status: string; compiled: { timelineStart: unknown }[]; tighteningJobId: string };
+      expect(session.status).toBe("accepted");
+      const sidecar = parseAnnotationSidecar(await readFile(join(root, "sidecars/annotations.yaml"), "utf8"));
+      expect(sidecar.annotations).toHaveLength(1);
+      expect(sidecar.annotations[0]).toMatchObject({
+        author: { kind: "agent" },
+        anchor: { kind: "timeline", frame: session.compiled[0]!.timelineStart },
+      });
+      const jobs = await call("JobQueue", "list", { kind: "assist.fillers.detect" }) as { jobId: string }[];
+      expect(jobs.map(({ jobId }) => jobId)).toContain(session.tighteningJobId);
+    } finally {
+      vi.unstubAllEnvs();
+      await windowHost.close();
+      await appHost.close();
     }
   });
 });

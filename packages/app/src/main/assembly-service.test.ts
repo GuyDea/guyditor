@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AuditLog, CostMeter, createLlmAdapter, DEFAULT_BUDGETS, LlmAdapterError } from "../../../agent/src/index.js";
 import type { BudgetConfig, LlmAdapter } from "../../../agent/src/index.js";
-import { createProject, JobQueue } from "../../../core/src/index.js";
+import { AnnotationService, createProject, JobQueue, OperationEngine, parseAnnotationSidecar } from "../../../core/src/index.js";
 import type { ProjectStore, Result } from "../../../core/src/index.js";
 import { projectFixture } from "../../../core/src/project/test-fixtures.js";
 import {
@@ -22,6 +22,7 @@ import { prepareSession, registerAssemblyPrepareExecutor } from "./assembly-prep
 import { registerDerivedSidecar } from "./derived-sidecar.js";
 import type { ProjectServices } from "./project-services.js";
 
+const EMPTY_ANNOTATIONS = "format: guyditor.annotations/v1\nannotations: []\n";
 const roots: string[] = [];
 const closers: (() => void)[] = [];
 const queues: JobQueue[] = [];
@@ -87,13 +88,22 @@ async function harness(options: {
   transcripts?: "both" | "none" | "silent-second";
   now?: () => Date;
   send?: SendOptions;
+  proposals?: { tightening: "ask" | "gentle" | "off" };
 } = {}) {
   const root = await mkdtemp(join(tmpdir(), "guyditor-assembly-"));
   roots.push(root);
   const model = projectFixture();
   const first = model.assets[0]!;
   model.assets.push({ ...structuredClone(first), id: SECOND, path: "media/b.mov", sha256: "b".repeat(64) });
+  if (options.proposals !== undefined) {
+    model.skills = [];
+    model.sidecars[0]!.inputs = [];
+    model.sidecars[0]!.sha256 = createHash("sha256").update(EMPTY_ANNOTATIONS).digest("hex");
+  }
   const store = valueOf(await createProject(root, model));
+  if (options.proposals !== undefined) {
+    await writeFile(join(root, "sidecars/annotations.yaml"), EMPTY_ANNOTATIONS, "utf8");
+  }
   const mode = options.transcripts ?? "both";
   if (mode !== "none") {
     await addTranscript(store, FIRST, UTTERANCES, 1);
@@ -111,13 +121,22 @@ async function harness(options: {
     ? {} as unknown as CostMeter
     : CostMeter.open({ userDir, auditLog, budgets: sendOptions.budgets ?? DEFAULT_BUDGETS });
   if (sendOptions !== undefined) closers.push(() => costMeter.close());
+  const annotations = new AnnotationService({ appVersion: "0.0.0-test" });
   const service = new AssemblyService({
-    project: { jobs: queue, captureMetadata: { list: async () => [] } } as unknown as ProjectServices,
+    project: { jobs: queue, captureMetadata: { list: async () => [] }, annotations } as unknown as ProjectServices,
     store,
-    engine: () => { throw new Error("unused"); },
+    engine: () => {
+      if (options.proposals === undefined) throw new Error("unused");
+      return new OperationEngine(store.currentProject, {
+        appVersion: "0.0.0-test",
+        committer: store,
+        proposalStore: store,
+        auditSink: auditLog,
+      });
+    },
     aiSettings: {
       current: () => ({
-        provider: "anthropic", model: sendOptions?.model ?? "m1", effort: "medium", tightening: "ask",
+        provider: "anthropic", model: sendOptions?.model ?? "m1", effort: "medium", tightening: options.proposals?.tightening ?? "ask",
         rates: sendOptions?.rates ?? {},
       }),
       externalCalls: () => sendOptions?.externalCalls ?? "allow",
@@ -523,5 +542,91 @@ describe("AssemblyService.send", () => {
     const view = await h.service.get(h.id);
     const starts = h.auditLog.readSession(view.auditSessionId!).records.filter((r) => r.type === "session.start");
     expect(starts).toHaveLength(1);
+  });
+});
+
+describe("AssemblyService proposals", () => {
+  const PLAN = (tightening: "gentle" | "off" | null) => ({
+    status: "plan", summary: "Two lines.", tightening,
+    flags: [{ cutIndex: 0, kind: "stitch", note: "joins two takes" }],
+    cuts: [{ scriptBlock: null, scriptSentences: null, assetId: FIRST, fromWord: "w000001", toWord: "w000004", reason: "opening" }],
+  });
+  const adapter = (reply: unknown): typeof createLlmAdapter => () => ({
+    provider: "anthropic",
+    complete: () => Promise.resolve({ reply, usage: { inputTokens: 10, outputTokens: 10 } }),
+    listModels: () => Promise.resolve([]),
+  });
+
+  async function planned(tightening: "ask" | "gentle" | "off", plan = PLAN(null)) {
+    const h = await harness({
+      send: { externalCalls: "allow", adapterFactory: adapter(plan) },
+      proposals: { tightening },
+    });
+    const { id } = await h.service.create({ assetIds: [FIRST, SECOND], scriptPath: h.scriptPath });
+    await prepare(h, id);
+    await h.service.send({ sessionId: id, text: "go" });
+    return { ...h, id };
+  }
+
+  it("createProposal appends clips after existing ones with a reason", async () => {
+    const h = await planned("ask");
+    const { proposalId, session } = await h.service.createProposal(h.id);
+    expect(session.status).toBe("proposed");
+    expect(session.proposalId).toBe(proposalId);
+    expect(session.compiled?.[0]).toMatchObject({ index: 2, timelineStart: { frames: 48, fps: "24/1" } });
+    const proposal = valueOf(await h.store.readProposal(proposalId));
+    expect(proposal.operations[0]).toMatchObject({ op: "clip.insert", params: { index: 2 } });
+    expect(proposal.riskClass).toBe("normal");
+    expect(proposal.reason.text).toBe("Two lines.");
+    expect(proposal.reason.sources.map(({ kind }) => kind)).toEqual(["media-evidence", "instruction"]);
+    expect(proposal.actor).toMatchObject({ kind: "agent", id: "anthropic:m1" });
+    await expect(h.service.createProposal(h.id)).rejects.toThrow("E_ASSEMBLY_STATE");
+  });
+
+  it("truncates a long summary to 280 characters with an ellipsis", async () => {
+    const h = await planned("ask", { ...PLAN(null), summary: "x".repeat(400) });
+    const { proposalId } = await h.service.createProposal(h.id);
+    const proposal = valueOf(await h.store.readProposal(proposalId));
+    expect([...proposal.reason.text]).toHaveLength(280);
+    expect(proposal.reason.text.endsWith("…")).toBe(true);
+  });
+
+  it("rejects createProposal before a plan", async () => {
+    const h = await harness({ proposals: { tightening: "ask" } });
+    const { id } = await h.service.create({ assetIds: [FIRST] });
+    await expect(h.service.createProposal(id)).rejects.toThrow(/E_ASSEMBLY_NOT_PLANNED/);
+  });
+
+  it("acceptance marks flagged cuts and enqueues scoped gentle tightening", async () => {
+    const h = await planned("gentle");
+    const { proposalId } = await h.service.createProposal(h.id);
+    await h.service.onProposalAccepted(proposalId);
+    const view = await h.service.get(h.id);
+    expect(view.status).toBe("accepted");
+    const sidecar = parseAnnotationSidecar(await readFile(join(h.root, "sidecars/annotations.yaml"), "utf8"));
+    expect(sidecar.annotations).toHaveLength(1);
+    expect(sidecar.annotations[0]).toMatchObject({
+      author: { kind: "agent", id: "anthropic:m1" },
+      body: "stitch: joins two takes",
+      anchor: { kind: "timeline", frame: { frames: 48, fps: "24/1" } },
+    });
+    const jobs = h.queue.list({ kind: "assist.fillers.detect" });
+    expect(jobs).toHaveLength(1);
+    expect(view.tighteningJobId).toBe(jobs[0]!.jobId);
+    const payload = jobs[0]!.payload as { assetIds: string[]; scope: { assemblySessionId: string; keptRanges: { assetId: string }[] } };
+    expect(payload.assetIds).toEqual([FIRST]);
+    expect(payload.scope.assemblySessionId).toBe(h.id);
+    expect(payload.scope.keptRanges).toHaveLength(1);
+    await h.service.onProposalAccepted(proposalId); // idempotent
+    expect(h.queue.list({ kind: "assist.fillers.detect" })).toHaveLength(1);
+  });
+
+  it("tightening off enqueues nothing", async () => {
+    const h = await planned("gentle", PLAN("off"));
+    const { proposalId } = await h.service.createProposal(h.id);
+    await h.service.onProposalAccepted(proposalId);
+    expect((await h.service.get(h.id)).status).toBe("accepted");
+    expect(h.queue.list({ kind: "assist.fillers.detect" })).toHaveLength(0);
+    await h.service.onProposalAccepted("prp_zzzzzzzzzz"); // unknown proposals are ignored
   });
 });
