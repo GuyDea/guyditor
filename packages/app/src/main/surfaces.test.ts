@@ -175,5 +175,7 @@ describe("workspace IPC surfaces", () => {
       "prepare",
       "send",
     ]);
+    const create = assembly?.methods["create"]?.paramsSchema as { properties: Record<string, unknown> };
+    expect(create.properties).not.toHaveProperty("scriptPath");
   });
 });

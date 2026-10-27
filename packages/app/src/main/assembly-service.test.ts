@@ -11,9 +11,12 @@ import { AnnotationService, createProject, JobQueue, OperationEngine, parseAnnot
 import type { ProjectStore, Result } from "../../../core/src/index.js";
 import { projectFixture } from "../../../core/src/project/test-fixtures.js";
 import {
+  classifyContextFile,
+  contextFilePath,
   serializeTranscriptSidecar,
   terminalJob,
 } from "../../../transcript/src/index.js";
+import type { ContextFile } from "../../../transcript/src/index.js";
 import { scriptedTranscript } from "../../../transcript/src/assembly/__fixtures__/scripted-transcript.js";
 
 import type { AiSettingsService } from "./ai-settings-service.js";
@@ -122,6 +125,7 @@ async function harness(options: {
     : CostMeter.open({ userDir, auditLog, budgets: sendOptions.budgets ?? DEFAULT_BUDGETS });
   if (sendOptions !== undefined) closers.push(() => costMeter.close());
   const annotations = new AnnotationService({ appVersion: "0.0.0-test" });
+  const ai = { model: sendOptions?.model ?? "m1" };
   const service = new AssemblyService({
     project: { jobs: queue, captureMetadata: { list: async () => [] }, annotations } as unknown as ProjectServices,
     store,
@@ -136,9 +140,10 @@ async function harness(options: {
     },
     aiSettings: {
       current: () => ({
-        provider: "anthropic", model: sendOptions?.model ?? "m1", effort: "medium", tightening: options.proposals?.tightening ?? "ask",
+        provider: "anthropic", model: ai.model, effort: "medium", tightening: options.proposals?.tightening ?? "ask",
         rates: sendOptions?.rates ?? {},
       }),
+      transport: () => "api",
       externalCalls: () => sendOptions?.externalCalls ?? "allow",
       apiKey: () => Promise.resolve("sk-test"),
     } as unknown as AiSettingsService,
@@ -150,44 +155,137 @@ async function harness(options: {
     ...(sendOptions?.adapterFactory === undefined ? {} : { adapterFactory: sendOptions.adapterFactory }),
     ...(options.now === undefined ? {} : { now: options.now }),
   });
-  const scriptPath = join(root, "script.md");
-  await writeFile(scriptPath, "# Intro\n\nWelcome to the channel. Today we talk about tea.\n", "utf8");
-  return { root, store, queue, publish, service, scriptPath, auditLog, annotations };
+  return { root, store, queue, publish, service, auditLog, annotations, ai };
+}
+
+const SCRIPT = "# Intro\n\n> Welcome to the channel. Today we talk about tea.\n";
+/** A 1×1 PNG. */
+const DOT = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+  "base64",
+);
+
+/** Copies files into the session's context directory and records them; Task 7 replaces this with addFiles. */
+async function seedFiles(
+  h: Awaited<ReturnType<typeof harness>>,
+  id: string,
+  files: { name: string; bytes: Uint8Array }[],
+): Promise<void> {
+  const deps = h.service.prepareDeps();
+  const start = (await deps.readSession(id)).inputs.nextFileLabel;
+  const seeded: ContextFile[] = [];
+  for (const [index, { name, bytes }] of files.entries()) {
+    const label = `F${String(start + index)}`;
+    const path = contextFilePath(id, label, name);
+    await mkdir(join(h.root, `sidecars/context/${id}`), { recursive: true });
+    await writeFile(join(h.root, path), bytes);
+    const { kind, mime, pages, sent, unsentReason } = classifyContextFile(name, bytes);
+    seeded.push({
+      label, name, path, sha256: createHash("sha256").update(bytes).digest("hex"), bytes: bytes.length,
+      mime, kind, sent, unsentReason, pages, role: "context",
+    });
+  }
+  await deps.updateSession(id, (current) => ({
+    ...current,
+    inputs: {
+      ...current.inputs,
+      files: [...current.inputs.files, ...seeded],
+      nextFileLabel: current.inputs.nextFileLabel + files.length,
+    },
+  }));
+}
+
+async function withScript(h: Awaited<ReturnType<typeof harness>>, id: string): Promise<void> {
+  await seedFiles(h, id, [{ name: "script.md", bytes: Buffer.from(SCRIPT, "utf8") }]);
 }
 
 const prepare = (h: Awaited<ReturnType<typeof harness>>, id: string) =>
   prepareSession(h.service.prepareDeps(), id, new AbortController().signal, () => undefined);
 
 describe("AssemblyService", () => {
-  it("create copies the script and registers the session sidecar", async () => {
+  it("create registers the session sidecar with no files and an automatic script", async () => {
     const h = await harness();
-    const view = await h.service.create({ assetIds: [FIRST, SECOND], scriptPath: h.scriptPath });
+    const view = await h.service.create({ assetIds: [FIRST, SECOND] });
     const ref = h.store.currentProject.sidecars.find(({ schema }) => schema === "guyditor.assembly/v1");
     expect(ref?.name).toBe(`assembly-${view.id}`);
-    const copy = join(h.root, `sidecars/scripts/${view.id}.script.md`);
-    const bytes = await readFile(copy);
-    expect(view.inputs.script?.sha256).toBe(createHash("sha256").update(bytes).digest("hex"));
+    expect(view.inputs).toEqual({ assetIds: [FIRST, SECOND], files: [], script: { mode: "auto" }, nextFileLabel: 1 });
     expect(view.status).toBe("created");
     expect(view.settings.provider).toBe("anthropic");
+    expect(view.settings.transport).toBe("api");
     expect(h.publish).toHaveBeenCalledWith({ kind: "assembly.updated", sessionId: view.id });
   });
 
-  it("create rejects unknown assets and unreadable scripts", async () => {
+  it("create rejects unknown assets", async () => {
     const h = await harness();
     await expect(h.service.create({ assetIds: ["ast_cccccccccc"] })).rejects.toThrow("E_ASSEMBLY_INVALID_INPUT");
-    await expect(h.service.create({ assetIds: [FIRST], scriptPath: join(h.root, "missing.md") }))
-      .rejects.toThrow("E_ASSEMBLY_INVALID_INPUT");
   });
 
   it("prepare builds evidence and publishes assembly.updated", async () => {
     const h = await harness();
-    const { id } = await h.service.create({ assetIds: [FIRST, SECOND], scriptPath: h.scriptPath });
+    const { id } = await h.service.create({ assetIds: [FIRST, SECOND] });
+    await withScript(h, id);
     h.publish.mockClear();
     const session = await prepare(h, id);
     expect(session.status).toBe("conversing");
     expect(session.evidence?.groups.length).toBeGreaterThanOrEqual(1);
     expect(h.publish).toHaveBeenCalledWith({ kind: "assembly.updated", sessionId: id });
     expect(h.store.currentProject.sidecars.filter(({ schema }) => schema === "guyditor.assembly/v1")).toHaveLength(1);
+  });
+
+  it("prepare resolves the script from the attached files, sets roles and lists them in the evidence", async () => {
+    const h = await harness();
+    const { id } = await h.service.create({ assetIds: [FIRST, SECOND] });
+    await seedFiles(h, id, [{ name: "script.md", bytes: Buffer.from(SCRIPT, "utf8") }, { name: "dot.png", bytes: DOT }]);
+    const session = await prepare(h, id);
+    expect(session.status).toBe("conversing");
+    expect(session.inputs.files[0]?.role).toBe("script");
+    expect(session.inputs.files[1]?.role).toBe("context");
+    expect(session.evidence?.scriptBlocks.length).toBeGreaterThanOrEqual(1);
+    expect(session.evidence?.text).toContain("## Context files");
+    expect(session.evidence?.text).toContain("### F2  dot.png   image");
+    expect(session.evidence?.notes).toContain("script: F1 script.md");
+
+    const again = await h.service.create({ assetIds: [FIRST] });
+    await seedFiles(h, again.id, [{ name: "script.md", bytes: Buffer.from(SCRIPT, "utf8") }]);
+    await h.service.prepareDeps().updateSession(again.id, (current) =>
+      ({ ...current, inputs: { ...current.inputs, script: { mode: "none" } } }));
+    const none = await prepare(h, again.id);
+    expect(none.evidence?.scriptBlocks).toHaveLength(0);
+    expect(none.evidence?.notes).toContain("script: none");
+    expect(none.inputs.files[0]?.role).toBe("context");
+  });
+
+  it("prepare notes an explicit script without quoted paragraphs", async () => {
+    const h = await harness();
+    const { id } = await h.service.create({ assetIds: [FIRST] });
+    await seedFiles(h, id, [{ name: "notes.md", bytes: Buffer.from("plain words only\n", "utf8") }]);
+    await h.service.prepareDeps().updateSession(id, (current) =>
+      ({ ...current, inputs: { ...current.inputs, script: { mode: "label", label: "F1" } } }));
+    const session = await prepare(h, id);
+    expect(session.evidence?.scriptBlocks).toHaveLength(0);
+    expect(session.evidence?.notes).toEqual(expect.arrayContaining([
+      "script: F1 notes.md",
+      "F1 notes.md has no quoted paragraphs; no script blocks",
+    ]));
+  });
+
+  it("prepare fails naming a context file that went missing", async () => {
+    const h = await harness();
+    const { id } = await h.service.create({ assetIds: [FIRST] });
+    await withScript(h, id);
+    await rm(join(h.root, contextFilePath(id, "F1", "script.md")));
+    const session = await prepare(h, id);
+    expect(session.status).toBe("failed");
+    expect(session.error).toMatch(/F1/);
+  });
+
+  it("prepare re-snapshots the AI settings", async () => {
+    const h = await harness();
+    const { id } = await h.service.create({ assetIds: [FIRST] });
+    h.ai.model = "m2";
+    const session = await prepare(h, id);
+    expect(session.settings.model).toBe("m2");
+    expect(session.settings.transport).toBe("api");
   });
 
   it("prepare skips a silent clip with a note", async () => {
@@ -360,7 +458,8 @@ const SEND_RATES = { "claude-sonnet-5-5": { inputPerMTok: 2, outputPerMTok: 10 }
 
 async function conversing(send: SendOptions) {
   const h = await harness({ send: { adapterFactory: stubFactory, ...send } });
-  const { id } = await h.service.create({ assetIds: [FIRST, SECOND], scriptPath: h.scriptPath });
+  const { id } = await h.service.create({ assetIds: [FIRST, SECOND] });
+  await withScript(h, id);
   await prepare(h, id);
   return { ...h, id };
 }
@@ -567,7 +666,8 @@ describe("AssemblyService proposals", () => {
       send: { externalCalls: "allow", adapterFactory: adapter(plan) },
       proposals: { tightening },
     });
-    const { id } = await h.service.create({ assetIds: [FIRST, SECOND], scriptPath: h.scriptPath });
+    const { id } = await h.service.create({ assetIds: [FIRST, SECOND] });
+    await withScript(h, id);
     await prepare(h, id);
     await h.service.send({ sessionId: id, text: "go" });
     return { ...h, id };

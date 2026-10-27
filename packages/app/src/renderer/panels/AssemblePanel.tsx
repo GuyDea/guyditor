@@ -72,7 +72,7 @@ export function evidenceSummary(session: AssemblySessionView): string | null {
   const { evidence } = session;
   if (evidence === null) return null;
   const clips = evidence.assets.length;
-  const script = session.inputs.script === null
+  const script = evidence.scriptBlocks.length === 0
     ? "no script"
     : `${String(evidence.scriptBlocks.length)} blocks`;
   return `${String(clips)} ${clips === 1 ? "clip" : "clips"} · ${String(evidence.segments.length)} segments · ${String(evidence.groups.length)} repeat groups · script: ${script}`;
@@ -133,7 +133,6 @@ export function AssemblePanel({
   const [settings, setSettings] = useState<AiSettingsView | null>(initialSettings ?? null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [deselected, setDeselected] = useState<ReadonlySet<string>>(new Set());
-  const [scriptPath, setScriptPath] = useState("");
   const [input, setInput] = useState("");
   const [pending, setPending] = useState<Pending | null>(null);
   const [busy, setBusy] = useState(false);
@@ -189,7 +188,6 @@ export function AssemblePanel({
       }
       const created = await window.guyditor.call<AssemblySessionView>("Assembly", "create", {
         assetIds: selectedIds,
-        ...(scriptPath.trim() === "" ? {} : { scriptPath: scriptPath.trim() }),
       });
       replaceSession(created);
       await window.guyditor.call<JobStatus>("Assembly", "prepare", { sessionId: created.id });
@@ -301,16 +299,6 @@ export function AssemblePanel({
             );
           })}
         </ol>
-        <div className="path-ingest">
-          <input
-            type="text"
-            value={scriptPath}
-            placeholder="Script path (optional)"
-            aria-label="Script path"
-            data-testid="assembly-script-path"
-            onChange={(event) => setScriptPath(event.target.value)}
-          />
-        </div>
         <button
           type="button"
           className="assembly-settings-summary"

@@ -1,8 +1,23 @@
 import { createHash } from "node:crypto";
 import type { SampleTime } from "../types.js";
+import { formatBytes } from "./context-files.js";
 import type {
-  AssemblyEvidence, CandidateSegment, EvidenceAsset, ScriptBlock, SegmentGroup,
+  AssemblyEvidence, AssemblyTransport, CandidateSegment, ContextFile, ContextFileKind, EvidenceAsset, ScriptBlock,
+  SegmentGroup,
 } from "./types.js";
+
+/** A context file as the evidence lists it: inline text for sent text files, otherwise a note on how it travels. */
+export interface EvidenceContextFile {
+  label: string;
+  name: string;
+  kind: ContextFileKind;
+  bytes: number;
+  role: "script" | "context";
+  sent: boolean;
+  text: string | null;
+  words: number | null;
+  note: string | null;
+}
 
 export interface EvidenceInput {
   projectName: string;
@@ -11,7 +26,42 @@ export interface EvidenceInput {
   segments: CandidateSegment[];
   groups: SegmentGroup[];
   scriptBlocks: ScriptBlock[];
+  contextFiles: EvidenceContextFile[];
   notes: string[];
+}
+
+const wordCount = (text: string): number => text.match(/\S+/gu)?.length ?? 0;
+
+/** `textOf` is read only for sent text files. */
+export function contextFileNotes(
+  files: readonly ContextFile[],
+  transport: AssemblyTransport,
+  textOf: (file: ContextFile) => string,
+): EvidenceContextFile[] {
+  return files.map((file) => {
+    const { label, name, kind, bytes, role, sent } = file;
+    const base = { label, name, kind, bytes, role, sent };
+    if (!sent) return { ...base, text: null, words: null, note: `not sent — ${file.unsentReason ?? "unknown reason"}` };
+    if (kind === "text") {
+      const text = textOf(file);
+      return role === "script"
+        ? { ...base, text: null, words: wordCount(text), note: "rendered as the script blocks above" }
+        : { ...base, text, words: wordCount(text), note: null };
+    }
+    if (kind === "image") return { ...base, text: null, words: null, note: "attached as an image input" };
+    const note = transport === "api"
+      ? "attached as a document input"
+      : `attached by path for CLI providers: ${label}-${name}`;
+    return { ...base, text: null, words: null, note };
+  });
+}
+
+function contextFileLines(file: EvidenceContextFile): string[] {
+  if (file.words !== null) {
+    const header = `### ${file.label}  ${file.name}   ${file.kind}   ${file.words.toLocaleString("en-US")} words   role: ${file.role}`;
+    return file.text === null ? [header] : [header, file.text.trimEnd()];
+  }
+  return [`### ${file.label}  ${file.name}   ${file.kind}   ${formatBytes(file.bytes)}   (${file.note ?? ""})`];
 }
 
 export const EVIDENCE_TOKEN_LIMIT = 120_000;
@@ -64,6 +114,10 @@ export function renderEvidencePackage(input: EvidenceInput): AssemblyEvidence {
   if (input.scriptBlocks.length > 0) {
     lines.push("## Script", "");
     for (const block of input.scriptBlocks) lines.push(`### ${block.id} — ${block.section}`, block.text, "");
+  }
+  if (input.contextFiles.length > 0) {
+    lines.push("## Context files", "");
+    for (const file of input.contextFiles) lines.push(...contextFileLines(file), "");
   }
   lines.push("## Footage", "");
   for (const asset of input.assets) {

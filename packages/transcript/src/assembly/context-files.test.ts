@@ -157,6 +157,14 @@ describe("resolveScript", () => {
     expect(resolveScript(all, { mode: "label", label: "F4" }, textOf)).toBeNull();
     expect(resolveScript(all, { mode: "none" }, textOf)).toBeNull();
   });
+
+  it("never picks a file that is not sent", () => {
+    const big = { ...file("F1", "big.md", "text"), sent: false, unsentReason: "over 200 KB" };
+    const F2 = file("F2", "script.md", "text");
+    const textOf = (): string => "> quoted";
+    expect(resolveScript([big, F2], { mode: "label", label: "F1" }, textOf)).toBeNull();
+    expect(resolveScript([big, F2], { mode: "auto" }, textOf)).toBe(F2);
+  });
 });
 
 describe("paths, totals and sizes", () => {

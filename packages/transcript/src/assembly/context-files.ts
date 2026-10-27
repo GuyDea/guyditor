@@ -161,11 +161,10 @@ export function resolveScript(
   textOf: (file: ContextFile) => string,
 ): ContextFile | null {
   if (choice.mode === "none") return null;
-  if (choice.mode === "label") {
-    const f = files.find((x) => x.label === choice.label);
-    return f !== undefined && f.kind === "text" ? f : null;
-  }
-  return files.find((f) => f.kind === "text" && hasQuotedParagraphs(textOf(f))) ?? null;
+  // A file over its cap is never sent, so it cannot come back as script blocks either.
+  const candidates = files.filter((f) => f.kind === "text" && f.sent);
+  if (choice.mode === "label") return candidates.find((f) => f.label === choice.label) ?? null;
+  return candidates.find((f) => hasQuotedParagraphs(textOf(f))) ?? null;
 }
 
 export function contextFilePath(sessionId: string, label: string, name: string): string {

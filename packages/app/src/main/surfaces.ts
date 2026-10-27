@@ -200,7 +200,6 @@ const assemblySurface: IpcSurface = {
             minItems: 1,
             items: { type: "string", pattern: "^ast_[a-z2-7]{10}$" },
           },
-          scriptPath: { type: "string", minLength: 1 },
         },
         additionalProperties: false,
       },

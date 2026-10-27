@@ -28,8 +28,8 @@ function session(tightening: "ask" | "gentle" = "gentle"): AssemblySession {
   return {
     ...createAssemblySession({
       id: "asb_aaaaaaaaaa", now: "2026-01-01T00:00:00.000Z",
-      settings: { provider: "anthropic", model: "m", effort: "medium", tightening },
-      assetIds: [ASSET], script: null,
+      settings: { provider: "anthropic", model: "m", effort: "medium", tightening, transport: "api" },
+      assetIds: [ASSET],
     }),
     status: "conversing",
     evidence: { text: "EVIDENCE", sha256: "x", tokenEstimate: 1, assets: [], segments: [], groups: [], scriptBlocks: [], notes: [] },

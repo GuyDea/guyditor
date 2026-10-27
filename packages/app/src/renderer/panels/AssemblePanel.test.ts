@@ -52,8 +52,8 @@ function session(overrides: Partial<AssemblySessionView> = {}): AssemblySessionV
     createdAt: "2026-10-27T10:00:00.000Z",
     updatedAt: "2026-10-27T10:00:00.000Z",
     status: "conversing",
-    settings: { provider: "anthropic", model: "claude-opus-5-5", effort: "high", tightening: "ask" },
-    inputs: { assetIds: ["ast_aaaaaaaaaa"], script: null },
+    settings: { provider: "anthropic", model: "claude-opus-5-5", effort: "high", tightening: "ask", transport: "api" },
+    inputs: { assetIds: ["ast_aaaaaaaaaa"], files: [], script: { mode: "auto" }, nextFileLabel: 1 },
     evidence: {
       sha256: "x",
       tokenEstimate: 10,
@@ -114,7 +114,7 @@ describe("Assemble panel", () => {
 
     expect(html).toContain('data-testid="assemble-panel"');
     expect(html).toContain("P14");
-    expect(html).toContain('data-testid="assembly-script-path"');
+    expect(html).not.toContain('data-testid="assembly-script-path"');
     expect(html).toContain("anthropic · claude-opus-5-5 · high · tightening: ask");
     expect(html).toContain("Sends the transcript and script text to anthropic. Never audio or video.");
     expect(html).toMatch(/data-testid="assembly-analyze"[^>]*disabled/u);

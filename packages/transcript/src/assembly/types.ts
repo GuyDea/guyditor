@@ -4,6 +4,8 @@ import type { SampleTime } from "../types.js";
 export type AssemblyProvider = "anthropic" | "openai" | "stub";
 export type AssemblyEffort = "low" | "medium" | "high" | "max";
 export type TighteningMode = "ask" | "gentle" | "off";
+/** Same values as the agent package's `LlmTransport`; transcript does not import agent. */
+export type AssemblyTransport = "api" | "cli";
 
 export interface ScriptBlock { id: string; section: string; text: string; sentences: string[] }
 
@@ -119,8 +121,15 @@ export interface AssemblySession {
   createdAt: string;
   updatedAt: string;
   status: AssemblySessionStatus;
-  settings: { provider: AssemblyProvider; model: string; effort: AssemblyEffort; tightening: TighteningMode };
-  inputs: { assetIds: string[]; script: { name: string; path: string; sha256: string } | null };
+  settings: {
+    provider: AssemblyProvider;
+    model: string;
+    effort: AssemblyEffort;
+    tightening: TighteningMode;
+    transport: AssemblyTransport;
+  };
+  /** `nextFileLabel` numbers the next attached file (`F<n>`); labels are never reused within a session. */
+  inputs: { assetIds: string[]; files: ContextFile[]; script: ScriptChoice; nextFileLabel: number };
   auditSessionId: string | null;
   externalAcknowledged: boolean;
   evidence: AssemblyEvidence | null;

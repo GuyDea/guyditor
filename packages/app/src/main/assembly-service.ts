@@ -1,6 +1,5 @@
-import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 
 import { makeId } from "../../../core/src/index.js";
 import type {
@@ -168,7 +167,18 @@ export class AssemblyService {
           .filter((sidecar) => sidecar.assetId === assetId)
           .flatMap(({ markers }) => markers),
       jobs: this.#options.project.jobs,
+      settings: () => this.#sessionSettings(),
     };
+  }
+
+  /** The current AI settings as a session records them; `GUYDITOR_ASSEMBLY_STUB=1` swaps in the stub provider. */
+  #sessionSettings(): AssemblySession["settings"] {
+    const { aiSettings } = this.#options;
+    const { provider, model, effort, tightening } = aiSettings.current();
+    if ((this.#options.environment ?? process.env)["GUYDITOR_ASSEMBLY_STUB"] === "1") {
+      return { provider: "stub", model, effort, tightening, transport: "api" };
+    }
+    return { provider, model, effort, tightening, transport: aiSettings.transport(provider) };
   }
 
   public async list(): Promise<AssemblySessionView[]> {
@@ -188,7 +198,7 @@ export class AssemblyService {
     return assemblyView(await this.#read(sessionId));
   }
 
-  public async create(input: { assetIds: string[]; scriptPath?: string }): Promise<AssemblySessionView> {
+  public async create(input: { assetIds: string[] }): Promise<AssemblySessionView> {
     const { store } = this.#options;
     if (input.assetIds.length === 0) throw invalidInput("at least one asset is required");
     for (const assetId of input.assetIds) {
@@ -198,34 +208,11 @@ export class AssemblyService {
         throw invalidInput(`asset ${assetId} is ${asset.kind}, not speech-bearing`);
       }
     }
-    let scriptBytes: Buffer | undefined;
-    if (input.scriptPath !== undefined) {
-      try {
-        scriptBytes = await readFile(input.scriptPath);
-      } catch {
-        throw invalidInput(`script ${input.scriptPath} is not a readable file`);
-      }
-    }
-    const id = (this.#options.idFactory ?? makeId)("asb");
-    let script: AssemblySession["inputs"]["script"] = null;
-    if (scriptBytes !== undefined && input.scriptPath !== undefined) {
-      const path = `sidecars/scripts/${id}.script.md`;
-      await mkdir(join(store.root, "sidecars/scripts"), { recursive: true });
-      await writeFile(join(store.root, path), scriptBytes);
-      script = {
-        name: basename(input.scriptPath),
-        path,
-        sha256: createHash("sha256").update(scriptBytes).digest("hex"),
-      };
-    }
-    const { provider, model, effort, tightening } = this.#options.aiSettings.current();
-    const stub = (this.#options.environment ?? process.env)["GUYDITOR_ASSEMBLY_STUB"] === "1";
     const session = createAssemblySession({
-      id,
+      id: (this.#options.idFactory ?? makeId)("asb"),
       now: (this.#options.now?.() ?? new Date()).toISOString(),
-      settings: { provider: stub ? "stub" : provider, model, effort, tightening },
+      settings: this.#sessionSettings(),
       assetIds: input.assetIds,
-      script,
     });
     await this.#serialized(() => this.#persist(session));
     return assemblyView(session);
@@ -540,7 +527,7 @@ export class AssemblyService {
   public surface(): Record<string, (params: never) => unknown> {
     return {
       list: () => this.list(),
-      create: (params: { assetIds: string[]; scriptPath?: string }) => this.create(params),
+      create: (params: { assetIds: string[] }) => this.create(params),
       prepare: ({ sessionId }: { sessionId: string }) => this.prepare(sessionId),
       get: ({ sessionId }: { sessionId: string }) => this.get(sessionId),
       send: (params: SendInput) => this.send(params),

@@ -18,35 +18,45 @@
     "settings": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["provider", "model", "effort", "tightening"],
+      "required": ["provider", "model", "effort", "tightening", "transport"],
       "properties": {
         "provider": { "enum": ["anthropic", "openai", "stub"] },
         "model": { "type": "string" },
         "effort": { "enum": ["low", "medium", "high", "max"] },
-        "tightening": { "enum": ["ask", "gentle", "off"] }
+        "tightening": { "enum": ["ask", "gentle", "off"] },
+        "transport": { "enum": ["api", "cli"] }
       }
     },
     "inputs": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["assetIds", "script"],
+      "required": ["assetIds", "files", "script", "nextFileLabel"],
       "properties": {
         "assetIds": { "type": "array", "items": { "type": "string" } },
+        "files": { "type": "array", "items": { "$ref": "#/$defs/contextFile" } },
         "script": {
           "oneOf": [
-            { "type": "null" },
             {
               "type": "object",
               "additionalProperties": false,
-              "required": ["name", "path", "sha256"],
-              "properties": {
-                "name": { "type": "string" },
-                "path": { "type": "string" },
-                "sha256": { "type": "string" }
-              }
+              "required": ["mode"],
+              "properties": { "mode": { "const": "auto" } }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["mode", "label"],
+              "properties": { "mode": { "const": "label" }, "label": { "type": "string" } }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["mode"],
+              "properties": { "mode": { "const": "none" } }
             }
           ]
-        }
+        },
+        "nextFileLabel": { "type": "integer", "minimum": 1 }
       }
     },
     "auditSessionId": { "type": ["string", "null"] },
@@ -62,6 +72,24 @@
     "error": { "type": ["string", "null"] }
   },
   "$defs": {
+    "contextFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["label", "name", "path", "sha256", "bytes", "mime", "kind", "sent", "unsentReason", "pages", "role"],
+      "properties": {
+        "label": { "type": "string" },
+        "name": { "type": "string" },
+        "path": { "type": "string" },
+        "sha256": { "type": "string" },
+        "bytes": { "type": "integer", "minimum": 0 },
+        "mime": { "type": "string" },
+        "kind": { "enum": ["text", "image", "pdf", "other"] },
+        "sent": { "type": "boolean" },
+        "unsentReason": { "type": ["string", "null"] },
+        "pages": { "type": ["integer", "null"] },
+        "role": { "enum": ["script", "context"] }
+      }
+    },
     "sampleTime": {
       "type": "object",
       "additionalProperties": false,
