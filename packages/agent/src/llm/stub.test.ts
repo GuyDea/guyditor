@@ -4,7 +4,7 @@ import {
   segmentTranscript, type AssemblyPlan, type AssemblyReply,
 } from "../../../transcript/src/index.js";
 import { scriptedTranscript } from "../../../transcript/src/assembly/__fixtures__/scripted-transcript.js";
-import { createLlmAdapter, LlmAdapterError, type LlmRequest } from "./types.js";
+import { createLlmAdapter, type LlmRequest } from "./types.js";
 
 const LINE = "the quick brown fox jumps over the lazy dog";
 const SCRIPT = [
@@ -91,8 +91,7 @@ describe("StubLlmAdapter", () => {
     expect(await stub.listModels()).toEqual(["stub-model"]);
   });
 
-  it("createLlmAdapter: stub provider, real providers not yet available", () => {
+  it("createLlmAdapter: stub provider", () => {
     expect(stub.provider).toBe("stub");
-    expect(() => createLlmAdapter("openai", { apiKey: "k" })).toThrow(LlmAdapterError);
   });
 });
