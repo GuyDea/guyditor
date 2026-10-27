@@ -61,7 +61,7 @@ function tokens(value: string): string[] {
     .filter(Boolean);
 }
 
-function tokenSimilarity(left: string, right: string): number {
+export function transcriptSimilarity(left: string, right: string): number {
   const a = tokens(left);
   const b = tokens(right);
   if (a.length === 0 || b.length === 0) return a.length === b.length ? 1 : 0;
@@ -91,7 +91,7 @@ export function groupTakeTranscripts(
   for (const candidate of [...candidates].sort((left, right) =>
     left.takeId.localeCompare(right.takeId))) {
     const group = groups.find(({ candidates: grouped }) =>
-      tokenSimilarity(grouped[0]!.transcriptText, candidate.transcriptText) >= threshold);
+      transcriptSimilarity(grouped[0]!.transcriptText, candidate.transcriptText) >= threshold);
     if (group === undefined) {
       groups.push({
         leadTakeId: candidate.takeId,
@@ -101,7 +101,7 @@ export function groupTakeTranscripts(
     }
     group.candidates.push({
       ...structuredClone(candidate),
-      similarityToLead: tokenSimilarity(group.candidates[0]!.transcriptText, candidate.transcriptText),
+      similarityToLead: transcriptSimilarity(group.candidates[0]!.transcriptText, candidate.transcriptText),
     });
   }
   return groups;
