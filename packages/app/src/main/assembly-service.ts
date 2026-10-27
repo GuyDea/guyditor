@@ -304,8 +304,11 @@ export class AssemblyService {
 
   public setScript(sessionId: string, script: ScriptChoice): Promise<AssemblySessionView> {
     return this.#editInputs(sessionId, ({ inputs }) => {
-      if (script.mode === "label" && !inputs.files.some(({ label, kind }) => label === script.label && kind === "text")) {
-        throw invalidInput(`${script.label} is not an attached text file`);
+      if (script.mode === "label") {
+        const file = inputs.files.find(({ label, kind }) => label === script.label && kind === "text");
+        if (file === undefined) throw invalidInput(`${script.label} is not an attached text file`);
+        // An unsent file never reaches the model, so it would silently resolve to no script.
+        if (!file.sent) throw invalidInput(`${file.label} is ${file.unsentReason ?? "not sent"} and cannot be the script`);
       }
       return { script };
     });

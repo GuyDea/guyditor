@@ -494,7 +494,7 @@ export function AssemblePanel({
           >
             <option value="auto">Auto — first Markdown with quoted lines</option>
             <option value="none">None</option>
-            {files.filter(({ kind }) => kind === "text").map(({ label, name }) => (
+            {files.filter(({ kind, sent }) => kind === "text" && sent).map(({ label, name }) => (
               <option key={label} value={label}>{label} {name}</option>
             ))}
           </select>

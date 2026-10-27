@@ -289,6 +289,22 @@ describe("Assemble panel", () => {
     expect(html).toContain('data-testid="assembly-abandon"');
   });
 
+  it("does not offer an unsent text file as the script", () => {
+    const longDraft = file({
+      label: "F2", name: "draft.md", kind: "text", bytes: 300_000, sent: false, unsentReason: "over 200 KB",
+    });
+    const html = render({
+      initialSessions: [session({
+        status: "created",
+        evidence: null,
+        inputs: { assetIds: ["ast_aaaaaaaaaa"], files: [OUTLINE, longDraft], script: { mode: "auto" }, nextFileLabel: 3 },
+      })],
+    });
+    expect(html).toContain('value="F1"');
+    expect(html).not.toContain('value="F2"');
+    expect(row(html, "assembly-file-F2")).toContain("not sent — over 200 KB");
+  });
+
   it("locks the inputs once analysed", () => {
     const html = render({
       initialSessions: [session({

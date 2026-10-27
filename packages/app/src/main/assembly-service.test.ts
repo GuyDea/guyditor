@@ -449,6 +449,16 @@ describe("AssemblyService", () => {
       expect((await h.service.get(id)).inputs.assetIds).toEqual([SECOND]);
     });
 
+    it("setScript refuses a text file that will not be sent", async () => {
+      const h = await harness();
+      const { id } = await h.service.create({ assetIds: [FIRST] });
+      await h.service.addFiles(id, [await fixture(h, "script.md", SCRIPT), await fixture(h, "long.md", "a".repeat(204_801))]);
+      await expect(h.service.setScript(id, { mode: "label", label: "F2" })).rejects.toThrow(
+        "E_ASSEMBLY_INVALID_INPUT: F2 is over 200 KB and cannot be the script",
+      );
+      expect((await h.service.get(id)).inputs.script).toEqual({ mode: "auto" });
+    });
+
     it("inputs are read-only from preparing on", async () => {
       const h = await harness();
       const { id } = await h.service.create({ assetIds: [FIRST] });
