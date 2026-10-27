@@ -5,3 +5,4 @@ export * from "./segments.js";
 export * from "./evidence.js";
 export * from "./reply.js";
 export * from "./compile.js";
+export * from "./rebase.js";

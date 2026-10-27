@@ -23,6 +23,7 @@ import { useProjectMirror } from "../state/project-mirror.js";
 import { projectDeliverableContextKey } from "../state/project-context.js";
 import { Panel } from "./Panel.js";
 import { RestylePlanReview } from "./RestylePlan.js";
+import { isRebaseSafeAssemblyProposal } from "../../../../transcript/src/assembly/rebase.js";
 import type { WorkspacePanelProps } from "./types.js";
 
 function grouped(entries: SemanticDiffEntry[]): Array<[string, SemanticDiffEntry[]]> {
@@ -248,13 +249,10 @@ export function ProposalPanel({
         {proposals.map((proposal) => {
           const stale = proposal.status === "ready" &&
             (proposal.staleBase === true || proposal.baseRevision !== snapshot?.revision);
-          // Main re-checks the insert spot at accept time; an assembly proposal is only offered the rebase.
-          const assemblyInserts = proposal.operations.length > 0 &&
-            proposal.operations.every(({ op }) => op === "clip.insert") &&
-            proposal.reason.sources.some(({ kind, ref }) => kind === "instruction" && /^asb_/u.test(ref));
-          const rebasableRestyle = assemblyInserts || (proposal.operations.length > 0 &&
-            proposal.operations.every(({ op }) =>
-              op === "restyle.segment.approve" || op === "clip.split" || op === "clip.punchin.set"));
+          const rebasableRestyle = (snapshot !== null && isRebaseSafeAssemblyProposal(proposal, snapshot.master)) ||
+            (proposal.operations.length > 0 &&
+              proposal.operations.every(({ op }) =>
+                op === "restyle.segment.approve" || op === "clip.split" || op === "clip.punchin.set"));
           const expanded = expandedProposalId === proposal.id || proposals.length === 1;
           return (
             <li key={proposal.id} data-testid={`proposal-${proposal.id}`}>

@@ -48,12 +48,21 @@ test("AI assembly — asks one question, plans three cuts, and accepts the propo
     const accept = page.locator('[data-testid^="proposal-accept-"]');
     await expect(accept).toBeVisible();
     await accept.click();
-    await expect(page.getByTestId("proposal-list")).toContainText("No open proposals");
+    // The service persists "accepted" only after review markers and the tightening step ran.
+    await expect.poll(async () => page.evaluate(async () => {
+      const sessions = await window.guyditor.call<Array<{ status: string }>>("Assembly", "list", {});
+      return sessions.map(({ status }) => status);
+    })).toEqual(["accepted"]);
 
     const state = await page.evaluate(async () => {
       const snapshot = await window.guyditor.call<Snapshot>("ProjectStore", "getSnapshot", {});
+      const annotations = await window.guyditor.call<Array<{ author: { kind: string } }>>(
+        "AnnotationService",
+        "list",
+        {},
+      );
       const jobs = await window.guyditor.call<Array<{ kind: string }>>("JobQueue", "list", {});
-      return { snapshot, jobs };
+      return { snapshot, annotations, jobs };
     });
     const master = state.snapshot.master;
     const deliverable = master.deliverables.find(({ id }) => id === master.settings.primaryDeliverable);
@@ -62,19 +71,7 @@ test("AI assembly — asks one question, plans three cuts, and accepts the propo
     expect(sequence?.clips[0]?.asset).toBe("ast_assemblyaa");
     expect(sequence?.clips[0]?.source.in.fps).toBe("30/1");
     expect(sequence?.clips[0]?.source.in.frames).toBeGreaterThan(150);
-    // The review marker is written right after acceptance; poll past the sidecar write/register window.
-    await expect.poll(async () => page.evaluate(async () => {
-      try {
-        const annotations = await window.guyditor.call<Array<{ author: { kind: string } }>>(
-          "AnnotationService",
-          "list",
-          {},
-        );
-        return annotations.filter(({ author }) => author.kind === "agent").length;
-      } catch {
-        return -1;
-      }
-    })).toBe(1);
+    expect(state.annotations.filter(({ author }) => author.kind === "agent")).toHaveLength(1);
     expect(state.jobs.filter(({ kind }) => kind === "assist.fillers.detect")).toHaveLength(0);
   } finally {
     await launched.electronApp.close();
