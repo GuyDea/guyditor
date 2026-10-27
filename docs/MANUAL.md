@@ -13,6 +13,8 @@ review — nothing consequential applies silently, ever.
 
 ## 1. Quick start
 
+The workspace opens only once a project is created or opened.
+
 1. **Create a project** (title bar → New project): pick a folder and a platform
    profile (defaults to `youtube-longform`). The profile sets resolution/fps.
 2. **Drop footage** into the Media panel (Ingest tab). Hashing, probing, proxies,

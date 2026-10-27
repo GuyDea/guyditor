@@ -1434,6 +1434,7 @@ small { color: var(--muted); }
 }
 .welcome-frame > footer .welcome-tour { margin-right: auto; border-color: #4f7080; color: #cbe5ef; background: #17262e; }
 .welcome-tour span { margin-left: 8px; color: var(--amber); }
+.welcome-hint { margin: 0; color: var(--muted, #9fb3bd); font-size: var(--fs-body); }
 
 .tour-layer { position: fixed; z-index: 120; inset: 0; pointer-events: none; }
 .tour-target {

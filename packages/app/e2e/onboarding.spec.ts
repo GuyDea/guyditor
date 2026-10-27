@@ -1,13 +1,38 @@
 import { rm } from "node:fs/promises";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 
 import { expect, test } from "@playwright/test";
 
 import { launchApp } from "./helpers/launch-app.js";
 import { createWorkspaceProject } from "./helpers/workspace-project.js";
 
-test("fresh user data shows welcome and Skip persists across relaunch", async () => {
-  const first = await launchApp({ seedOnboarding: false });
+const REPOSITORY_ROOT = resolve(import.meta.dirname, "../../..");
+const BASIC_PROJECT = join(REPOSITORY_ROOT, ".fixtures/projects/basic");
+
+test("welcome is mandatory without a project and has no Skip", async () => {
+  const launched = await launchApp({ seedOnboarding: false });
+  try {
+    await expect(launched.page.getByTestId("welcome-surface")).toBeVisible();
+    await expect(launched.page.getByTestId("welcome-skip")).toHaveCount(0);
+    await expect(launched.page.getByTestId("welcome-tour")).toHaveCount(0);
+    await expect(launched.page.getByTestId("welcome-hint")).toBeVisible();
+  } finally {
+    await launched.electronApp.close();
+  }
+});
+
+test("welcome stays up without a project even after onboarding was dismissed", async () => {
+  const launched = await launchApp();
+  try {
+    await expect(launched.page.getByTestId("welcome-surface")).toBeVisible();
+    await expect(launched.page.getByTestId("welcome-skip")).toHaveCount(0);
+  } finally {
+    await launched.electronApp.close();
+  }
+});
+
+test("with a project, first run shows welcome with Skip and Skip persists across relaunch", async () => {
+  const first = await launchApp({ seedOnboarding: false, projectTemplate: BASIC_PROJECT });
   let second: Awaited<ReturnType<typeof launchApp>> | null = null;
   try {
     await expect(first.page.getByTestId("welcome-surface")).toBeVisible();
@@ -18,9 +43,10 @@ test("fresh user data shows welcome and Skip persists across relaunch", async ()
     second = await launchApp({
       seedOnboarding: false,
       userDataDirectory: first.userDataDirectory,
+      projectTemplate: BASIC_PROJECT,
     });
-    await expect(second.page.getByTestId("welcome-surface")).toHaveCount(0);
     await expect(second.page.getByTestId("workflow-phase-tabs")).toBeVisible();
+    await expect(second.page.getByTestId("welcome-surface")).toHaveCount(0);
   } finally {
     await first.electronApp.close().catch(() => undefined);
     await second?.electronApp.close().catch(() => undefined);
@@ -28,7 +54,7 @@ test("fresh user data shows welcome and Skip persists across relaunch", async ()
 });
 
 test("tour introduces the phase strip, master rail, progress, and first panel", async () => {
-  const launched = await launchApp({ seedOnboarding: false });
+  const launched = await launchApp({ seedOnboarding: false, projectTemplate: BASIC_PROJECT });
   try {
     await launched.page.getByTestId("welcome-tour").click();
     await expect(launched.page.getByTestId("tour-stop")).toHaveAttribute(

@@ -1,8 +1,8 @@
 interface WelcomeSurfaceProps {
   onCreateProject: () => Promise<void>;
   onOpenProject: () => Promise<void>;
-  onSkip: () => void;
-  onTakeTour: () => void;
+  onSkip?: () => void;
+  onTakeTour?: () => void;
 }
 
 export function WelcomeSurface({
@@ -46,15 +46,26 @@ export function WelcomeSurface({
             <small>Continue from disk</small>
           </button>
         </div>
-        <footer>
-          <button
-            type="button"
-            className="welcome-tour"
-            data-testid="welcome-tour"
-            onClick={onTakeTour}
-          >Take the tour <span aria-hidden="true">→</span></button>
-          <button type="button" data-testid="welcome-skip" onClick={onSkip}>Skip</button>
-        </footer>
+        {onSkip === undefined ? (
+          <p className="welcome-hint" data-testid="welcome-hint">
+            Open or create a project to start.
+          </p>
+        ) : null}
+        {onTakeTour === undefined && onSkip === undefined ? null : (
+          <footer>
+            {onTakeTour === undefined ? null : (
+              <button
+                type="button"
+                className="welcome-tour"
+                data-testid="welcome-tour"
+                onClick={onTakeTour}
+              >Take the tour <span aria-hidden="true">→</span></button>
+            )}
+            {onSkip === undefined ? null : (
+              <button type="button" data-testid="welcome-skip" onClick={onSkip}>Skip</button>
+            )}
+          </footer>
+        )}
       </div>
     </section>
   );

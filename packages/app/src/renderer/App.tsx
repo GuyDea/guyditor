@@ -53,6 +53,7 @@ import {
   loadOnboardingState,
   saveOnboardingState,
   shouldShowWelcome,
+  welcomeVisible,
 } from "./state/onboarding.js";
 import type {
   OnboardingSignal,
@@ -1154,12 +1155,13 @@ export function App(): React.JSX.Element {
       <p className="global-notice" role="status" data-testid="shell-status">
         {snapshot === null ? "Open a project to begin" : notice}
       </p>
-      {welcomeOpen ? (
+      {welcomeVisible({ projectOpen: snapshot !== null, onboardingWants: welcomeOpen }) ? (
         <WelcomeSurface
           onCreateProject={() => welcomeProjectAction("create")}
           onOpenProject={() => welcomeProjectAction("open")}
-          onSkip={rememberWelcomeDismissal}
-          onTakeTour={beginTour}
+          {...(snapshot === null
+            ? {}
+            : { onSkip: rememberWelcomeDismissal, onTakeTour: beginTour })}
         />
       ) : null}
       {tourOpen ? (

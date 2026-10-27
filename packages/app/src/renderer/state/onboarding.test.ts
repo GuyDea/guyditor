@@ -10,6 +10,7 @@ import {
   loadOnboardingState,
   saveOnboardingState,
   shouldShowWelcome,
+  welcomeVisible,
 } from "./onboarding.js";
 
 function memoryStorage(initial: Record<string, string> = {}): Storage {
@@ -127,5 +128,17 @@ describe("getting-started checklist reducer", () => {
       projectOpened: true,
       importedMedia: true,
     });
+  });
+});
+
+describe("welcomeVisible", () => {
+  it("always shows welcome when no project is open", () => {
+    expect(welcomeVisible({ projectOpen: false, onboardingWants: false })).toBe(true);
+    expect(welcomeVisible({ projectOpen: false, onboardingWants: true })).toBe(true);
+  });
+
+  it("follows onboarding once a project is open", () => {
+    expect(welcomeVisible({ projectOpen: true, onboardingWants: false })).toBe(false);
+    expect(welcomeVisible({ projectOpen: true, onboardingWants: true })).toBe(true);
   });
 });

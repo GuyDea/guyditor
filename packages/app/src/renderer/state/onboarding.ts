@@ -105,6 +105,13 @@ export function shouldShowWelcome(storage: Storage): boolean {
   return !loadOnboardingState(storage).welcomeDismissed && !hasPriorProject(storage);
 }
 
+export function welcomeVisible(input: {
+  projectOpen: boolean;
+  onboardingWants: boolean;
+}): boolean {
+  return !input.projectOpen || input.onboardingWants;
+}
+
 export function dismissWelcome(storage: Storage): void {
   saveOnboardingState(storage, {
     ...loadOnboardingState(storage),
