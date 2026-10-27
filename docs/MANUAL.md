@@ -58,6 +58,35 @@ review — nothing consequential applies silently, ever.
 | Continuity guards | Automatic on every cut | Warns about mid-word cuts, clicks, ambience jumps — with evidence and suggestions (micro-fade, crossfade). Warnings never block. |
 | Jump-cut concealment | Timeline cut warnings → one click | Proposes punch-in alternation (1.0→1.12→1.25 crops) or smooth-cut transitions at visible jump cuts. |
 
+### Assemble a rough cut (AI)
+
+The **Assemble** panel (Cut tab, top right; Ingest tab, bottom right) turns a pile of raw takes of one presenter into a first-draft timeline. It never edits the timeline directly: the result is a **proposal** you review and accept like any other.
+
+| Step | Where | How |
+|---|---|---|
+| Inputs | Assemble panel | The footage list shows every video/audio asset and whether its transcript is ready. Optionally enter the path to a script (plain text or Markdown); a copy is stored with the session. |
+| Analyze | **Analyze footage** | Runs the job "Analyze footage for assembly". It waits for transcription that is already running, notes clips that have no transcript or no speech, and builds a text *evidence package* (candidate passages, repeat groups, script matches). It does not start transcription itself — import does that. |
+| Chat | Conversation | The assistant either asks questions (cards with a **Jump** button to the passage and answer buttons) or returns a plan. Type in the box and **Send** to answer or instruct. A plan is only accepted when no questions are open. One automatic retry if a reply is malformed; the conversation ends at 12 turns. |
+| Plan | Plan table | Each cut shows its script block and reason; flag badges mark stitches, overrides, low confidence and unmatched lines. |
+| Proposal | **Create proposal** / **Open proposal** | Creates one proposal with a reason, plus an open, non-blocking *review marker* for every flagged cut. Nothing changes until you accept it. Assembly proposals are born stale, so accept with **Rebase + accept** (one rebase per accept). |
+| Tightening | AI settings | `gentle` adds a second proposal: long pauses (over 1.2 s) shortened to 0.5 s, "um/uh/erm/ehm" flagged for review (not removed), repeats and false starts. `off` skips it; `ask` lets the assistant raise it with you. |
+| Start over | **Start over** | Once a session has a conversation it cannot be re-analysed; Start over abandons it and creates a fresh session. |
+
+**The six rules the assistant follows**
+
+1. **Latest take wins.** Among attempts at the same line, the one recorded last is used (by capture time, then position in the clip).
+2. **...unless you say otherwise on camera.** "Use the first one", "take two", "the previous one was better" override rule 1 for that line. Such asides are instructions, never put into the cut.
+3. **Script order** if you gave a script; recording order otherwise.
+4. **Partial retakes stitch.** If a retake restarts mid-line, the plan may join the earlier head to the later tail. Every stitch gets a review marker.
+5. **Ask, don't guess.** Ambiguous repeats, a line with no script match, an aside it cannot parse, or a clip with missing/out-of-order capture time become questions.
+6. **Tightening is gentle and optional.** Dead air is trimmed, never removed to zero; a stray "ehm" stays; anything doubtful gets a marker.
+
+**AI settings and keys.** The settings strip in the panel opens the AI section: provider (Anthropic or OpenAI), model (pick from the provider's list or type one), effort, tightening, API key (**Save** / **Clear**; the status reads "Key saved ✓" or "No key", and the key is never shown back), and a per-model rate table in $ per million tokens. Keys go into the OS-encrypted store; if the system cannot encrypt, the panel says "Keys will not persist across restarts on this system."
+
+**What leaves the machine.** Only the evidence text (transcript wording, timings, script text) and the conversation — never audio or video; the panel says so. Your *external calls* setting (`allow` / `ask` / `block`) is honoured: `ask` shows one acknowledgement per session, `block` stops the call with a message. Every call goes through the cost meter (budgets from Settings; the cost is estimated when the model has no known rate, and you confirm with **Confirm $…** when a warning threshold applies) and is written to the audit log.
+
+**Known limits.** Single camera only; the assistant is not told about separate audio recordings; real-provider calls have not been exercised by automated tests (only the deterministic stub). For tests and demos, launch with `GUYDITOR_ASSEMBLY_STUB=1` to use the stub instead of a provider.
+
 ## 5. Polish tab — the look and sound
 
 | Feature | Where | How |

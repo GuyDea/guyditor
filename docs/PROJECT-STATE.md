@@ -20,6 +20,11 @@ To resume: open Claude Code in this directory and say "continue the Guyditor bui
 - **Amendment 002** (global progress visibility) implemented as FR-907.
 - **User reference:** [`docs/MANUAL.md`](MANUAL.md) is the single source for the
   feature manual and is rendered verbatim in the app’s dockable Help panel.
+- **Amendment 008 (AI rough-cut assembly) is implemented on `feat/ai-assembly`**
+  (not yet merged): Assemble panel, evidence package, questions-then-plan chat,
+  proposal with review markers, optional gentle tightening, privacy/cost/audit
+  gates, `asb` sessions. Real-provider calls are unexercised by automated tests
+  (stub only). See `docs/amendments/008-ai-assembly.md`.
 - **Amendment 003 (motion design system) is COMPLETE and merged** (3e305f7):
   primitives/v1 (word-timed text reveals, springs, charts, cutouts, textures),
   SVG/font/Lottie brand assets (deterministic in-house Lottie subset interpreter
