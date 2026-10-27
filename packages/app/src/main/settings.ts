@@ -150,17 +150,37 @@ export async function loadSettings(
   }
 }
 
+let tempCounter = 0;
+
 /** Replaces only the `ai` key of settings.json (unknown keys kept), atomically. */
-export async function saveAiSettings(userDirectory: string, ai: AiSettings): Promise<void> {
+export async function saveAiSettings(
+  userDirectory: string,
+  ai: AiSettings,
+  now: () => Date = () => new Date(),
+): Promise<void> {
   const settingsPath = join(userDirectory, "settings.json");
   let current: Record<string, unknown> = {};
+  let text: string | undefined;
   try {
-    const parsed = JSON.parse(await readFile(settingsPath, "utf8")) as unknown;
-    if (isRecord(parsed)) current = parsed;
+    text = await readFile(settingsPath, "utf8");
   } catch (error: unknown) {
     if (!isMissing(error)) throw error;
   }
-  const temporary = `${settingsPath}.tmp-${String(process.pid)}`;
+  if (text !== undefined) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      parsed = undefined;
+    }
+    if (isRecord(parsed)) {
+      current = parsed;
+    } else {
+      await rename(settingsPath, `${settingsPath}.bad-${String(now().getTime())}`);
+    }
+  }
+  tempCounter += 1;
+  const temporary = `${settingsPath}.tmp-${String(process.pid)}-${String(tempCounter)}`;
   await writeFile(temporary, `${JSON.stringify({ ...current, ai }, null, 2)}\n`, "utf8");
   await rename(temporary, settingsPath);
 }

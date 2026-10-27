@@ -66,6 +66,7 @@ function validatedPatch(patch: Partial<AiSettings>): Partial<AiSettings> {
 export class AiSettingsService {
   readonly #options: AiSettingsServiceOptions;
   #settings: AiSettings;
+  #queue: Promise<unknown> = Promise.resolve();
 
   public constructor(options: AiSettingsServiceOptions) {
     this.#options = options;
@@ -94,11 +95,19 @@ export class AiSettingsService {
     };
   }
 
-  public async update(patch: Partial<AiSettings>): Promise<AiSettingsView> {
-    const next = { ...this.#settings, ...validatedPatch(patch) };
-    await saveAiSettings(this.#options.userDirectory, next);
-    this.#settings = next;
-    return this.get();
+  #serialized<T>(task: () => Promise<T>): Promise<T> {
+    const run = this.#queue.then(task, task);
+    this.#queue = run.catch(() => undefined);
+    return run;
+  }
+
+  public update(patch: Partial<AiSettings>): Promise<AiSettingsView> {
+    return this.#serialized(async () => {
+      const next = { ...this.#settings, ...validatedPatch(patch) };
+      await saveAiSettings(this.#options.userDirectory, next);
+      this.#settings = next;
+      return this.get();
+    });
   }
 
   public async listModels(provider: Provider): Promise<string[]> {
@@ -108,17 +117,21 @@ export class AiSettingsService {
     return (this.#options.adapterFactory ?? createLlmAdapter)(provider, { apiKey }).listModels();
   }
 
-  public async setKey(provider: Provider, key: string): Promise<AiSettingsView> {
+  public setKey(provider: Provider, key: string): Promise<AiSettingsView> {
     checkProvider(provider);
     if (typeof key !== "string" || key === "") throw invalid("key must be a non-empty string");
-    await this.#options.credentials.set(CREDENTIAL_ID, provider, key);
-    return this.get();
+    return this.#serialized(async () => {
+      await this.#options.credentials.set(CREDENTIAL_ID, provider, key);
+      return this.get();
+    });
   }
 
-  public async clearKey(provider: Provider): Promise<AiSettingsView> {
+  public clearKey(provider: Provider): Promise<AiSettingsView> {
     checkProvider(provider);
-    await this.#options.credentials.delete(CREDENTIAL_ID, provider);
-    return this.get();
+    return this.#serialized(async () => {
+      await this.#options.credentials.delete(CREDENTIAL_ID, provider);
+      return this.get();
+    });
   }
 
   public surface(): Record<string, (params: never) => unknown> {

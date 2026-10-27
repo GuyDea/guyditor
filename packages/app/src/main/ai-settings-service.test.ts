@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -74,5 +74,21 @@ describe("AiSettingsService", () => {
   it("exposes the five IPC methods", async () => {
     const { surface } = await setup();
     expect(Object.keys(surface).sort()).toEqual(["clearKey", "get", "listModels", "setKey", "update"]);
+  });
+
+  it("serializes concurrent updates without losing writes", async () => {
+    const { userDirectory, service } = await setup();
+    await Promise.all([service.update({ effort: "low" }), service.update({ model: "m2" })]);
+    expect(service.current()).toMatchObject({ effort: "low", model: "m2" });
+    expect((await loadSettings(userDirectory)).settings.ai).toMatchObject({ effort: "low", model: "m2" });
+  });
+
+  it("recovers a corrupt settings.json when saving", async () => {
+    const { userDirectory, service } = await setup();
+    await writeFile(join(userDirectory, "settings.json"), "{not json", "utf8");
+    await service.update({ effort: "low" });
+    expect((await readdir(userDirectory)).some((f) => f.startsWith("settings.json.bad-"))).toBe(true);
+    const raw = JSON.parse(await readFile(join(userDirectory, "settings.json"), "utf8")) as { ai: { effort: string } };
+    expect(raw.ai.effort).toBe("low");
   });
 });
