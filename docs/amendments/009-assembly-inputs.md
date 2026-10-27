@@ -21,7 +21,8 @@ images and PDFs as native inputs, anything else listed by name; size caps; a Scr
 dropdown; inputs read-only after Analyze). Each provider can be connected via an API
 key or the creator's local CLI (`claude` / `codex`), confined to the session's context
 directory, with a Check button; CLI cost is recorded as reported. The per-model rate
-table is removed from the AI settings UI.
+table is removed from the AI settings UI; `ai.rates` stays in `settings.json` and the
+built-in rates still drive the pre-send cost gate.
 
 - Design: [`docs/superpowers/specs/2026-10-27-assembly-inputs-design.md`](../superpowers/specs/2026-10-27-assembly-inputs-design.md)
 - Plan: [`docs/superpowers/plans/2026-10-27-assembly-inputs.md`](../superpowers/plans/2026-10-27-assembly-inputs.md)
@@ -34,7 +35,8 @@ table is removed from the AI settings UI.
 - In `guyditor.assembly/v1`, amended in place (no migration): `inputs.files`,
   `inputs.script`, `inputs.nextFileLabel`, `settings.transport`. Sessions written before
   this change are skipped by the session list.
-- Settings `ai.transport` (API key or CLI) and `ai.cli` (the `claude` / `codex` paths).
+- Settings `ai.transport`, stored per provider (`{ anthropic, openai }`, each API key or
+  CLI), and `ai.cli` (the `claude` / `codex` paths).
 - Audit providers `claude-cli` and `codex-cli`.
 
 ## Known limitations
@@ -44,6 +46,8 @@ table is removed from the AI settings UI.
 - Cancelling a turn does not kill a running CLI child; it stops at the 300 s timeout.
 - The pre-send cost estimate for CLI turns is $0, because the CLI reports cost only afterwards.
 - Real CLI runs are not covered by automated tests (dogfood pending).
+- Codex's read confinement to the context directory (`--sandbox read-only -C`) is
+  unverified until the dogfood confinement check runs.
 
 ## Migration
 

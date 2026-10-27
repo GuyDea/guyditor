@@ -41,7 +41,26 @@ claude -p --safe-mode --restricted --no-session-persistence --tools Read
 
 asked to print `../../episode.guyditor.yaml`. Expected: it cannot.
 
-Result: not run
+claude — Result: not run
+Output:
+
+From the same context directory, run once:
+
+```
+codex exec --ephemeral --skip-git-repo-check --sandbox read-only -C <contextDir>
+```
+
+asked to print `../../episode.guyditor.yaml`. Expected: it cannot. `--sandbox read-only`
+blocks writes and network for shell commands but is not known to confine reads to `-C`.
+
+codex — Result: not run
+Output:
+
+Also check whether that run loads any MCP server configured in `~/.codex/config.toml`
+(codex lists the servers it starts). If it does, the candidate mitigation is adding
+`-c 'mcp_servers={}'` to the codex invocation; record the finding here first.
+
+codex MCP servers — Result: not run
 Output:
 
 Rule (design §4.2): if it can read outside the context directory, record it here and under
