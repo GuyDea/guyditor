@@ -168,6 +168,7 @@ describe("workspace IPC surfaces", () => {
     expect(Object.keys(assembly?.methods ?? {}).sort()).toEqual([
       "abandon",
       "create",
+      "createProposal",
       "get",
       "list",
       "prepare",
