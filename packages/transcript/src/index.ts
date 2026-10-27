@@ -41,6 +41,7 @@ export type {
 } from "./take-markers.js";
 export * from "./fillers.js";
 export * from "./captions/index.js";
+export * from "./assembly/index.js";
 export {
   assessSourceRangeContinuity,
   continuityEvidenceOperation,

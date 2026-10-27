@@ -25,6 +25,7 @@ export const RANDOM_ID_PREFIXES = Object.freeze([
   "txn",
   "prp",
   "adp",
+  "asb",
 ]);
 
 export const CANONICAL_SERVICES = Object.freeze([

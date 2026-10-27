@@ -1,0 +1,282 @@
+{
+  "$id": "https://guyditor.dev/schema/sidecars/guyditor-assembly-v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "id", "createdAt", "updatedAt", "status", "settings", "inputs", "auditSessionId",
+    "externalAcknowledged", "evidence", "messages", "plan", "compiled", "proposalId", "tighteningJobId", "error"
+  ],
+  "properties": {
+    "schema": { "const": "guyditor.assembly/v1" },
+    "id": { "type": "string", "pattern": "^asb_[a-z2-7]{10}$" },
+    "createdAt": { "type": "string" },
+    "updatedAt": { "type": "string" },
+    "status": {
+      "enum": ["created", "preparing", "conversing", "planned", "proposed", "accepted", "abandoned", "failed"]
+    },
+    "settings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "model", "effort", "tightening"],
+      "properties": {
+        "provider": { "enum": ["anthropic", "openai", "stub"] },
+        "model": { "type": "string" },
+        "effort": { "enum": ["low", "medium", "high", "max"] },
+        "tightening": { "enum": ["ask", "gentle", "off"] }
+      }
+    },
+    "inputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["assetIds", "script"],
+      "properties": {
+        "assetIds": { "type": "array", "items": { "type": "string" } },
+        "script": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["name", "path", "sha256"],
+              "properties": {
+                "name": { "type": "string" },
+                "path": { "type": "string" },
+                "sha256": { "type": "string" }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "auditSessionId": { "type": ["string", "null"] },
+    "externalAcknowledged": { "type": "boolean" },
+    "evidence": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/evidence" }] },
+    "messages": { "type": "array", "items": { "$ref": "#/$defs/message" } },
+    "plan": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/plan" }] },
+    "compiled": {
+      "oneOf": [{ "type": "null" }, { "type": "array", "items": { "$ref": "#/$defs/compiledCut" } }]
+    },
+    "proposalId": { "type": ["string", "null"] },
+    "tighteningJobId": { "type": ["string", "null"] },
+    "error": { "type": ["string", "null"] }
+  },
+  "$defs": {
+    "sampleTime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["samples", "rate"],
+      "properties": { "samples": { "type": "number" }, "rate": { "type": "number" } }
+    },
+    "frameTime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["frames", "fps"],
+      "properties": { "frames": { "type": "integer" }, "fps": { "type": "string" } }
+    },
+    "scriptBlock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "section", "text", "sentences"],
+      "properties": {
+        "id": { "type": "string" },
+        "section": { "type": "string" },
+        "text": { "type": "string" },
+        "sentences": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "segment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id", "assetId", "fromWord", "toWord", "start", "end", "text", "pauseBeforeMs", "confidence",
+        "lowConfidence", "groupId", "scriptMatch", "aside", "markerPhrases"
+      ],
+      "properties": {
+        "id": { "type": "string" },
+        "assetId": { "type": "string" },
+        "fromWord": { "type": "string" },
+        "toWord": { "type": "string" },
+        "start": { "$ref": "#/$defs/sampleTime" },
+        "end": { "$ref": "#/$defs/sampleTime" },
+        "text": { "type": "string" },
+        "pauseBeforeMs": { "type": ["number", "null"] },
+        "confidence": { "type": ["number", "null"] },
+        "lowConfidence": { "type": "boolean" },
+        "groupId": { "type": ["string", "null"] },
+        "scriptMatch": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["block", "score"],
+              "properties": { "block": { "type": "string" }, "score": { "type": "number" } }
+            }
+          ]
+        },
+        "aside": { "type": "boolean" },
+        "markerPhrases": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "group": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "memberIds", "scriptBlock"],
+      "properties": {
+        "id": { "type": "string" },
+        "memberIds": { "type": "array", "items": { "type": "string" } },
+        "scriptBlock": { "type": ["string", "null"] }
+      }
+    },
+    "evidenceAsset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["assetId", "ordinal", "fileName", "capturedAt", "captureSource", "durationMs", "orderWarning"],
+      "properties": {
+        "assetId": { "type": "string" },
+        "ordinal": { "type": "integer" },
+        "fileName": { "type": "string" },
+        "capturedAt": { "type": "string" },
+        "captureSource": { "enum": ["container", "file-mtime"] },
+        "durationMs": { "type": "number" },
+        "orderWarning": { "type": ["string", "null"] }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["text", "sha256", "tokenEstimate", "assets", "segments", "groups", "scriptBlocks", "notes"],
+      "properties": {
+        "text": { "type": "string" },
+        "sha256": { "type": "string" },
+        "tokenEstimate": { "type": "number" },
+        "assets": { "type": "array", "items": { "$ref": "#/$defs/evidenceAsset" } },
+        "segments": { "type": "array", "items": { "$ref": "#/$defs/segment" } },
+        "groups": { "type": "array", "items": { "$ref": "#/$defs/group" } },
+        "scriptBlocks": { "type": "array", "items": { "$ref": "#/$defs/scriptBlock" } },
+        "notes": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "question": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "about", "text", "options"],
+      "properties": {
+        "id": { "type": "string" },
+        "about": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["assetId", "fromWord", "toWord"],
+              "properties": {
+                "assetId": { "type": "string" },
+                "fromWord": { "type": "string" },
+                "toWord": { "type": "string" }
+              }
+            }
+          ]
+        },
+        "text": { "type": "string" },
+        "options": { "oneOf": [{ "type": "null" }, { "type": "array", "items": { "type": "string" } }] }
+      }
+    },
+    "cut": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scriptBlock", "scriptSentences", "assetId", "fromWord", "toWord", "reason"],
+      "properties": {
+        "scriptBlock": { "type": ["string", "null"] },
+        "scriptSentences": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "array",
+              "items": { "type": "integer" },
+              "minItems": 2,
+              "maxItems": 2
+            }
+          ]
+        },
+        "assetId": { "type": "string" },
+        "fromWord": { "type": "string" },
+        "toWord": { "type": "string" },
+        "reason": { "type": "string" }
+      }
+    },
+    "flag": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cutIndex", "kind", "note"],
+      "properties": {
+        "cutIndex": { "type": "integer" },
+        "kind": { "enum": ["stitch", "override", "low-confidence", "unmatched", "other"] },
+        "note": { "type": "string" }
+      }
+    },
+    "plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "summary", "tightening", "cuts", "flags"],
+      "properties": {
+        "status": { "const": "plan" },
+        "summary": { "type": "string" },
+        "tightening": { "enum": ["gentle", "off", null] },
+        "cuts": { "type": "array", "items": { "$ref": "#/$defs/cut" } },
+        "flags": { "type": "array", "items": { "$ref": "#/$defs/flag" } }
+      }
+    },
+    "questionsReply": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "summary", "questions"],
+      "properties": {
+        "status": { "const": "questions" },
+        "summary": { "type": "string" },
+        "questions": { "type": "array", "items": { "$ref": "#/$defs/question" } }
+      }
+    },
+    "compiledCut": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["index", "assetId", "in", "out", "timelineStart", "extent", "reason", "flags"],
+      "properties": {
+        "index": { "type": "integer" },
+        "assetId": { "type": "string" },
+        "in": { "$ref": "#/$defs/frameTime" },
+        "out": { "$ref": "#/$defs/frameTime" },
+        "timelineStart": { "$ref": "#/$defs/frameTime" },
+        "extent": { "$ref": "#/$defs/frameTime" },
+        "reason": { "type": "string" },
+        "flags": { "type": "array", "items": { "$ref": "#/$defs/flag" } }
+      }
+    },
+    "usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["inputTokens", "outputTokens", "usd", "estimated"],
+      "properties": {
+        "inputTokens": { "type": "number" },
+        "outputTokens": { "type": "number" },
+        "usd": { "type": "number" },
+        "estimated": { "type": "boolean" }
+      }
+    },
+    "message": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "content", "reply", "usage", "at"],
+      "properties": {
+        "role": { "enum": ["user", "assistant", "validation"] },
+        "content": { "type": "string" },
+        "reply": {
+          "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/questionsReply" }, { "$ref": "#/$defs/plan" }]
+        },
+        "usage": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/usage" }] },
+        "at": { "type": "string" }
+      }
+    }
+  }
+}
