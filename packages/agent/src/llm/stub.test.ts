@@ -33,7 +33,7 @@ function evidence(withAside: boolean): string {
   ];
   const { segments, groups } = groupSegments(raw, scriptBlocks);
   return renderEvidencePackage({
-    projectName: "Demo", language: "en", assets, segments, groups, scriptBlocks, notes: [],
+    projectName: "Demo", language: "en", assets, segments, groups, scriptBlocks, contextFiles: [], notes: [],
   }).text;
 }
 
