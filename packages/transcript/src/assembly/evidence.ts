@@ -32,11 +32,15 @@ export interface EvidenceInput {
 
 const wordCount = (text: string): number => text.match(/\S+/gu)?.length ?? 0;
 
-/** `textOf` is read only for sent text files. */
+/**
+ * `textOf` is read only for sent text files. `scriptRendered` says whether the script file produced script blocks;
+ * a script without them is inlined like any text file so it still reaches the model.
+ */
 export function contextFileNotes(
   files: readonly ContextFile[],
   transport: AssemblyTransport,
   textOf: (file: ContextFile) => string,
+  scriptRendered: boolean,
 ): EvidenceContextFile[] {
   return files.map((file) => {
     const { label, name, kind, bytes, role, sent } = file;
@@ -44,9 +48,10 @@ export function contextFileNotes(
     if (!sent) return { ...base, text: null, words: null, note: `not sent — ${file.unsentReason ?? "unknown reason"}` };
     if (kind === "text") {
       const text = textOf(file);
-      return role === "script"
+      if (role !== "script") return { ...base, text, words: wordCount(text), note: null };
+      return scriptRendered
         ? { ...base, text: null, words: wordCount(text), note: "rendered as the script blocks above" }
-        : { ...base, text, words: wordCount(text), note: null };
+        : { ...base, text, words: wordCount(text), note: "chosen as the script but has no quoted paragraphs; shown inline" };
     }
     if (kind === "image") return { ...base, text: null, words: null, note: "attached as an image input" };
     const note = transport === "api"

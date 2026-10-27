@@ -59,7 +59,7 @@ function fixture(withScript = true, files: ContextFile[] = CONTEXT_FILES): Evide
   const { segments, groups } = groupSegments(raw, scriptBlocks);
   return {
     projectName: "Demo", language: "en", assets, segments, groups, scriptBlocks,
-    contextFiles: contextFileNotes(files, "api", () => OUTLINE),
+    contextFiles: contextFileNotes(files, "api", () => OUTLINE, true),
     notes: ["Asset ast_bbbbbbbbbb was captured later."],
   };
 }
@@ -123,7 +123,7 @@ describe("contextFileNotes", () => {
     const script = { ...contextFile("F1", "script.md", "text", 9000), role: "script" as const };
     const long = contextFile("F2", "notes.md", "text", 9000);
     const read = (f: ContextFile): string => (f.label === "F2" ? "word ".repeat(1240) : "one two");
-    const [scriptNote, longNote] = contextFileNotes([script, long], "api", read);
+    const [scriptNote, longNote] = contextFileNotes([script, long], "api", read, true);
     expect(scriptNote).toMatchObject({ role: "script", text: null, note: "rendered as the script blocks above" });
     expect(longNote).toMatchObject({ role: "context", words: 1240, note: null });
     const { text } = renderEvidencePackage({ ...fixture(false, []), contextFiles: [scriptNote!, longNote!] });
@@ -131,10 +131,21 @@ describe("contextFileNotes", () => {
     expect(text).toContain("### F2  notes.md   text   1,240 words   role: context\n");
   });
 
+  it("inlines a chosen script that rendered no blocks", () => {
+    const script = { ...contextFile("F1", "notes.md", "text", 30), role: "script" as const };
+    const [note] = contextFileNotes([script], "api", () => "plain words only", false);
+    expect(note).toMatchObject({
+      role: "script", text: "plain words only", words: 3,
+      note: "chosen as the script but has no quoted paragraphs; shown inline",
+    });
+    const { text } = renderEvidencePackage({ ...fixture(false, []), contextFiles: [note!] });
+    expect(text).toContain("### F1  notes.md   text   3 words   role: script\nplain words only\n");
+  });
+
   it("describes a pdf by transport", () => {
     const pdf = [contextFile("F4", "brief.pdf", "pdf", 2048)];
-    expect(contextFileNotes(pdf, "api", () => "")[0]?.note).toBe("attached as a document input");
-    expect(contextFileNotes(pdf, "cli", () => "")[0]?.note).toBe("attached by path for CLI providers: F4-brief.pdf");
+    expect(contextFileNotes(pdf, "api", () => "", true)[0]?.note).toBe("attached as a document input");
+    expect(contextFileNotes(pdf, "cli", () => "", true)[0]?.note).toBe("attached by path for CLI providers: F4-brief.pdf");
   });
 });
 

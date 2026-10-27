@@ -267,6 +267,10 @@ describe("AssemblyService", () => {
       "script: F1 notes.md",
       "F1 notes.md has no quoted paragraphs; no script blocks",
     ]));
+    expect(session.inputs.files[0]?.role).toBe("script");
+    const text = session.evidence?.text ?? "";
+    const contextFiles = text.slice(text.indexOf("## Context files"), text.indexOf("## Footage"));
+    expect(contextFiles).toContain("### F1  notes.md   text   3 words   role: script\nplain words only\n");
   });
 
   it("prepare fails naming a context file that went missing", async () => {

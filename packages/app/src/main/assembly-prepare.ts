@@ -174,7 +174,7 @@ async function build(
     segments,
     groups,
     scriptBlocks,
-    contextFiles: contextFileNotes(session.inputs.files, session.settings.transport, textOf),
+    contextFiles: contextFileNotes(session.inputs.files, session.settings.transport, textOf, scriptBlocks.length > 0),
     notes,
   });
 }
