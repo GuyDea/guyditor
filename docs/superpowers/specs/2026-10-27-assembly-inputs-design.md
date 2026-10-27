@@ -271,3 +271,10 @@ non-JSON, ENOENT, non-zero exit, timeout).
 - Whether `claude` reads PDFs natively via the path or needs the `Read` tool prompt; test
   once live and document.
 - Layout of the file list inside the existing panel CSS.
+
+## Addendum: rate table hidden
+
+Added 2026-10-27 at the creator's request. The editable per-model rate table leaves the AI
+settings section; nothing else in that section changes. The pre-send cost gate ("Confirm $…")
+keeps working from the built-in `DEFAULT_LLM_RATES`, and `ai.rates` stays in `settings.json`
+(still accepted by `AiSettings.update`) so the gate has its numbers; it is simply not exposed.
