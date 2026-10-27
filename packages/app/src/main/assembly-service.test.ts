@@ -1,12 +1,12 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile, mkdir } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AuditLog, CostMeter, createLlmAdapter, DEFAULT_BUDGETS, LlmAdapterError } from "../../../agent/src/index.js";
-import type { BudgetConfig, LlmAdapter } from "../../../agent/src/index.js";
+import type { BudgetConfig, LlmAdapter, LlmRequest } from "../../../agent/src/index.js";
 import { AnnotationService, createProject, JobQueue, OperationEngine, parseAnnotationSidecar } from "../../../core/src/index.js";
 import type { ProjectStore, Result } from "../../../core/src/index.js";
 import { projectFixture } from "../../../core/src/project/test-fixtures.js";
@@ -79,6 +79,8 @@ interface SendOptions {
   rates?: Record<string, { inputPerMTok: number; outputPerMTok: number }>;
   model?: string;
   adapterFactory?: typeof createLlmAdapter;
+  provider?: "anthropic" | "openai";
+  aiSettings?: Partial<Pick<AiSettingsService, "transport" | "cliBinary" | "apiKey">>;
 }
 
 async function harness(options: {
@@ -135,12 +137,13 @@ async function harness(options: {
     },
     aiSettings: {
       current: () => ({
-        provider: "anthropic", model: ai.model, effort: "medium", tightening: options.proposals?.tightening ?? "ask",
+        provider: sendOptions?.provider ?? "anthropic", model: ai.model, effort: "medium", tightening: options.proposals?.tightening ?? "ask",
         rates: sendOptions?.rates ?? {},
       }),
       transport: () => "api",
       externalCalls: () => sendOptions?.externalCalls ?? "allow",
       apiKey: () => Promise.resolve("sk-test"),
+      ...sendOptions?.aiSettings,
     } as unknown as AiSettingsService,
     auditLog,
     costMeter,
@@ -151,7 +154,7 @@ async function harness(options: {
     ...(options.now === undefined ? {} : { now: options.now }),
     ...(options.pickFiles === undefined ? {} : { pickFiles: options.pickFiles }),
   });
-  return { root, store, queue, publish, service, auditLog, annotations, ai };
+  return { root, store, queue, publish, service, auditLog, costMeter, annotations, ai };
 }
 
 const SCRIPT = "# Intro\n\n> Welcome to the channel. Today we talk about tea.\n";
@@ -564,6 +567,15 @@ async function conversing(send: SendOptions) {
 }
 
 describe("AssemblyService.send", () => {
+  it("the external notice names attached files", async () => {
+    const h = await conversing({ externalCalls: "ask" });
+    const asked = await h.service.send({ sessionId: h.id, text: "go" });
+    expect(asked).toMatchObject({
+      kind: "acknowledge-external",
+      notice: "Sends the transcript, the conversation and the files you attach to anthropic. Never your footage.",
+    });
+  });
+
   it("blocks when externalCalls is block", async () => {
     const h = await conversing({ externalCalls: "block" });
     await expect(h.service.send({ sessionId: h.id, text: "go" })).resolves.toMatchObject({ kind: "blocked" });
@@ -746,6 +758,100 @@ describe("AssemblyService.send", () => {
     const starts = h.auditLog.readSession(view.auditSessionId!).records.filter((r) => r.type === "session.start");
     expect(starts).toHaveLength(1);
   });
+
+  /** A 2-page PDF as far as the page counter is concerned. */
+  const TWO_PAGES = Buffer.from("%PDF-1.4\n1 0 obj << /Type /Page >> endobj\n2 0 obj << /Type /Page >> endobj\n%%EOF\n", "latin1");
+
+  function capturing(reply: unknown = PLAN_OF("w000001", "w000002"), reportedUsd?: number) {
+    const requests: LlmRequest[] = [];
+    const factory = vi.fn<typeof createLlmAdapter>(() => ({
+      provider: "anthropic",
+      listModels: () => Promise.resolve([]),
+      complete: (request) => {
+        requests.push(request);
+        return Promise.resolve({ reply, usage: { inputTokens: 0, outputTokens: 0 }, ...(reportedUsd === undefined ? {} : { reportedUsd }) });
+      },
+    }));
+    return { requests, factory };
+  }
+
+  async function withImageAndPdf(send: SendOptions) {
+    const h = await harness({ send });
+    const { id } = await h.service.create({ assetIds: [FIRST, SECOND] });
+    await h.service.addFiles(id, [await fixture(h, "dot.png", DOT), await fixture(h, "two.pdf", TWO_PAGES)]);
+    await prepare(h, id);
+    return { ...h, id };
+  }
+
+  it("sends image and pdf bytes as parts, counts them in the estimate and audits the frames class", async () => {
+    const adapter = capturing();
+    const h = await withImageAndPdf({ externalCalls: "allow", adapterFactory: adapter.factory });
+    const preflight = vi.spyOn(h.costMeter, "preflight");
+    const result = await h.service.send({ sessionId: h.id, text: "go" });
+    expect(result.kind).toBe("turn");
+    const parts = adapter.requests[0]!.messages[0]!.content;
+    expect(parts.map(({ type }) => type)).toEqual(["text", "image", "pdf"]);
+    expect(parts[1]).toEqual({ type: "image", mime: "image/png", data: expect.anything() as unknown, label: "F1", name: "dot.png" });
+    expect(Buffer.from((parts[1] as { data: Uint8Array }).data).equals(DOT)).toBe(true);
+    expect(parts[2]).toMatchObject({ type: "pdf", mime: "application/pdf", label: "F2", name: "two.pdf" });
+    expect(Buffer.from((parts[2] as { data: Uint8Array }).data).equals(TWO_PAGES)).toBe(true);
+    expect((preflight.mock.calls[0]![0].units as { inputTokens: number }).inputTokens).toBeGreaterThanOrEqual(1600 + 4000);
+    const view = await h.service.get(h.id);
+    const call = h.auditLog.readSession(view.auditSessionId!).records.find((record) => record.type === "external.call") as unknown as
+      { provider: string; dataClassesSent: string[]; payloadSummary: { frames?: number } };
+    expect(call.provider).toBe("anthropic");
+    expect(call.dataClassesSent).toContain("frames");
+    expect(call.payloadSummary.frames).toBe(2);
+  });
+
+  it("a missing attachment fails the turn readably and keeps the session sendable", async () => {
+    const adapter = capturing();
+    const h = await withImageAndPdf({ externalCalls: "allow", adapterFactory: adapter.factory });
+    const png = join(h.root, contextFilePath(h.id, "F1", "dot.png"));
+    await rm(png);
+    await expect(h.service.send({ sessionId: h.id, text: "go" }))
+      .rejects.toThrow(/E_ASSEMBLY_FILE_MISSING: F1 dot.png is missing from sidecars\/context\//);
+    expect(adapter.requests).toHaveLength(0);
+    const view = await h.service.get(h.id);
+    expect(view.status).toBe("conversing");
+    expect(view.messages).toHaveLength(0);
+    await writeFile(png, DOT);
+    await expect(h.service.send({ sessionId: h.id, text: "go" })).resolves.toMatchObject({ kind: "turn" });
+  });
+
+  it.each([["anthropic", "claude", "claude-cli"], ["openai", "codex", "codex-cli"]] as const)(
+    "cli transport needs no key, quotes zero, records the reported cost and labels the audit %s %s %s",
+    async (provider, cli, label) => {
+      const adapter = capturing(PLAN_OF("w000001", "w000002"), 0.42);
+      const h = await harness({
+        send: {
+          externalCalls: "allow", provider, model: "claude-sonnet-5-5", rates: SEND_RATES, adapterFactory: adapter.factory,
+          aiSettings: { transport: () => "cli", cliBinary: () => `/x/${cli}`, apiKey: () => Promise.resolve(undefined) },
+        },
+      });
+      const { id } = await h.service.create({ assetIds: [FIRST, SECOND] });
+      await prepare(h, id);
+      const preflight = vi.spyOn(h.costMeter, "preflight");
+      const result = await h.service.send({ sessionId: id, text: "go" });
+      if (result.kind !== "turn") throw new Error("expected turn");
+      const cwd = join(h.root, "sidecars/context", id);
+      expect(adapter.factory).toHaveBeenCalledWith(provider, {
+        apiKey: "", transport: "cli", cli: { binary: `/x/${cli}`, cwd },
+      });
+      expect(preflight.mock.calls[0]![0]).toMatchObject({ adapterId: `llm.${label}`, amount: 0, confidence: "quote" });
+      expect(result.session.messages.at(-1)?.usage).toEqual({ inputTokens: 0, outputTokens: 0, usd: 0.42, estimated: false });
+      const records = h.auditLog.readSession(result.session.auditSessionId!).records;
+      const call = records.find((record) => record.type === "external.call") as unknown as { provider: string; adapterId: string };
+      expect(call.provider).toBe(label);
+      expect(call.adapterId).toBe(`llm.${label}`);
+      const charge = records.find((record) => record.type === "cost.charge") as unknown as { costUsd: number };
+      expect(charge.costUsd).toBe(0.42);
+      expect(records.find((record) => record.type === "session.start")).toMatchObject({
+        director: { modelLabel: `${label}/claude-sonnet-5-5` },
+      });
+      expect((await stat(cwd)).isDirectory()).toBe(true);
+    },
+  );
 });
 
 describe("AssemblyService proposals", () => {

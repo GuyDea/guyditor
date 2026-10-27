@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { ASSEMBLY_REPLY_SCHEMA, createAssemblySession } from "../../../transcript/src/index.js";
 import type { AssemblySession, ReplyContext } from "../../../transcript/src/index.js";
 import { messageText, textMessage } from "../../../agent/src/index.js";
-import type { LlmAdapter, LlmCompletion, LlmRequest } from "../../../agent/src/index.js";
+import type { LlmAdapter, LlmCompletion, LlmContentPart, LlmRequest } from "../../../agent/src/index.js";
 
 import { runAssemblyTurn, TurnError } from "./assembly-turn.js";
 import type { TurnDeps } from "./assembly-turn.js";
@@ -42,11 +42,17 @@ function scripted(...replies: unknown[]) {
     requests.push(structuredClone(request));
     const reply = replies.shift();
     if (reply instanceof Error) return Promise.reject(reply);
+    if (isCompletion(reply)) return Promise.resolve(reply);
     return Promise.resolve({ reply, usage: { inputTokens: 10, outputTokens: 5 } });
   });
   const adapter = { provider: "anthropic", complete, listModels: () => Promise.resolve([]) } as unknown as LlmAdapter;
   const deps: TurnDeps = { adapter, system: "SYS", schema: ASSEMBLY_REPLY_SCHEMA, context, maxTurns: 12 };
   return { deps, requests };
+}
+
+/** A scripted entry that is already a whole completion, e.g. one carrying `reportedUsd`. */
+function isCompletion(value: unknown): value is LlmCompletion {
+  return typeof value === "object" && value !== null && "reply" in value && "usage" in value;
 }
 
 describe("runAssemblyTurn", () => {
@@ -123,5 +129,26 @@ describe("runAssemblyTurn", () => {
   it("requires evidence", async () => {
     const { deps } = scripted(PLAN);
     await expect(runAssemblyTurn({ ...session(), evidence: null }, "go", deps)).rejects.toThrow("E_ASSEMBLY_STATE");
+  });
+
+  it("attachments ride on the first user message on every turn", async () => {
+    const image: LlmContentPart = { type: "image", mime: "image/png", data: new Uint8Array([1, 2, 3]), label: "F1", name: "dot.png" };
+    const { deps, requests } = scripted(QUESTIONS, QUESTIONS);
+    const withAttachments = { ...deps, attachments: [image] };
+    const first = await runAssemblyTurn(session(), "go", withAttachments);
+    await runAssemblyTurn(first.session, "keep it", withAttachments);
+    for (const request of requests) {
+      expect(request.messages[0]!.content).toEqual([{ type: "text", text: expect.stringContaining("go") as string }, image]);
+    }
+    expect(requests[1]!.messages[2]!.content).toEqual([{ type: "text", text: "keep it" }]);
+  });
+
+  it("sums reported cost across the validation retry", async () => {
+    const { deps } = scripted(
+      { reply: BAD, usage: { inputTokens: 0, outputTokens: 0 }, reportedUsd: 0.1 },
+      { reply: PLAN, usage: { inputTokens: 0, outputTokens: 0 }, reportedUsd: 0.2 },
+    );
+    const result = await runAssemblyTurn(session(), "go", deps);
+    expect(result.usage.reportedUsd).toBeCloseTo(0.3, 9);
   });
 });

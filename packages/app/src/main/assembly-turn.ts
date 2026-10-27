@@ -1,6 +1,6 @@
 import { ASSEMBLY_REPLY_TOKEN_ALLOWANCE } from "../../../agent/src/index.js";
 import { textMessage } from "../../../agent/src/index.js";
-import type { LlmAdapter, LlmMessage } from "../../../agent/src/index.js";
+import type { LlmAdapter, LlmContentPart, LlmMessage } from "../../../agent/src/index.js";
 import { validateAssemblyReply } from "../../../transcript/src/index.js";
 import type { AssemblyMessage, AssemblySession, ReplyContext } from "../../../transcript/src/index.js";
 
@@ -15,9 +15,12 @@ export interface TurnDeps {
   signal?: AbortSignal;
   /** Prices one completion for the stored per-message usage; defaults to unpriced. */
   price?: (usage: TurnUsage) => { usd: number; estimated: boolean };
+  /** The session's sent images and PDFs; appended to the first user message's parts on every turn. */
+  attachments?: LlmContentPart[];
 }
 
-export interface TurnUsage { inputTokens: number; outputTokens: number }
+/** `reportedUsd` is set only when the adapter reports its own cost (CLI); summed across the validation retry. */
+export interface TurnUsage { inputTokens: number; outputTokens: number; reportedUsd?: number }
 
 export const TIGHTENING_HINT = "Tightening preference: ask me before planning. ";
 
@@ -37,15 +40,19 @@ export class TurnError extends Error {
   }
 }
 
-/** Messages as the provider sees them: the evidence rides on the first user message, validation notes are user turns. */
-export function llmMessages(session: AssemblySession, hint = false): LlmMessage[] {
+/**
+ * Messages as the provider sees them: the evidence and the attachments ride on the first user message,
+ * validation notes are user turns.
+ */
+export function llmMessages(session: AssemblySession, hint = false, attachments: LlmContentPart[] = []): LlmMessage[] {
   const evidence = session.evidence?.text ?? "";
   let first = true;
   return session.messages.map(({ role, content }) => {
     if (role !== "user") return textMessage(role, content);
     if (!first) return textMessage("user", content);
     first = false;
-    return textMessage("user", `${evidence}\n\n${hint ? TIGHTENING_HINT : ""}${content}`);
+    const message = textMessage("user", `${evidence}\n\n${hint ? TIGHTENING_HINT : ""}${content}`);
+    return { ...message, content: [...message.content, ...attachments] };
   });
 }
 
@@ -53,8 +60,13 @@ export function assistantTurns(session: AssemblySession): number {
   return session.messages.filter(({ role, reply }) => role === "assistant" && reply !== null).length;
 }
 
-const sum = (a: TurnUsage, b: TurnUsage): TurnUsage =>
-  ({ inputTokens: a.inputTokens + b.inputTokens, outputTokens: a.outputTokens + b.outputTokens });
+const sum = (a: TurnUsage, b: TurnUsage): TurnUsage => ({
+  inputTokens: a.inputTokens + b.inputTokens,
+  outputTokens: a.outputTokens + b.outputTokens,
+  ...(a.reportedUsd === undefined && b.reportedUsd === undefined
+    ? {}
+    : { reportedUsd: (a.reportedUsd ?? 0) + (b.reportedUsd ?? 0) }),
+});
 
 export async function runAssemblyTurn(
   session: AssemblySession,
@@ -80,7 +92,7 @@ export async function runAssemblyTurn(
         model: session.settings.model,
         effort: session.settings.effort,
         system: deps.system,
-        messages: llmMessages(current, hint),
+        messages: llmMessages(current, hint, deps.attachments),
         responseSchema: deps.schema,
         maxOutputTokens: ASSEMBLY_REPLY_TOKEN_ALLOWANCE,
         ...(deps.signal === undefined ? {} : { signal: deps.signal }),
@@ -88,9 +100,12 @@ export async function runAssemblyTurn(
     } catch (error: unknown) {
       throw new TurnError(error instanceof Error ? error.message : String(error), "provider", current, usage);
     }
-    usage = sum(usage, completion.usage);
+    const completionUsage: TurnUsage = completion.reportedUsd === undefined
+      ? completion.usage
+      : { ...completion.usage, reportedUsd: completion.reportedUsd };
+    usage = sum(usage, completionUsage);
     const checked = validateAssemblyReply(completion.reply, deps.context);
-    const turnUsage = { ...completion.usage, ...(deps.price?.(completion.usage) ?? { usd: 0, estimated: true }) };
+    const turnUsage = { ...completion.usage, ...(deps.price?.(completionUsage) ?? { usd: 0, estimated: true }) };
     if (checked.ok) {
       const assistant: AssemblyMessage = {
         role: "assistant", content: JSON.stringify(checked.value), reply: checked.value, usage: turnUsage, at: now(),
