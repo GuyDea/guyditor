@@ -12,7 +12,7 @@ test("phase tabs render their curated panel sets", async () => {
   const launched = await launchApp({ projectTemplate: template });
   try {
     const expectedPanels = {
-      ingest: ["media", "status", "storage"],
+      ingest: ["assemble", "media", "status", "storage"],
       cut: ["agent", "preview", "timeline", "transcript"],
       polish: ["agent", "graphics", "inspector", "preview", "transcript"],
       review: ["agent", "media", "preview"],

@@ -6,6 +6,8 @@
 .assembly-question > p { flex-basis: 100%; margin: 0; }
 .ai-settings { display: grid; gap: 6px; }
 .ai-settings label { display: grid; gap: 2px; }
-.ai-rates input { width: 70px; }
 .assemble-region table { width: 100%; border-collapse: collapse; font-size: var(--fs-body); }
 .assemble-region th, .assemble-region td { padding: 3px 4px; text-align: left; vertical-align: top; }
+.assembly-files { margin: 0; padding: 0; list-style: none; display: grid; gap: 3px; }
+.assembly-files li { display: flex; gap: 6px; align-items: center; }
+.assembly-files .file-label, .asset-list .file-label { font-family: ui-monospace, monospace; }

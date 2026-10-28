@@ -20,11 +20,18 @@ To resume: open Claude Code in this directory and say "continue the Guyditor bui
 - **Amendment 002** (global progress visibility) implemented as FR-907.
 - **User reference:** [`docs/MANUAL.md`](MANUAL.md) is the single source for the
   feature manual and is rendered verbatim in the app’s dockable Help panel.
-- **Amendment 008 (AI rough-cut assembly) is implemented on `feat/ai-assembly`**
-  (not yet merged): Assemble panel, evidence package, questions-then-plan chat,
+- **Amendment 008 (AI rough-cut assembly) is implemented and merged to `main`**
+  (2bb1fe1): Assemble panel, evidence package, questions-then-plan chat,
   proposal with review markers, optional gentle tightening, privacy/cost/audit
   gates, `asb` sessions. Real-provider calls are unexercised by automated tests
   (stub only). See `docs/amendments/008-ai-assembly.md`.
+- **Amendment 009 (assembly inputs) is implemented on `feat/assembly-inputs`**
+  (not yet merged): context files on an assembly session (`F1…` labels, caps,
+  Script dropdown, read-only after Analyze) and a per-provider **Connect via**
+  API key / local CLI switch (`claude`, `codex`, confined to the session's
+  context directory; cost recorded as reported). Real CLI runs are manual and
+  still pending (`docs/dogfood/2026-10-27-assembly-cli.md`, ASM-007 `partial`).
+  See `docs/amendments/009-assembly-inputs.md`.
 - **Amendment 003 (motion design system) is COMPLETE and merged** (3e305f7):
   primitives/v1 (word-timed text reveals, springs, charts, cutouts, textures),
   SVG/font/Lottie brand assets (deterministic in-house Lottie subset interpreter

@@ -185,6 +185,7 @@ export interface WindowServiceHostOptions {
   chooseProject?: () => Promise<string | undefined>;
   chooseNewProject?: () => Promise<string | undefined>;
   chooseMedia?: () => Promise<string[]>;
+  chooseContextFiles?: () => Promise<string[]>;
   chooseTemplate?: () => Promise<string | undefined>;
   revealPath?: (path: string) => void;
   openPath?: (path: string) => Promise<string>;
@@ -460,6 +461,7 @@ export class WindowServiceHost {
   readonly #chooseProject: (() => Promise<string | undefined>) | undefined;
   readonly #chooseNewProject: (() => Promise<string | undefined>) | undefined;
   readonly #chooseMedia: (() => Promise<string[]>) | undefined;
+  readonly #chooseContextFiles: (() => Promise<string[]>) | undefined;
   readonly #chooseTemplate: (() => Promise<string | undefined>) | undefined;
   readonly #revealPath: ((path: string) => void) | undefined;
   readonly #openPath: ((path: string) => Promise<string>) | undefined;
@@ -476,6 +478,7 @@ export class WindowServiceHost {
     this.#chooseProject = options.chooseProject;
     this.#chooseNewProject = options.chooseNewProject;
     this.#chooseMedia = options.chooseMedia;
+    this.#chooseContextFiles = options.chooseContextFiles;
     this.#chooseTemplate = options.chooseTemplate;
     this.#revealPath = options.revealPath;
     this.#openPath = options.openPath;
@@ -1036,6 +1039,7 @@ export class WindowServiceHost {
       costMeter: this.#app.costMeter,
       appVersion: this.#app.appVersion,
       publish: (event) => this.publisher.publish(event),
+      pickFiles: () => this.#chooseContextFiles?.() ?? Promise.resolve([]),
     });
     registerAssemblyPrepareExecutor(jobs, assembly.prepareDeps());
     openedProject.value = {

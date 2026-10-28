@@ -4,3 +4,7 @@ export * from "./assembly-prompt.js";
 export { StubLlmAdapter } from "./stub.js";
 export { AnthropicLlmAdapter } from "./anthropic.js";
 export { OpenAiLlmAdapter, toOpenAiStrictSchema } from "./openai.js";
+export * from "./cli-process.js";
+export { renderCliConversation } from "./cli-conversation.js";
+export { ClaudeCliAdapter } from "./claude-cli.js";
+export { CodexCliAdapter } from "./codex-cli.js";

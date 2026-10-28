@@ -1,6 +1,5 @@
-import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 
 import { makeId } from "../../../core/src/index.js";
 import type {
@@ -15,10 +14,19 @@ import {
   ASSEMBLY_OUTPUT_TOKEN_ESTIMATE,
   createLlmAdapter as defaultAdapterFactory,
   estimateUsd,
+  messageText,
   resolveRate,
   SessionManager,
 } from "../../../agent/src/index.js";
-import type { AuditLog, CostEstimate, CostMeter, CostContext, createLlmAdapter } from "../../../agent/src/index.js";
+import type {
+  AuditLog,
+  CostEstimate,
+  CostMeter,
+  CostContext,
+  createLlmAdapter,
+  DataClass,
+  LlmContentPart,
+} from "../../../agent/src/index.js";
 import {
   ASSEMBLY_REPLY_SCHEMA,
   assemblySidecarRef,
@@ -31,13 +39,23 @@ import {
   reviewMarkerAnnotations,
   serializeAssemblySession,
 } from "../../../transcript/src/index.js";
-import type { AssemblyEvidence, AssemblyProvider, CompiledCut, AssemblySession, ReplyContext } from "../../../transcript/src/index.js";
+import type {
+  AssemblyEvidence,
+  AssemblyProvider,
+  CompiledCut,
+  AssemblySession,
+  ContextFile,
+  ReplyContext,
+  ScriptChoice,
+} from "../../../transcript/src/index.js";
 
 import type { GdEventWithoutSeq } from "../shared/ipc.js";
 import type { AiSettingsService } from "./ai-settings-service.js";
+import { attachContextFiles, detachContextFile } from "./assembly-files.js";
 import type { PrepareDeps } from "./assembly-prepare.js";
 import { assemblyTarget, compileContext, keptRanges, proposalReason, rederiveStarts } from "./assembly-proposal.js";
 import { llmMessages, runAssemblyTurn, TurnError } from "./assembly-turn.js";
+import type { TurnUsage } from "./assembly-turn.js";
 import { registerDerivedSidecar } from "./derived-sidecar.js";
 import { publicJobStatus } from "./job-status.js";
 import { transcriptSidecars } from "./project-readers.js";
@@ -60,6 +78,8 @@ export interface AssemblyServiceOptions {
   idFactory?: IdFactory;
   adapterFactory?: typeof createLlmAdapter;
   environment?: NodeJS.ProcessEnv;
+  /** The native multi-file picker; absent in tests and headless runs. */
+  pickFiles?: () => Promise<string[]>;
 }
 
 export type SendInput = {
@@ -77,11 +97,19 @@ export type SendResult =
   | { kind: "acknowledge-external"; provider: AssemblyProvider; notice: string };
 
 const MAX_TURNS = 12;
+/** Estimate-only input tokens per attached image and per PDF page; the providers bill what they actually saw. */
+const IMAGE_TOKENS = 1600;
+const PDF_PAGE_TOKENS = 2000;
 const SESSION_ID = /^asb_[a-z2-7]{10}$/u;
 const PREPARABLE: readonly AssemblySession["status"][] = ["created", "failed"];
 /** A planned session keeps talking: a new reply replaces the plan. */
 const SENDABLE: readonly AssemblySession["status"][] = ["conversing", "planned"];
 let tempCounter = 0;
+
+/** Images and PDFs the provider receives natively; text files ride in the evidence instead. */
+function isAttachment(file: ContextFile): boolean {
+  return file.sent && (file.kind === "image" || file.kind === "pdf");
+}
 
 function invalidInput(detail: string): Error {
   return new Error(`E_ASSEMBLY_INVALID_INPUT: ${detail}`);
@@ -167,7 +195,18 @@ export class AssemblyService {
           .filter((sidecar) => sidecar.assetId === assetId)
           .flatMap(({ markers }) => markers),
       jobs: this.#options.project.jobs,
+      settings: () => this.#sessionSettings(),
     };
+  }
+
+  /** The current AI settings as a session records them; `GUYDITOR_ASSEMBLY_STUB=1` swaps in the stub provider. */
+  #sessionSettings(): AssemblySession["settings"] {
+    const { aiSettings } = this.#options;
+    const { provider, model, effort, tightening } = aiSettings.current();
+    if ((this.#options.environment ?? process.env)["GUYDITOR_ASSEMBLY_STUB"] === "1") {
+      return { provider: "stub", model, effort, tightening, transport: "api" };
+    }
+    return { provider, model, effort, tightening, transport: aiSettings.transport(provider) };
   }
 
   public async list(): Promise<AssemblySessionView[]> {
@@ -187,47 +226,99 @@ export class AssemblyService {
     return assemblyView(await this.#read(sessionId));
   }
 
-  public async create(input: { assetIds: string[]; scriptPath?: string }): Promise<AssemblySessionView> {
-    const { store } = this.#options;
-    if (input.assetIds.length === 0) throw invalidInput("at least one asset is required");
-    for (const assetId of input.assetIds) {
-      const asset = store.currentProject.assets.find(({ id }) => id === assetId);
+  #checkAssets(assetIds: readonly string[]): void {
+    if (assetIds.length === 0) throw invalidInput("at least one asset is required");
+    if (new Set(assetIds).size !== assetIds.length) throw invalidInput("an asset is listed twice");
+    for (const assetId of assetIds) {
+      const asset = this.#options.store.currentProject.assets.find(({ id }) => id === assetId);
       if (asset === undefined) throw invalidInput(`asset ${assetId} does not exist`);
       if (asset.kind !== "video" && asset.kind !== "audio") {
         throw invalidInput(`asset ${assetId} is ${asset.kind}, not speech-bearing`);
       }
     }
-    let scriptBytes: Buffer | undefined;
-    if (input.scriptPath !== undefined) {
-      try {
-        scriptBytes = await readFile(input.scriptPath);
-      } catch {
-        throw invalidInput(`script ${input.scriptPath} is not a readable file`);
-      }
-    }
-    const id = (this.#options.idFactory ?? makeId)("asb");
-    let script: AssemblySession["inputs"]["script"] = null;
-    if (scriptBytes !== undefined && input.scriptPath !== undefined) {
-      const path = `sidecars/scripts/${id}.script.md`;
-      await mkdir(join(store.root, "sidecars/scripts"), { recursive: true });
-      await writeFile(join(store.root, path), scriptBytes);
-      script = {
-        name: basename(input.scriptPath),
-        path,
-        sha256: createHash("sha256").update(scriptBytes).digest("hex"),
-      };
-    }
-    const { provider, model, effort, tightening } = this.#options.aiSettings.current();
-    const stub = (this.#options.environment ?? process.env)["GUYDITOR_ASSEMBLY_STUB"] === "1";
+  }
+
+  public async create(input: { assetIds: string[] }): Promise<AssemblySessionView> {
+    this.#checkAssets(input.assetIds);
     const session = createAssemblySession({
-      id,
+      id: (this.#options.idFactory ?? makeId)("asb"),
       now: (this.#options.now?.() ?? new Date()).toISOString(),
-      settings: { provider: stub ? "stub" : provider, model, effort, tightening },
+      settings: this.#sessionSettings(),
       assetIds: input.assetIds,
-      script,
     });
     await this.#serialized(() => this.#persist(session));
     return assemblyView(session);
+  }
+
+  /** Reads a session whose inputs may still change: only before Analyze, or after a failed one. Call inside #serialized. */
+  async #readEditable(sessionId: string): Promise<AssemblySession> {
+    const session = await this.#read(sessionId);
+    if (!PREPARABLE.includes(session.status)) {
+      throw new Error(
+        `E_ASSEMBLY_STATE: session ${sessionId} is ${session.status}; inputs can only change before Analyze (Start over to change them)`,
+      );
+    }
+    return session;
+  }
+
+  #editInputs(
+    sessionId: string,
+    change: (session: AssemblySession) => Promise<Partial<AssemblySession["inputs"]>> | Partial<AssemblySession["inputs"]>,
+  ): Promise<AssemblySessionView> {
+    return this.#serialized(async () => {
+      const session = await this.#readEditable(sessionId);
+      const inputs = { ...session.inputs, ...await change(session) };
+      return assemblyView(await this.#persist({ ...session, inputs }));
+    });
+  }
+
+  public pickContextFiles(): Promise<string[]> {
+    return this.#options.pickFiles?.() ?? Promise.resolve([]);
+  }
+
+  /** Copies the files into the session (labels `F<n>`, never reused). */
+  public addFiles(sessionId: string, paths: string[]): Promise<AssemblySessionView> {
+    return this.#editInputs(sessionId, (session) => attachContextFiles(this.#options.store.root, session, paths));
+  }
+
+  /** Drops a file and its copy; removing the chosen script falls back to automatic detection. */
+  public removeFile(sessionId: string, label: string): Promise<AssemblySessionView> {
+    return this.#serialized(async () => {
+      const session = await this.#readEditable(sessionId);
+      const file = session.inputs.files.find((candidate) => candidate.label === label);
+      if (file === undefined) throw invalidInput(`no attached file ${label}`);
+      const { script } = session.inputs;
+      const next = await this.#persist({
+        ...session,
+        inputs: {
+          ...session.inputs,
+          files: session.inputs.files.filter((candidate) => candidate !== file),
+          script: script.mode === "label" && script.label === label ? { mode: "auto" } : script,
+        },
+      });
+      // After the persist: a crash in between leaves an orphan copy, never a listed file without one.
+      await detachContextFile(this.#options.store.root, file);
+      return assemblyView(next);
+    });
+  }
+
+  public setScript(sessionId: string, script: ScriptChoice): Promise<AssemblySessionView> {
+    return this.#editInputs(sessionId, ({ inputs }) => {
+      if (script.mode === "label") {
+        const file = inputs.files.find(({ label, kind }) => label === script.label && kind === "text");
+        if (file === undefined) throw invalidInput(`${script.label} is not an attached text file`);
+        // An unsent file never reaches the model, so it would silently resolve to no script.
+        if (!file.sent) throw invalidInput(`${file.label} is ${file.unsentReason ?? "not sent"} and cannot be the script`);
+      }
+      return { script };
+    });
+  }
+
+  public setAssets(sessionId: string, assetIds: string[]): Promise<AssemblySessionView> {
+    return this.#editInputs(sessionId, () => {
+      this.#checkAssets(assetIds);
+      return { assetIds: [...assetIds] };
+    });
   }
 
   public prepare(sessionId: string): Promise<JobStatus> {
@@ -299,6 +390,22 @@ export class AssemblyService {
     }
   }
 
+  /** The session's sent images and PDFs in label order, read from their copies now: bytes never live in the session. */
+  async #attachments(session: AssemblySession): Promise<LlmContentPart[]> {
+    const parts: LlmContentPart[] = [];
+    for (const file of session.inputs.files.filter(isAttachment)) {
+      let data: Buffer;
+      try {
+        data = await readFile(join(this.#options.store.root, file.path));
+      } catch {
+        throw new Error(`E_ASSEMBLY_FILE_MISSING: ${file.label} ${file.name} is missing from ${file.path}; start over and attach it again`);
+      }
+      const { label, name, mime } = file;
+      parts.push(file.kind === "pdf" ? { type: "pdf", mime: "application/pdf", data, label, name } : { type: "image", mime, data, label, name });
+    }
+    return parts;
+  }
+
   async #sendGuarded(
     start: AssemblySession,
     evidence: AssemblyEvidence,
@@ -307,8 +414,12 @@ export class AssemblyService {
   ): Promise<SendResult> {
     const { aiSettings, store, costMeter } = this.#options;
     let session = start;
-    const { provider, model } = session.settings;
+    const { provider, model, transport } = session.settings;
     const stub = provider === "stub";
+    const cli = !stub && transport === "cli";
+    const auditProvider = cli ? (provider === "anthropic" ? "claude-cli" : "codex-cli") : provider;
+    // Read before the gate so a missing copy fails the turn with nothing sent, charged or changed.
+    const attachments = await this.#attachments(session);
     const externalCalls = aiSettings.externalCalls();
     if (!stub) {
       if (externalCalls === "block") {
@@ -319,24 +430,33 @@ export class AssemblyService {
           return {
             kind: "acknowledge-external",
             provider,
-            notice: `Sends the transcript and script text to ${provider}. Never audio or video.`,
+            notice: `Sends the transcript, the conversation and the files you attach to ${provider}. Never your footage.`,
           };
         }
         session = await this.#update(session.id, (current) => ({ ...current, externalAcknowledged: true }));
       }
     }
     let apiKey = "";
-    if (!stub) {
+    if (!stub && !cli) {
       apiKey = (await aiSettings.apiKey(provider)) ?? "";
       if (apiKey === "") throw new Error(`E_AI_KEY_MISSING: no API key for ${provider}`);
     }
-    const adapter = (this.#options.adapterFactory ?? defaultAdapterFactory)(provider, { apiKey });
+    const adapterFactory = this.#options.adapterFactory ?? defaultAdapterFactory;
+    let adapter;
+    if (cli) {
+      // The CLI is confined to the session's context directory; a session with no files has none yet.
+      const cwd = join(store.root, "sidecars/context", session.id);
+      await mkdir(cwd, { recursive: true });
+      adapter = adapterFactory(provider, { apiKey, transport, cli: { binary: aiSettings.cliBinary(provider), cwd } });
+    } else {
+      adapter = adapterFactory(provider, { apiKey });
+    }
     const projectId = store.currentProject.project.id;
     let auditSessionId = session.auditSessionId;
     if (auditSessionId === null) {
       auditSessionId = this.#audit.open({
         projectId,
-        director: { profileId: "assembly", modelLabel: `${provider}/${model}`, locality: stub ? "local" : "remote" },
+        director: { profileId: "assembly", modelLabel: `${auditProvider}/${model}`, locality: stub ? "local" : "remote" },
         policySnapshot: { externalCalls },
       }).sessionId;
       const opened = auditSessionId;
@@ -347,14 +467,20 @@ export class AssemblyService {
     const history = llmMessages({
       ...session,
       messages: [...session.messages, { role: "user", content: userText, reply: null, usage: null, at: "" }],
-    }).map(({ content }) => content).join("");
-    const units = { inputTokens: estimateTokens(system + history), outputTokens: ASSEMBLY_OUTPUT_TOKEN_ESTIMATE };
+    }).map(messageText).join("");
+    const attachmentTokens = session.inputs.files.filter(isAttachment)
+      .reduce((n, { kind, pages }) => n + (kind === "image" ? IMAGE_TOKENS : PDF_PAGE_TOKENS * (pages ?? 1)), 0);
+    const units = {
+      inputTokens: estimateTokens(system + history) + attachmentTokens,
+      outputTokens: ASSEMBLY_OUTPUT_TOKEN_ESTIMATE,
+    };
+    // A CLI bills the creator's own subscription and reports its cost afterwards; nothing to quote up front.
     const estimate: CostEstimate = {
-      adapterId: `llm.${provider}`,
+      adapterId: `llm.${auditProvider}`,
       currency: "USD",
-      amount: estimateUsd(rate, units),
+      amount: cli ? 0 : estimateUsd(rate, units),
       units,
-      confidence: estimated ? "heuristic" : "pricebook",
+      confidence: cli ? "quote" : estimated ? "heuristic" : "pricebook",
     };
     const context: CostContext = { sessionId: auditSessionId, projectId, taskId: session.id, initiator: "creator" };
     const verdict = costMeter.preflight(estimate, context, input.confirmToken);
@@ -369,16 +495,22 @@ export class AssemblyService {
       };
     }
     const startedAt = performance.now();
-    const record = (outcome: "ok" | "error", usage: { inputTokens: number; outputTokens: number }, actualUsd: number) =>
+    const dataClassesSent: DataClass[] = attachments.length > 0 ? ["prompt", "transcript", "frames"] : ["prompt", "transcript"];
+    const actualUsd = (usage: TurnUsage): number => (cli ? usage.reportedUsd ?? 0 : estimateUsd(rate, usage));
+    const record = (outcome: "ok" | "error", usage: TurnUsage) =>
       costMeter.record({
         context,
         estimate,
-        provider,
+        provider: auditProvider,
         purpose: "assembly",
-        dataClassesSent: ["prompt", "transcript"],
-        payloadSummary: { promptChars: system.length + history.length, transcriptWords: evidence.segments.reduce((n, { text }) => n + text.split(/\s+/u).length, 0) },
-        units: usage,
-        actualUsd,
+        dataClassesSent,
+        payloadSummary: {
+          promptChars: system.length + history.length,
+          transcriptWords: evidence.segments.reduce((n, { text }) => n + text.split(/\s+/u).length, 0),
+          ...(attachments.length > 0 ? { frames: attachments.length } : {}),
+        },
+        units: { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens },
+        actualUsd: actualUsd(usage),
         outcome,
         durationMs: Math.round(performance.now() - startedAt),
       });
@@ -391,9 +523,10 @@ export class AssemblyService {
         context: replyContext,
         maxTurns: MAX_TURNS,
         now: () => (this.#options.now?.() ?? new Date()).toISOString(),
-        price: (usage) => ({ usd: estimateUsd(rate, usage), estimated }),
+        price: (usage) => (cli ? { usd: usage.reportedUsd ?? 0, estimated: false } : { usd: estimateUsd(rate, usage), estimated }),
+        attachments,
       });
-      record("ok", result.usage, estimateUsd(rate, result.usage));
+      record("ok", result.usage);
       const turn = await this.#update(session.id, (current) =>
         SENDABLE.includes(current.status)
           ? { ...current, messages: result.session.messages, status: result.session.status, plan: result.session.plan, error: null }
@@ -402,7 +535,7 @@ export class AssemblyService {
     } catch (error: unknown) {
       if (!(error instanceof TurnError)) throw error;
       const failure = error;
-      record("error", failure.usage, estimateUsd(rate, failure.usage));
+      record("error", failure.usage);
       await this.#update(session.id, (current) => SENDABLE.includes(current.status)
         ? { ...current, messages: failure.session.messages, error: failure.message }
         : current);
@@ -539,12 +672,17 @@ export class AssemblyService {
   public surface(): Record<string, (params: never) => unknown> {
     return {
       list: () => this.list(),
-      create: (params: { assetIds: string[]; scriptPath?: string }) => this.create(params),
+      create: (params: { assetIds: string[] }) => this.create(params),
       prepare: ({ sessionId }: { sessionId: string }) => this.prepare(sessionId),
       get: ({ sessionId }: { sessionId: string }) => this.get(sessionId),
       send: (params: SendInput) => this.send(params),
       abandon: ({ sessionId }: { sessionId: string }) => this.abandon(sessionId),
       createProposal: ({ sessionId }: { sessionId: string }) => this.createProposal(sessionId),
+      pickContextFiles: () => this.pickContextFiles(),
+      addFiles: ({ sessionId, paths }: { sessionId: string; paths: string[] }) => this.addFiles(sessionId, paths),
+      removeFile: ({ sessionId, label }: { sessionId: string; label: string }) => this.removeFile(sessionId, label),
+      setScript: ({ sessionId, script }: { sessionId: string; script: ScriptChoice }) => this.setScript(sessionId, script),
+      setAssets: ({ sessionId, assetIds }: { sessionId: string; assetIds: string[] }) => this.setAssets(sessionId, assetIds),
     };
   }
 }

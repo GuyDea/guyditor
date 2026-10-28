@@ -1554,11 +1554,18 @@ const ASSEMBLY_SCRIPT = [
   "",
 ].join("\n");
 
+// A 1x1 PNG the assembly e2e attaches as a storyboard image next to the script.
+const ASSEMBLY_STORYBOARD_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+  "base64",
+);
+
 async function createAssemblyProjectTemplate(core, transcriptDomain, fixtureRoot) {
   const root = path.join(fixtureRoot, "projects", "assembly");
   await mkdir(path.join(root, "media"), { recursive: true });
   await mkdir(path.join(fixtureRoot, "scripts"), { recursive: true });
   await writeFile(path.join(fixtureRoot, "scripts/assembly.raw.md"), ASSEMBLY_SCRIPT);
+  await writeFile(path.join(fixtureRoot, "scripts/assembly-storyboard.png"), ASSEMBLY_STORYBOARD_PNG);
   const base = Date.parse("2026-10-20T10:00:00Z");
   const assets = [];
   for (const clip of ASSEMBLY_CLIPS) {

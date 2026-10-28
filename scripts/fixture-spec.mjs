@@ -1,4 +1,4 @@
-export const FIXTURE_GENERATOR_VERSION = "1.6.0";
+export const FIXTURE_GENERATOR_VERSION = "1.7.0";
 
 export const REQUIRED_PROJECT_TEMPLATES = Object.freeze(["basic", "annotated", "ac003", "ac005", "ac006", "assembly"]);
 

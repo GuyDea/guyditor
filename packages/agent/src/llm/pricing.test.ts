@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_LLM_RATES, estimateUsd, resolveRate } from "./pricing.js";
+import { DEFAULT_LLM_RATES, estimateUsd, knownModels, resolveRate } from "./pricing.js";
 
 const RATES = {
   "claude-a": { inputPerMTok: 1, outputPerMTok: 5 },
@@ -35,5 +35,17 @@ describe("pricing", () => {
     for (const id of ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"]) {
       expect(DEFAULT_LLM_RATES[id]).toBeDefined();
     }
+  });
+
+  it("knownModels splits the table by provider", () => {
+    const anthropic = knownModels("anthropic");
+    const openai = knownModels("openai");
+    expect(anthropic.length).toBeGreaterThan(0);
+    expect(openai.length).toBeGreaterThan(0);
+    expect(anthropic.every((id) => id.startsWith("claude-"))).toBe(true);
+    expect(openai.some((id) => id.startsWith("claude-"))).toBe(false);
+    expect(anthropic).toEqual([...anthropic].sort());
+    expect(openai).toEqual([...openai].sort());
+    expect(knownModels("openai", RATES)).toEqual(["gpt-x"]);
   });
 });

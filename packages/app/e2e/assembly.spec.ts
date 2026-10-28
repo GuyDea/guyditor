@@ -27,8 +27,15 @@ test("AI assembly — asks one question, plans three cuts, and accepts the propo
   try {
     await page.getByTestId("phase-tab-cut").click();
     await page.getByTestId("dock-tab-assemble").click();
-    await page.getByTestId("assembly-script-path")
-      .fill(join(REPOSITORY_ROOT, ".fixtures/scripts/assembly.raw.md"));
+    for (const file of ["assembly.raw.md", "assembly-storyboard.png"]) {
+      await page.getByTestId("assembly-file-path").fill(join(REPOSITORY_ROOT, ".fixtures/scripts", file));
+      await page.getByTestId("assembly-file-path-add").click();
+    }
+    await expect(page.getByTestId("assembly-file-F1")).toContainText("assembly.raw.md");
+    await expect(page.getByTestId("assembly-file-F2")).toContainText("assembly-storyboard.png");
+    await expect(page.getByTestId("assembly-file-F2")).toContainText("image");
+    await expect(page.getByTestId("assembly-script-select")).toHaveValue("auto");
+    await expect(page.getByTestId("assembly-asset-label-ast_assemblyaa")).toHaveText("A1");
     await page.getByTestId("assembly-analyze").click();
     await expect(page.getByTestId("assembly-evidence-summary")).toContainText("3 clips");
 

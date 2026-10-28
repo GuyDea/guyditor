@@ -63,3 +63,11 @@ export function resolveRate(
 export function estimateUsd(rate: LlmRate, usage: { inputTokens: number; outputTokens: number }): number {
   return (usage.inputTokens / 1e6) * rate.inputPerMTok + (usage.outputTokens / 1e6) * rate.outputPerMTok;
 }
+
+/** Model ids in the rate table for one provider, sorted. */
+export function knownModels(
+  provider: "anthropic" | "openai",
+  rates: Readonly<Record<string, LlmRate>> = DEFAULT_LLM_RATES,
+): string[] {
+  return Object.keys(rates).filter((id) => id.startsWith("claude-") === (provider === "anthropic")).sort();
+}

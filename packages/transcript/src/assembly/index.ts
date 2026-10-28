@@ -6,3 +6,4 @@ export * from "./evidence.js";
 export * from "./reply.js";
 export * from "./compile.js";
 export * from "./rebase.js";
+export * from "./context-files.js";

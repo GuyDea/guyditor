@@ -16,7 +16,6 @@ export function createAssemblySession(input: {
   now: string;
   settings: AssemblySession["settings"];
   assetIds: string[];
-  script: AssemblySession["inputs"]["script"];
 }): AssemblySession {
   return {
     schema: "guyditor.assembly/v1",
@@ -25,7 +24,7 @@ export function createAssemblySession(input: {
     updatedAt: input.now,
     status: "created",
     settings: { ...input.settings },
-    inputs: { assetIds: [...input.assetIds], script: input.script === null ? null : { ...input.script } },
+    inputs: { assetIds: [...input.assetIds], files: [], script: { mode: "auto" }, nextFileLabel: 1 },
     auditSessionId: null,
     externalAcknowledged: false,
     evidence: null,

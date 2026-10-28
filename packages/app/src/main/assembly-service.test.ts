@@ -1,19 +1,16 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile, mkdir } from "node:fs/promises";
+import { mkdtemp, open, readFile, rm, stat, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AuditLog, CostMeter, createLlmAdapter, DEFAULT_BUDGETS, LlmAdapterError } from "../../../agent/src/index.js";
-import type { BudgetConfig, LlmAdapter } from "../../../agent/src/index.js";
+import type { BudgetConfig, LlmAdapter, LlmRequest } from "../../../agent/src/index.js";
 import { AnnotationService, createProject, JobQueue, OperationEngine, parseAnnotationSidecar } from "../../../core/src/index.js";
 import type { ProjectStore, Result } from "../../../core/src/index.js";
 import { projectFixture } from "../../../core/src/project/test-fixtures.js";
-import {
-  serializeTranscriptSidecar,
-  terminalJob,
-} from "../../../transcript/src/index.js";
+import { contextFilePath, serializeTranscriptSidecar, terminalJob } from "../../../transcript/src/index.js";
 import { scriptedTranscript } from "../../../transcript/src/assembly/__fixtures__/scripted-transcript.js";
 
 import type { AiSettingsService } from "./ai-settings-service.js";
@@ -82,6 +79,8 @@ interface SendOptions {
   rates?: Record<string, { inputPerMTok: number; outputPerMTok: number }>;
   model?: string;
   adapterFactory?: typeof createLlmAdapter;
+  provider?: "anthropic" | "openai";
+  aiSettings?: Partial<Pick<AiSettingsService, "transport" | "cliBinary" | "apiKey">>;
 }
 
 async function harness(options: {
@@ -89,6 +88,7 @@ async function harness(options: {
   now?: () => Date;
   send?: SendOptions;
   proposals?: { tightening: "ask" | "gentle" | "off" };
+  pickFiles?: () => Promise<string[]>;
 } = {}) {
   const root = await mkdtemp(join(tmpdir(), "guyditor-assembly-"));
   roots.push(root);
@@ -122,6 +122,7 @@ async function harness(options: {
     : CostMeter.open({ userDir, auditLog, budgets: sendOptions.budgets ?? DEFAULT_BUDGETS });
   if (sendOptions !== undefined) closers.push(() => costMeter.close());
   const annotations = new AnnotationService({ appVersion: "0.0.0-test" });
+  const ai = { model: sendOptions?.model ?? "m1" };
   const service = new AssemblyService({
     project: { jobs: queue, captureMetadata: { list: async () => [] }, annotations } as unknown as ProjectServices,
     store,
@@ -136,11 +137,13 @@ async function harness(options: {
     },
     aiSettings: {
       current: () => ({
-        provider: "anthropic", model: sendOptions?.model ?? "m1", effort: "medium", tightening: options.proposals?.tightening ?? "ask",
+        provider: sendOptions?.provider ?? "anthropic", model: ai.model, effort: "medium", tightening: options.proposals?.tightening ?? "ask",
         rates: sendOptions?.rates ?? {},
       }),
+      transport: () => "api",
       externalCalls: () => sendOptions?.externalCalls ?? "allow",
       apiKey: () => Promise.resolve("sk-test"),
+      ...sendOptions?.aiSettings,
     } as unknown as AiSettingsService,
     auditLog,
     costMeter,
@@ -149,45 +152,129 @@ async function harness(options: {
     environment: {},
     ...(sendOptions?.adapterFactory === undefined ? {} : { adapterFactory: sendOptions.adapterFactory }),
     ...(options.now === undefined ? {} : { now: options.now }),
+    ...(options.pickFiles === undefined ? {} : { pickFiles: options.pickFiles }),
   });
-  const scriptPath = join(root, "script.md");
-  await writeFile(scriptPath, "# Intro\n\nWelcome to the channel. Today we talk about tea.\n", "utf8");
-  return { root, store, queue, publish, service, scriptPath, auditLog, annotations };
+  return { root, store, queue, publish, service, auditLog, costMeter, annotations, ai };
+}
+
+const SCRIPT = "# Intro\n\n> Welcome to the channel. Today we talk about tea.\n";
+/** A 1×1 PNG. */
+const DOT = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+  "base64",
+);
+
+/** Writes a file outside the project, where the creator's picker would find it; returns its absolute path. */
+async function fixture(h: Awaited<ReturnType<typeof harness>>, name: string, bytes: string | Uint8Array): Promise<string> {
+  const path = join(h.root, "outside", name);
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, bytes);
+  return path;
+}
+
+/** A `%PDF-1.4` buffer of exactly `bytes` bytes. */
+function pdfOf(bytes: number): Buffer {
+  const pdf = Buffer.alloc(bytes, 0x20);
+  pdf.write("%PDF-1.4\n", 0, "latin1");
+  return pdf;
+}
+
+async function withScript(h: Awaited<ReturnType<typeof harness>>, id: string): Promise<void> {
+  await h.service.addFiles(id, [await fixture(h, "script.md", SCRIPT)]);
 }
 
 const prepare = (h: Awaited<ReturnType<typeof harness>>, id: string) =>
   prepareSession(h.service.prepareDeps(), id, new AbortController().signal, () => undefined);
 
 describe("AssemblyService", () => {
-  it("create copies the script and registers the session sidecar", async () => {
+  it("create registers the session sidecar with no files and an automatic script", async () => {
     const h = await harness();
-    const view = await h.service.create({ assetIds: [FIRST, SECOND], scriptPath: h.scriptPath });
+    const view = await h.service.create({ assetIds: [FIRST, SECOND] });
     const ref = h.store.currentProject.sidecars.find(({ schema }) => schema === "guyditor.assembly/v1");
     expect(ref?.name).toBe(`assembly-${view.id}`);
-    const copy = join(h.root, `sidecars/scripts/${view.id}.script.md`);
-    const bytes = await readFile(copy);
-    expect(view.inputs.script?.sha256).toBe(createHash("sha256").update(bytes).digest("hex"));
+    expect(view.inputs).toEqual({ assetIds: [FIRST, SECOND], files: [], script: { mode: "auto" }, nextFileLabel: 1 });
     expect(view.status).toBe("created");
     expect(view.settings.provider).toBe("anthropic");
+    expect(view.settings.transport).toBe("api");
     expect(h.publish).toHaveBeenCalledWith({ kind: "assembly.updated", sessionId: view.id });
   });
 
-  it("create rejects unknown assets and unreadable scripts", async () => {
+  it("create rejects unknown assets", async () => {
     const h = await harness();
     await expect(h.service.create({ assetIds: ["ast_cccccccccc"] })).rejects.toThrow("E_ASSEMBLY_INVALID_INPUT");
-    await expect(h.service.create({ assetIds: [FIRST], scriptPath: join(h.root, "missing.md") }))
-      .rejects.toThrow("E_ASSEMBLY_INVALID_INPUT");
   });
 
   it("prepare builds evidence and publishes assembly.updated", async () => {
     const h = await harness();
-    const { id } = await h.service.create({ assetIds: [FIRST, SECOND], scriptPath: h.scriptPath });
+    const { id } = await h.service.create({ assetIds: [FIRST, SECOND] });
+    await withScript(h, id);
     h.publish.mockClear();
     const session = await prepare(h, id);
     expect(session.status).toBe("conversing");
     expect(session.evidence?.groups.length).toBeGreaterThanOrEqual(1);
     expect(h.publish).toHaveBeenCalledWith({ kind: "assembly.updated", sessionId: id });
     expect(h.store.currentProject.sidecars.filter(({ schema }) => schema === "guyditor.assembly/v1")).toHaveLength(1);
+  });
+
+  it("prepare resolves the script from the attached files, sets roles and lists them in the evidence", async () => {
+    const h = await harness();
+    const { id } = await h.service.create({ assetIds: [FIRST, SECOND] });
+    await h.service.addFiles(id, [await fixture(h, "script.md", SCRIPT), await fixture(h, "dot.png", DOT)]);
+    const session = await prepare(h, id);
+    expect(session.status).toBe("conversing");
+    expect(session.inputs.files[0]?.role).toBe("script");
+    expect(session.inputs.files[1]?.role).toBe("context");
+    expect(session.evidence?.scriptBlocks.length).toBeGreaterThanOrEqual(1);
+    expect(session.evidence?.text).toContain("## Context files");
+    expect(session.evidence?.text).toMatch(/### F1 {2}script\.md {3}text {3}\d+ words {3}role: script {3}\(rendered as the script blocks above\)\n/u);
+    expect(session.evidence?.text).toContain("### F2  dot.png   image");
+    expect(session.evidence?.notes).toContain("script: F1 script.md");
+
+    const again = await h.service.create({ assetIds: [FIRST] });
+    await withScript(h, again.id);
+    await h.service.setScript(again.id, { mode: "none" });
+    const none = await prepare(h, again.id);
+    expect(none.evidence?.scriptBlocks).toHaveLength(0);
+    expect(none.evidence?.notes).toContain("script: none");
+    expect(none.inputs.files[0]?.role).toBe("context");
+  });
+
+  it("prepare notes an explicit script without quoted paragraphs", async () => {
+    const h = await harness();
+    const { id } = await h.service.create({ assetIds: [FIRST] });
+    await h.service.addFiles(id, [await fixture(h, "notes.md", "plain words only\n")]);
+    await h.service.setScript(id, { mode: "label", label: "F1" });
+    const session = await prepare(h, id);
+    expect(session.evidence?.scriptBlocks).toHaveLength(0);
+    expect(session.evidence?.notes).toEqual(expect.arrayContaining([
+      "script: F1 notes.md",
+      "F1 notes.md has no quoted paragraphs; no script blocks",
+    ]));
+    expect(session.inputs.files[0]?.role).toBe("script");
+    const text = session.evidence?.text ?? "";
+    const contextFiles = text.slice(text.indexOf("## Context files"), text.indexOf("## Footage"));
+    expect(contextFiles).toContain(
+      "### F1  notes.md   text   3 words   role: script   (chosen as the script but has no quoted paragraphs; shown inline)\nplain words only\n",
+    );
+  });
+
+  it("prepare fails naming a context file that went missing", async () => {
+    const h = await harness();
+    const { id } = await h.service.create({ assetIds: [FIRST] });
+    await withScript(h, id);
+    await rm(join(h.root, contextFilePath(id, "F1", "script.md")));
+    const session = await prepare(h, id);
+    expect(session.status).toBe("failed");
+    expect(session.error).toMatch(/F1/);
+  });
+
+  it("prepare re-snapshots the AI settings", async () => {
+    const h = await harness();
+    const { id } = await h.service.create({ assetIds: [FIRST] });
+    h.ai.model = "m2";
+    const session = await prepare(h, id);
+    expect(session.settings.model).toBe("m2");
+    expect(session.settings.transport).toBe("api");
   });
 
   it("prepare skips a silent clip with a note", async () => {
@@ -240,6 +327,164 @@ describe("AssemblyService", () => {
     const listed = await h.service.list();
     expect(listed.map(({ id }) => id)).toEqual([second.id, first.id]);
     expect(listed[1]!.status).toBe("abandoned");
+  });
+
+  describe("context files", () => {
+    const sha256 = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
+
+    it("addFiles copies, hashes and labels files monotonically", async () => {
+      const h = await harness();
+      const { id } = await h.service.create({ assetIds: [FIRST] });
+      const added = await h.service.addFiles(id, [await fixture(h, "script.md", SCRIPT), await fixture(h, "notes.md", "notes\n")]);
+      expect(added.inputs.files.map(({ label }) => label)).toEqual(["F1", "F2"]);
+      expect(added.inputs.nextFileLabel).toBe(3);
+      const [script] = added.inputs.files;
+      expect(script).toMatchObject({
+        name: "script.md", path: `sidecars/context/${id}/F1-script.md`, kind: "text", sent: true, role: "context",
+      });
+      const copy = await readFile(join(h.root, `sidecars/context/${id}/F1-script.md`));
+      expect(copy.toString("utf8")).toBe(SCRIPT);
+      expect(script?.sha256).toBe(sha256(copy));
+      expect(script?.bytes).toBe(copy.length);
+
+      const removed = await h.service.removeFile(id, "F1");
+      expect(removed.inputs.files.map(({ label }) => label)).toEqual(["F2"]);
+      await expect(readFile(join(h.root, `sidecars/context/${id}/F1-script.md`))).rejects.toThrow(/ENOENT/);
+      const again = await h.service.addFiles(id, [await fixture(h, "script.md", SCRIPT)]);
+      expect(again.inputs.files.map(({ label }) => label)).toEqual(["F2", "F3"]);
+      expect(again.inputs.nextFileLabel).toBe(4);
+      await expect(h.service.removeFile(id, "F1")).rejects.toThrow("E_ASSEMBLY_INVALID_INPUT");
+    });
+
+    it("files with the same basename get distinct paths", async () => {
+      const h = await harness();
+      const { id } = await h.service.create({ assetIds: [FIRST] });
+      const view = await h.service.addFiles(id, [await fixture(h, "a/notes.md", "a\n"), await fixture(h, "b/notes.md", "b\n")]);
+      expect(view.inputs.files.map(({ path }) => path)).toEqual([
+        `sidecars/context/${id}/F1-notes.md`,
+        `sidecars/context/${id}/F2-notes.md`,
+      ]);
+      expect(await readFile(join(h.root, view.inputs.files[0]!.path), "utf8")).toBe("a\n");
+      expect(await readFile(join(h.root, view.inputs.files[1]!.path), "utf8")).toBe("b\n");
+    });
+
+    it("refuses attachments beyond the 20 MB turn total with the running total", async () => {
+      const h = await harness();
+      const { id } = await h.service.create({ assetIds: [FIRST] });
+      await h.service.addFiles(id, [await fixture(h, "big1.pdf", pdfOf(15 * 1_048_576))]);
+      await expect(h.service.addFiles(id, [await fixture(h, "big2.pdf", pdfOf(6 * 1_048_576))])).rejects.toThrow(
+        "E_ASSEMBLY_FILES_TOO_LARGE: adding big2.pdf (6.0 MB) would put attached files at 21.0 MB; the limit is 20 MB",
+      );
+      const view = await h.service.get(id);
+      expect(view.inputs.files).toHaveLength(1);
+      expect(view.inputs.nextFileLabel).toBe(2);
+    });
+
+    it("a failing path in a batch attaches none of it", async () => {
+      const h = await harness();
+      const { id } = await h.service.create({ assetIds: [FIRST] });
+      const missing = join(h.root, "outside", "missing.md");
+      await expect(h.service.addFiles(id, [await fixture(h, "notes.md", "n\n"), missing]))
+        .rejects.toThrow(`E_ASSEMBLY_INVALID_INPUT: ${missing} is not a readable file`);
+      expect((await h.service.get(id)).inputs).toMatchObject({ files: [], nextFileLabel: 1 });
+      await expect(readFile(join(h.root, `sidecars/context/${id}/F1-notes.md`))).rejects.toThrow(/ENOENT/);
+    });
+
+    it("unsent files are kept and say why", async () => {
+      const h = await harness();
+      const { id } = await h.service.create({ assetIds: [FIRST] });
+      const view = await h.service.addFiles(id, [await fixture(h, "budget.xlsx", Buffer.from("PK\u0003\u0004sheet", "latin1"))]);
+      expect(view.inputs.files[0]).toMatchObject({ name: "budget.xlsx", sent: false, unsentReason: "unsupported type" });
+      await expect(readFile(join(h.root, `sidecars/context/${id}/F1-budget.xlsx`))).resolves.toBeDefined();
+    });
+
+    it("a file over every cap is listed unsent without being read or copied", async () => {
+      const h = await harness();
+      const { id } = await h.service.create({ assetIds: [FIRST] });
+      const sparse = async (name: string): Promise<string> => {
+        const path = await fixture(h, name, "");
+        const handle = await open(path, "r+");
+        await handle.truncate(33 * 1_048_576);
+        await handle.close();
+        return path;
+      };
+      const view = await h.service.addFiles(id, [await sparse("IMG_0001.mov"), await sparse("scan.pdf")]);
+      expect(view.inputs.files).toEqual([
+        {
+          label: "F1", name: "IMG_0001.mov", path: `sidecars/context/${id}/F1-IMG_0001.mov`, sha256: "",
+          bytes: 33 * 1_048_576, mime: "application/octet-stream", kind: "other", sent: false,
+          unsentReason: "unsupported type", pages: null, role: "context",
+        },
+        expect.objectContaining({ label: "F2", kind: "pdf", sent: false, unsentReason: "over 32 MB", sha256: "" }),
+      ]);
+      await expect(stat(join(h.root, `sidecars/context/${id}/F1-IMG_0001.mov`))).rejects.toThrow(/ENOENT/);
+      await expect(stat(join(h.root, `sidecars/context/${id}/F2-scan.pdf`))).rejects.toThrow(/ENOENT/);
+      expect((await h.service.get(id)).inputs.files.map(({ label }) => label)).toEqual(["F1", "F2"]);
+      expect((await h.service.removeFile(id, "F1")).inputs.files.map(({ label }) => label)).toEqual(["F2"]);
+    });
+
+    it("a directory is not a readable file", async () => {
+      const h = await harness();
+      const { id } = await h.service.create({ assetIds: [FIRST] });
+      const folder = join(h.root, "outside", "clips");
+      await mkdir(folder, { recursive: true });
+      await expect(h.service.addFiles(id, [await fixture(h, "notes.md", "n\n"), folder]))
+        .rejects.toThrow(`E_ASSEMBLY_INVALID_INPUT: ${folder} is not a readable file`);
+      expect((await h.service.get(id)).inputs).toMatchObject({ files: [], nextFileLabel: 1 });
+    });
+
+    it("setScript, removing the chosen script, and setAssets", async () => {
+      const h = await harness();
+      const { id } = await h.service.create({ assetIds: [FIRST] });
+      await h.service.addFiles(id, [await fixture(h, "script.md", SCRIPT), await fixture(h, "dot.png", DOT)]);
+      expect((await h.service.setScript(id, { mode: "label", label: "F1" })).inputs.script)
+        .toEqual({ mode: "label", label: "F1" });
+      await expect(h.service.setScript(id, { mode: "label", label: "F2" })).rejects.toThrow(/E_ASSEMBLY_INVALID_INPUT/);
+      await expect(h.service.setScript(id, { mode: "label", label: "F9" })).rejects.toThrow(/E_ASSEMBLY_INVALID_INPUT/);
+      expect((await h.service.removeFile(id, "F1")).inputs.script).toEqual({ mode: "auto" });
+      expect((await h.service.setAssets(id, [SECOND])).inputs.assetIds).toEqual([SECOND]);
+      await expect(h.service.setAssets(id, ["ast_cccccccccc"])).rejects.toThrow(/E_ASSEMBLY_INVALID_INPUT/);
+      await expect(h.service.setAssets(id, [])).rejects.toThrow(/E_ASSEMBLY_INVALID_INPUT/);
+      await expect(h.service.setAssets(id, [FIRST, FIRST])).rejects.toThrow(/E_ASSEMBLY_INVALID_INPUT/);
+      expect((await h.service.get(id)).inputs.assetIds).toEqual([SECOND]);
+    });
+
+    it("setScript refuses a text file that will not be sent", async () => {
+      const h = await harness();
+      const { id } = await h.service.create({ assetIds: [FIRST] });
+      await h.service.addFiles(id, [await fixture(h, "script.md", SCRIPT), await fixture(h, "long.md", "a".repeat(204_801))]);
+      await expect(h.service.setScript(id, { mode: "label", label: "F2" })).rejects.toThrow(
+        "E_ASSEMBLY_INVALID_INPUT: F2 is over 200 KB and cannot be the script",
+      );
+      expect((await h.service.get(id)).inputs.script).toEqual({ mode: "auto" });
+    });
+
+    it("inputs are read-only from preparing on", async () => {
+      const h = await harness();
+      const { id } = await h.service.create({ assetIds: [FIRST] });
+      await withScript(h, id);
+      await prepare(h, id);
+      const path = await fixture(h, "notes.md", "n\n");
+      await expect(h.service.addFiles(id, [path])).rejects.toThrow(
+        `E_ASSEMBLY_STATE: session ${id} is conversing; inputs can only change before Analyze (Start over to change them)`,
+      );
+      await expect(h.service.removeFile(id, "F1")).rejects.toThrow(/E_ASSEMBLY_STATE/);
+      await expect(h.service.setScript(id, { mode: "none" })).rejects.toThrow(/E_ASSEMBLY_STATE/);
+      await expect(h.service.setAssets(id, [SECOND])).rejects.toThrow(/E_ASSEMBLY_STATE/);
+
+      const failed = await harness({ transcripts: "none" });
+      const other = await failed.service.create({ assetIds: [FIRST] });
+      expect((await prepare(failed, other.id)).status).toBe("failed");
+      const added = await failed.service.addFiles(other.id, [await fixture(failed, "notes.md", "n\n")]);
+      expect(added.inputs.files.map(({ label }) => label)).toEqual(["F1"]);
+    });
+
+    it("pickContextFiles returns the dialog's paths", async () => {
+      const picked = await harness({ pickFiles: async () => ["/a.md"] });
+      await expect(picked.service.pickContextFiles()).resolves.toEqual(["/a.md"]);
+      const plain = await harness();
+      await expect(plain.service.pickContextFiles()).resolves.toEqual([]);
+    });
   });
 
   describe("waiting for transcription", () => {
@@ -360,12 +605,22 @@ const SEND_RATES = { "claude-sonnet-5-5": { inputPerMTok: 2, outputPerMTok: 10 }
 
 async function conversing(send: SendOptions) {
   const h = await harness({ send: { adapterFactory: stubFactory, ...send } });
-  const { id } = await h.service.create({ assetIds: [FIRST, SECOND], scriptPath: h.scriptPath });
+  const { id } = await h.service.create({ assetIds: [FIRST, SECOND] });
+  await withScript(h, id);
   await prepare(h, id);
   return { ...h, id };
 }
 
 describe("AssemblyService.send", () => {
+  it("the external notice names attached files", async () => {
+    const h = await conversing({ externalCalls: "ask" });
+    const asked = await h.service.send({ sessionId: h.id, text: "go" });
+    expect(asked).toMatchObject({
+      kind: "acknowledge-external",
+      notice: "Sends the transcript, the conversation and the files you attach to anthropic. Never your footage.",
+    });
+  });
+
   it("blocks when externalCalls is block", async () => {
     const h = await conversing({ externalCalls: "block" });
     await expect(h.service.send({ sessionId: h.id, text: "go" })).resolves.toMatchObject({ kind: "blocked" });
@@ -548,6 +803,100 @@ describe("AssemblyService.send", () => {
     const starts = h.auditLog.readSession(view.auditSessionId!).records.filter((r) => r.type === "session.start");
     expect(starts).toHaveLength(1);
   });
+
+  /** A 2-page PDF as far as the page counter is concerned. */
+  const TWO_PAGES = Buffer.from("%PDF-1.4\n1 0 obj << /Type /Page >> endobj\n2 0 obj << /Type /Page >> endobj\n%%EOF\n", "latin1");
+
+  function capturing(reply: unknown = PLAN_OF("w000001", "w000002"), reportedUsd?: number) {
+    const requests: LlmRequest[] = [];
+    const factory = vi.fn<typeof createLlmAdapter>(() => ({
+      provider: "anthropic",
+      listModels: () => Promise.resolve([]),
+      complete: (request) => {
+        requests.push(request);
+        return Promise.resolve({ reply, usage: { inputTokens: 0, outputTokens: 0 }, ...(reportedUsd === undefined ? {} : { reportedUsd }) });
+      },
+    }));
+    return { requests, factory };
+  }
+
+  async function withImageAndPdf(send: SendOptions) {
+    const h = await harness({ send });
+    const { id } = await h.service.create({ assetIds: [FIRST, SECOND] });
+    await h.service.addFiles(id, [await fixture(h, "dot.png", DOT), await fixture(h, "two.pdf", TWO_PAGES)]);
+    await prepare(h, id);
+    return { ...h, id };
+  }
+
+  it("sends image and pdf bytes as parts, counts them in the estimate and audits the frames class", async () => {
+    const adapter = capturing();
+    const h = await withImageAndPdf({ externalCalls: "allow", adapterFactory: adapter.factory });
+    const preflight = vi.spyOn(h.costMeter, "preflight");
+    const result = await h.service.send({ sessionId: h.id, text: "go" });
+    expect(result.kind).toBe("turn");
+    const parts = adapter.requests[0]!.messages[0]!.content;
+    expect(parts.map(({ type }) => type)).toEqual(["text", "image", "pdf"]);
+    expect(parts[1]).toEqual({ type: "image", mime: "image/png", data: expect.anything() as unknown, label: "F1", name: "dot.png" });
+    expect(Buffer.from((parts[1] as { data: Uint8Array }).data).equals(DOT)).toBe(true);
+    expect(parts[2]).toMatchObject({ type: "pdf", mime: "application/pdf", label: "F2", name: "two.pdf" });
+    expect(Buffer.from((parts[2] as { data: Uint8Array }).data).equals(TWO_PAGES)).toBe(true);
+    expect((preflight.mock.calls[0]![0].units as { inputTokens: number }).inputTokens).toBeGreaterThanOrEqual(1600 + 4000);
+    const view = await h.service.get(h.id);
+    const call = h.auditLog.readSession(view.auditSessionId!).records.find((record) => record.type === "external.call") as unknown as
+      { provider: string; dataClassesSent: string[]; payloadSummary: { frames?: number } };
+    expect(call.provider).toBe("anthropic");
+    expect(call.dataClassesSent).toContain("frames");
+    expect(call.payloadSummary.frames).toBe(2);
+  });
+
+  it("a missing attachment fails the turn readably and keeps the session sendable", async () => {
+    const adapter = capturing();
+    const h = await withImageAndPdf({ externalCalls: "allow", adapterFactory: adapter.factory });
+    const png = join(h.root, contextFilePath(h.id, "F1", "dot.png"));
+    await rm(png);
+    await expect(h.service.send({ sessionId: h.id, text: "go" }))
+      .rejects.toThrow(/E_ASSEMBLY_FILE_MISSING: F1 dot.png is missing from sidecars\/context\//);
+    expect(adapter.requests).toHaveLength(0);
+    const view = await h.service.get(h.id);
+    expect(view.status).toBe("conversing");
+    expect(view.messages).toHaveLength(0);
+    await writeFile(png, DOT);
+    await expect(h.service.send({ sessionId: h.id, text: "go" })).resolves.toMatchObject({ kind: "turn" });
+  });
+
+  it.each([["anthropic", "claude", "claude-cli"], ["openai", "codex", "codex-cli"]] as const)(
+    "cli transport needs no key, quotes zero, records the reported cost and labels the audit %s %s %s",
+    async (provider, cli, label) => {
+      const adapter = capturing(PLAN_OF("w000001", "w000002"), 0.42);
+      const h = await harness({
+        send: {
+          externalCalls: "allow", provider, model: "claude-sonnet-5-5", rates: SEND_RATES, adapterFactory: adapter.factory,
+          aiSettings: { transport: () => "cli", cliBinary: () => `/x/${cli}`, apiKey: () => Promise.resolve(undefined) },
+        },
+      });
+      const { id } = await h.service.create({ assetIds: [FIRST, SECOND] });
+      await prepare(h, id);
+      const preflight = vi.spyOn(h.costMeter, "preflight");
+      const result = await h.service.send({ sessionId: id, text: "go" });
+      if (result.kind !== "turn") throw new Error("expected turn");
+      const cwd = join(h.root, "sidecars/context", id);
+      expect(adapter.factory).toHaveBeenCalledWith(provider, {
+        apiKey: "", transport: "cli", cli: { binary: `/x/${cli}`, cwd },
+      });
+      expect(preflight.mock.calls[0]![0]).toMatchObject({ adapterId: `llm.${label}`, amount: 0, confidence: "quote" });
+      expect(result.session.messages.at(-1)?.usage).toEqual({ inputTokens: 0, outputTokens: 0, usd: 0.42, estimated: false });
+      const records = h.auditLog.readSession(result.session.auditSessionId!).records;
+      const call = records.find((record) => record.type === "external.call") as unknown as { provider: string; adapterId: string };
+      expect(call.provider).toBe(label);
+      expect(call.adapterId).toBe(`llm.${label}`);
+      const charge = records.find((record) => record.type === "cost.charge") as unknown as { costUsd: number };
+      expect(charge.costUsd).toBe(0.42);
+      expect(records.find((record) => record.type === "session.start")).toMatchObject({
+        director: { modelLabel: `${label}/claude-sonnet-5-5` },
+      });
+      expect((await stat(cwd)).isDirectory()).toBe(true);
+    },
+  );
 });
 
 describe("AssemblyService proposals", () => {
@@ -567,7 +916,8 @@ describe("AssemblyService proposals", () => {
       send: { externalCalls: "allow", adapterFactory: adapter(plan) },
       proposals: { tightening },
     });
-    const { id } = await h.service.create({ assetIds: [FIRST, SECOND], scriptPath: h.scriptPath });
+    const { id } = await h.service.create({ assetIds: [FIRST, SECOND] });
+    await withScript(h, id);
     await prepare(h, id);
     await h.service.send({ sessionId: id, text: "go" });
     return { ...h, id };

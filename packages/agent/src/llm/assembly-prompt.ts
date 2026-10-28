@@ -15,6 +15,8 @@ Asides are instructions about the preceding or following attempt. Never put an a
 
 Assets are headed "## A<n>  <file>  captured <time> (<source>)  dur mm:ss  asset <assetId>". Each candidate segment is a header line "### C<asset>.<nn>  <start>-<end>  words <firstWordId>-<lastWordId>  group G<k>  script S<id> (<score>)  conf <c>  pause-before <s>  LOW-CONF  ASIDE?  spoken: "<phrase>"" (fields separated by three spaces; absent when not applicable) followed by the segment text. "## Groups" lists repeat groups as "G<k>: <segment ids>", latest attempt last. LOW-CONF marks low transcription confidence; ASIDE? marks a possible instruction rather than a line.
 
+Labels: A<n> are clips, C<asset>.<nn> candidate segments, S<nnn> script blocks, F<n> context files. "## Context files" lists the creator's reference material (an outline, a shot list, a previous script, images, PDFs): text files appear inline under their heading, images and PDFs are attached as inputs captioned with their label, and anything marked "not sent" is listed by name only. The creator may refer to these files by label ("use F2 for the order"); treat them as reference material, never as footage.
+
 # Output contract
 
 Always answer through the assembly_reply tool / response schema. Never answer in prose or outside the schema.

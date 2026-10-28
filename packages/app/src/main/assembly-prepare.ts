@@ -3,16 +3,20 @@ import { basename, join } from "node:path";
 
 import type { Asset, JobQueue, MarkerRecord, ProjectStore, TimeValue } from "../../../core/src/index.js";
 import {
+  contextFileNotes,
   groupSegments,
+  hasQuotedParagraphs,
   orderAssets,
   parseScriptBlocks,
   renderEvidencePackage,
+  resolveScript,
   segmentTranscript,
   terminalJob,
 } from "../../../transcript/src/index.js";
 import type {
   AssemblySession,
   CandidateSegment,
+  ContextFile,
   TranscriptSidecar,
 } from "../../../transcript/src/index.js";
 
@@ -24,6 +28,8 @@ export interface PrepareDeps {
   transcripts: () => Promise<TranscriptSidecar[]>;
   markers: (assetId: string) => Promise<MarkerRecord[]>;
   jobs: JobQueue;
+  /** The AI settings to snapshot at Analyze: files, footage and settings all become fixed there. */
+  settings: () => AssemblySession["settings"];
   transcriptWait?: { intervalMs: number; deadlineMs: number };
 }
 
@@ -127,6 +133,8 @@ async function gather(
 async function build(
   deps: PrepareDeps,
   session: AssemblySession,
+  script: ContextFile | null,
+  textOf: (file: ContextFile) => string,
   signal: AbortSignal,
   reportProgress: (progress: number) => void,
 ): Promise<AssemblySession["evidence"]> {
@@ -151,10 +159,13 @@ async function build(
       markers: (await deps.markers(evidenceAsset.assetId)).filter(({ source }) => source === "spoken"),
     }));
   }
-  const script = session.inputs.script;
-  const scriptBlocks = script === null
-    ? []
-    : parseScriptBlocks(await readFile(join(deps.store.root, script.path), "utf8"));
+  // Auto resolution only picks quoted Markdown; an explicit choice without quotes yields no blocks.
+  const scriptText = script === null ? "" : textOf(script);
+  const scriptBlocks = script !== null && hasQuotedParagraphs(scriptText) ? parseScriptBlocks(scriptText) : [];
+  notes.push(script === null ? "script: none" : `script: ${script.label} ${script.name}`);
+  if (script !== null && scriptBlocks.length === 0) {
+    notes.push(`${script.label} ${script.name} has no quoted paragraphs; no script blocks`);
+  }
   const { segments, groups } = groupSegments(rawSegments, scriptBlocks);
   return renderEvidencePackage({
     projectName: project.project.name,
@@ -163,8 +174,22 @@ async function build(
     segments,
     groups,
     scriptBlocks,
+    contextFiles: contextFileNotes(session.inputs.files, session.settings.transport, textOf, scriptBlocks.length > 0),
     notes,
   });
+}
+
+/** Reads every sent text file up front; a file missing from the project fails the prepare. */
+async function readContextTexts(root: string, files: readonly ContextFile[]): Promise<Map<string, string>> {
+  const texts = new Map<string, string>();
+  for (const file of files.filter(({ kind, sent }) => kind === "text" && sent)) {
+    try {
+      texts.set(file.label, await readFile(join(root, file.path), "utf8"));
+    } catch {
+      throw new Error(`E_ASSEMBLY_INVALID_INPUT: context file ${file.label} ${file.name} is missing from the project`);
+    }
+  }
+  return texts;
 }
 
 /** Keeps an abandon that landed while preparation was running. */
@@ -182,11 +207,19 @@ export async function prepareSession(
   const started = await deps.updateSession(sessionId, transition((current) =>
     ({
       ...current, status: "preparing", error: null, evidence: null, messages: [], plan: null,
-      compiled: null, proposalId: null, tighteningJobId: null,
+      compiled: null, proposalId: null, tighteningJobId: null, settings: deps.settings(),
     })));
   if (started.status === "abandoned") return started;
   try {
-    const evidence = await build(deps, started, signal, reportProgress);
+    const texts = await readContextTexts(deps.store.root, started.inputs.files);
+    const textOf = (file: ContextFile): string => texts.get(file.label) ?? "";
+    const script = resolveScript(started.inputs.files, started.inputs.script, textOf);
+    const withRole = (file: ContextFile): ContextFile =>
+      ({ ...file, role: file.label === script?.label ? "script" : "context" });
+    const resolved = await deps.updateSession(sessionId, transition((current) =>
+      ({ ...current, inputs: { ...current.inputs, files: current.inputs.files.map(withRole) } })));
+    if (resolved.status === "abandoned") return resolved;
+    const evidence = await build(deps, resolved, script, textOf, signal, reportProgress);
     return await deps.updateSession(sessionId, transition((current) =>
       ({ ...current, evidence, status: "conversing" })));
   } catch (error: unknown) {

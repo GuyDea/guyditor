@@ -4,12 +4,14 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { EphemeralCredentialStore } from "../../../agent/src/index.js";
+import { EphemeralCredentialStore, knownModels } from "../../../agent/src/index.js";
 import type { createLlmAdapter } from "../../../agent/src/index.js";
+import { fakeSpawn } from "../../../agent/src/llm/__fixtures__/fake-spawn.js";
+import type { FakeRun } from "../../../agent/src/llm/__fixtures__/fake-spawn.js";
 import { AiSettingsService } from "./ai-settings-service.js";
 import { DEFAULT_SETTINGS, loadSettings } from "./settings.js";
 
-async function setup(factory?: typeof createLlmAdapter) {
+async function setup(factory?: typeof createLlmAdapter, spawn?: ReturnType<typeof fakeSpawn>["spawn"]) {
   const userDirectory = await mkdtemp(join(tmpdir(), "guyditor-ai-"));
   const service = new AiSettingsService({
     userDirectory,
@@ -18,6 +20,7 @@ async function setup(factory?: typeof createLlmAdapter) {
     externalCalls: "ask",
     encryptionAvailable: false,
     ...(factory === undefined ? {} : { adapterFactory: factory }),
+    ...(spawn === undefined ? {} : { spawn }),
   });
   return { userDirectory, service, surface: service.surface() as Record<string, (p: unknown) => Promise<never>> };
 }
@@ -71,9 +74,9 @@ describe("AiSettingsService", () => {
     expect(usedKey).toBe("k-1");
   });
 
-  it("exposes the five IPC methods", async () => {
+  it("exposes the six IPC methods", async () => {
     const { surface } = await setup();
-    expect(Object.keys(surface).sort()).toEqual(["clearKey", "get", "listModels", "setKey", "update"]);
+    expect(Object.keys(surface).sort()).toEqual(["checkCli", "clearKey", "get", "listModels", "setKey", "update"]);
   });
 
   it("serializes concurrent updates without losing writes", async () => {
@@ -90,5 +93,44 @@ describe("AiSettingsService", () => {
     expect((await readdir(userDirectory)).some((f) => f.startsWith("settings.json.bad-"))).toBe(true);
     const raw = JSON.parse(await readFile(join(userDirectory, "settings.json"), "utf8")) as { ai: { effort: string } };
     expect(raw.ai.effort).toBe("low");
+  });
+
+  it("persists transport and cli paths and rejects bad values", async () => {
+    const { userDirectory, service } = await setup();
+    await service.update({ transport: { anthropic: "cli" }, cli: { claudePath: "/opt/claude" } } as never);
+    const raw = JSON.parse(await readFile(join(userDirectory, "settings.json"), "utf8")) as {
+      ai: { transport: unknown; cli: { claudePath: string; codexPath: string } };
+    };
+    expect(raw.ai.transport).toEqual({ anthropic: "cli", openai: "api" });
+    expect(raw.ai.cli.claudePath).toBe("/opt/claude");
+    expect(raw.ai.cli.codexPath).toBe("codex");
+    expect(service.transport("anthropic")).toBe("cli");
+    expect(service.cliBinary("anthropic")).toBe("/opt/claude");
+    expect(service.cliBinary("openai")).toBe("codex");
+    await expect(service.update({ transport: { anthropic: "ssh" } } as never)).rejects.toThrow(/E_AI_SETTINGS_INVALID/);
+    await expect(service.update({ cli: { codexPath: "" } } as never)).rejects.toThrow(/E_AI_SETTINGS_INVALID/);
+  });
+
+  it("listModels needs no key on the cli transport", async () => {
+    const { service } = await setup();
+    await expect(service.listModels("anthropic")).rejects.toThrow(/E_AI_KEY_MISSING/);
+    await service.update({ transport: { anthropic: "cli" } } as never);
+    await expect(service.listModels("anthropic")).resolves.toEqual(knownModels("anthropic"));
+  });
+
+  it("checkCli reports the version or the failure through the injected spawn", async () => {
+    const ok = fakeSpawn({ stdout: "2.1.309 (Claude Code)\n", code: 0 });
+    const first = await setup(undefined, ok.spawn);
+    await first.service.update({ cli: { claudePath: "/opt/claude" } } as never);
+    await expect(first.service.checkCli("anthropic")).resolves.toEqual({ ok: true, version: "2.1.309 (Claude Code)" });
+    expect(ok.calls[0]?.binary).toBe("/opt/claude");
+    expect(ok.calls[0]?.args).toEqual(["--version"]);
+
+    const missing: FakeRun = { error: Object.assign(new Error("spawn claude ENOENT"), { code: "ENOENT" }) };
+    const second = await setup(undefined, fakeSpawn(missing).spawn);
+    await expect(second.service.checkCli("anthropic")).resolves.toEqual({
+      ok: false,
+      message: expect.stringMatching(/claude not found/) as string,
+    });
   });
 });

@@ -4,7 +4,7 @@ import {
   segmentTranscript, type AssemblyPlan, type AssemblyReply,
 } from "../../../transcript/src/index.js";
 import { scriptedTranscript } from "../../../transcript/src/assembly/__fixtures__/scripted-transcript.js";
-import { createLlmAdapter, type LlmRequest } from "./types.js";
+import { createLlmAdapter, textMessage, type LlmRequest } from "./types.js";
 
 const LINE = "the quick brown fox jumps over the lazy dog";
 const SCRIPT = [
@@ -33,14 +33,14 @@ function evidence(withAside: boolean): string {
   ];
   const { segments, groups } = groupSegments(raw, scriptBlocks);
   return renderEvidencePackage({
-    projectName: "Demo", language: "en", assets, segments, groups, scriptBlocks, notes: [],
+    projectName: "Demo", language: "en", assets, segments, groups, scriptBlocks, contextFiles: [], notes: [],
   }).text;
 }
 
 function request(text: string, assistantTurns = 0): LlmRequest {
-  const messages: LlmRequest["messages"] = [{ role: "user", content: text }];
+  const messages: LlmRequest["messages"] = [textMessage("user", text)];
   for (let i = 0; i < assistantTurns; i += 1) {
-    messages.push({ role: "assistant", content: "{}" }, { role: "user", content: "Instruction, drop it" });
+    messages.push(textMessage("assistant", "{}"), textMessage("user", "Instruction, drop it"));
   }
   return {
     model: "stub-model", effort: "low", system: "sys", messages,
@@ -64,6 +64,23 @@ describe("StubLlmAdapter", () => {
     expect(typed.questions[0]!.options).toEqual(["Instruction, drop it", "It is a line, keep it"]);
     expect(usage.outputTokens).toBe(200);
     expect(usage.inputTokens).toBeGreaterThan(0);
+  });
+
+  it("reads the evidence from text parts and ignores binary parts", async () => {
+    const base = request(evidence(false));
+    const withFile: LlmRequest = {
+      ...base,
+      messages: [{
+        role: "user",
+        content: [
+          ...base.messages[0]!.content,
+          { type: "image", mime: "image/png", data: new Uint8Array(4096), label: "F1", name: "a.png" },
+        ],
+      }],
+    };
+    const { reply, usage } = await stub.complete(withFile);
+    expect((reply as AssemblyReply).status).toBe("plan");
+    expect(usage).toEqual((await stub.complete(base)).usage);
   });
 
   it("plans latest-wins after the answer", async () => {

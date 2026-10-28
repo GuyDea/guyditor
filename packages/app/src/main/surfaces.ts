@@ -130,6 +130,22 @@ const aiSettingsSurface: IpcSurface = {
           model: { type: "string", minLength: 1 },
           effort: { type: "string", enum: ["low", "medium", "high", "max"] },
           tightening: { type: "string", enum: ["ask", "gentle", "off"] },
+          transport: {
+            type: "object",
+            properties: {
+              anthropic: { type: "string", enum: ["api", "cli"] },
+              openai: { type: "string", enum: ["api", "cli"] },
+            },
+            additionalProperties: false,
+          },
+          cli: {
+            type: "object",
+            properties: {
+              claudePath: { type: "string", minLength: 1 },
+              codexPath: { type: "string", minLength: 1 },
+            },
+            additionalProperties: false,
+          },
           rates: {
             type: "object",
             additionalProperties: {
@@ -160,15 +176,23 @@ const aiSettingsSurface: IpcSurface = {
       budgetMs: 20,
     },
     clearKey: { paramsSchema: aiProviderParams, resultSchema: anyResult, budgetMs: 20 },
+    checkCli: { paramsSchema: aiProviderParams, resultSchema: anyResult, budgetMs: 15_000 },
   },
 };
 
+const assemblySessionId: JsonSchema = { type: "string", pattern: "^asb_[a-z2-7]{10}$" };
 const assemblySessionParams: JsonSchema = {
   type: "object",
   required: ["sessionId"],
-  properties: { sessionId: { type: "string", pattern: "^asb_[a-z2-7]{10}$" } },
+  properties: { sessionId: assemblySessionId },
   additionalProperties: false,
 };
+const assemblyAssetIds: JsonSchema = {
+  type: "array",
+  minItems: 1,
+  items: { type: "string", pattern: "^ast_[a-z2-7]{10}$" },
+};
+const contextFileLabel: JsonSchema = { type: "string", pattern: "^F[0-9]+$" };
 const assemblySurface: IpcSurface = {
   service: "Assembly",
   methods: {
@@ -177,14 +201,75 @@ const assemblySurface: IpcSurface = {
       paramsSchema: {
         type: "object",
         required: ["assetIds"],
+        properties: { assetIds: assemblyAssetIds },
+        additionalProperties: false,
+      },
+      resultSchema: anyResult,
+      budgetMs: 20,
+    },
+    pickContextFiles: { paramsSchema: emptyParams, resultSchema: { type: "array" }, budgetMs: 20 },
+    addFiles: {
+      paramsSchema: {
+        type: "object",
+        required: ["sessionId", "paths"],
         properties: {
-          assetIds: {
-            type: "array",
-            minItems: 1,
-            items: { type: "string", pattern: "^ast_[a-z2-7]{10}$" },
-          },
-          scriptPath: { type: "string", minLength: 1 },
+          sessionId: assemblySessionId,
+          paths: { type: "array", minItems: 1, items: { type: "string", minLength: 1 } },
         },
+        additionalProperties: false,
+      },
+      resultSchema: anyResult,
+      budgetMs: 200,
+    },
+    removeFile: {
+      paramsSchema: {
+        type: "object",
+        required: ["sessionId", "label"],
+        properties: { sessionId: assemblySessionId, label: contextFileLabel },
+        additionalProperties: false,
+      },
+      resultSchema: anyResult,
+      budgetMs: 20,
+    },
+    setScript: {
+      paramsSchema: {
+        type: "object",
+        required: ["sessionId", "script"],
+        properties: {
+          sessionId: assemblySessionId,
+          script: {
+            oneOf: [
+              {
+                type: "object",
+                required: ["mode"],
+                properties: { mode: { const: "auto" } },
+                additionalProperties: false,
+              },
+              {
+                type: "object",
+                required: ["mode", "label"],
+                properties: { mode: { const: "label" }, label: contextFileLabel },
+                additionalProperties: false,
+              },
+              {
+                type: "object",
+                required: ["mode"],
+                properties: { mode: { const: "none" } },
+                additionalProperties: false,
+              },
+            ],
+          },
+        },
+        additionalProperties: false,
+      },
+      resultSchema: anyResult,
+      budgetMs: 20,
+    },
+    setAssets: {
+      paramsSchema: {
+        type: "object",
+        required: ["sessionId", "assetIds"],
+        properties: { sessionId: assemblySessionId, assetIds: assemblyAssetIds },
         additionalProperties: false,
       },
       resultSchema: anyResult,
@@ -199,7 +284,7 @@ const assemblySurface: IpcSurface = {
         type: "object",
         required: ["sessionId"],
         properties: {
-          sessionId: { type: "string", pattern: "^asb_[a-z2-7]{10}$" },
+          sessionId: assemblySessionId,
           text: { type: "string" },
           optionIndex: { type: "integer", minimum: 0 },
           questionId: { type: "string" },

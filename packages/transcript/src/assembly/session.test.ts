@@ -14,9 +14,8 @@ function fresh() {
   return createAssemblySession({
     id: "asb_aaaaaaaaaa",
     now: "2026-10-27T10:00:00.000Z",
-    settings: { provider: "stub", model: "stub-1", effort: "medium", tightening: "ask" },
+    settings: { provider: "stub", model: "stub-1", effort: "medium", tightening: "ask", transport: "api" },
     assetIds: ["ast_aaaaaaaaaa", "ast_bbbbbbbbbb"],
-    script: { name: "script.md", path: "/tmp/script.md", sha256: "0".repeat(64) },
   });
 }
 
@@ -35,6 +34,21 @@ function populated(): AssemblySession {
   };
   return {
     ...session,
+    inputs: {
+      ...session.inputs,
+      files: [
+        {
+          label: "F1", name: "script.md", path: "sidecars/context/asb_aaaaaaaaaa/F1-script.md", sha256: "2".repeat(64),
+          bytes: 120, mime: "text/markdown", kind: "text", sent: true, unsentReason: null, pages: null, role: "script",
+        },
+        {
+          label: "F2", name: "dot.png", path: "sidecars/context/asb_aaaaaaaaaa/F2-dot.png", sha256: "3".repeat(64),
+          bytes: 68, mime: "image/png", kind: "image", sent: true, unsentReason: null, pages: null, role: "context",
+        },
+      ],
+      script: { mode: "label", label: "F1" },
+      nextFileLabel: 3,
+    },
     status: "proposed",
     updatedAt: "2026-10-27T10:05:00.000Z",
     auditSessionId: "ses_aaaaaaaaaa",
@@ -93,6 +107,16 @@ describe("assembly session sidecar", () => {
     expect(parsed.status).toBe("created");
     expect(parsed.messages.length).toBe(0);
     expect(parsed.externalAcknowledged).toBe(false);
+    expect(parsed.inputs).toEqual({
+      assetIds: ["ast_aaaaaaaaaa", "ast_bbbbbbbbbb"], files: [], script: { mode: "auto" }, nextFileLabel: 1,
+    });
+    expect(parsed.settings.transport).toBe("api");
+  });
+
+  it("rejects the pre-v2 inputs shape", () => {
+    const old = JSON.parse(serializeAssemblySession(fresh())) as { inputs: Record<string, unknown> };
+    old.inputs = { assetIds: ["ast_aaaaaaaaaa"], script: null };
+    expect(() => parseAssemblySession(JSON.stringify(old))).toThrow(/E_ASSEMBLY_SIDECAR_INVALID/);
   });
 
   it("rejects a sidecar with the wrong schema id", () => {

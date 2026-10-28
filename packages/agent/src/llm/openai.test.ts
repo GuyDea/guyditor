@@ -1,14 +1,23 @@
 import { describe, expect, it, vi } from "vitest";
 import { ASSEMBLY_REPLY_SCHEMA } from "../../../transcript/src/index.js";
 import { OpenAiLlmAdapter, toOpenAiStrictSchema } from "./openai.js";
-import { LlmAdapterError, type LlmRequest } from "./types.js";
+import { LlmAdapterError, textMessage, type LlmMessage, type LlmRequest } from "./types.js";
 
 const SCHEMA = { type: "object", properties: { a: { type: "string" } }, required: ["a"], additionalProperties: false };
+
+const FILES: LlmMessage = {
+  role: "user",
+  content: [
+    { type: "text", text: "hi" },
+    { type: "image", mime: "image/png", data: new Uint8Array([1, 2, 3]), label: "F2", name: "storyboard.png" },
+    { type: "pdf", mime: "application/pdf", data: new Uint8Array([1, 2, 3]), label: "F3", name: "deck.pdf" },
+  ],
+};
 
 function req(over: Partial<LlmRequest> = {}): LlmRequest {
   return {
     model: "gpt-5.5", effort: "medium", system: "SYS", maxOutputTokens: 1000,
-    messages: [{ role: "user", content: "hi" }], responseSchema: SCHEMA, ...over,
+    messages: [textMessage("user", "hi")], responseSchema: SCHEMA, ...over,
   };
 }
 
@@ -38,6 +47,19 @@ function count(node: unknown, key: string): number {
 }
 
 describe("OpenAiLlmAdapter", () => {
+  it("sends images as data URLs and PDFs as input_file", async () => {
+    const fetchFn = vi.fn(async () => ok('{"reply":{}}'));
+    await new OpenAiLlmAdapter({ apiKey: "k", fetch: fetchFn as unknown as typeof fetch }).complete(req({ messages: [FILES] }));
+    const [, init] = fetchFn.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(init.body as string).input[0].content).toEqual([
+      { type: "input_text", text: "hi" },
+      { type: "input_text", text: "F2 (storyboard.png):" },
+      { type: "input_image", image_url: "data:image/png;base64,AQID" },
+      { type: "input_text", text: "F3 (deck.pdf):" },
+      { type: "input_file", filename: "deck.pdf", file_data: "data:application/pdf;base64,AQID" },
+    ]);
+  });
+
   it("sends reasoning effort and strict json schema", async () => {
     const fetchFn = vi.fn(async () => ok('{"reply":{}}'));
     const signal = new AbortController().signal;

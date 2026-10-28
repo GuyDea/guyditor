@@ -26,13 +26,15 @@ Only the evidence text and conversation are sent to the provider; `network.exter
 (`allow|ask|block`) is honoured; every call is cost-metered and audited
 (`external.call` + `cost.charge`); keys live in the OS-encrypted store.
 
+Context files, the script dropdown and the local-CLI transport are added by [Amendment 009](009-assembly-inputs.md).
+
 ## New persisted names
 
 - Sidecar `guyditor.assembly/v1` at `sidecars/assembly/<asb_id>.json`; script copy at
   `sidecars/scripts/<asb_id>.script.md`.
 - Id prefix **`asb`** (`asb_` + 10 base32 characters).
 - Settings key `ai` in `settings.json`: `provider` (`anthropic|openai`), `model`,
-  `effort`, `tightening` (`ask|gentle|off`, default `ask`), `rates` (per-model $/M tokens).
+  `effort`, `tightening` (`ask|gentle|off`, default `ask`), `rates` (per-model $/M tokens). The rate editor is not exposed in the UI as of this branch; the cost gate uses the stored rates.
   Existing keys reused: `network.externalCalls`, `budgets.*`.
 - Env var `GUYDITOR_ASSEMBLY_STUB=1` selects the deterministic stub provider (tests).
 - Filler rule set `GENTLE_FILLER_RULE_SET` for post-assembly tightening.
