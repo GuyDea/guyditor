@@ -29,11 +29,18 @@ const LISTENER_OPTIONS = { capture: true, passive: false } as const;
 
 export type HelpKeyDecision = "toggle" | "close-popup" | "exit" | "allow" | "block";
 
+/**
+ * `welcomeShown`: the welcome screen covers the title bar, so help mode must not turn on
+ * behind it (the toggle and banner would be hidden). Turning it off still works.
+ */
 export function helpKeyDecision(
   event: { key: string; shiftKey: boolean; inAllowedRegion: boolean; ctrlKey?: boolean; repeat?: boolean },
-  state: { active: boolean; popupOpen: boolean },
+  state: { active: boolean; popupOpen: boolean; welcomeShown?: boolean },
 ): HelpKeyDecision {
-  if (event.key === "F1" && event.shiftKey) return event.repeat === true ? "block" : "toggle";
+  if (event.key === "F1" && event.shiftKey) {
+    if (event.repeat === true) return "block";
+    return !state.active && state.welcomeShown === true ? "block" : "toggle";
+  }
   if (!state.active) return "allow";
   if (event.key === "Escape") return state.popupOpen ? "close-popup" : "exit";
   if (event.inAllowedRegion && (event.key === "Tab" || event.key === "Enter")) return "allow";
@@ -73,6 +80,10 @@ export function installHelpGate(target: Window): () => void {
     else delete root.dataset.helpMode;
   };
 
+  // Pointers pressed while help mode was off: their release must still reach the app, or a
+  // drag started before Shift+F1 (a slider, a dock splitter) would stay captured.
+  const pressedWhileOff = new Set<number>();
+
   const onKeyDown = (event: Event): void => {
     const keyEvent = event as KeyboardEvent;
     const state = useHelpMode.getState();
@@ -84,9 +95,18 @@ export function installHelpGate(target: Window): () => void {
         repeat: keyEvent.repeat,
         inAllowedRegion: helpTargetFor(asElementLike(keyEvent.target)) === "allow",
       },
-      { active: state.active, popupOpen: state.openKey !== null },
+      {
+        active: state.active,
+        popupOpen: state.openKey !== null,
+        welcomeShown: target.document.querySelector(".welcome-surface") !== null,
+      },
     );
-    if (decision === "allow") return;
+    if (decision === "allow") {
+      // Tab/Enter on the help chrome: keep the native default (focus move, button activation)
+      // but hide the key from later window listeners such as the guided tour's Enter handler.
+      if (state.active) keyEvent.stopImmediatePropagation();
+      return;
+    }
     if (decision === "toggle") state.toggle();
     else if (decision === "close-popup") state.close();
     else if (decision === "exit") state.exit();
@@ -95,6 +115,11 @@ export function installHelpGate(target: Window): () => void {
 
   const onPointer = (event: Event): void => {
     const state = useHelpMode.getState();
+    const { pointerId } = event as PointerEvent;
+    if (event.type === "pointerdown" && !state.active) pressedWhileOff.add(pointerId);
+    if (event.type === "pointerup" || event.type === "pointercancel") {
+      if (pressedWhileOff.delete(pointerId) && state.active) return;
+    }
     if (!state.active) return;
     const hit = helpTargetFor(asElementLike(event.target));
     if (hit === "allow") return;

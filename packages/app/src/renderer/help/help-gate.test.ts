@@ -84,6 +84,11 @@ describe("helpKeyDecision", () => {
     expect(helpKeyDecision(key("a"), off)).toBe("allow");
   });
 
+  it("does not turn help mode on behind the welcome screen, but still turns it off", () => {
+    expect(helpKeyDecision(key("F1", { shiftKey: true }), { ...off, welcomeShown: true })).toBe("block");
+    expect(helpKeyDecision(key("F1", { shiftKey: true }), { ...on, welcomeShown: true })).toBe("toggle");
+  });
+
   it("ignores auto-repeat of Shift+F1 so holding it does not flip help mode", () => {
     expect(helpKeyDecision(key("F1", { shiftKey: true, repeat: true }), off)).toBe("block");
     expect(helpKeyDecision(key("F1", { shiftKey: true, repeat: true }), on)).toBe("block");
