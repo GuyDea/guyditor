@@ -84,6 +84,7 @@ export function WorkflowPhaseTabs({
                 type="button"
                 className="phase-badge"
                 data-testid={`phase-badge-${phase}`}
+                data-help={phaseHelpKey(phase)}
                 aria-label={`${String(badges[phase])} items need attention in ${WORKFLOW_PHASE_LABELS[phase]}`}
                 title={`Open ${WORKFLOW_PHASE_LABELS[phase]} attention`}
                 onClick={() => openBadge(phase)}

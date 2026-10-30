@@ -14,6 +14,12 @@
   cursor: help;
 }
 
+/* Nothing outside the help chrome acts, so no pointer, grab or resize cursor may suggest it does.
+   !important beats inline and state-specific cursors (splitters, drag handles, sliders). */
+:root[data-help-mode="on"] body *:not([data-help-allow], [data-help-allow] *) {
+  cursor: help !important;
+}
+
 .help-mode-toggle {
   min-width: 2rem;
 }
