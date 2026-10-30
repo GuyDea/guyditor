@@ -67,9 +67,14 @@ describe("helpKeyDecision", () => {
   const off = { active: false, popupOpen: false };
   const on = { active: true, popupOpen: false };
   const onWithPopup = { active: true, popupOpen: true };
-  const key = (name: string, extra: { shiftKey?: boolean; inAllowedRegion?: boolean } = {}) => ({
+  const key = (
+    name: string,
+    extra: { shiftKey?: boolean; ctrlKey?: boolean; repeat?: boolean; inAllowedRegion?: boolean } = {},
+  ) => ({
     key: name,
     shiftKey: extra.shiftKey ?? false,
+    ctrlKey: extra.ctrlKey ?? false,
+    repeat: extra.repeat ?? false,
     inAllowedRegion: extra.inAllowedRegion ?? false,
   });
 
@@ -79,6 +84,11 @@ describe("helpKeyDecision", () => {
     expect(helpKeyDecision(key("a"), off)).toBe("allow");
   });
 
+  it("ignores auto-repeat of Shift+F1 so holding it does not flip help mode", () => {
+    expect(helpKeyDecision(key("F1", { shiftKey: true, repeat: true }), off)).toBe("block");
+    expect(helpKeyDecision(key("F1", { shiftKey: true, repeat: true }), on)).toBe("block");
+  });
+
   it("keys while help mode is on", () => {
     expect(helpKeyDecision(key("F1", { shiftKey: true }), on)).toBe("toggle");
     expect(helpKeyDecision(key("Escape"), onWithPopup)).toBe("close-popup");
@@ -86,6 +96,7 @@ describe("helpKeyDecision", () => {
     for (const name of ["a", " ", "Backspace", "z", "ArrowLeft", "Enter", "Tab"]) {
       expect(helpKeyDecision(key(name), on)).toBe("block");
     }
+    expect(helpKeyDecision(key("z", { ctrlKey: true }), on)).toBe("block");
     expect(helpKeyDecision(key("Tab", { inAllowedRegion: true }), on)).toBe("allow");
     expect(helpKeyDecision(key("Enter", { inAllowedRegion: true }), on)).toBe("allow");
   });
@@ -93,7 +104,7 @@ describe("helpKeyDecision", () => {
 
 describe("helpDragDecision", () => {
   it("refuses drag and drop only in help mode", () => {
-    for (const type of ["dragstart", "dragover", "drop"]) {
+    for (const type of ["dragstart", "dragenter", "dragover", "dragleave", "drop"]) {
       expect(helpDragDecision(type, true)).toBe("refuse");
       expect(helpDragDecision(type, false)).toBe("pass");
     }

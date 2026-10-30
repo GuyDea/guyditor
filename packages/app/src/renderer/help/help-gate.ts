@@ -19,13 +19,21 @@ export function helpTargetFor(target: ElementLike | null): { key: string } | "al
   return key === null ? null : { key };
 }
 
+const POINTER_EVENTS = [
+  "pointerdown", "pointerup", "pointercancel", "mousedown", "mouseup", "click", "dblclick", "auxclick",
+  "contextmenu", "touchstart", "touchend",
+] as const;
+const DRAG_EVENTS = ["dragstart", "dragenter", "dragover", "dragleave", "drop"] as const;
+// Non-passive so touchstart can be cancelled (browsers default window-level touch listeners to passive).
+const LISTENER_OPTIONS = { capture: true, passive: false } as const;
+
 export type HelpKeyDecision = "toggle" | "close-popup" | "exit" | "allow" | "block";
 
 export function helpKeyDecision(
-  event: { key: string; shiftKey: boolean; inAllowedRegion: boolean },
+  event: { key: string; shiftKey: boolean; inAllowedRegion: boolean; ctrlKey?: boolean; repeat?: boolean },
   state: { active: boolean; popupOpen: boolean },
 ): HelpKeyDecision {
-  if (event.key === "F1" && event.shiftKey) return "toggle";
+  if (event.key === "F1" && event.shiftKey) return event.repeat === true ? "block" : "toggle";
   if (!state.active) return "allow";
   if (event.key === "Escape") return state.popupOpen ? "close-popup" : "exit";
   if (event.inAllowedRegion && (event.key === "Tab" || event.key === "Enter")) return "allow";
@@ -34,11 +42,9 @@ export function helpKeyDecision(
 
 export function helpDragDecision(type: string, active: boolean): "refuse" | "pass" {
   if (!active) return "pass";
-  return type === "dragstart" || type === "dragover" || type === "drop" ? "refuse" : "pass";
+  return DRAG_EVENTS.some((name) => name === type) ? "refuse" : "pass";
 }
 
-const POINTER_EVENTS = ["pointerdown", "mousedown", "mouseup", "click", "dblclick", "auxclick", "contextmenu"] as const;
-const DRAG_EVENTS = ["dragstart", "dragover", "drop"] as const;
 
 function asElementLike(target: EventTarget | null): ElementLike | null {
   if (target === null) return null;
@@ -74,6 +80,8 @@ export function installHelpGate(target: Window): () => void {
       {
         key: keyEvent.key,
         shiftKey: keyEvent.shiftKey,
+        ctrlKey: keyEvent.ctrlKey,
+        repeat: keyEvent.repeat,
         inAllowedRegion: helpTargetFor(asElementLike(keyEvent.target)) === "allow",
       },
       { active: state.active, popupOpen: state.openKey !== null },
@@ -103,17 +111,17 @@ export function installHelpGate(target: Window): () => void {
     }
   };
 
-  target.addEventListener("keydown", onKeyDown, true);
-  for (const type of POINTER_EVENTS) target.addEventListener(type, onPointer, true);
-  for (const type of DRAG_EVENTS) target.addEventListener(type, onDrag, true);
+  target.addEventListener("keydown", onKeyDown, LISTENER_OPTIONS);
+  for (const type of POINTER_EVENTS) target.addEventListener(type, onPointer, LISTENER_OPTIONS);
+  for (const type of DRAG_EVENTS) target.addEventListener(type, onDrag, LISTENER_OPTIONS);
   syncAttribute(useHelpMode.getState().active);
   const unsubscribe = useHelpMode.subscribe((state) => syncAttribute(state.active));
 
   return () => {
     unsubscribe();
-    target.removeEventListener("keydown", onKeyDown, true);
-    for (const type of POINTER_EVENTS) target.removeEventListener(type, onPointer, true);
-    for (const type of DRAG_EVENTS) target.removeEventListener(type, onDrag, true);
+    target.removeEventListener("keydown", onKeyDown, LISTENER_OPTIONS);
+    for (const type of POINTER_EVENTS) target.removeEventListener(type, onPointer, LISTENER_OPTIONS);
+    for (const type of DRAG_EVENTS) target.removeEventListener(type, onDrag, LISTENER_OPTIONS);
     syncAttribute(false);
   };
 }
