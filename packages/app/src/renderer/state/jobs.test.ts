@@ -22,4 +22,13 @@ describe("readableJobTitle", () => {
     expect(readableJobTitle("Ingest 9 assets", assets)).toBe("Ingest 9 assets");
     expect(readableJobTitle("Transcribe ast_za6x3vytdc", [])).toBe("Transcribe ast_za6x3vytdc");
   });
+
+  it("keeps the folder when two clips share a file name", () => {
+    const twins = [
+      { id: "ast_cccccccccc", path: "/vlogs/day-1/IMG_0084.MOV" },
+      { id: "ast_dddddddddd", path: "/vlogs/day-2/IMG_0084.MOV" },
+    ];
+    expect(readableJobTitle("Transcribe ast_cccccccccc", twins)).toBe("Transcribe day-1/IMG_0084.MOV");
+    expect(readableJobTitle("Transcribe ast_dddddddddd", twins)).toBe("Transcribe day-2/IMG_0084.MOV");
+  });
 });
