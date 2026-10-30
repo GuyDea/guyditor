@@ -15,7 +15,7 @@ import {
   executeDirect,
   setActiveDeliverable,
 } from "../ipc.js";
-import { useJobsStore } from "../state/jobs.js";
+import { readableJobTitle, useJobsStore } from "../state/jobs.js";
 import { useSelectionStore } from "../state/view-state.js";
 import { Panel } from "./Panel.js";
 import type { WorkspacePanelProps } from "./types.js";
@@ -299,8 +299,8 @@ export function StatusStripPanel({
           <ol className="job-list">
             {jobs.map((job) => (
               <li key={job.jobId} data-testid={`job-${job.jobId}`}>
-                <div className="job-title-row"><strong>{job.title}</strong><span data-state={job.state}>{job.state}</span></div>
-                <progress value={job.progress} max={1} aria-label={`${job.title} progress`} />
+                <div className="job-title-row"><strong>{readableJobTitle(job.title, snapshot?.master.assets ?? [])}</strong><span data-state={job.state}>{job.state}</span></div>
+                <progress value={job.progress} max={1} aria-label={`${readableJobTitle(job.title, snapshot?.master.assets ?? [])} progress`} />
                 <small>{Math.round(job.progress * 100)}% · {job.kind}</small>
                 <div className="row-actions">
                   {job.cancellable && (job.state === "queued" || job.state === "running") ? <button type="button" onClick={() => void jobAction(job, "cancel")}>Cancel</button> : null}

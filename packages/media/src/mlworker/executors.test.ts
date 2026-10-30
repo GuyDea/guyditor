@@ -46,7 +46,52 @@ class RecordingRunner implements MlworkerTaskRunner {
   }
 }
 
+class BlockingRunner implements MlworkerTaskRunner {
+  readonly started: string[] = [];
+  readonly #releases: Array<() => void> = [];
+
+  release(): void {
+    this.#releases.shift()?.();
+  }
+
+  async runTask(method: MlworkerTaskMethod, params: Record<string, JsonValue>) {
+    this.started.push(String(params["taskId"]));
+    await new Promise<void>((resolve) => this.#releases.push(resolve));
+    return { ok: true as const, value: { method } };
+  }
+}
+
 describe("registerMlworkerJobExecutors", () => {
+  it("keeps ML jobs queued while another ML job holds the single worker", async () => {
+    const { queue } = JobQueue.open(":memory:", { concurrency: 4 });
+    queues.push(queue);
+    const runner = new BlockingRunner();
+    registerMlworkerJobExecutors(queue, runner);
+    const jobs = (["transcribe", "align", "vad"] as const).map((kind) => queue.enqueue({
+      kind,
+      title: kind,
+      cancellable: true,
+      payload: { audioPath: "/tmp/audio.wav" },
+    }).jobId);
+
+    const deadline = Date.now() + 2_000;
+    while (runner.started.length === 0 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(jobs.map((jobId) => queue.get(jobId)?.state))
+      .toEqual(["running", "queued", "queued"]);
+    expect(runner.started).toEqual([jobs[0]]);
+
+    runner.release();
+    await waitForTerminal(queue, jobs[0]!);
+    runner.release();
+    await waitForTerminal(queue, jobs[1]!);
+    runner.release();
+    await waitForTerminal(queue, jobs[2]!);
+    expect(runner.started).toEqual(jobs);
+  });
+
   it("maps transcribe, align, vad, and matte jobs to one task runner with queue progress", async () => {
     const { queue } = JobQueue.open(":memory:", { concurrency: 2 });
     queues.push(queue);

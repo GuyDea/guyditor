@@ -228,7 +228,7 @@ export type {
   MaterializeRestyleSegmentInput,
   MaterializedRestyleSegment,
 } from "./restyle.js";
-export { registerMlworkerJobExecutors } from "./mlworker/executors.js";
+export { MLWORKER_LANE, registerMlworkerJobExecutors } from "./mlworker/executors.js";
 export { MlworkerSupervisor } from "./mlworker/supervisor.js";
 export type { MlworkerSupervisorOptions } from "./mlworker/supervisor.js";
 export type {

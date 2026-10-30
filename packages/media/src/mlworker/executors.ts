@@ -29,6 +29,13 @@ function taskResult(
   return result;
 }
 
+/**
+ * The ML worker runs one task at a time, so every job kind that calls it shares
+ * this queue lane: jobs waiting for the worker stay queued (and leave queue
+ * slots to proxy and peaks jobs) instead of showing as running at 0%.
+ */
+export const MLWORKER_LANE = "mlworker";
+
 export function registerMlworkerJobExecutors(
   queue: JobQueue,
   runner: MlworkerTaskRunner,
@@ -45,6 +52,6 @@ export function registerMlworkerJobExecutors(
       );
       if (!result.ok) throw result.error;
       return taskResult(job.payload, result.value, job.jobId);
-    });
+    }, { lane: MLWORKER_LANE });
   }
 }

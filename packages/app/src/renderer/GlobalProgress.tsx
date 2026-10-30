@@ -9,8 +9,10 @@ import { errorMessage } from "./ipc.js";
 import {
   overviewStatusText,
   overviewWaitingCount,
+  readableJobTitle,
   useJobsStore,
 } from "./state/jobs.js";
+import { useProjectMirror } from "./state/project-mirror.js";
 import {
   jumpToAnnotation as jumpToAnnotationPanel,
   jumpToProposal as jumpToProposalPanel,
@@ -28,16 +30,22 @@ function etaLabel(etaSeconds: number | undefined): string {
   return `${String(Math.ceil(etaSeconds / 60))}m left`;
 }
 
-function DependencyTree({ nodes }: { nodes: JobDependencyNode[] }): React.JSX.Element | null {
+function DependencyTree({
+  nodes,
+  titleOf,
+}: {
+  nodes: JobDependencyNode[];
+  titleOf: (title: string) => string;
+}): React.JSX.Element | null {
   if (nodes.length === 0) return null;
   return (
     <ul className="dependency-tree">
       {nodes.map((node) => (
         <li key={node.jobId} data-testid={`global-dependency-${node.jobId}`}>
           <span data-state={node.state}>{node.state}</span>
-          <strong>{node.title}</strong>
+          <strong>{titleOf(node.title)}</strong>
           <small>{node.kind}</small>
-          <DependencyTree nodes={node.dependencies} />
+          <DependencyTree nodes={node.dependencies} titleOf={titleOf} />
         </li>
       ))}
     </ul>
@@ -51,6 +59,9 @@ export function GlobalProgress({
 }: GlobalProgressProps): React.JSX.Element {
   const [open, setOpen] = useState(false);
   const overview = useJobsStore((state) => state.overview);
+  const snapshot = useProjectMirror((state) => state.snapshot);
+  const titleOf = (title: string): string =>
+    readableJobTitle(title, snapshot?.master.assets ?? []);
   const waitingCount = overviewWaitingCount(overview);
   const activeCount = overview.running.length + overview.queued.length;
   const fill = Math.max(0, Math.min(100, overview.aggregateFraction * 100));
@@ -60,7 +71,7 @@ export function GlobalProgress({
     try {
       await window.guyditor.call<JobStatus>("JobQueue", action, { jobId: job.jobId });
       await refreshOverview();
-      setNotice(`${action === "cancel" ? "Cancelled" : "Re-queued"} ${job.title}.`);
+      setNotice(`${action === "cancel" ? "Cancelled" : "Re-queued"} ${titleOf(job.title)}.`);
     } catch (error: unknown) {
       setNotice(errorMessage(error));
     }
@@ -79,10 +90,10 @@ export function GlobalProgress({
   const jobRow = (job: JobStatus): React.JSX.Element => (
     <div className="global-job-copy">
       <div>
-        <strong>{job.title}</strong>
+        <strong>{titleOf(job.title)}</strong>
         <span data-state={job.state}>{job.state}</span>
       </div>
-      <progress value={job.progress} max={1} aria-label={`${job.title} progress`} />
+      <progress value={job.progress} max={1} aria-label={`${titleOf(job.title)} progress`} />
       <small>{job.kind} · {Math.round(job.progress * 100)}% · {etaLabel(job.etaSeconds)}</small>
       <div className="global-job-actions">
         {job.cancellable && (job.state === "running" || job.state === "queued") ? (
@@ -182,7 +193,7 @@ export function GlobalProgress({
                   {job.dependencyChain.length === 0 ? null : (
                     <div className="dependency-copy">
                       <span>Blocked on</span>
-                      <DependencyTree nodes={job.dependencyChain} />
+                      <DependencyTree nodes={job.dependencyChain} titleOf={titleOf} />
                     </div>
                   )}
                 </article>

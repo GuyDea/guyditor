@@ -43,6 +43,34 @@ export function overviewStatusText(overview: JobOverview): string {
     : `waiting on external providers · ${String(overview.waitingOnExternal.length)}`;
 }
 
+const ASSET_ID = /\bast_[a-z2-7]{10}\b/gu;
+
+function pathParts(path: string): string[] {
+  return path.split(/[\\/]/u).filter((part) => part.length > 0);
+}
+
+/**
+ * Job titles are stored with asset ids ("Transcribe ast_za6x3vytdc"); show the
+ * clip's file name instead wherever the id belongs to a known asset. Phones
+ * reuse names like IMG_0084.MOV, so a name shared by several assets keeps its
+ * parent folder.
+ */
+export function readableJobTitle(
+  title: string,
+  assets: readonly { id: string; path: string }[],
+): string {
+  return title.replace(ASSET_ID, (id) => {
+    const asset = assets.find((candidate) => candidate.id === id);
+    if (asset === undefined) return id;
+    const parts = pathParts(asset.path);
+    const name = parts.at(-1);
+    if (name === undefined) return id;
+    const shared = assets.filter((candidate) => pathParts(candidate.path).at(-1) === name);
+    const folder = parts.at(-2);
+    return shared.length > 1 && folder !== undefined ? `${folder}/${name}` : name;
+  });
+}
+
 function newestFirst(jobs: JobStatus[]): JobStatus[] {
   return [...jobs].sort((left, right) => right.createdAt.localeCompare(left.createdAt));
 }

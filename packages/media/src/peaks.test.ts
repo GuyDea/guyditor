@@ -14,6 +14,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   JobQueue,
+  openProject,
   ProjectStore,
 } from "../../core/src/index.js";
 import type {
@@ -195,6 +196,75 @@ describe.skipIf(!FIXTURES_AVAILABLE)("peaks.generate fixture executor", () => {
       }
     }
     await expect(access(paths.part)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  async function ingestThenCloseSession(name: string): Promise<{
+    assetId: string;
+    databasePath: string;
+    root: string;
+  }> {
+    const sandboxRoot = await sandbox();
+    const store = await valueOf(ProjectStore.createProject(
+      path.join(sandboxRoot, "project"),
+      { name },
+      { profilesDirectory: path.join(REPOSITORY_ROOT, "profiles") },
+    ));
+    const databasePath = path.join(store.root, ".guyditor/jobs.sqlite");
+    const first = JobQueue.open(databasePath).queue;
+    const ingest = await waitForJob(first, new MediaEngine({
+      followUpJobs: [],
+      jobQueue: first,
+    }).ingest(store, {
+      sources: [{ path: path.join(FIXTURE_ROOT, "speech-48k-20s.wav") }],
+    }).jobId);
+    const assetId = (ingest.payload as unknown as IngestJobResult).assets[0]?.assetId;
+    if (assetId === undefined) throw new Error("Audio asset was not registered.");
+    first.close();
+    return { assetId, databasePath, root: store.root };
+  }
+
+  async function resumePeaksJob(
+    databasePath: string,
+    root: string,
+    payloadRoot: string,
+    assetId: string,
+  ): Promise<JobRecord> {
+    // A fresh app session: the project is reopened from disk, the queue still
+    // holds the follow-up job, and the media engine never ingested anything.
+    const reopened = await valueOf(openProject(root));
+    const { queue } = JobQueue.open(databasePath);
+    queues.push(queue);
+    const peaks = queue.enqueue({
+      kind: "peaks.generate",
+      title: "Generate peaks",
+      payload: { assetId, projectRoot: payloadRoot },
+      cancellable: true,
+    });
+    new MediaEngine({ followUpJobs: [], jobQueue: queue, project: reopened });
+    return waitForJob(queue, peaks.jobId);
+  }
+
+  it("runs a peaks job left queued by an earlier session once the project is reopened", async () => {
+    const { assetId, databasePath, root } = await ingestThenCloseSession("Peaks resume test");
+
+    const settled = await resumePeaksJob(databasePath, root, root, assetId);
+
+    expect(settled.error).toBeUndefined();
+    expect(settled.state).toBe("done");
+  });
+
+  it("runs a left-over peaks job after the project folder was moved", async () => {
+    const { assetId, databasePath, root } = await ingestThenCloseSession("Peaks moved test");
+
+    const settled = await resumePeaksJob(
+      databasePath,
+      root,
+      path.join(path.dirname(root), "old-location"),
+      assetId,
+    );
+
+    expect(settled.error).toBeUndefined();
+    expect(settled.state).toBe("done");
   });
 });
 

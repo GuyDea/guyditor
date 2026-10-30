@@ -76,6 +76,12 @@ export interface MediaEngineOptions {
   mlworker?: MlworkerTaskRunner;
   idFactory?: (prefix: IdPrefix) => string;
   now?: () => Date;
+  /**
+   * The project this engine serves. Jobs queued in an earlier session (proxy,
+   * peaks) resume as soon as executors register, so the project must be known
+   * before then rather than only after the next ingest.
+   */
+  project?: ProjectStore;
 }
 
 export interface IngestAssetResult {
@@ -410,6 +416,7 @@ export class MediaEngine {
   readonly #idFactory: (prefix: IdPrefix) => string;
   readonly #now: () => Date;
   readonly #projects = new Map<string, ProjectStore>();
+  readonly #project: ProjectStore | undefined;
 
   public constructor(options: MediaEngineOptions) {
     this.#queue = options.jobQueue;
@@ -420,12 +427,16 @@ export class MediaEngine {
     ])];
     this.#idFactory = options.idFactory ?? makeId;
     this.#now = options.now ?? (() => new Date());
+    this.#project = options.project;
+    if (options.project !== undefined) {
+      this.#projects.set(options.project.root, options.project);
+    }
     if (options.mlworker !== undefined) {
       registerMlworkerJobExecutors(this.#queue, options.mlworker);
     }
     this.#queue.registerExecutor("ingest", async (job, { reportProgress }) => {
       const payload = job.payload as unknown as IngestJobPayload;
-      const project = this.#projects.get(payload.projectRoot);
+      const project = this.#projectFor(payload.projectRoot);
       if (project === undefined) {
         throw new MediaError(
           "E_MEDIA_INGEST_INVALID_SOURCE",
@@ -443,7 +454,7 @@ export class MediaEngine {
     });
     this.#queue.registerExecutor("proxy.generate", async (job, { signal }) => {
       const payload = job.payload as unknown as ProxyGeneratePayload;
-      const project = this.#projects.get(payload.projectRoot);
+      const project = this.#projectFor(payload.projectRoot);
       const asset = project?.currentProject.assets.find(
         ({ id }) => id === payload.assetId,
       );
@@ -466,7 +477,7 @@ export class MediaEngine {
     });
     this.#queue.registerExecutor("peaks.generate", async (job, { signal }) => {
       const payload = job.payload as unknown as PeaksGeneratePayload;
-      const project = this.#projects.get(payload.projectRoot);
+      const project = this.#projectFor(payload.projectRoot);
       const asset = project?.currentProject.assets.find(
         ({ id }) => id === payload.assetId,
       );
@@ -483,6 +494,15 @@ export class MediaEngine {
       }
       return jsonValue(await generatePeaks(project.root, asset, signal));
     });
+  }
+
+  /**
+   * A job's payload records the project root at queue time. The engine is bound
+   * to the project it was opened for, so a job queued before the folder was
+   * moved or renamed still finds it.
+   */
+  #projectFor(projectRoot: string): ProjectStore | undefined {
+    return this.#projects.get(projectRoot) ?? this.#project;
   }
 
   public ingest(

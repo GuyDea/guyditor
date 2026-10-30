@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 import multiprocessing
+from multiprocessing.connection import wait
 from multiprocessing.process import BaseProcess
 import os
 from queue import Empty
 import sys
-from threading import Lock, Thread
+from threading import Event, Lock, Thread
+import time
 from typing import Any, TextIO
 
 from .capabilities import advertised_capabilities, disabled_tasks, hello_params
@@ -14,6 +16,38 @@ from .tasks import TASKS
 
 
 JsonObject = dict[str, Any]
+
+# The supervisor restarts a worker that stays silent for 120 seconds during a
+# task. Model loads (a first transcription downloads about 3 GB) and long
+# decode windows report nothing for minutes, so the task process repeats its
+# last progress well inside that window. It stops repeating once the task has
+# made no real progress for an hour (enough for that download at about 1 MB/s),
+# so a genuinely hung task still goes silent and gets restarted.
+HEARTBEAT_INTERVAL_SECONDS = 15.0
+HEARTBEAT_STALL_LIMIT_SECONDS = 60 * 60.0
+
+# The supervisor kills an unresponsive worker outright, which skips
+# multiprocessing's cleanup of daemonic children. A task child watches its
+# parent's process sentinel and exits once the parent is gone instead of
+# running on (holding gigabytes of model memory) with nobody left to receive
+# its result. The sentinel works on POSIX and Windows and exists before the
+# task starts, so a parent killed during start-up is caught too.
+PARENT_POLL_SECONDS = 1.0
+
+
+def _exit_with_parent(stop: Event, interval: float | None = None) -> None:
+    parent = multiprocessing.parent_process()
+    if parent is None:
+        return
+    sentinel = parent.sentinel
+    period = PARENT_POLL_SECONDS if interval is None else interval
+
+    def watch() -> None:
+        while not stop.is_set():
+            if wait([sentinel], timeout=period):
+                os._exit(1)
+
+    Thread(target=watch, daemon=True).start()
 
 
 def _task_entry(
@@ -24,16 +58,40 @@ def _task_entry(
     os.dup2(sys.stderr.fileno(), sys.stdout.fileno())
     try:
         task_id = str(params["taskId"])
+        last: dict[str, Any] = {"progress": 0.0, "stage": "starting"}
+        last_reported = time.monotonic()
+        lock = Lock()
+
+        def emit() -> None:
+            with lock:
+                events.put(("progress", {"taskId": task_id, **last}))
 
         def progress(value: float, stage: str) -> None:
-            events.put(
-                (
-                    "progress",
-                    {"taskId": task_id, "progress": value, "stage": stage},
-                )
-            )
+            nonlocal last_reported
+            with lock:
+                last["progress"] = value
+                last["stage"] = stage
+                last_reported = time.monotonic()
+            emit()
 
-        result = TASKS[method](params, progress)
+        stop = Event()
+        _exit_with_parent(stop)
+
+        def heartbeat() -> None:
+            while not stop.wait(HEARTBEAT_INTERVAL_SECONDS):
+                with lock:
+                    stalled = time.monotonic() - last_reported
+                if stalled > HEARTBEAT_STALL_LIMIT_SECONDS:
+                    return
+                emit()
+
+        beat = Thread(target=heartbeat, daemon=True)
+        beat.start()
+        try:
+            result = TASKS[method](params, progress)
+        finally:
+            stop.set()
+            beat.join()
         events.put(("result", result))
     except BaseException as error:
         events.put(("error", {"code": -32001, "message": str(error)}))

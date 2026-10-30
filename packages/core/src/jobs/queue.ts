@@ -27,6 +27,7 @@ import type {
   JobState,
   JobStatus,
   JsonValue,
+  RegisterExecutorOptions,
 } from "./types.js";
 import { makeId } from "../project/ids.js";
 
@@ -71,6 +72,7 @@ interface PendingProgress {
 
 interface ActiveJob {
   controller: AbortController;
+  kind: string;
   lastProgressWriteAt: number;
   pendingProgress: PendingProgress | undefined;
   progressTimer: ReturnType<typeof setTimeout> | undefined;
@@ -252,6 +254,7 @@ export class JobQueue {
   readonly #overviewSources: JobOverviewSources;
   readonly #preflight: JobPreflight | undefined;
   readonly #executors = new Map<string, JobExecutor>();
+  readonly #lanes = new Map<string, string>();
   readonly #listeners = new Set<JobChangeListener>();
   readonly #active = new Map<string, ActiveJob>();
   #closed = false;
@@ -408,10 +411,17 @@ export class JobQueue {
     return success(updated);
   }
 
-  public registerExecutor(kind: string, executor: JobExecutor): void {
+  public registerExecutor(
+    kind: string,
+    executor: JobExecutor,
+    options: RegisterExecutorOptions = {},
+  ): void {
     this.#ensureOpen();
     if (kind.length === 0) throw new TypeError("Executor kind must not be empty.");
+    if (options.lane?.length === 0) throw new TypeError("Executor lane must not be empty.");
     this.#executors.set(kind, executor);
+    if (options.lane === undefined) this.#lanes.delete(kind);
+    else this.#lanes.set(kind, options.lane);
     this.#scheduleSoon();
   }
 
@@ -630,9 +640,16 @@ export class JobQueue {
     while (this.#active.size < this.#concurrency) {
       const jobs = this.list();
       const byId = new Map(jobs.map((job) => [job.jobId, job] as const));
+      const busyLanes = new Set(
+        [...this.#active.values()].flatMap(({ kind }) => {
+          const lane = this.#lanes.get(kind);
+          return lane === undefined ? [] : [lane];
+        }),
+      );
       const next = jobs.filter((job) => job.state === "queued")
         .find((job) =>
           this.#executors.has(job.kind) && !this.#active.has(job.jobId) &&
+          !this.#laneIsBusy(job.kind, busyLanes) &&
           job.dependsOn.every((dependencyId) => {
             const state = byId.get(dependencyId)?.state;
             return job.dependencyMode === "terminal"
@@ -655,6 +672,7 @@ export class JobQueue {
 
       const active: ActiveJob = {
         controller: new AbortController(),
+        kind: running.kind,
         lastProgressWriteAt: 0,
         pendingProgress: undefined,
         progressTimer: undefined,
@@ -675,6 +693,11 @@ export class JobQueue {
       }
       void this.#execute(running, executor, active);
     }
+  }
+
+  #laneIsBusy(kind: string, busyLanes: ReadonlySet<string>): boolean {
+    const lane = this.#lanes.get(kind);
+    return lane !== undefined && busyLanes.has(lane);
   }
 
   #failBlockedDependencies(): void {
