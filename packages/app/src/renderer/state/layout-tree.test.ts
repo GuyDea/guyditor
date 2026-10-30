@@ -110,6 +110,25 @@ describe("addTab and moveTab", () => {
     expect(placedPanels(next)).toEqual(["media", "preview"]);
   });
 
+  it("keeps a lone tab dropped back onto its own tab strip", () => {
+    const layout = {
+      root: split("column", [group(["preview"]), group(["timeline"])], [0.8, 0.2]),
+    };
+
+    const next = moveTab(layout, "timeline", "g_timeline", 0);
+
+    expect(shape(next.root)).toEqual({ column: [["preview"], ["timeline"]] });
+  });
+
+  it("reorders tabs within one group", () => {
+    const layout = { root: group(["agent", "assemble", "inspector"], "g_right") };
+
+    const next = moveTab(layout, "inspector", "g_right", 0);
+
+    expect(shape(next.root)).toEqual(["inspector", "agent", "assemble"]);
+    expect(firstGroup(next)?.activePanelId).toBe("inspector");
+  });
+
   it("falls back to the first group for an unknown target", () => {
     const next = addTab(single("preview"), "g_gone", "agent");
 
@@ -256,6 +275,15 @@ describe("normalizeLayout", () => {
 
   it("accepts an empty workspace", () => {
     expect(normalizeLayout({ root: null })).toEqual({ root: null });
+  });
+
+  it("rejects a pathologically deep tree instead of overflowing the stack", () => {
+    let node: unknown = { kind: "group", id: "g_leaf", panelIds: ["preview"], activePanelId: "preview" };
+    for (let depth = 0; depth < 20_000; depth += 1) {
+      node = { kind: "split", id: `s_${String(depth)}`, direction: "row", sizes: [1], children: [node] };
+    }
+
+    expect(normalizeLayout({ root: node })).toBeNull();
   });
 
   it("rejects values that are not layouts", () => {

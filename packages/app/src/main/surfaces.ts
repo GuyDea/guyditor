@@ -303,11 +303,15 @@ const workspaceLayoutSurface: IpcSurface = {
   service: "WorkspaceLayout",
   methods: {
     get: { paramsSchema: emptyParams, resultSchema: anyResult, budgetMs: 50 },
-    save: {
+    update: {
       paramsSchema: {
         type: "object",
-        required: ["document"],
-        properties: { document: { type: "object" } },
+        required: ["clientId", "activePhase", "layouts"],
+        properties: {
+          clientId: { type: "string", minLength: 1 },
+          activePhase: { type: "string", enum: ["ingest", "cut", "polish", "review", "publish"] },
+          layouts: { type: "object" },
+        },
         additionalProperties: false,
       },
       resultSchema: anyResult,

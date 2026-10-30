@@ -360,7 +360,14 @@ export class AppServiceHost {
     this.credentials = options.credentials ?? new FileCredentialStore({
       userDir: options.userDirectory,
     });
-    this.workspaceLayout = new WorkspaceLayoutService({ userDirectory: options.userDirectory });
+    this.workspaceLayout = new WorkspaceLayoutService({
+      userDirectory: options.userDirectory,
+      onChange: (document, clientId) => {
+        for (const window of this.#windows) {
+          window.publisher.publish({ kind: "workspace.layout", clientId, document });
+        }
+      },
+    });
     this.aiSettings = new AiSettingsService({
       userDirectory: options.userDirectory,
       credentials: this.credentials,

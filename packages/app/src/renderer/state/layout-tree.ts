@@ -157,6 +157,9 @@ export function moveTab(
   index?: number,
 ): PhaseLayout {
   if (findGroup(layout, targetGroupId) === null) return layout;
+  const source = groupOf(layout, panelId);
+  // A lone tab dropped back on its own strip would otherwise close its group first.
+  if (source?.id === targetGroupId && source.panelIds.length === 1) return layout;
   const removed = withoutPanel(layout, panelId);
   return updateGroup(removed, targetGroupId, (group) => {
     const at = Math.min(Math.max(0, index ?? group.panelIds.length), group.panelIds.length);
@@ -239,8 +242,11 @@ function isDockPanelId(value: unknown): value is DockPanelId {
 
 class InvalidLayout extends Error {}
 
-function normalizeNode(value: unknown, seen: Set<DockPanelId>): LayoutNode | null {
-  if (!isRecord(value)) throw new InvalidLayout();
+/** Far deeper than any layout a person builds; bounds recursion on corrupt input. */
+const MAX_LAYOUT_DEPTH = 32;
+
+function normalizeNode(value: unknown, seen: Set<DockPanelId>, depth = 0): LayoutNode | null {
+  if (!isRecord(value) || depth > MAX_LAYOUT_DEPTH) throw new InvalidLayout();
   const id = typeof value["id"] === "string" && value["id"].length > 0 ? value["id"] : null;
   if (value["kind"] === "group") {
     if (!Array.isArray(value["panelIds"])) throw new InvalidLayout();
@@ -271,7 +277,7 @@ function normalizeNode(value: unknown, seen: Set<DockPanelId>): LayoutNode | nul
       : children.map(() => 1);
     const kept: { child: LayoutNode; size: number }[] = [];
     children.forEach((child, index) => {
-      const next = normalizeNode(child, seen);
+      const next = normalizeNode(child, seen, depth + 1);
       if (next !== null) kept.push({ child: next, size: sizes[index]! });
     });
     if (kept.length === 0) return null;

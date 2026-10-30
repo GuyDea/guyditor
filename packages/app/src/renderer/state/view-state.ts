@@ -1,6 +1,7 @@
 import { create } from "zustand";
 
 import type { FrameTime, KeySettings } from "../../../../core/src/index.js";
+import { WORKFLOW_PHASES } from "./layout-state.js";
 import type { DockPanelId, WorkflowPhase } from "./layout-state.js";
 import { presetLayout, presetLayouts } from "./layout-presets.js";
 import {
@@ -10,12 +11,25 @@ import {
   closeTab as closeLayoutTab,
   groupOf,
   moveTab as moveLayoutTab,
+  normalizeLayout,
   normalizeLayoutsDocument,
   resizeSplit as resizeLayoutSplit,
   revealInLayout,
   splitGroup,
 } from "./layout-tree.js";
-import type { LayoutsDocument, PhaseLayout } from "./layout-tree.js";
+import type { PhaseLayout } from "./layout-tree.js";
+
+/** What one save carries: the active phase plus only the phase layouts that changed. */
+export interface LayoutChange {
+  activePhase: WorkflowPhase;
+  layouts: Partial<Record<WorkflowPhase, PhaseLayout>>;
+}
+
+/** Phases (and whether the active phase) changed locally before the stored document loaded. */
+export interface LocalLayoutEdits {
+  phases: readonly WorkflowPhase[];
+  activePhase: boolean;
+}
 
 export type DiagnosticBackground = "none" | "black" | "white" | "saturated" | "checkerboard";
 
@@ -61,7 +75,8 @@ interface WorkspaceState {
   focusedPanel: PanelId;
   flashingPanel: PanelId | null;
   picker: PickerRequest | null;
-  hydrateLayouts: (stored: unknown) => void;
+  hydrateLayouts: (stored: unknown, local?: LocalLayoutEdits) => void;
+  applyRemoteLayouts: (stored: unknown) => void;
   setPhase: (phase: WorkflowPhase) => void;
   focusPanel: (panel: PanelId) => void;
   revealPanel: (panel: PanelId) => void;
@@ -157,10 +172,14 @@ export const useTimelineViewStore = create<TimelineViewState>((set) => ({
   toggleSnapping: () => set((state) => ({ snapping: !state.snapping })),
 }));
 
-let saveLayouts: (document: LayoutsDocument) => void = () => undefined;
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+let saveLayouts: (change: LayoutChange) => void = () => undefined;
 
 /** Installs where layout changes are persisted (App wires this to the WorkspaceLayout RPC). */
-export function configureLayoutSaver(save: (document: LayoutsDocument) => void): void {
+export function configureLayoutSaver(save: (change: LayoutChange) => void): void {
   saveLayouts = save;
 }
 
@@ -178,7 +197,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
     const focusedGroupId = groupOf(layout, extra.focusedPanel ?? state.focusedPanel)?.id ??
       state.focusedGroupId;
     set({ layouts, layout, focusedGroupId, ...extra });
-    if (persist) saveLayouts({ activePhase: state.activePhase, layouts });
+    if (persist) saveLayouts({ activePhase: state.activePhase, layouts: { [state.activePhase]: layout } });
   };
 
   return {
@@ -189,16 +208,30 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
     focusedPanel: "preview",
     flashingPanel: null,
     picker: null,
-    hydrateLayouts: (stored) => {
+    hydrateLayouts: (stored, local = { phases: [], activePhase: false }) => {
+      const state = get();
       const document = normalizeLayoutsDocument(stored);
+      const layouts = { ...document.layouts };
+      for (const phase of local.phases) layouts[phase] = state.layouts[phase];
+      const activePhase = local.activePhase ? state.activePhase : document.activePhase;
       set({
-        layouts: document.layouts,
-        layout: document.layouts[document.activePhase],
-        activePhase: document.activePhase,
+        layouts,
+        layout: layouts[activePhase],
+        activePhase,
         focusedGroupId: null,
         flashingPanel: null,
         picker: null,
       });
+    },
+    applyRemoteLayouts: (stored) => {
+      const { activePhase, layouts: current } = get();
+      const incoming = isRecord(stored) && isRecord(stored["layouts"]) ? stored["layouts"] : {};
+      const layouts = { ...current };
+      for (const phase of WORKFLOW_PHASES) {
+        if (!(phase in incoming)) continue;
+        layouts[phase] = normalizeLayout(incoming[phase]) ?? presetLayout(phase);
+      }
+      set({ layouts, layout: layouts[activePhase], picker: null });
     },
     setPhase: (activePhase) => {
       const { layouts } = get();
@@ -209,7 +242,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
         flashingPanel: null,
         picker: null,
       });
-      saveLayouts({ activePhase, layouts });
+      saveLayouts({ activePhase, layouts: {} });
     },
     focusPanel: (focusedPanel) => set((state) => ({
       focusedPanel,

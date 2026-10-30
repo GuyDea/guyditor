@@ -315,8 +315,50 @@ describe("workspace layout store", () => {
     expect(state.picker).toBeNull();
     expect(save).toHaveBeenCalledTimes(1);
     expect(save.mock.calls[0]![0]).toMatchObject({ activePhase: "cut" });
-    expect(Object.keys(save.mock.calls[0]![0].layouts as object).sort())
+    expect(Object.keys(save.mock.calls[0]![0].layouts as object)).toEqual(["cut"]);
+  });
+
+  it("saves only the active phase on a phase switch and every phase on reset all", () => {
+    useWorkspaceStore.getState().setPhase("review");
+    expect(save).toHaveBeenLastCalledWith({ activePhase: "review", layouts: {} });
+
+    useWorkspaceStore.getState().resetAllLayouts();
+    expect(Object.keys(save.mock.lastCall![0].layouts as object).sort())
       .toEqual([...WORKFLOW_PHASES].sort());
+  });
+
+  it("keeps locally edited phases when the stored document arrives late", () => {
+    useWorkspaceStore.getState().closeGroup(groupId("timeline"));
+    const stored = {
+      activePhase: "publish",
+      layouts: {
+        cut: { root: null },
+        review: { root: { kind: "group", id: "g_r", panelIds: ["help"], activePanelId: "help" } },
+      },
+    };
+
+    useWorkspaceStore.getState().hydrateLayouts(stored, { phases: ["cut"], activePhase: true });
+
+    const state = useWorkspaceStore.getState();
+    expect(state.activePhase).toBe("cut");
+    expect(placedPanels(state.layouts.cut)).toEqual(["preview", "transcript", "agent", "assemble"]);
+    expect(placedPanels(state.layouts.review)).toEqual(["help"]);
+  });
+
+  it("applies another window's layouts without changing this window's phase", () => {
+    useWorkspaceStore.getState().openPicker({ mode: "split", groupId: groupId("preview"), side: "right" });
+
+    useWorkspaceStore.getState().applyRemoteLayouts({
+      activePhase: "publish",
+      layouts: { cut: { root: { kind: "group", id: "g_x", panelIds: ["help"], activePanelId: "help" } } },
+    });
+
+    const state = useWorkspaceStore.getState();
+    expect(state.activePhase).toBe("cut");
+    expect(placedPanels(state.layout)).toEqual(["help"]);
+    expect(state.picker).toBeNull();
+    expect(placedPanels(state.layouts.review)).toEqual(placedPanels(presetLayout("review")));
+    expect(save).not.toHaveBeenCalled();
   });
 
   it("leaves the layout untouched when the picker is cancelled", () => {

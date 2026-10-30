@@ -169,7 +169,7 @@ describe("workspace IPC surfaces", () => {
     const saved: unknown[] = [];
     const dispatch = createRpcDispatcher(IPC_SURFACES, (service) =>
       service === "WorkspaceLayout"
-        ? { get: () => null, save: (params: unknown) => { saved.push(params); } }
+        ? { get: () => null, update: (params: unknown) => { saved.push(params); } }
         : undefined);
     const call = (method: string, params: unknown) => dispatch({
       v: 1,
@@ -179,11 +179,15 @@ describe("workspace IPC surfaces", () => {
       params,
     });
 
-    expect((await call("save", {})).ok).toBe(false);
-    expect((await call("save", { document: 1 })).ok).toBe(false);
-    expect((await call("save", { document: {} })).ok).toBe(true);
+    expect((await call("update", {})).ok).toBe(false);
+    expect((await call("update", { clientId: "a", activePhase: "later", layouts: {} })).ok)
+      .toBe(false);
+    expect((await call("update", { clientId: "a", activePhase: "cut", layouts: 1 })).ok)
+      .toBe(false);
+    expect((await call("update", { clientId: "a", activePhase: "cut", layouts: {} })).ok)
+      .toBe(true);
     expect((await call("get", {})).ok).toBe(true);
-    expect(saved).toEqual([{ document: {} }]);
+    expect(saved).toEqual([{ clientId: "a", activePhase: "cut", layouts: {} }]);
   });
 
   it("exposes the assembly session methods", () => {
