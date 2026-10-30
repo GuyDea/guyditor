@@ -100,6 +100,7 @@ import { revealPanel } from "./workspace-navigation.js";
 import { installHelpGate } from "./help/help-gate.js";
 import { HelpModeBanner } from "./help/HelpModeBanner.js";
 import { HelpModeToggle } from "./help/HelpModeToggle.js";
+import { HelpPopup } from "./help/HelpPopup.js";
 
 function isTypingTarget(target: EventTarget | null): boolean {
   return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement ||
@@ -1186,6 +1187,7 @@ export function App(): React.JSX.Element {
           onStopChange={setTourStop}
         />
       ) : null}
+      <HelpPopup />
     </main>
   );
 }

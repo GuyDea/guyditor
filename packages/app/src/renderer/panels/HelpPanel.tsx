@@ -1,5 +1,6 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
+import { useHelpMode } from "../help/help-mode.js";
 import { MANUAL_SOURCE } from "../manual-source.js";
 import {
   MarkdownDocument,
@@ -46,7 +47,21 @@ export function HelpPanel({
     () => filterManualSections(manual, query),
     [manual, query],
   );
+  const manualRequest = useHelpMode((state) => state.manualRequest);
   const completed = CHECKLIST_STEPS.filter(({ id }) => onboarding.checklist[id]).length;
+
+  // "Open in manual" from the help popup: clear the search so every section renders, scroll to
+  // the requested heading once it has, then mark the request handled.
+  useEffect(() => {
+    if (manualRequest !== null && query !== "") setQuery("");
+  }, [manualRequest, query]);
+  useEffect(() => {
+    if (manualRequest === null || query !== "") return;
+    document
+      .querySelector(`[data-manual-section="${CSS.escape(manualRequest.heading)}"]`)
+      ?.scrollIntoView({ block: "start" });
+    useHelpMode.getState().consumeManualRequest();
+  }, [manualRequest, query]);
 
   return (
     <Panel

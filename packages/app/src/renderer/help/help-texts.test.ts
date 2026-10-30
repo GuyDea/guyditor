@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { parseManual } from "../manual.js";
 import { MANUAL_SOURCE } from "../manual-source.js";
-import { HELP_ENTRIES } from "./help-source.js";
+import { helpEntries } from "./help-source.js";
 import {
   panelHelpKey,
   parseHelp,
@@ -99,9 +99,11 @@ describe("parseHelp", () => {
 
 describe("bundled HELP.md", () => {
   it("parses and every manual link names a manual heading", () => {
-    expect(HELP_ENTRIES.size).toBeGreaterThan(0);
+    const { entries, error } = helpEntries();
+    expect(error).toBeUndefined();
+    expect(entries.size).toBeGreaterThan(0);
     const manual = parseManual(MANUAL_SOURCE);
-    for (const helpEntry of HELP_ENTRIES.values()) {
+    for (const helpEntry of entries.values()) {
       if (helpEntry.manual === undefined) continue;
       expect(
         manual.sections.some(({ heading }) => heading === helpEntry.manual),
