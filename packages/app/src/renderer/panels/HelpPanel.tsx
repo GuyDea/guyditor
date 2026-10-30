@@ -28,7 +28,7 @@ const KEYBOARD_MAP = [
   ["← / →", "Step one frame"],
   ["Shift+← / Shift+→", "Step ten frames"],
   [", / .", "Step while paused"],
-  ["Ctrl/Cmd+Z / Ctrl/Cmd+Y", "Undo or redo"],
+  ["Ctrl/Cmd+Z / Ctrl/Cmd+Shift+Z", "Undo or redo"],
   ["Home", "Go to frame zero"],
   ["Alt+← / Alt+→", "Move between transcript words"],
   ["A / Shift+A", "Move between annotations"],

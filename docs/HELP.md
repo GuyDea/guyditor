@@ -431,7 +431,7 @@ Every keyboard shortcut in one list. The ones you'll use most while cutting a vl
 1. Click **Keyboard map** to open or close the list.
 2. Keys 1 to 9 open Media, Preview, Transcript, Inspector, Agent (Proposals), Timeline, Status, Graphics and Publish.
 3. Alt+← / Alt+→ move between transcript words, A / Shift+A between Preview notes; Home goes to frame zero.
-4. Undo is Ctrl+Z; redo is Ctrl+Shift+Z or **Redo** in the title bar. The listed Ctrl+Y does not work yet.
+4. Undo is Ctrl+Z; redo is Ctrl+Shift+Z or **Redo** in the title bar.
 
 ## panel.storage
 Title: Storage & recovery
