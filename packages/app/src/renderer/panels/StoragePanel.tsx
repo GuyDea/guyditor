@@ -5,6 +5,7 @@ import type {
   StorageCategory,
   StorageReport,
 } from "../../../../media/src/index.js";
+import { sectionHelpKey } from "../help/help-texts.js";
 import { errorMessage } from "../ipc.js";
 import { Panel } from "./Panel.js";
 
@@ -141,7 +142,7 @@ export function StoragePanel({
       )}
       {plan === null ? null : (
         <section className="cleanup-review" data-testid="storage-cleanup-review">
-          <h3>Cleanup review</h3>
+          <h3 data-help={sectionHelpKey("storage", "Cleanup review")}>Cleanup review</h3>
           <p>{String(plan.items.length)} verified regenerable items · {formatStorageBytes(plan.totalBytes)}</p>
           <button type="button" disabled={busy} onClick={() => void executeCleanup()}>
             Delete planned disposable files

@@ -18,6 +18,7 @@ import type {
   GenerationStartResult,
 } from "../../../../agent/src/index.js";
 import { resolveActiveDeliverable } from "../active-deliverable.js";
+import { sectionHelpKey } from "../help/help-texts.js";
 import { errorMessage } from "../ipc.js";
 import { useJobsStore } from "../state/jobs.js";
 import {
@@ -488,7 +489,7 @@ export function BrollPanel({
     <Panel id="broll" title="B-roll" eyebrow="Sources · generation · review">
       <div className="broll-workbench">
         <section className="broll-source-browser" aria-label="B-roll source taxonomy">
-          <header><h3>Source classes</h3><span>7 paths</span></header>
+          <header><h3 data-help={sectionHelpKey("broll", "Source classes")}>Source classes</h3><span>7 paths</span></header>
           <div className="broll-source-rail">
             {BROLL_SOURCE_TAXONOMY.map((source) => (
               <button
@@ -521,7 +522,7 @@ export function BrollPanel({
         </section>
 
         <form className="broll-generation-form" data-testid="generation-request" onSubmit={(event) => { event.preventDefault(); void startGeneration(); }}>
-          <header><h3>Generation request</h3><span>text-free</span></header>
+          <header><h3 data-help={sectionHelpKey("broll", "Generation request")}>Generation request</h3><span>text-free</span></header>
           <label className="broll-prompt">Visual prompt<textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="Slow orbit around a cobalt glass sculpture…" /></label>
           <label>Negative prompt<input value={negativePrompt} onChange={(event) => setNegativePrompt(event.target.value)} placeholder="logos, lettering, watermarks" /></label>
           <div className="broll-form-grid">
@@ -543,7 +544,7 @@ export function BrollPanel({
         </form>
 
         <section className="broll-review" data-testid="generation-review-queue">
-          <header><h3>Candidate review</h3><span>{String(candidates.length)} waiting</span></header>
+          <header><h3 data-help={sectionHelpKey("broll", "Candidate review")}>Candidate review</h3><span>{String(candidates.length)} waiting</span></header>
           <p className="broll-verification-note">Visual plausibility is not factual verification.</p>
           <ul className="broll-review-key" aria-label="Required review fields">{REVIEW_FIELD_LABELS.map((label) => <li key={label}>{label}</li>)}</ul>
           {candidates.length === 0 ? <p className="empty-copy">Generated candidates stay in disposable cache until creator review and acceptance.</p> : (
@@ -582,7 +583,7 @@ export function BrollPanel({
         </section>
 
         <section className="broll-rights-shelf">
-          <header><h3>Rights indicators</h3><span>{rightsPolicy.requirementLevel}</span></header>
+          <header><h3 data-help={sectionHelpKey("broll", "Rights indicators")}>Rights indicators</h3><span>{rightsPolicy.requirementLevel}</span></header>
           <div className="broll-rights-legend"><span className="rights-badge" data-state="ready">Rights ready</span><span className="rights-badge" data-state="missing">Rights missing</span></div>
           {rightsAssets.map(({ asset, compliance }) => <div key={asset.id}><strong>{asset.id}</strong><span>{asset.rights?.origin ?? "unknown"}</span><span className="rights-badge" data-state={compliance.compliant ? "ready" : "missing"}>{rightsLabel(compliance)}</span></div>)}
         </section>

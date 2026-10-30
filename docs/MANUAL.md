@@ -31,6 +31,7 @@ The workspace opens only once a project is created or opened.
 | Panel resize / reorder | Any splitter / panel header | Drag splitters (keyboard-accessible). Drag a panel header to another region; multiple panels in a region become tabs. |
 | Collapse | Panel header `–` or master tool rail | Collapsed panels stay assigned to the current tab and are restored from the single master rail; per-region rails are not used. |
 | Reset layout | Layout menu | Per-tab reset, or "Reset all tabs" for the five defaults. Layouts persist per project. |
+| Help mode | Title bar ⓘ button, or `Shift+F1` | Turns the app into a point-and-click explainer: click any panel, tab, rail entry or section header to open a short "what it is good for / how to use it" card (with a link to the matching manual section). While it is on, nothing acts — clicks, keys and drops are swallowed and nothing navigates, so you cannot change anything by accident. `Esc` closes the card; `Esc` again (or the toggle) leaves help mode. |
 | Global progress bar | Title bar, always visible | Aggregate of all background work. Click it → the **waiting-on view**: running jobs (cancel/retry), queued chains, **waiting on you** (proposals, confirmations — badge), and external provider calls with spend. |
 | Tab badges | On each phase tab | Live counts from the same data: proposals → Review, ingest chains → Ingest, failed exports/budget prompts → Publish. Click badge → jumps to the exact panel. |
 | Inspector | Panel P4 (all tabs) | Schema-driven properties for the current selection; every edit is a semantic operation (undoable, journaled). |
@@ -53,7 +54,7 @@ The workspace opens only once a project is created or opened.
 | Feature | Where | How |
 |---|---|---|
 | Transcript editing | Transcript panel | Click a word → playhead seeks there. Select a range → **remove / retain / create clip / mark short candidate**. Fix transcription errors inline (word IDs are permanent; captions and edits anchored to words survive later changes). |
-| Timeline editing | Timeline panel | Trim (edge drag or numeric), split at playhead, join, move (drag), duplicate, gap editing, layer enable/lock/reorder. Waveforms on every clip. Full undo/redo (`Ctrl+Z/Y`) — undos are forward journal entries. |
+| Timeline editing | Timeline panel | Trim (edge drag or numeric), split at playhead, join, move (drag), duplicate, gap editing, layer enable/lock/reorder. Waveforms on every clip. Full undo/redo (`Ctrl+Z` / `Ctrl+Shift+Z`) — undos are forward journal entries. |
 | Filler & pause assist | Transcript panel → Assist | Detects long pauses, filler words, repeats, false starts (configurable). Results compile into a **proposal** — review each removal; protections for beats, annotated moments, and dramatic pauses. |
 | Pickups | Media panel → pickup wizard | Import a corrective re-recording of a flubbed line; it's transcribed, aligned, and spliced under audio-continuity checks — as a proposal. |
 | Take comparison | Review tab or Media panel takes | Groups alternate takes of the same content, scores delivery (pace, pauses, fillers, loudness stability) weighted by your skills, recommends with a reason. Rejected takes stay accessible. |
@@ -159,7 +160,7 @@ The **Assemble** panel (Cut tab, top right; Ingest tab, bottom right) turns a pi
 ## 10. Reference
 
 - **Shortcuts**: phase tabs `Ctrl/Cmd+Alt+1..5`; frame step `←/→`; undo/redo
-  `Ctrl+Z/Ctrl+Y`; full map in the in-app keyboard reference.
+  `Ctrl+Z` / `Ctrl+Shift+Z`; help mode `Shift+F1`; full map in the in-app keyboard reference.
 - **Project on disk**: `episode.guyditor.yaml` (the canonical project model,
   human-readable) · `workspace.guyditor.yaml` (portable non-editorial active-
   distribution state; safe fallback to primary if missing or invalid) ·

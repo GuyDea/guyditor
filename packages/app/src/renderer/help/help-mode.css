@@ -1,0 +1,119 @@
+/* Help mode: outline every explainable region and highlight the innermost one under the pointer. */
+:root[data-help-mode="on"] [data-help] {
+  outline: 1px dashed var(--blue);
+  outline-offset: -1px;
+  cursor: help;
+}
+
+:root[data-help-mode="on"] [data-help]:hover:not(:has([data-help]:hover)) {
+  outline: 2px solid var(--blue);
+  box-shadow: inset 0 0 0 9999px color-mix(in srgb, var(--blue) 14%, transparent);
+}
+
+:root[data-help-mode="on"] body {
+  cursor: help;
+}
+
+/* Nothing outside the help chrome acts, so no pointer, grab or resize cursor may suggest it does.
+   !important beats inline and state-specific cursors (splitters, drag handles, sliders). */
+:root[data-help-mode="on"] body *:not([data-help-allow], [data-help-allow] *) {
+  cursor: help !important;
+}
+
+.help-mode-toggle {
+  min-width: 2rem;
+}
+
+.help-mode-toggle-on {
+  background: var(--blue);
+  color: var(--well);
+}
+
+/* An overlay, not a flow child: `.shell` is a grid with fixed rows, so an extra child would push
+   the workspace into the 26px status row. It sits just under the 52px title bar (never over the
+   toggle) on the right of the phase strip and lets clicks through to whatever is underneath. */
+.help-mode-banner {
+  position: fixed;
+  top: 56px;
+  right: 12px;
+  z-index: 900;
+  box-sizing: border-box;
+  max-width: calc(100vw - 24px);
+  padding: 0.3rem 0.75rem;
+  border: 1px solid var(--blue);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--blue) 22%, var(--well));
+  font-size: var(--fs-body);
+  text-align: center;
+  pointer-events: none;
+  box-shadow: 0 4px 14px color-mix(in srgb, black 45%, transparent);
+}
+
+/* Help popup: centred card over a dimmed backdrop. */
+.help-popup-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: color-mix(in srgb, black 55%, transparent);
+}
+
+.help-popup {
+  box-sizing: border-box;
+  width: min(34rem, 100%);
+  max-height: 100%;
+  overflow-y: auto;
+  padding: 1rem 1.25rem;
+  border: 1px solid var(--blue);
+  border-radius: 6px;
+  background: var(--well);
+  color: inherit;
+  font-size: var(--fs-emphasis);
+  box-shadow: 0 12px 40px color-mix(in srgb, black 60%, transparent);
+  cursor: default;
+}
+
+.help-popup h2 {
+  margin: 0;
+  font-size: var(--fs-display);
+}
+
+.help-popup h3 {
+  margin: 0.75rem 0 0.25rem;
+  font-size: var(--fs-label);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.75;
+}
+
+.help-popup p,
+.help-popup ol {
+  margin: 0;
+  line-height: 1.45;
+}
+
+.help-popup ol {
+  padding-left: 1.4rem;
+}
+
+.help-popup li + li {
+  margin-top: 0.2rem;
+}
+
+.help-popup-where {
+  opacity: 0.75;
+}
+
+.help-popup-error {
+  margin: 0.5rem 0;
+  color: var(--red);
+}
+
+.help-popup-actions {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+  margin-top: 1rem;
+}

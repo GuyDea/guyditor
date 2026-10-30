@@ -61,7 +61,7 @@ function repositoryPath(href: string): string {
   return `docs/${href.replace(/^\.\//u, "")}`;
 }
 
-function InlineMarkdown({
+export function InlineMarkdown({
   onRepositoryLink,
   source,
 }: {

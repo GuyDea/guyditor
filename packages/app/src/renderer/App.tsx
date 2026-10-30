@@ -97,6 +97,10 @@ import {
 import { useAnnotationTimelineFrames } from "./annotation-timeline.js";
 import { phaseForShortcut } from "./workflow-phases.js";
 import { revealPanel } from "./workspace-navigation.js";
+import { installHelpGate } from "./help/help-gate.js";
+import { HelpModeBanner } from "./help/HelpModeBanner.js";
+import { HelpModeToggle } from "./help/HelpModeToggle.js";
+import { HelpPopup } from "./help/HelpPopup.js";
 
 function isTypingTarget(target: EventTarget | null): boolean {
   return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement ||
@@ -434,6 +438,8 @@ export function App(): React.JSX.Element {
       }
     }
   }, []);
+
+  useEffect(() => installHelpGate(window), []);
 
   useEffect(() => () => {
     invalidateContextRequests(restylePlanGate.current);
@@ -1143,11 +1149,14 @@ export function App(): React.JSX.Element {
             aria-label="Open Help"
             title="Help & manual"
             data-testid="title-help"
+            data-help-allow=""
             onClick={() => revealPanel("help")}
           >?</button>
+          <HelpModeToggle />
           <button type="button" className="open-button" onClick={() => void openProject()} data-testid="open-project">Open project</button>
         </div>
       </header>
+      <HelpModeBanner />
       <WorkflowPhaseTabs setNotice={setNotice} />
       <div className="workspace-main">
         <MasterToolRail />
@@ -1178,6 +1187,7 @@ export function App(): React.JSX.Element {
           onStopChange={setTourStop}
         />
       ) : null}
+      <HelpPopup />
     </main>
   );
 }

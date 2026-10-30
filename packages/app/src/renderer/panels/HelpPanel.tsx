@@ -1,5 +1,7 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
+import { useHelpMode } from "../help/help-mode.js";
+import { sectionHelpKey } from "../help/help-texts.js";
 import { MANUAL_SOURCE } from "../manual-source.js";
 import {
   MarkdownDocument,
@@ -26,10 +28,11 @@ const KEYBOARD_MAP = [
   ["← / →", "Step one frame"],
   ["Shift+← / Shift+→", "Step ten frames"],
   [", / .", "Step while paused"],
-  ["Ctrl/Cmd+Z / Ctrl/Cmd+Y", "Undo or redo"],
+  ["Ctrl/Cmd+Z / Ctrl/Cmd+Shift+Z", "Undo or redo"],
   ["Home", "Go to frame zero"],
   ["Alt+← / Alt+→", "Move between transcript words"],
   ["A / Shift+A", "Move between annotations"],
+  ["Shift+F1", "Turn help mode on or off"],
 ] as const;
 
 export function HelpPanel({
@@ -45,7 +48,24 @@ export function HelpPanel({
     () => filterManualSections(manual, query),
     [manual, query],
   );
+  const manualRequest = useHelpMode((state) => state.manualRequest);
   const completed = CHECKLIST_STEPS.filter(({ id }) => onboarding.checklist[id]).length;
+
+  // "Open in manual" from the help popup: clear the search so every section renders, scroll to
+  // the requested heading once it has, then mark the request handled. The section's own heading
+  // is the scroll target because it carries scroll-margin-top, which keeps it clear of the sticky
+  // search bar; the <section> itself has none.
+  useEffect(() => {
+    if (manualRequest !== null && query !== "") setQuery("");
+  }, [manualRequest, query]);
+  useEffect(() => {
+    if (manualRequest === null || query !== "") return;
+    const section = document.querySelector(
+      `[data-manual-section="${CSS.escape(manualRequest.heading)}"]`,
+    );
+    (section?.querySelector("h1, h2, h3") ?? section)?.scrollIntoView({ block: "start" });
+    useHelpMode.getState().consumeManualRequest();
+  }, [manualRequest, query]);
 
   return (
     <Panel
@@ -82,7 +102,7 @@ export function HelpPanel({
         <header>
           <div>
             <span className="eyebrow">One complete workflow</span>
-            <h3 id="getting-started-title">Getting started</h3>
+            <h3 id="getting-started-title" data-help={sectionHelpKey("help", "Getting started")}>Getting started</h3>
           </div>
           <strong>{String(completed)}/{String(CHECKLIST_STEPS.length)}</strong>
         </header>
@@ -119,7 +139,7 @@ export function HelpPanel({
       </section>
 
       <details className="keyboard-map">
-        <summary>Keyboard map</summary>
+        <summary data-help={sectionHelpKey("help", "Keyboard map")}>Keyboard map</summary>
         <dl>
           {KEYBOARD_MAP.map(([keys, action]) => (
             <div key={keys}><dt><kbd>{keys}</kbd></dt><dd>{action}</dd></div>

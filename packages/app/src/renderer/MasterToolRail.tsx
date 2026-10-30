@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 
+import { panelHelpKey } from "./help/help-texts.js";
 import { useJobsStore } from "./state/jobs.js";
 import {
   PANEL_LABELS,
@@ -49,6 +50,7 @@ export function MasterToolRail(): React.JSX.Element {
     <aside
       className="master-tool-rail"
       data-testid="master-tool-rail"
+      data-help="chrome.tool-rail"
       data-expanded={expanded}
       aria-label="Master tool rail"
     >
@@ -85,6 +87,7 @@ export function MasterToolRail(): React.JSX.Element {
                     entryRefs.current[index] = element;
                   }}
                   data-testid={`tool-rail-entry-${panelId}`}
+                  data-help={panelHelpKey(panelId)}
                   data-state={state}
                   aria-pressed={state === "expanded-here"}
                   aria-label={`${label.name}: ${STATE_LABELS[state]}${
