@@ -45,7 +45,10 @@ in the popup instead of blanking the renderer.
 - **Nothing acts in help mode.** One capture-phase gate on `window` swallows clicks,
   key presses and drops except on the toggle, the popup, the banner and the title-bar
   Help button (`data-help-allow`) and except `Esc` and `Shift+F1`, so help mode cannot
-  start an import, cancel a job or change the project.
+  start an import, cancel a job or change the project. `Tab`/`Enter` on those allowed
+  controls keep their native effect but reach no other window listener (so `Enter` on the
+  popup cannot advance the guided tour). The release of a pointer pressed before help mode
+  turned on still reaches the app, so a drag begun earlier is not left captured.
 - **Granularity is panels and sections.** Individual buttons, badges and fields have no
   text. Headers generated per item (per clip, per proposal entity type, per changed
   skill) are not sections and get none.
@@ -69,6 +72,10 @@ None. No project, settings or sidecar format changes. New repository file: `docs
   help; the text is edited in `docs/HELP.md` after re-checking the code), not in the app,
   and there is no "this did not help" button.
 - Text quality cannot be tested; it is judged in use.
+- Help mode is mouse-only: help targets are not reachable by keyboard. From the keyboard
+  only `Shift+F1`, `Esc`, and `Tab`/`Enter` on the toggle and popup buttons work.
+- `Shift+F1` cannot turn help mode on while the welcome screen is shown, because that
+  screen covers the toggle and the banner.
 - The popup has no focus trap: `Tab` can move focus behind it. Help mode swallows keys
   and clicks, so the page behind cannot be acted on, but focus is not confined.
 - Manual links are coarse: most manual headings cover a whole tab.

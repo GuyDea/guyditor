@@ -386,13 +386,13 @@ Where: Publish panel
 Manual: 7. Publish tab — get it out
 
 ### What it's good for
-Packs the video picked under Deliverable for upload: title, description, tags, chapters, covers, exported files and an upload kit (one folder per platform; you upload by hand). Limitation: kits work for shorts only; the main video's kit needs chapters, made from story beats the app can't create, and a thumbnail image nothing makes yet.
+Packs the video picked under Deliverable for upload: title, description, tags, chapters, covers, exported files and an upload kit (one folder per platform; you upload by hand). Kits work for shorts only: the main video's kit needs chapters, made from beats (named story moments, such as the hook) the app can't create yet, and a thumbnail nothing makes yet.
 
 ### How to use it
-1. Press **Draft from transcript + beats** for a rough title, description and tags from your words; rewrite them, keep each counter (e.g. 52/100) within its limit, press **Save draft**, then **Approve**.
-2. Approve the video itself in Deliverables & jobs (**Send review**, **Approve**).
-3. Press **Export output set**: video with and without burned-in captions, subtitles and, for a short, six covers, in the exports folder.
-4. When that job reads done in the Deliverables & jobs list, with no changes in between, press **Build upload kit**; the folder appears under exports/kits. **Text exports**, **Export .otio**, **Batch export** are optional.
+1. Press **Draft from transcript + beats** for a rough title, description and tags; rewrite them within each counter's limit (e.g. 52/100), press **Save draft**, then **Approve**.
+2. Approve the video in Deliverables & jobs (**Send review**, **Approve**).
+3. Press **Export output set**: video with and without burned-in captions, subtitles and, for a short, six covers, into exports.
+4. When that job reads done in Deliverables & jobs, with no changes since, press **Build upload kit** (under exports/kits). Optional: **Text exports**, **Batch export**, **Export .otio** (a timeline other editing programs open).
 
 ## panel.help
 Title: Help & manual

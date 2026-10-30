@@ -32,6 +32,14 @@ To resume: open Claude Code in this directory and say "continue the Guyditor bui
   context directory; cost recorded as reported). Real CLI runs are manual and
   still pending (`docs/dogfood/2026-10-27-assembly-cli.md`, ASM-007 `partial`).
   See `docs/amendments/009-assembly-inputs.md`.
+- **Amendment 010 (contextual help) is implemented on `feat/contextual-help`**
+  (not yet merged): a title-bar help-mode toggle (`Shift+F1`); while it is on,
+  clicking a panel, phase tab, rail entry, dock tab or fixed section header opens
+  a popup with that target's text from `docs/HELP.md` ("What it's good for",
+  "How to use it", **Open in manual**), and one capture-phase gate keeps the rest
+  of the app inert. `help-coverage.test.ts` fails on any target without a text.
+  Mouse-only; text quality is judged in use. See
+  `docs/amendments/010-contextual-help.md`.
 - **Amendment 003 (motion design system) is COMPLETE and merged** (3e305f7):
   primitives/v1 (word-timed text reveals, springs, charts, cutouts, textures),
   SVG/font/Lottie brand assets (deterministic in-house Lottie subset interpreter

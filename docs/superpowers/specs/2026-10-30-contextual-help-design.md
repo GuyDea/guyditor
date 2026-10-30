@@ -46,7 +46,9 @@ centred popup for "Capture watcher") in the brainstorm session.
    - Every element that has help gets a dashed outline; the help target under
      the pointer is highlighted and the cursor is the help cursor.
    - A one-line banner says "Help mode: click a panel or section to see what it
-     does. Esc to leave." *(Claude's call: banner placement is the builder's.)*
+     does. Esc closes a popup; Esc again leaves help mode." *(Claude's call: banner
+     placement is the builder's: a fixed overlay under the title bar, on the right,
+     that takes no row of the shell grid and lets clicks through.)*
    - Clicks are intercepted before they reach the app: a click on a help target
      opens its popup; any other click does nothing, so help mode can never
      start an import, cancel a job or change the project. The toggle, the
