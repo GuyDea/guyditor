@@ -194,6 +194,51 @@ describe("JobQueue persistence", () => {
 });
 
 describe("JobQueue execution", () => {
+  it("runs one job per lane at a time and lets other kinds use the free slots", async () => {
+    // The ML worker runs one task at a time. Jobs waiting for it must stay
+    // queued instead of holding queue slots as "running 0%" and starving
+    // proxy and peaks jobs.
+    const path = await databasePath();
+    const { queue } = JobQueue.open(path, { concurrency: 3 });
+    const releases = new Map<string, () => void>();
+    const blocking = async (job: { jobId: string }): Promise<{ ok: true }> => {
+      const release = deferred();
+      releases.set(job.jobId, release.resolve);
+      await release.promise;
+      return { ok: true };
+    };
+    queue.registerExecutor("transcribe", blocking, { lane: "mlworker" });
+    queue.registerExecutor("align", blocking, { lane: "mlworker" });
+    queue.registerExecutor("proxy.generate", blocking);
+
+    const enqueue = (kind: string): string => queue.enqueue({
+      kind,
+      title: kind,
+      payload: {},
+      cancellable: true,
+    }).jobId;
+    const transcribeA = enqueue("transcribe");
+    const transcribeB = enqueue("transcribe");
+    const align = enqueue("align");
+    const proxyA = enqueue("proxy.generate");
+    const proxyB = enqueue("proxy.generate");
+    const state = (jobId: string): string | undefined => queue.get(jobId)?.state;
+
+    await waitFor(() => state(proxyB) === "running");
+    expect([transcribeA, transcribeB, align, proxyA, proxyB].map(state))
+      .toEqual(["running", "queued", "queued", "running", "running"]);
+
+    releases.get(transcribeA)?.();
+    await waitFor(() => state(transcribeB) === "running");
+    expect(state(align)).toBe("queued");
+
+    releases.get(transcribeB)?.();
+    await waitFor(() => state(align) === "running");
+    for (const jobId of [align, proxyA, proxyB]) releases.get(jobId)?.();
+    await waitFor(() => [align, proxyA, proxyB].every((jobId) => state(jobId) === "done"));
+    queue.close();
+  });
+
   it("runs an executor, persists throttled progress, and completes with its result", async () => {
     const path = await databasePath();
     const { queue } = JobQueue.open(path, { concurrency: 1 });

@@ -33,6 +33,7 @@ import {
   createSubjectTrackAnalysis,
   loadPeaks,
   MediaEngine,
+  MLWORKER_LANE,
   MlworkerSupervisor,
   probeMedia,
   proxyCachePaths,
@@ -773,7 +774,7 @@ export class WindowServiceHost {
       );
       context.reportProgress(1);
       return { deliverableId, framingPath: framingReference.path, decisionCount: sidecar.decisions.length };
-    });
+    }, { lane: MLWORKER_LANE });
     const media = new MediaEngine({
       jobQueue: jobs,
       mlworker: this.#app.mlworker,

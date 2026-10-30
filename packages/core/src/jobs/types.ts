@@ -141,4 +141,13 @@ export type JobExecutor = (
   context: JobExecutorContext,
 ) => Promise<JsonValue | void>;
 
+export interface RegisterExecutorOptions {
+  /**
+   * Jobs whose kinds share a lane run one at a time. Use it for kinds served by
+   * a single-task resource (the ML worker), so the jobs that wait for it stay
+   * queued instead of holding queue slots other kinds could use.
+   */
+  lane?: string;
+}
+
 export type JobChangeListener = (event: JobChangeEvent) => void;
