@@ -15,6 +15,7 @@ import {
   executeDirect,
   setActiveDeliverable,
 } from "../ipc.js";
+import { sectionHelpKey } from "../help/help-texts.js";
 import { readableJobTitle, useJobsStore } from "../state/jobs.js";
 import { useSelectionStore } from "../state/view-state.js";
 import { Panel } from "./Panel.js";
@@ -325,7 +326,7 @@ export function StatusStripPanel({
       </div>
       {deriveOpen ? (
         <section className="derive-dialog" role="dialog" aria-modal="true" aria-label="Derive a short" data-testid="derive-dialog">
-          <header><div><span className="panel-eyebrow">Independent sequence</span><h3>Derive a short</h3></div><button type="button" onClick={() => setDeriveOpen(false)}>Close</button></header>
+          <header><div><span className="panel-eyebrow">Independent sequence</span><h3 data-help={sectionHelpKey("status", "Derive a short")}>Derive a short</h3></div><button type="button" onClick={() => setDeriveOpen(false)}>Close</button></header>
           <div className="derive-grid">
             <label>Name<input value={name} onChange={(event) => setName(event.currentTarget.value)} /></label>
             <label>Platform<select data-testid="profile-picker" value={profilePin} onChange={(event) => setProfilePin(event.currentTarget.value)}>

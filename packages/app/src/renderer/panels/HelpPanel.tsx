@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { useHelpMode } from "../help/help-mode.js";
+import { sectionHelpKey } from "../help/help-texts.js";
 import { MANUAL_SOURCE } from "../manual-source.js";
 import {
   MarkdownDocument,
@@ -98,7 +99,7 @@ export function HelpPanel({
         <header>
           <div>
             <span className="eyebrow">One complete workflow</span>
-            <h3 id="getting-started-title">Getting started</h3>
+            <h3 id="getting-started-title" data-help={sectionHelpKey("help", "Getting started")}>Getting started</h3>
           </div>
           <strong>{String(completed)}/{String(CHECKLIST_STEPS.length)}</strong>
         </header>
@@ -135,7 +136,7 @@ export function HelpPanel({
       </section>
 
       <details className="keyboard-map">
-        <summary>Keyboard map</summary>
+        <summary data-help={sectionHelpKey("help", "Keyboard map")}>Keyboard map</summary>
         <dl>
           {KEYBOARD_MAP.map(([keys, action]) => (
             <div key={keys}><dt><kbd>{keys}</kbd></dt><dd>{action}</dd></div>

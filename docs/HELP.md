@@ -54,13 +54,13 @@ Where: Phase tabs, top of the window
 Manual: 6. Review tab — the feedback loop
 
 ### What it's good for
-Watch the cut critically and settle every open change. It shows Media (to compare alternative takes), Preview (pause and draw notes on the frame) and Agent (titled Proposals: every suggested change with its reason, waiting for your yes or no).
+Watch the cut critically and settle every open change. It shows Media (to compare alternative takes), Preview (pause and pin notes to a frame) and Agent (titled Proposals: every suggested change with its reason, waiting for your yes or no).
 
 ### How to use it
 1. Click the tab, or press `Ctrl+Alt+4`.
-2. Pause Preview and draw or type a note on the frame.
-3. In Proposals, **Accept** or **Reject** each change, or type what to change and press **Supersede** to ask for a new version; rejecting leaves the project exactly as it was.
-4. The number on the tab counts proposals waiting for review (notes you draw don't add to it); click it to jump to the first one.
+2. Pause Preview, pick a shape, type in "Annotation note" and press **Add at center**; the note sits at the middle of the frame.
+3. In Proposals, **Accept** or **Reject** each change; rejecting leaves the project exactly as it was. **Supersede** files the same edits again against the current project, with your typed text as the reason.
+4. The number on the tab counts proposals waiting for review (notes you add don't count); click it to jump to the first one.
 
 ## phase.publish
 Title: Publish tab
@@ -335,3 +335,156 @@ Unpublished new versions of a skill, made when you teach it from your own decisi
 2. Here, press **Review draft** to see what changed against the last published version.
 3. Press **Publish reviewed version** to add it to Library as a new version, or **Cancel**. Projects keep their old version.
 4. To use it in this project, press **Review v…** under Project pins, then **Upgrade project pin**.
+
+## panel.agent
+Title: Proposals
+Where: Agent panel (titled Proposals)
+Manual: 6. Review tab — the feedback loop
+
+### What it's good for
+A proposal is a change Guyditor suggests instead of making it: filler cuts from the Transcript, a jump-cut fix from the Timeline, an Assemble rough cut, a new short. Each waits here with its reason; nothing changes until you accept it, and rejecting leaves the project exactly as it was.
+
+### How to use it
+1. Click a proposal (a lone one opens by itself) to read its reason and changes.
+2. **Accept** applies it, **Reject** drops it; either way it leaves the list. Empty, it reads "No open proposals."
+3. "stale" means the project changed since: Accept reads **Rebase + accept** where safe, else greys out; **Supersede** refiles the same edits against the current project, your typed text as the reason.
+4. Below, **Save to new draft version** keeps the decision as an example for a pinned skill.
+5. Ignore the "Segmented AI restyle" box on top: a paid AI restyle needing a Kling key no panel can enter.
+
+## panel.status
+Title: Deliverables & jobs
+Where: Status panel (titled Deliverables & jobs)
+Manual: 7. Publish tab — get it out
+
+### What it's good for
+A deliverable is one video you will publish: your main video, plus any short (an upright clip for Shorts, TikTok or Reels) made from it. This panel lists them with their state (draft, in-review, approved, stale), every background job (imports, transcripts, exports) and the last export's report. Publish only exports approved videos.
+
+### How to use it
+1. Click a video to make it the one Preview, Timeline and Publish work on.
+2. Press **Send review**, then **Approve**; the chip then reads approved.
+3. **Render primary export** writes the main video, without burned-in captions, to the project's exports folder, even unapproved; its report shows below (**Refresh report** reloads it).
+4. A reviewed short turns "stale" when you edit footage it uses: **Build refresh review**, then **Accept refresh** or **Keep stale**. The main video stays approved after edits.
+5. In the job list, **Cancel** stops a job and **Retry** reruns a failed one. **Derive short** makes a new short.
+
+## section.status.derive-a-short
+Title: Derive a short
+Where: Status panel (Deliverables & jobs), opened with Derive short
+Manual: 7. Publish tab — get it out
+
+### What it's good for
+Makes a short, an upright (9:16) video for YouTube Shorts, TikTok or Instagram Reels, from part of your main video, say the 40 seconds with your best tip. It is its own edit with its own timeline, not a crop, and arrives as a proposal (a suggested change waiting in Proposals for your Accept).
+
+### How to use it
+1. Type a Name, pick a Platform; the box below lists its size, length and loudness limits.
+2. Under Source keep Transcript passage and select the words in the Transcript (click the first, Shift+click the last), or pick Timeline range and type a start and end frame.
+3. Press **Create proposal**, then **Accept** it in Proposals: the short appears in the list as draft.
+4. Clip range takes clip IDs (Inspector's **Copy selected ID**). Discovered candidate and Beat range need story beats, which the app can't create yet; without them **Discover candidates** offers only the whole recording, if it fits.
+
+## panel.publish
+Title: Publish
+Where: Publish panel
+Manual: 7. Publish tab — get it out
+
+### What it's good for
+Packs the video picked under Deliverable for upload: title, description, tags, chapters, covers, exported files and an upload kit (one folder per platform; you upload by hand). Limitation: kits work for shorts only; the main video's kit needs chapters, made from story beats the app can't create, and a thumbnail image nothing makes yet.
+
+### How to use it
+1. Press **Draft from transcript + beats** for a rough title, description and tags taken from your words; rewrite them, keep each counter (e.g. 52/100) within its limit, press **Save draft**, then **Approve**.
+2. Approve the video itself in Deliverables & jobs (**Send review**, **Approve**).
+3. Press **Export output set**: video with and without burned-in captions, subtitles and, for a short, six covers, in the project's exports folder.
+4. Once that job is done, and with no changes in between, press **Build upload kit**; the folder appears under exports/kits. **Text exports**, **Export .otio** and **Batch export** are optional.
+
+## panel.help
+Title: Help & manual
+Where: Help panel (the "?" button in the title bar)
+
+### What it's good for
+The whole user manual inside the app, searchable, plus a Getting started checklist and the keyboard map. For a quick answer about one part of the screen use help mode instead: while it is on, clicking a panel or section explains it instead of doing anything.
+
+### How to use it
+1. Click **?** in the title bar to open this panel; type in "Search manual" to show only the sections containing that text.
+2. Turn help mode on with **ⓘ** next to **?** (it then reads "Help mode") or press Shift+F1, then click any panel or section.
+3. In the popup, **Open in manual** jumps to the matching manual section here. Esc closes the popup, Esc again leaves help mode; Shift+F1 also switches it off.
+4. **Restart tour** replays the guided tour; **Show welcome** reopens the welcome screen.
+
+## section.help.getting-started
+Title: Getting started
+Where: Help panel
+
+### What it's good for
+A six-step checklist that takes one video from start to export: open a project, import media, wait for the transcript, make an edit, review a proposal (a suggested change in the Proposals panel), export. Steps tick themselves (✓) as you do them; the count beside the heading, such as 2/6, shows how far you are.
+
+### How to use it
+1. Do each step anywhere in the app; you can't tick one by hand.
+2. "Make your first accepted edit" ticks with any saved change (even an import counts); "Review an agent proposal" with **Accept** or **Reject** in Proposals.
+3. "Export your first deliverable" ticks once an export report exists, for example after **Render primary export** in Deliverables & jobs.
+4. Once you know your way around, press **Dismiss checklist**; **Show checklist** brings it back.
+
+## section.help.keyboard-map
+Title: Keyboard map
+Where: Help panel
+
+### What it's good for
+Every keyboard shortcut in one list. The ones you'll use most while cutting a vlog: Space plays or pauses, ← / → step one frame (with Shift, ten) and Ctrl+Alt+1…5 switch tabs (Cmd on a Mac). Playback keys do nothing while you type in a box, and in help mode keys only steer help.
+
+### How to use it
+1. Click **Keyboard map** to open or close the list.
+2. Keys 1 to 9 open Media, Preview, Transcript, Inspector, Agent (Proposals), Timeline, Status, Graphics and Publish.
+3. Alt+← / Alt+→ move between transcript words, A / Shift+A between Preview notes; Home goes to frame zero.
+4. Undo is Ctrl+Z; redo is Ctrl+Shift+Z or **Redo** in the title bar. The listed Ctrl+Y does not work yet.
+
+## panel.storage
+Title: Storage & recovery
+Where: Storage panel
+Manual: 3. Ingest tab — get material in
+
+### What it's good for
+Shows where this project's disk space goes, by kind: sources (your original clips, never touched), generated (accepted B-roll and other clips Guyditor made), project-state (project file, history, transcripts), proxies (light copies for smooth scrubbing), caches, renders (your exports) and more. When vlogs fill your disk, it frees space safely. Despite the name, backup and archiving have no buttons here yet.
+
+### How to use it
+1. Press **Scan**: free space, orphans (cache files of clips no longer in the project) and each kind's size, marked "Safe to clean — regenerable" or "Protected — load-bearing".
+2. Press **Plan safe cleanup**; a Cleanup review appears below listing what would go.
+3. Decide there: deleting frees the space, but proxies don't come back by themselves (see Cleanup review).
+4. If your disk isn't filling up, you don't need this panel.
+
+## section.storage.cleanup-review
+Title: Cleanup review
+Where: Storage panel, after Plan safe cleanup
+Manual: 3. Ingest tab — get material in
+
+### What it's good for
+The last check before anything is deleted. It counts what would go: every proxy (light copy for smooth scrubbing), every cache file (such as waveforms, timeline thumbnails, B-roll candidates not yet accepted, short candidates) and the finished entries in the job list. Your original clips, project, transcripts and exports are never touched.
+
+### How to use it
+1. Read the line, such as "120 verified regenerable items · 3.4 GB".
+2. Press **Delete planned disposable files** (the panel then rescans), or **Keep files** to cancel.
+3. Limitation: proxies and waveforms are not rebuilt by themselves yet, so Preview shows "PROXY PENDING" and clips lose their waveform. Clean only when you need the space; exports still work, they use your originals.
+4. If a file changed after planning, the cleanup refuses; press **Plan safe cleanup** again.
+
+## panel.inspector
+Title: Inspector
+Where: Inspector panel
+Manual: 2. The workspace
+
+### What it's good for
+Shows the details of what you selected (a Timeline clip or layer, a transcript word, a Preview note) as raw text, plus three tools that appear with the right selection: green-screen keying (cutting you out of the background) for a clip, Ducking (music turns down while you talk) for an audio layer, Picture in picture for a video layer. Volume, fades and colour can't be edited here yet.
+
+### How to use it
+1. Select something; its data appears, with **Copy selected ID** to paste its ID elsewhere.
+2. With a clip selected, **Enable chroma key** removes a green screen; **Use neural matte** works without one (needs the ML worker with a matte model installed).
+3. Click a layer's name on the Timeline: a music or audio layer shows Ducking (**Save ducking**), a video layer Picture in picture (**Place / update**).
+4. **Reveal project** shows the project folder, **Copy path** copies its path, **History** lists every change.
+
+## section.inspector.semantic-history
+Title: Semantic history
+Where: Inspector panel, opened with History
+Manual: 2. The workspace
+
+### What it's good for
+The project's change log: every saved change, oldest first, described in words. Use it to find when a clip disappeared or what an accepted proposal (a suggested edit from the Proposals panel) actually did. You can't go back to an old version from here yet: **Restore revision** and **Compare revisions** are greyed out.
+
+### How to use it
+1. Press **History** at the top of the Inspector.
+2. Each row shows the revision it created (rev_00012 is the 12th saved state), who made it (human:ui is you editing directly; other rows come from proposals and automatic work such as imports) and each change.
+3. To follow one clip, paste its ID (the Inspector's **Copy selected ID**) into "Entity ID"; "Actor" and "Revision" filter the same way.
+4. **Close** hides the list. To take back a recent edit, use **Undo** in the title bar.

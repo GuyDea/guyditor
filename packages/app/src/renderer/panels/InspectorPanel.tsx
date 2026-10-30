@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 
 import type { TransactionRecord } from "../../../../core/src/index.js";
 import { resolveActiveDeliverable } from "../active-deliverable.js";
+import { sectionHelpKey } from "../help/help-texts.js";
 import { errorMessage } from "../ipc.js";
 import { useSelectionStore } from "../state/view-state.js";
 import { Panel } from "./Panel.js";
@@ -117,7 +118,7 @@ export function InspectorPanel({
           <header>
             <div>
               <span className="panel-eyebrow">Append-only journal</span>
-              <h3>Semantic history</h3>
+              <h3 data-help={sectionHelpKey("inspector", "Semantic history")}>Semantic history</h3>
             </div>
             <button type="button" data-testid="history-close" onClick={() => setHistory(null)}>Close</button>
           </header>
