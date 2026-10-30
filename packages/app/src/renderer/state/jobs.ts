@@ -43,6 +43,22 @@ export function overviewStatusText(overview: JobOverview): string {
     : `waiting on external providers · ${String(overview.waitingOnExternal.length)}`;
 }
 
+const ASSET_ID = /\bast_[a-z2-7]{10}\b/gu;
+
+/**
+ * Job titles are stored with asset ids ("Transcribe ast_za6x3vytdc"); show the
+ * clip's file name instead wherever the id belongs to a known asset.
+ */
+export function readableJobTitle(
+  title: string,
+  assets: readonly { id: string; path: string }[],
+): string {
+  return title.replace(ASSET_ID, (id) => {
+    const name = assets.find((candidate) => candidate.id === id)?.path.split(/[\\/]/u).pop();
+    return name === undefined || name.length === 0 ? id : name;
+  });
+}
+
 function newestFirst(jobs: JobStatus[]): JobStatus[] {
   return [...jobs].sort((left, right) => right.createdAt.localeCompare(left.createdAt));
 }
