@@ -48,9 +48,11 @@ function asElementLike(target: EventTarget | null): ElementLike | null {
     : null;
 }
 
+// stopImmediatePropagation also silences other window capture listeners (e.g. the guided
+// tour's keydown handler), which stopPropagation alone would not.
 function swallow(event: Event): void {
   event.preventDefault();
-  event.stopPropagation();
+  event.stopImmediatePropagation();
 }
 
 /**
