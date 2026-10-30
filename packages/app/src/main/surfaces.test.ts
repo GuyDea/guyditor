@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { DIVERGENCE_CLASSES } from "../../../core/src/index.js";
+import { createRpcDispatcher } from "./rpc.js";
 import { IPC_SURFACES } from "./surfaces.js";
 
 describe("workspace IPC surfaces", () => {
@@ -162,6 +163,27 @@ describe("workspace IPC surfaces", () => {
       "setKey",
       "update",
     ]);
+  });
+
+  it("validates workspace layout saves", async () => {
+    const saved: unknown[] = [];
+    const dispatch = createRpcDispatcher(IPC_SURFACES, (service) =>
+      service === "WorkspaceLayout"
+        ? { get: () => null, save: (params: unknown) => { saved.push(params); } }
+        : undefined);
+    const call = (method: string, params: unknown) => dispatch({
+      v: 1,
+      requestId: "req_aaaaaaaaaa",
+      service: "WorkspaceLayout",
+      method,
+      params,
+    });
+
+    expect((await call("save", {})).ok).toBe(false);
+    expect((await call("save", { document: 1 })).ok).toBe(false);
+    expect((await call("save", { document: {} })).ok).toBe(true);
+    expect((await call("get", {})).ok).toBe(true);
+    expect(saved).toEqual([{ document: {} }]);
   });
 
   it("exposes the assembly session methods", () => {

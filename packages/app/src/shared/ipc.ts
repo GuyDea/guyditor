@@ -16,7 +16,8 @@ export type ServiceName =
   | "CompositorModel" | "RenderService" | "JobQueue" | "AgentGateway"
   | "AuditLog" | "CostMeter" | "BackupService" | "DeliverableService"
   | "AnnotationService" | "SkillRegistry" | "AdapterRegistry" | "CaptureWatcher"
-  | "GenerationService" | "TemplateAuthoringService" | "AiSettings" | "Assembly";
+  | "GenerationService" | "TemplateAuthoringService" | "AiSettings" | "Assembly"
+  | "WorkspaceLayout";
 
 export interface IpcRequest {
   v: 1;

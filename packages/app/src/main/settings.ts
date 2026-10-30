@@ -155,12 +155,25 @@ export async function loadSettings(
 }
 
 let tempCounter = 0;
+let writeQueue: Promise<void> = Promise.resolve();
 
-/** Replaces only the `ai` key of settings.json (unknown keys kept), atomically. */
-export async function saveAiSettings(
+/** Replaces one top-level key of settings.json (other keys kept), atomically. Writes are serialized. */
+export function replaceSettingsKey(
   userDirectory: string,
-  ai: AiSettings,
+  key: string,
+  value: unknown,
   now: () => Date = () => new Date(),
+): Promise<void> {
+  const write = writeQueue.then(() => writeSettingsKey(userDirectory, key, value, now));
+  writeQueue = write.catch(() => undefined);
+  return write;
+}
+
+async function writeSettingsKey(
+  userDirectory: string,
+  key: string,
+  value: unknown,
+  now: () => Date,
 ): Promise<void> {
   const settingsPath = join(userDirectory, "settings.json");
   let current: Record<string, unknown> = {};
@@ -185,6 +198,32 @@ export async function saveAiSettings(
   }
   tempCounter += 1;
   const temporary = `${settingsPath}.tmp-${String(process.pid)}-${String(tempCounter)}`;
-  await writeFile(temporary, `${JSON.stringify({ ...current, ai }, null, 2)}\n`, "utf8");
+  await writeFile(temporary, `${JSON.stringify({ ...current, [key]: value }, null, 2)}\n`, "utf8");
   await rename(temporary, settingsPath);
+}
+
+/** Reads one top-level key of settings.json; undefined when the file or key is missing or unreadable. */
+export async function readSettingsKey(userDirectory: string, key: string): Promise<unknown> {
+  let text: string;
+  try {
+    text = await readFile(join(userDirectory, "settings.json"), "utf8");
+  } catch (error: unknown) {
+    if (isMissing(error)) return undefined;
+    throw error;
+  }
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    return isRecord(parsed) ? parsed[key] : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Replaces only the `ai` key of settings.json (unknown keys kept), atomically. */
+export async function saveAiSettings(
+  userDirectory: string,
+  ai: AiSettings,
+  now: () => Date = () => new Date(),
+): Promise<void> {
+  await replaceSettingsKey(userDirectory, "ai", ai, now);
 }

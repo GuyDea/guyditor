@@ -299,8 +299,26 @@ const assemblySurface: IpcSurface = {
   },
 };
 
+const workspaceLayoutSurface: IpcSurface = {
+  service: "WorkspaceLayout",
+  methods: {
+    get: { paramsSchema: emptyParams, resultSchema: anyResult, budgetMs: 50 },
+    save: {
+      paramsSchema: {
+        type: "object",
+        required: ["document"],
+        properties: { document: { type: "object" } },
+        additionalProperties: false,
+      },
+      resultSchema: anyResult,
+      budgetMs: 50,
+    },
+  },
+};
+
 export const IPC_SURFACES: readonly IpcSurface[] = Object.freeze([
   aiSettingsSurface,
+  workspaceLayoutSurface,
   assemblySurface,
   {
     service: "ProjectStore",
