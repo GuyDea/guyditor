@@ -31,7 +31,7 @@ def test_silent_task_keeps_reporting_liveness_with_its_last_progress(
     monkeypatch.setattr(server, "HEARTBEAT_INTERVAL_SECONDS", 0.05)
     events = RecordingEvents()
 
-    server._task_entry("slow", {"taskId": "job_slow"}, events)
+    server._task_entry("slow", {"taskId": "job_slowslow22"}, events)
 
     kinds = [kind for kind, _ in events.items]
     assert kinds[-1] == "result"
@@ -39,7 +39,7 @@ def test_silent_task_keeps_reporting_liveness_with_its_last_progress(
     before = [item for item in progress if item["stage"] == "starting"]
     after = [item for item in progress if item["stage"] == "decode"]
     assert len(before) >= 2
-    assert all(item == {"taskId": "job_slow", "progress": 0.0, "stage": "starting"} for item in before)
+    assert all(item == {"taskId": "job_slowslow22", "progress": 0.0, "stage": "starting"} for item in before)
     assert len(after) >= 2
     assert all(item["progress"] == 0.5 for item in after)
 
@@ -53,7 +53,7 @@ def test_heartbeat_stops_when_the_task_fails(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(server, "HEARTBEAT_INTERVAL_SECONDS", 0.05)
     events = RecordingEvents()
 
-    server._task_entry("failing", {"taskId": "job_fail"}, events)
+    server._task_entry("failing", {"taskId": "job_failfail22"}, events)
     count = len(events.items)
     time.sleep(0.2)
 
