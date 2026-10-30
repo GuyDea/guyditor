@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 import multiprocessing
+from multiprocessing.connection import wait
 from multiprocessing.process import BaseProcess
 import os
 from queue import Empty
 import sys
 from threading import Event, Lock, Thread
+import time
 from typing import Any, TextIO
 
 from .capabilities import advertised_capabilities, disabled_tasks, hello_params
@@ -18,23 +20,31 @@ JsonObject = dict[str, Any]
 # The supervisor restarts a worker that stays silent for 120 seconds during a
 # task. Model loads (a first transcription downloads about 3 GB) and long
 # decode windows report nothing for minutes, so the task process repeats its
-# last progress well inside that window for as long as the task runs.
+# last progress well inside that window. It stops repeating once the task has
+# made no real progress for an hour (enough for that download at about 1 MB/s),
+# so a genuinely hung task still goes silent and gets restarted.
 HEARTBEAT_INTERVAL_SECONDS = 15.0
+HEARTBEAT_STALL_LIMIT_SECONDS = 60 * 60.0
 
-# The supervisor SIGKILLs an unresponsive worker, which skips multiprocessing's
-# cleanup of daemonic children. A task child polls for its parent and exits
-# once it is gone instead of running on (holding gigabytes of model memory)
-# with nobody left to receive its result.
+# The supervisor kills an unresponsive worker outright, which skips
+# multiprocessing's cleanup of daemonic children. A task child watches its
+# parent's process sentinel and exits once the parent is gone instead of
+# running on (holding gigabytes of model memory) with nobody left to receive
+# its result. The sentinel works on POSIX and Windows and exists before the
+# task starts, so a parent killed during start-up is caught too.
 PARENT_POLL_SECONDS = 1.0
 
 
 def _exit_with_parent(stop: Event, interval: float | None = None) -> None:
-    parent = os.getppid()
+    parent = multiprocessing.parent_process()
+    if parent is None:
+        return
+    sentinel = parent.sentinel
     period = PARENT_POLL_SECONDS if interval is None else interval
 
     def watch() -> None:
-        while not stop.wait(period):
-            if os.getppid() != parent:
+        while not stop.is_set():
+            if wait([sentinel], timeout=period):
                 os._exit(1)
 
     Thread(target=watch, daemon=True).start()
@@ -49,6 +59,7 @@ def _task_entry(
     try:
         task_id = str(params["taskId"])
         last: dict[str, Any] = {"progress": 0.0, "stage": "starting"}
+        last_reported = time.monotonic()
         lock = Lock()
 
         def emit() -> None:
@@ -56,9 +67,11 @@ def _task_entry(
                 events.put(("progress", {"taskId": task_id, **last}))
 
         def progress(value: float, stage: str) -> None:
+            nonlocal last_reported
             with lock:
                 last["progress"] = value
                 last["stage"] = stage
+                last_reported = time.monotonic()
             emit()
 
         stop = Event()
@@ -66,6 +79,10 @@ def _task_entry(
 
         def heartbeat() -> None:
             while not stop.wait(HEARTBEAT_INTERVAL_SECONDS):
+                with lock:
+                    stalled = time.monotonic() - last_reported
+                if stalled > HEARTBEAT_STALL_LIMIT_SECONDS:
+                    return
                 emit()
 
         beat = Thread(target=heartbeat, daemon=True)

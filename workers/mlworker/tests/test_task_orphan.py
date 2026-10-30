@@ -7,6 +7,8 @@ import subprocess
 import sys
 import time
 
+import pytest
+
 
 TESTS_DIR = Path(__file__).resolve().parent
 WORKER_ROOT = TESTS_DIR.parent
@@ -30,13 +32,16 @@ def _gone(pid: int) -> bool:
         os.kill(pid, 0)
     except ProcessLookupError:
         return True
+    status = Path(f"/proc/{pid}/status")
+    if not status.parent.parent.exists():
+        return False  # no procfs (macOS): os.kill already showed it exists
     try:
-        status = Path(f"/proc/{pid}/status").read_text()
+        return "\nState:\tZ" in status.read_text()
     except FileNotFoundError:
         return True
-    return "\nState:\tZ" in status
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="uses POSIX signals to kill the parent")
 def test_task_child_exits_when_the_worker_is_killed(tmp_path: Path) -> None:
     # The supervisor SIGKILLs an unresponsive worker; the task child it spawned
     # used to keep running (and holding gigabytes of model memory) as an orphan.

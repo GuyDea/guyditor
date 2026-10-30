@@ -11,9 +11,18 @@ from mlworker import server
 class RecordingEvents:
     def __init__(self) -> None:
         self.items: list[tuple[str, Any]] = []
+        self.times: list[float] = []
 
     def put(self, item: tuple[str, Any]) -> None:
         self.items.append(item)
+        self.times.append(time.monotonic())
+
+
+@pytest.fixture(autouse=True)
+def in_process_entry(monkeypatch: pytest.MonkeyPatch) -> None:
+    # _task_entry normally runs in a spawned child and points its stdout at
+    # stderr; keep pytest's own descriptors untouched when calling it here.
+    monkeypatch.setattr(server.os, "dup2", lambda *_: None)
 
 
 def test_silent_task_keeps_reporting_liveness_with_its_last_progress(
@@ -62,3 +71,28 @@ def test_heartbeat_stops_when_the_task_fails(monkeypatch: pytest.MonkeyPatch) ->
         {"code": -32001, "message": "model download failed"},
     )
     assert len(events.items) == count
+
+
+def test_heartbeat_stops_once_a_task_stalls_so_a_hung_task_is_still_restarted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def hung_task(params: dict[str, Any], progress: Any) -> dict[str, Any]:
+        time.sleep(0.6)
+        return {"ok": True}
+
+    monkeypatch.setitem(server.TASKS, "hung", hung_task)
+    monkeypatch.setattr(server, "HEARTBEAT_INTERVAL_SECONDS", 0.05)
+    monkeypatch.setattr(server, "HEARTBEAT_STALL_LIMIT_SECONDS", 0.15)
+    events = RecordingEvents()
+    started = time.monotonic()
+
+    server._task_entry("hung", {"taskId": "job_hunghung22"}, events)
+
+    beats = [
+        at - started
+        for (kind, _), at in zip(events.items, events.times)
+        if kind == "progress"
+    ]
+    assert len(beats) >= 2
+    assert max(beats) < 0.35
+    assert events.items[-1] == ("result", {"ok": True})
