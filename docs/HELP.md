@@ -220,13 +220,13 @@ Where: Transcript panel
 Manual: 4. Cut tab — shape the story
 
 ### What it's good for
-Every word said in your transcribed clips, written out, so you edit by reading: find the rambling sentence and cut it, no hunting on the timeline. Words with a dotted red underline may be misheard. The Caption track box sets how captions look: preset, size, colour, line breaks.
+Every word said in your transcribed clips, written out, so you edit by reading: find the rambling sentence and cut it, no hunting on the timeline. Words with a dotted red underline may be misheard. The Caption track box sets how captions look.
 
 ### How to use it
-1. Click a word to move the playhead there; Shift+click a later word to select the span (shown at the top, like w000120 → w000135).
+1. Click a word to move the playhead there; Shift+click a later word to select the span (shown at the top).
 2. **Remove range** cuts the span from the timeline and closes the gap (footage must be on the timeline); **Create clip** adds it as a clip at the end. `Ctrl+Z` undoes.
 3. **Correct word** fixes a misheard word: type it, press **Save correction**.
-4. **Detect fillers** (top right; needs the ML worker, Guyditor's local speech tools) proposes shortening long pauses and cutting um/uh/erm, "like", "you know", "so", repeats and false starts; check it in Proposals before accepting.
+4. **Detect fillers** (needs the ML worker: local speech tools) shows "Queued …". Later a proposal appears in Proposals (where suggested edits wait for your Accept), shortening long pauses and cutting um/uh/erm, "like", "you know", "so", repeats and false starts; check it first.
 
 ## panel.assemble
 Title: Assemble
@@ -234,13 +234,13 @@ Where: Assemble panel
 Manual: 4. Cut tab — shape the story
 
 ### What it's good for
-Turns raw takes of you talking to camera into a first rough cut: an AI assistant (Anthropic or OpenAI) reads the transcripts, never your video, keeps your last attempt at each line unless you say otherwise on camera ("use the first one"), and asks when unsure. It needs an API key or a logged-in `claude`/`codex` command; replies cost money. With one clean take, cut in the Transcript instead.
+Turns raw takes of you talking into a first rough cut: an AI assistant reads transcripts, never your video, keeps your last attempt at each line unless you say otherwise on camera ("use the first one"), and asks when unsure. It needs an API key or a logged-in `claude`/`codex` command, and replies cost money; for one clean take, use the Transcript.
 
 ### How to use it
-1. All clips start ticked; untick any to leave out. Attach a script or notes with **Add files…** and pick it under Script.
-2. Click the settings line ("anthropic · …") to save an API key, or choose local CLI, press **Check**.
-3. Press **Analyze footage**, type what you want, press **Send**; answer its questions until a plan table appears.
-4. Press **Create proposal**, then accept it in Proposals (**Rebase + accept**); the cut lands after what is already on the timeline.
+1. Untick clips to leave out. Attach a script or notes with **Add files…** and pick it under Script.
+2. In the settings line, save an API key or choose local CLI and press **Check**.
+3. **Analyze footage**, then type what you want, press **Send** (it may first ask **I understand — continue** or **Confirm $…**); answer its questions until a plan table appears.
+4. **Create proposal**, then **Accept** it in Proposals, the suggested-edits panel (shown as **Rebase + accept** if the project changed); it lands after existing clips.
 
 ## panel.timeline
 Title: Timeline
@@ -248,13 +248,13 @@ Where: Timeline panel
 Manual: 4. Cut tab — shape the story
 
 ### What it's good for
-Your video in order, one block per clip, with thumbnails and sound wave. Here you make fine cuts the Transcript can't: split a clip, shave frames (still pictures; 30 make a second at 30 fps) off its start or end, or reorder. `Ctrl+Z` undoes any edit.
+Your video in order, one block per clip, with thumbnails and sound wave. For fine cuts the Transcript can't do: split a clip, shave frames (still pictures; 30 make a second at 30 fps) off its start or end, or reorder. Edits show at once; `Ctrl+Z` undoes them.
 
 ### How to use it
 1. Click a clip to select it (the playhead jumps to its start); drag it onto another to place it before that one.
-2. To split, move the playhead inside it (Preview's slider or a Transcript word), press **Split**; **Join next** rejoins it to the next clip if both came from one split.
-3. Type frames, pick **Head** (start) or **Tail** (end), press **Trim** to shorten. **Remove** deletes it and closes the gap; **Set gap** adds that many black frames before it.
-4. A "!" marks a jump cut (the same shot jumps); click it for a proposal to hide it, like a zoom-in.
+2. To split, move the playhead inside it (Preview slider or Transcript word), press **Split**; **Join next** rejoins two split halves.
+3. Type frames in the first box, pick **Head** (start) or **Tail** (end), press **Trim** to shorten. **Set gap** puts the second box's frames of black before it (0 clears); **Remove** deletes it.
+4. A "!" marks a jump cut (the same shot jumps); click it for a suggested fix (like a zoom-in) in Proposals, awaiting your Accept.
 
 ## panel.preview
 Title: Preview
@@ -262,7 +262,7 @@ Where: Preview panel
 Manual: 5. Polish tab — the look and sound
 
 ### What it's good for
-Plays your edit with captions and graphics on top, as viewers will see it, but from the light proxy copies (the badge always reads PROXY), so judge sharpness in the export. The PROGRAM METER underneath checks loudness (overall volume, in LUFS) and peaks against your platform's target while it plays. You can also leave notes on a frame.
+Plays your edit with captions and graphics on top, as viewers will see it, but from the light proxy copies (the badge always reads PROXY), so judge sharpness in the export. The PROGRAM METER underneath checks loudness (overall volume, in LUFS) and peaks against the project's target (normally −14 LUFS) while it plays. You can also leave notes on a frame.
 
 ### How to use it
 1. Press **Play** or **Pause**, drag the slider or type a frame number; the word being said shows below.
@@ -276,12 +276,12 @@ Where: Graphics panel
 Manual: 5. Polish tab — the look and sound
 
 ### What it's good for
-Titles and on-screen text from ready-made templates; ten are built in, from title cards and lower thirds (your name and a line at the bottom of the frame) to callouts, counters and charts. Each sits on a layer above your footage, like your name when you first appear. A pinned skill named brand_visual supplies brand colours and fonts.
+Titles and on-screen text from ready-made templates; ten are built in, from title cards and lower thirds (your name and a line along the bottom) to callouts, counters and charts. Each sits on a layer above your footage. A pinned skill named brand_visual supplies brand colours and fonts; skip this panel if you want no on-screen text.
 
 ### How to use it
 1. Click a template in the rack and fill its fields (* = required); the picture above updates.
 2. Under Anchor pick the playhead or the selected Transcript word; under Duration, intrinsic (the template's own length), fixed or until frame.
-3. Press **Place graphic**; it shows in Preview and in the list at the bottom. Click it there to **Apply params**, **Remove** it or move its layer with ↓ ↑.
+3. Press **Place graphic**: it appears in Preview and in the list at the bottom. Click it there to **Apply params**, **Remove** it or move its layer with ↓ ↑.
 4. **Freeze to clip** makes it a real video clip at the end of the timeline; **Import package** adds a template folder.
 
 ## panel.skills
@@ -290,13 +290,13 @@ Where: Skills panel
 Manual: 8. The agent, skills, and safety rails
 
 ### What it's good for
-A skill is a short written document of your editing taste with rules, such as how tight to cut pauses or your brand colours; pinning it to a project freezes its version, so a later change never alters a finished episode until you upgrade. Pinned skills guide an attached AI agent, the take comparison's scoring and, for a skill named brand_visual, Graphics colours and fonts. Guyditor cannot write new skills yet, so unless your library already has one it is empty; then skip this panel.
+A skill is a short written document of your editing taste with rules, such as how tight to cut pauses or your brand colours; pinning it to a project freezes its version, so a later change never alters a finished episode until you upgrade. Pinned skills guide an attached AI agent, the take comparison's scoring and, for a skill named brand_visual, Graphics colours and fonts. This app's panels cannot write new skills yet, so unless your library already has one it is empty; then skip this panel.
 
 ### How to use it
 1. No tab shows it by default: click **K** in the tool rail (Polish group).
 2. In **Library**, click a version to read it, then **Pin v…** to use it here.
 3. It then shows in **Project pins**: **Read** shows its rules; **Review v…** appears when a newer version exists.
-4. Examples you teach it from Proposals wait in **Draft revisions** until you publish them.
+4. Examples taught in Proposals (the suggested-edits panel) wait in **Draft revisions**.
 
 ## section.skills.project-pins
 Title: Project pins
@@ -316,7 +316,7 @@ Title: Library
 Where: Skills panel
 
 ### What it's good for
-Every skill on this computer, shared by all your projects, with each of its versions. A published version never changes; a change makes a new version. Guyditor has no button to write a skill from scratch, so the library starts empty ("The global skill library is empty.") and grows only when you publish a draft of a skill you already have.
+Every skill on this computer, shared by all your projects, with each of its versions. A published version never changes; a change makes a new version. No panel in this app writes a skill from scratch, so the library starts empty ("The global skill library is empty."); in the app it grows only when you publish a draft of a skill you already have.
 
 ### How to use it
 1. Click a version button (such as v1.0.0) to read that version below.
@@ -328,7 +328,7 @@ Title: Draft revisions
 Where: Skills panel
 
 ### What it's good for
-Unpublished new versions of a skill, made when you teach it from your own decisions: after you accept or reject a proposal, Proposals offers to save that decision as an example. Drafts are inactive ("inactive" in the header): nothing uses them until you publish one and upgrade a project to it. This section only appears while a draft exists.
+Unpublished new versions of a skill, made when you teach it from your own decisions: after you accept or reject a proposal, Proposals (the panel where suggested edits wait) offers to save that decision as an example. Drafts are inactive ("inactive" in the header): nothing uses them until you publish one and upgrade a project to it. This section only appears while a draft exists.
 
 ### How to use it
 1. In Proposals, after **Accept** or **Reject**, pick the skill, say why (optional) and press **Save to new draft version**.
