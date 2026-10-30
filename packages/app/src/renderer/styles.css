@@ -577,7 +577,9 @@ small { color: var(--muted); }
   background: rgb(13 20 24 / 72%);
 }
 .panel-picker {
-  max-width: min(420px, 100%);
+  width: min(420px, calc(100% - 16px));
+  max-height: calc(100% - 16px);
+  overflow: auto;
   display: grid;
   gap: 8px;
   padding: 10px;

@@ -1,4 +1,4 @@
-import { createContext, Fragment, useCallback, useRef, useState } from "react";
+import { createContext, Fragment, useCallback, useEffect, useRef, useState } from "react";
 import type {
   CSSProperties,
   DragEvent,
@@ -88,6 +88,23 @@ function DockGroup({ group, panels }: { group: LayoutGroup; panels: Panels }): R
   const [slot, setSlot] = useState<HTMLElement | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [dropActive, setDropActive] = useState(false);
+  const controls = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!menuOpen) return undefined;
+    const dismissOutside = (event: PointerEvent): void => {
+      if (!controls.current?.contains(event.target as Node | null)) setMenuOpen(false);
+    };
+    const dismissOnEscape = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") setMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", dismissOutside, true);
+    document.addEventListener("keydown", dismissOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", dismissOutside, true);
+      document.removeEventListener("keydown", dismissOnEscape);
+    };
+  }, [menuOpen]);
   const label = PANEL_LABELS[group.activePanelId].name;
 
   const receiveDrop = (event: DragEvent<HTMLElement>, index?: number): void => {
@@ -163,7 +180,7 @@ function DockGroup({ group, panels }: { group: LayoutGroup; panels: Panels }): R
           })}
         </div>
         <div className="panel-actions" data-testid="group-actions" ref={setSlot} />
-        <div className="dock-group-controls">
+        <div className="dock-group-controls" ref={controls}>
           <button
             type="button"
             className="icon-button"
