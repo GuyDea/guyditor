@@ -21,6 +21,24 @@ JsonObject = dict[str, Any]
 # last progress well inside that window for as long as the task runs.
 HEARTBEAT_INTERVAL_SECONDS = 15.0
 
+# The supervisor SIGKILLs an unresponsive worker, which skips multiprocessing's
+# cleanup of daemonic children. A task child polls for its parent and exits
+# once it is gone instead of running on (holding gigabytes of model memory)
+# with nobody left to receive its result.
+PARENT_POLL_SECONDS = 1.0
+
+
+def _exit_with_parent(stop: Event, interval: float | None = None) -> None:
+    parent = os.getppid()
+    period = PARENT_POLL_SECONDS if interval is None else interval
+
+    def watch() -> None:
+        while not stop.wait(period):
+            if os.getppid() != parent:
+                os._exit(1)
+
+    Thread(target=watch, daemon=True).start()
+
 
 def _task_entry(
     method: str,
@@ -44,6 +62,7 @@ def _task_entry(
             emit()
 
         stop = Event()
+        _exit_with_parent(stop)
 
         def heartbeat() -> None:
             while not stop.wait(HEARTBEAT_INTERVAL_SECONDS):
