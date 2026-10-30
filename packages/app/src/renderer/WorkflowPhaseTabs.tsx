@@ -1,3 +1,4 @@
+import { phaseHelpKey } from "./help/help-texts.js";
 import {
   WORKFLOW_PHASES,
 } from "./state/layout-state.js";
@@ -69,6 +70,7 @@ export function WorkflowPhaseTabs({
               aria-controls="workspace-layout"
               aria-selected={activePhase === phase}
               data-testid={`phase-tab-${phase}`}
+              data-help={phaseHelpKey(phase)}
               title={`${WORKFLOW_PHASE_LABELS[phase]} · ${WORKFLOW_PHASE_SHORTCUTS[phase]}`}
               onClick={() => setPhase(phase)}
             >

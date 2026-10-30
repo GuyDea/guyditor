@@ -8,6 +8,7 @@ import type {
   WatchFolderConfig,
 } from "../../../../core/src/index.js";
 import type { JobStatus } from "../../shared/ipc.js";
+import { sectionHelpKey } from "../help/help-texts.js";
 import { errorMessage } from "../ipc.js";
 import { useJobsStore } from "../state/jobs.js";
 import { usePreviewStore, useSelectionStore } from "../state/view-state.js";
@@ -299,7 +300,7 @@ export function MediaBrowserPanel({
         </select>
       </label>
       <details className="capture-panel" data-testid="watch-folder-panel">
-        <summary>Capture watcher <span>{String(watchFolders.length)}</span></summary>
+        <summary data-help={sectionHelpKey("media", "Capture watcher")}>Capture watcher <span>{String(watchFolders.length)}</span></summary>
         <p>Stable recordings are grouped into sessions, ingested, and chained into visible background jobs.</p>
         <div className="path-ingest">
           <input
@@ -353,7 +354,7 @@ export function MediaBrowserPanel({
         </ul>
       </details>
       <details className="capture-panel pickup-panel" data-testid="pickup-wizard">
-        <summary>Pickup repair <span>import</span></summary>
+        <summary data-help={sectionHelpKey("media", "Pickup repair")}>Pickup repair <span>import</span></summary>
         <p>Record on your usual rig with about 1 s of room tone on each side, then import the corrective line.</p>
         <div className="path-ingest">
           <input type="text" aria-label="Pickup file path" placeholder="Corrective recording path" value={pickupPath} data-testid="pickup-path" onChange={(event) => setPickupPath(event.target.value)} />

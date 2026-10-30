@@ -1,6 +1,7 @@
 import type { PropsWithChildren } from "react";
 
 import { beginPanelDrag } from "../DockWorkspace.js";
+import { panelHelpKey } from "../help/help-texts.js";
 import { DOCK_PANEL_IDS } from "../state/layout-state.js";
 import type { DockPanelId } from "../state/layout-state.js";
 import { useWorkspaceStore } from "../state/view-state.js";
@@ -35,6 +36,7 @@ export function Panel({
       } ${className}`}
       data-testid={`${id}-panel`}
       data-panel={id}
+      data-help={panelHelpKey(id)}
       tabIndex={-1}
       aria-labelledby={`${id}-title`}
       onFocusCapture={() => focusPanel(id)}

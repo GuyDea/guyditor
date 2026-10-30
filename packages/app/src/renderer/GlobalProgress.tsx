@@ -120,6 +120,7 @@ export function GlobalProgress({
         type="button"
         className="global-progress"
         data-testid="global-progress"
+        data-help="chrome.global-progress"
         aria-haspopup="dialog"
         aria-expanded={visible}
         onClick={() => setOpen((current) => !current)}
@@ -155,6 +156,7 @@ export function GlobalProgress({
           role="dialog"
           aria-label="What the project is waiting on"
           data-testid="global-progress-popover"
+          data-help="chrome.global-progress"
         >
           <header>
             <div>

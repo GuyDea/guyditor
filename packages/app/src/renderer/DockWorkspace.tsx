@@ -6,6 +6,7 @@ import type {
   ReactNode,
 } from "react";
 
+import { panelHelpKey } from "./help/help-texts.js";
 import {
   DOCK_PANEL_IDS,
   splitterRange,
@@ -105,6 +106,7 @@ function DockRegion({ regionId, panels }: DockRegionProps): React.JSX.Element {
                 className="dock-tab"
                 data-collapsed={railCollapsed[panelId]}
                 data-testid={`dock-tab-${panelId}`}
+                data-help={panelHelpKey(panelId)}
                 key={panelId}
                 title={label.name}
                 onClick={() => {
