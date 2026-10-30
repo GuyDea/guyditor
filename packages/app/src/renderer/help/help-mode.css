@@ -23,12 +23,24 @@
   color: var(--well);
 }
 
+/* An overlay, not a flow child: `.shell` is a grid with fixed rows, so an extra child would push
+   the workspace into the 26px status row. It sits just under the 52px title bar (never over the
+   toggle) on the right of the phase strip and lets clicks through to whatever is underneath. */
 .help-mode-banner {
-  padding: 0.35rem 0.75rem;
-  text-align: center;
+  position: fixed;
+  top: 56px;
+  right: 12px;
+  z-index: 900;
+  box-sizing: border-box;
+  max-width: calc(100vw - 24px);
+  padding: 0.3rem 0.75rem;
+  border: 1px solid var(--blue);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--blue) 22%, var(--well));
   font-size: var(--fs-body);
-  background: color-mix(in srgb, var(--blue) 22%, transparent);
-  border-bottom: 1px solid var(--blue);
+  text-align: center;
+  pointer-events: none;
+  box-shadow: 0 4px 14px color-mix(in srgb, black 45%, transparent);
 }
 
 /* Help popup: centred card over a dimmed backdrop. */

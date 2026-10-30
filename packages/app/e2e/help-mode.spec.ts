@@ -17,9 +17,18 @@ test("help mode explains a section, swallows clicks, and leaves cleanly", async 
     const watcher = page.locator("details", { has: summary });
     await expect(summary).toBeVisible();
     const openBefore = await watcher.evaluate((element: HTMLDetailsElement) => element.open);
+    const heights = async (): Promise<number[]> => Promise.all(
+      ["media-panel", "master-tool-rail"].map(async (id) => (await page.getByTestId(id).boundingBox())?.height ?? 0),
+    );
+    const heightsOff = await heights();
+    expect(heightsOff.every((height) => height > 100)).toBe(true);
 
     await page.getByTestId("help-mode-toggle").click();
     await expect(page.getByTestId("help-mode-banner")).toBeVisible();
+
+    // The banner overlays the workspace; it must not take a row of the shell grid.
+    const heightsOn = await heights();
+    heightsOn.forEach((height, index) => expect(Math.abs(height - (heightsOff[index] ?? 0))).toBeLessThanOrEqual(2));
 
     // The click explains the section instead of toggling it.
     await summary.click();
