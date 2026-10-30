@@ -40,11 +40,11 @@ Where: Phase tabs, top of the window
 Manual: 5. Polish tab — the look and sound
 
 ### What it's good for
-Make the video look and sound finished: captions, titles, colour and audio. Captions are styled with the Caption track controls in the Transcript panel. It shows Graphics (titles, lower thirds and other templates), Preview, Transcript, Agent (Proposals) and Inspector (the settings of whatever clip or item you selected).
+Make the video look and sound finished: captions, titles, green screen and music levels. Captions are styled with the Caption track controls in the Transcript panel. It shows Graphics (titles, lower thirds and other templates), Preview, Transcript, Agent (Proposals) and Inspector (details and tools for whatever you selected).
 
 ### How to use it
 1. Click the tab, or press `Ctrl+Alt+3`.
-2. Select a clip or graphic and adjust it in the Inspector.
+2. Select a clip or a layer name on the Timeline (Cut tab); the Inspector here then offers green-screen keying for a clip, Ducking (music turns down while you talk) for a music layer, picture-in-picture for a video layer. Volume, fades and colour have no editors yet.
 3. Add titles from Graphics and check them and the captions in Preview (it may play the light proxy copies, so judge sharpness in the export).
 4. If the video already looks and sounds the way you want, skip this tab; it never shows a number.
 
@@ -73,7 +73,7 @@ Get the finished video out: exports, shorts, chapters, titles and descriptions, 
 ### How to use it
 1. Click the tab, or press `Ctrl+Alt+5`.
 2. In Deliverables & jobs, find the video (the main one or a short), press **Send review**, then **Approve**; only approved videos export.
-3. In Publish, press **Export output set**, then **Build upload kit** (one folder per platform, ready to upload by hand).
+3. In Publish, press **Export output set**, then **Build upload kit** (one folder per platform, ready to upload by hand). Today kits build for shorts only: the main video's kit needs approved chapters and a thumbnail image that nothing generates yet.
 4. The number on the tab counts failed exports and cost confirmations waiting; click it to open the Status panel.
 
 ## chrome.tool-rail
@@ -362,9 +362,9 @@ A deliverable is one video you will publish: your main video, plus any short (an
 ### How to use it
 1. Click a video to make it the one Preview, Timeline and Publish work on.
 2. Press **Send review**, then **Approve**; the chip then reads approved.
-3. **Render primary export** writes the main video, without burned-in captions, to the project's exports folder, even unapproved; its report shows below (**Refresh report** reloads it).
+3. **Render primary export** writes the main video, without burned-in captions, to the project's exports folder, even unapproved; a failed check shows at the window's bottom. Its report shows below.
 4. A reviewed short turns "stale" when you edit footage it uses: **Build refresh review**, then **Accept refresh** or **Keep stale**. The main video stays approved after edits.
-5. In the job list, **Cancel** stops a job and **Retry** reruns a failed one. **Derive short** makes a new short.
+5. Jobs: **Cancel** stops one, **Retry** reruns a failed one. **Derive short** makes a new short.
 
 ## section.status.derive-a-short
 Title: Derive a short
@@ -372,13 +372,13 @@ Where: Status panel (Deliverables & jobs), opened with Derive short
 Manual: 7. Publish tab — get it out
 
 ### What it's good for
-Makes a short, an upright (9:16) video for YouTube Shorts, TikTok or Instagram Reels, from part of your main video, say the 40 seconds with your best tip. It is its own edit with its own timeline, not a crop, and arrives as a proposal (a suggested change waiting in Proposals for your Accept).
+Makes a short, an upright (9:16) video for YouTube Shorts, TikTok or Instagram Reels, from part of your main video, say the 40 seconds with your best tip. It is its own edit, not a crop, and arrives as a proposal (a suggested change waiting in Proposals for your Accept).
 
 ### How to use it
-1. Type a Name, pick a Platform; the box below lists its size, length and loudness limits.
-2. Under Source keep Transcript passage and select the words in the Transcript (click the first, Shift+click the last), or pick Timeline range and type a start and end frame.
+1. First select the words in the Transcript (Cut tab: click the first, Shift+click the last), then press **Derive short** here with Source on Transcript passage; or use Timeline range with start and end frames.
+2. Type a Name, pick a Platform; the box below lists its size, length and loudness limits.
 3. Press **Create proposal**, then **Accept** it in Proposals: the short appears in the list as draft.
-4. Clip range takes clip IDs (Inspector's **Copy selected ID**). Discovered candidate and Beat range need story beats, which the app can't create yet; without them **Discover candidates** offers only the whole recording, if it fits.
+4. Clip range takes clip IDs. Discovered candidate and Beat range need story beats, which the app can't create; **Discover candidates** queues a job, **Load results** then shows only the whole recording, if it fits.
 
 ## panel.publish
 Title: Publish
@@ -389,10 +389,10 @@ Manual: 7. Publish tab — get it out
 Packs the video picked under Deliverable for upload: title, description, tags, chapters, covers, exported files and an upload kit (one folder per platform; you upload by hand). Limitation: kits work for shorts only; the main video's kit needs chapters, made from story beats the app can't create, and a thumbnail image nothing makes yet.
 
 ### How to use it
-1. Press **Draft from transcript + beats** for a rough title, description and tags taken from your words; rewrite them, keep each counter (e.g. 52/100) within its limit, press **Save draft**, then **Approve**.
+1. Press **Draft from transcript + beats** for a rough title, description and tags from your words; rewrite them, keep each counter (e.g. 52/100) within its limit, press **Save draft**, then **Approve**.
 2. Approve the video itself in Deliverables & jobs (**Send review**, **Approve**).
-3. Press **Export output set**: video with and without burned-in captions, subtitles and, for a short, six covers, in the project's exports folder.
-4. Once that job is done, and with no changes in between, press **Build upload kit**; the folder appears under exports/kits. **Text exports**, **Export .otio** and **Batch export** are optional.
+3. Press **Export output set**: video with and without burned-in captions, subtitles and, for a short, six covers, in the exports folder.
+4. When that job reads done in the Deliverables & jobs list, with no changes in between, press **Build upload kit**; the folder appears under exports/kits. **Text exports**, **Export .otio**, **Batch export** are optional.
 
 ## panel.help
 Title: Help & manual
@@ -442,7 +442,7 @@ Manual: 3. Ingest tab — get material in
 Shows where this project's disk space goes, by kind: sources (your original clips, never touched), generated (accepted B-roll and other clips Guyditor made), project-state (project file, history, transcripts), proxies (light copies for smooth scrubbing), caches, renders (your exports) and more. When vlogs fill your disk, it frees space safely. Despite the name, backup and archiving have no buttons here yet.
 
 ### How to use it
-1. Press **Scan**: free space, orphans (cache files of clips no longer in the project) and each kind's size, marked "Safe to clean — regenerable" or "Protected — load-bearing".
+1. Press **Scan**: free space, orphans (cache files of clips no longer in the project) and each kind's size, each marked whether it is safe to clean (only proxies, caches and the job list are).
 2. Press **Plan safe cleanup**; a Cleanup review appears below listing what would go.
 3. Decide there: deleting frees the space, but proxies don't come back by themselves (see Cleanup review).
 4. If your disk isn't filling up, you don't need this panel.
@@ -467,13 +467,13 @@ Where: Inspector panel
 Manual: 2. The workspace
 
 ### What it's good for
-Shows the details of what you selected (a Timeline clip or layer, a transcript word, a Preview note) as raw text, plus three tools that appear with the right selection: green-screen keying (cutting you out of the background) for a clip, Ducking (music turns down while you talk) for an audio layer, Picture in picture for a video layer. Volume, fades and colour can't be edited here yet.
+Shows what you selected (a Timeline clip or layer, a transcript word, a Preview note) as raw text, plus tools that appear with the right selection: green-screen keying (cutting you out of the background) for a clip, Ducking (music turns down while you talk) for an audio layer, Picture in picture for a video layer. Volume, fades and colour have no editors yet.
 
 ### How to use it
-1. Select something; its data appears, with **Copy selected ID** to paste its ID elsewhere.
-2. With a clip selected, **Enable chroma key** removes a green screen; **Use neural matte** works without one (needs the ML worker with a matte model installed).
+1. Select something; **Copy selected ID** copies its ID.
+2. With a clip selected and no key set, **Enable chroma key** removes a green screen (Key method turns it off). Without a green screen: **Use neural matte**, **Generate matte candidate**, **Accept + freeze matte** (needs the ML worker's matte model).
 3. Click a layer's name on the Timeline: a music or audio layer shows Ducking (**Save ducking**), a video layer Picture in picture (**Place / update**).
-4. **Reveal project** shows the project folder, **Copy path** copies its path, **History** lists every change.
+4. **Reveal project** shows the project folder, **Copy path** copies it, **History** lists every change.
 
 ## section.inspector.semantic-history
 Title: Semantic history
