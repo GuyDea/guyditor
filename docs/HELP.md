@@ -30,7 +30,7 @@ Shape the story: decide what stays, what goes and in what order. It shows Previe
 
 ### How to use it
 1. Click the tab, or press `Ctrl+Alt+2`. New projects open here.
-2. Select words in the Transcript to cut or keep them; fine-tune trims on the Timeline.
+2. In the Transcript, select the words you don't want and press **Remove range**. On the Timeline, select a clip to **Split** it at the playhead, **Trim** it or **Remove** it.
 3. The number on the tab counts proposals to remove fillers or pauses that wait for you; click it to jump to the first one.
 4. Any other panel can still be opened here from the tool rail on the left.
 
@@ -40,12 +40,12 @@ Where: Phase tabs, top of the window
 Manual: 5. Polish tab — the look and sound
 
 ### What it's good for
-Make the video look and sound finished: captions, titles, colour and audio. It shows Graphics (titles, lower thirds and other templates), Preview, Transcript, Agent (Proposals) and Inspector (the settings of whatever clip or item you selected).
+Make the video look and sound finished: captions, titles, colour and audio. Captions are styled with the Caption track controls in the Transcript panel. It shows Graphics (titles, lower thirds and other templates), Preview, Transcript, Agent (Proposals) and Inspector (the settings of whatever clip or item you selected).
 
 ### How to use it
 1. Click the tab, or press `Ctrl+Alt+3`.
 2. Select a clip or graphic and adjust it in the Inspector.
-3. Add titles from Graphics and check them in Preview, which shows the same picture the export will.
+3. Add titles from Graphics and check them and the captions in Preview (it may play the light proxy copies, so judge sharpness in the export).
 4. If the video already looks and sounds the way you want, skip this tab; it never shows a number.
 
 ## phase.review
@@ -60,7 +60,7 @@ Watch the cut critically and settle every open change. It shows Media (to compar
 1. Click the tab, or press `Ctrl+Alt+4`.
 2. Pause Preview and draw or type a note on the frame.
 3. In Proposals, **Accept** or **Reject** each change, or type what to change and press **Supersede** to ask for a new version; rejecting leaves the project exactly as it was.
-4. The number on the tab counts proposals plus open notes marked as blocking; click it to jump to the first one.
+4. The number on the tab counts proposals waiting for review (notes you draw don't add to it); click it to jump to the first one.
 
 ## phase.publish
 Title: Publish tab
@@ -72,7 +72,7 @@ Get the finished video out: exports, shorts, chapters, titles and descriptions, 
 
 ### How to use it
 1. Click the tab, or press `Ctrl+Alt+5`.
-2. In Deliverables & jobs, pick the video (the main one or a short) and approve it; only approved videos export.
+2. In Deliverables & jobs, find the video (the main one or a short), press **Send review**, then **Approve**; only approved videos export.
 3. In Publish, press **Export output set**, then **Build upload kit** (one folder per platform, ready to upload by hand).
 4. The number on the tab counts failed exports and cost confirmations waiting; click it to open the Status panel.
 
@@ -103,7 +103,7 @@ One bar for everything Guyditor does in the background (importing, proxies, tran
 2. **Running**: jobs in progress, with Cancel; "ETA pending" means no time estimate yet.
 3. **Needs attention**: failed jobs; **Retry chain** reruns one together with the failed jobs linked to it.
 4. **Queued / blocked**: jobs waiting for a free slot or for another job, like a transcript waiting for its import ("Blocked on").
-5. **Waiting on you**: proposals, frame notes marked as blocking, and cost confirmations (answer those where you started them). **External providers**: paid online calls in progress, with time and spend.
+5. **Waiting on you**: proposals to review (**Review proposal** jumps to one) and cost confirmations (answer those where you started them). **External providers**: paid online calls in progress, with time and spend.
 
 ## panel.media
 Title: Media
@@ -125,11 +125,11 @@ Where: Media panel
 Manual: 3. Ingest tab — get material in
 
 ### What it's good for
-Imports new recordings by itself: point it at a folder, such as the one OBS saves into or where you copy iPhone clips, and every file that lands there while this project is open comes in with the jobs you ticked: a proxy (a light copy that keeps scrubbing smooth; exports use your originals), speech analysis (finding where someone talks) and a transcript. Your originals are never changed. If you import by hand, you don't need it.
+Imports new recordings by itself: every file that lands in a folder you name (where OBS saves, or where you copy iPhone clips) while this project is open comes in, with the jobs you ticked: a proxy (a light copy for smooth scrubbing; exports use your originals), speech analysis (finding where someone talks) and a transcript. Originals are never changed. If you import by hand, skip it.
 
 ### How to use it
 1. Type the folder's full path in "Watch-folder path"; files already there come in too.
-2. "Guyditor naming" (preselected) groups clips by session folders like 20260717-0930_ep12-hooks, others by the day saved; "Flat / per day" groups all by day.
+2. "Guyditor naming" (preselected) groups clips by session folders like 20260717-0930_ep12-hooks, others by day; "Flat / per day" groups all by day.
 3. Tick the jobs you want and press **Add watcher**; the folder is listed with "ingest on".
 4. Copy a clip in; a few seconds after it stops growing it appears in the list below.
 5. **Remove** stops watching that folder; clips already imported stay.
@@ -140,14 +140,14 @@ Where: Media panel
 Manual: 4. Cut tab — shape the story
 
 ### What it's good for
-Fixes a fluffed line without reshooting the take. A pickup is a short re-recording of just the wrong words (say, a price you misspoke): Guyditor matches it word by word and proposes adding it at that spot. If a cut or another take fixes the line, you don't need it.
+Fixes a fluffed line without reshooting. A pickup is a short re-recording of just the wrong words (say, a misspoken price); Guyditor matches it word by word and proposes adding it at that spot. If a cut or another take fixes the line, skip this.
 
 ### How to use it
-1. Type the clip's ID (under its name in the list) and the first and last wrong word IDs (hover a word in the Transcript to see one, like w000123); those words show highlighted.
-2. Re-record exactly those words on the same mic, with a second of silence either side.
-3. Enter the recording's path and a short name, press **Import**, then type its new ID as "Pickup asset ID".
-4. When its transcript is done, press **Transcribe, align & propose splice**: a proposal appears in Proposals (Agent on the rail), or a message if the match is unsure.
-5. Accept it there: the line goes on a "Pickups" audio track; the original audio isn't cut for you.
+1. Enter the clip's ID (under its name) and the first and last wrong word IDs (hover a word in the Transcript, e.g. w000123); they show highlighted.
+2. Re-record exactly those words, same mic, a second of silence either side.
+3. Enter its path and a short name, press **Import**, and type its new ID as "Pickup asset ID".
+4. Once transcribed, press **Transcribe, align & propose splice** (needs the ML worker speech tools, else "Forced alignment is unavailable").
+5. Accept the proposal in Proposals: the line goes on a "Pickups" audio track. Limitation: the fluffed take is not muted and still plays underneath.
 
 ## panel.broll
 Title: B-roll
@@ -170,9 +170,9 @@ Where: B-roll panel
 The seven kinds of B-roll Guyditor knows, each with its own way in. Picking the right one records who owns the file, so an export can warn you about anything you may not be allowed to use. For example, a stock clip you bought goes in as Licensed assets, with the licence and the seller.
 
 ### How to use it
-1. Click a kind. Local footage, Licensed assets, Stills and Screen captures show a "Source path" box; the label under each says if the rights are yours (creator-owned) or need filling in (capture-required).
+1. Click a kind. Local footage, Licensed assets, Stills and Screen captures show a "Source path" box; only Licensed assets asks for licence details. The label under each kind shows its default rights.
 2. Type the file's full path. For Licensed assets also fill License, Licensor (who sold it) and Purchase ref.
-3. Press **Capture rights + ingest**: it is imported like any Media import, with the rights attached; a note says if licence details are missing.
+3. Press **Capture rights + ingest**: imported like any Media import, rights attached; a note flags missing licence details.
 4. Programmatic animations are made in the Graphics panel; External generation uses **Generation request** below; Local generation is not available.
 
 ## section.broll.generation-request
@@ -198,7 +198,7 @@ Every generated clip (a candidate) waits here until you have checked it; nothing
 ### How to use it
 1. Pick a candidate (#1, #2…) and play its preview.
 2. For each of the seven points choose Pass, Fail or N/A and write a short note; every point needs a note.
-3. Press **Resolve review**. It doesn't check your verdicts: if something failed, press **Reject** or **Regenerate new** instead.
+3. Press **Resolve review**. If any point is Fail, **Accept + freeze** will refuse; press **Reject** or **Regenerate new** instead.
 4. **Accept + freeze** copies the clip into the project and puts it on a new track at the playhead. Until then candidates sit in a cache that cleanup may delete.
 
 ## section.broll.rights-indicators
