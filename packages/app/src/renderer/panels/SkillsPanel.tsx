@@ -5,6 +5,7 @@ import type {
   SkillManifest,
   SkillVersionDiff,
 } from "../../../../agent/src/index.js";
+import { sectionHelpKey } from "../help/help-texts.js";
 import { errorMessage } from "../ipc.js";
 import { Panel } from "./Panel.js";
 import type { WorkspacePanelProps } from "./types.js";
@@ -159,7 +160,7 @@ export function SkillsPanel({
       actions={<button type="button" data-testid="skills-refresh" onClick={() => void refreshSkills()}>Refresh</button>}
     >
       <section className="skill-section" data-testid="project-skill-pins">
-        <header><h3>Project pins</h3><span>{String(pinnedSkills.length)} active</span></header>
+        <header><h3 data-help={sectionHelpKey("skills", "Project pins")}>Project pins</h3><span>{String(pinnedSkills.length)} active</span></header>
         {pinnedSkills.map((skill) => {
           const newest = latest.find(({ id }) => id === skill.manifest.id);
           const canUpgrade = newest !== undefined &&
@@ -252,7 +253,7 @@ export function SkillsPanel({
       )}
 
       <section className="skill-section" data-testid="skill-library">
-        <header><h3>Library</h3><span>{String(latest.length)} skills</span></header>
+        <header><h3 data-help={sectionHelpKey("skills", "Library")}>Library</h3><span>{String(latest.length)} skills</span></header>
         {latest.map((skill) => {
           const pinned = pinnedSkills.some(({ manifest }) => manifest.id === skill.id);
           return (
@@ -280,7 +281,7 @@ export function SkillsPanel({
 
       {skillDrafts.length === 0 ? null : (
         <section className="skill-section" data-testid="skill-drafts">
-          <header><h3>Draft revisions</h3><span>inactive</span></header>
+          <header><h3 data-help={sectionHelpKey("skills", "Draft revisions")}>Draft revisions</h3><span>inactive</span></header>
           {skillDrafts.map((draft) => (
             <article className="skill-card is-draft" key={`${draft.manifest.id}@${draft.manifest.version}`}>
               <div><strong>{draft.manifest.title}</strong><small>v{draft.manifest.version} · unpublished</small></div>
