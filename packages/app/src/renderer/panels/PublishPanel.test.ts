@@ -43,14 +43,7 @@ function prepareServerRender(selectedDeliverableId: string | null): void {
     selectedDeliverableId,
   });
   stateHookMock.selectionServerSnapshot = useSelectionStore.getState();
-  const workspace = useWorkspaceStore.getState();
-  stateHookMock.workspaceServerSnapshot = {
-    ...workspace,
-    railCollapsed: {
-      ...workspace.railCollapsed,
-      publish: false,
-    },
-  };
+  stateHookMock.workspaceServerSnapshot = useWorkspaceStore.getState();
 }
 
 afterEach(() => {

@@ -9,18 +9,18 @@ import {
 } from "./state/tool-rail.js";
 import { useWorkspaceStore } from "./state/view-state.js";
 import { panelBadgeCounts } from "./workflow-phases.js";
+import { revealPanel } from "./workspace-navigation.js";
 
 const STATE_LABELS = {
-  "expanded-here": "Expanded in this tab",
-  collapsed: "Collapsed",
-  "in-another-tab-only": "Available in another tab",
+  here: "In this tab",
+  "other-phase": "In another tab",
+  absent: "Not placed",
 } as const;
 
 export function MasterToolRail(): React.JSX.Element {
   const [expanded, setExpanded] = useState(false);
   const layouts = useWorkspaceStore((state) => state.layouts);
   const activePhase = useWorkspaceStore((state) => state.activePhase);
-  const togglePanel = useWorkspaceStore((state) => state.togglePanel);
   const overview = useJobsStore((state) => state.overview);
   const badges = panelBadgeCounts(overview);
   const entryRefs = useRef<Array<HTMLButtonElement | null>>([]);
@@ -86,14 +86,14 @@ export function MasterToolRail(): React.JSX.Element {
                   }}
                   data-testid={`tool-rail-entry-${panelId}`}
                   data-state={state}
-                  aria-pressed={state === "expanded-here"}
+                  aria-pressed={state === "here"}
                   aria-label={`${label.name}: ${STATE_LABELS[state]}${
                     badge > 0 ? `, ${String(badge)} need attention` : ""
                   }`}
                   title={`${label.name} · ${STATE_LABELS[state]}${
                     badge > 0 ? ` · ${String(badge)} need attention` : ""
                   }`}
-                  onClick={() => togglePanel(panelId)}
+                  onClick={() => revealPanel(panelId)}
                   onKeyDown={(event) => moveFocus(event, index)}
                 >
                   <span className="tool-rail-icon" aria-hidden="true">{label.icon}</span>
