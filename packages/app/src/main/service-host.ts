@@ -774,7 +774,11 @@ export class WindowServiceHost {
       context.reportProgress(1);
       return { deliverableId, framingPath: framingReference.path, decisionCount: sidecar.decisions.length };
     });
-    const media = new MediaEngine({ jobQueue: jobs, mlworker: this.#app.mlworker });
+    const media = new MediaEngine({
+      jobQueue: jobs,
+      mlworker: this.#app.mlworker,
+      project: store,
+    });
     const timelineFrames = new TimelineFrameService();
     registerKeyQcExecutor(jobs);
     const matte = new MatteService({

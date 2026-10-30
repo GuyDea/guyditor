@@ -76,6 +76,12 @@ export interface MediaEngineOptions {
   mlworker?: MlworkerTaskRunner;
   idFactory?: (prefix: IdPrefix) => string;
   now?: () => Date;
+  /**
+   * The project this engine serves. Jobs queued in an earlier session (proxy,
+   * peaks) resume as soon as executors register, so the project must be known
+   * before then rather than only after the next ingest.
+   */
+  project?: ProjectStore;
 }
 
 export interface IngestAssetResult {
@@ -420,6 +426,9 @@ export class MediaEngine {
     ])];
     this.#idFactory = options.idFactory ?? makeId;
     this.#now = options.now ?? (() => new Date());
+    if (options.project !== undefined) {
+      this.#projects.set(options.project.root, options.project);
+    }
     if (options.mlworker !== undefined) {
       registerMlworkerJobExecutors(this.#queue, options.mlworker);
     }

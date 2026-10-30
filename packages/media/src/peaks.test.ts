@@ -196,6 +196,42 @@ describe.skipIf(!FIXTURES_AVAILABLE)("peaks.generate fixture executor", () => {
     }
     await expect(access(paths.part)).rejects.toMatchObject({ code: "ENOENT" });
   });
+
+  it("runs a peaks job left queued by an earlier session once the project is reopened", async () => {
+    const root = await sandbox();
+    const store = await valueOf(ProjectStore.createProject(
+      path.join(root, "project"),
+      { name: "Peaks resume test" },
+      { profilesDirectory: path.join(REPOSITORY_ROOT, "profiles") },
+    ));
+    const databasePath = path.join(store.root, ".guyditor/jobs.sqlite");
+    const first = JobQueue.open(databasePath).queue;
+    const ingest = await waitForJob(first, new MediaEngine({
+      followUpJobs: [],
+      jobQueue: first,
+    }).ingest(store, {
+      sources: [{ path: path.join(FIXTURE_ROOT, "speech-48k-20s.wav") }],
+    }).jobId);
+    const assetId = (ingest.payload as unknown as IngestJobResult).assets[0]?.assetId;
+    if (assetId === undefined) throw new Error("Audio asset was not registered.");
+    first.close();
+
+    // A fresh app session: the queue reopens with the follow-up job still queued
+    // and the media engine has never ingested into this project.
+    const { queue } = JobQueue.open(databasePath);
+    queues.push(queue);
+    const peaks = queue.enqueue({
+      kind: "peaks.generate",
+      title: "Generate peaks",
+      payload: { assetId, projectRoot: store.root },
+      cancellable: true,
+    });
+    new MediaEngine({ followUpJobs: [], jobQueue: queue, project: store });
+
+    const settled = await waitForJob(queue, peaks.jobId);
+    expect(settled.error).toBeUndefined();
+    expect(settled.state).toBe("done");
+  });
 });
 
 describe("peaks cache paths", () => {
