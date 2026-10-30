@@ -8,6 +8,7 @@ import {
   createOnboardingState,
   dismissWelcome,
   loadOnboardingState,
+  markProjectOpened,
   saveOnboardingState,
   shouldShowWelcome,
   welcomeVisible,
@@ -47,6 +48,14 @@ describe("first-run onboarding state", () => {
     dismissWelcome(fresh);
     expect(shouldShowWelcome(fresh)).toBe(false);
     expect(loadOnboardingState(fresh).welcomeDismissed).toBe(true);
+  });
+
+  it("treats a project opened under the free layout as a returning user", () => {
+    const storage = memoryStorage();
+
+    markProjectOpened(storage);
+
+    expect(shouldShowWelcome(storage)).toBe(false);
   });
 
   it("recovers malformed persisted onboarding state without losing first-run behavior", () => {

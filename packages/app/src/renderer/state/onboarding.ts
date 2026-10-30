@@ -1,6 +1,7 @@
-import { LAYOUT_STORAGE_KEY } from "./layout-state.js";
+import { LAYOUT_STORAGE_KEY, LEGACY_LAYOUT_STORAGE_KEY } from "./layout-state.js";
 
 export const ONBOARDING_STORAGE_KEY = "guyditor/onboarding/v1";
+export const PROJECT_OPENED_KEY = "guyditor/project-opened";
 
 export const CHECKLIST_STEPS = [
   { id: "projectOpened", label: "Create or open a project" },
@@ -91,14 +92,25 @@ export function saveOnboardingState(
   storage.setItem(ONBOARDING_STORAGE_KEY, JSON.stringify(state));
 }
 
-function hasPriorProject(storage: Storage): boolean {
+export function markProjectOpened(storage: Storage): void {
+  storage.setItem(PROJECT_OPENED_KEY, "true");
+}
+
+/** Layouts used to be stored per project; their presence still marks a returning user. */
+function hasLegacyLayoutProject(storage: Storage, key: string): boolean {
   try {
-    const value: unknown = JSON.parse(storage.getItem(LAYOUT_STORAGE_KEY) ?? "null");
+    const value: unknown = JSON.parse(storage.getItem(key) ?? "null");
     return isRecord(value) && isRecord(value["projects"]) &&
       Object.keys(value["projects"]).length > 0;
   } catch {
     return false;
   }
+}
+
+function hasPriorProject(storage: Storage): boolean {
+  return storage.getItem(PROJECT_OPENED_KEY) !== null ||
+    hasLegacyLayoutProject(storage, LAYOUT_STORAGE_KEY) ||
+    hasLegacyLayoutProject(storage, LEGACY_LAYOUT_STORAGE_KEY);
 }
 
 export function shouldShowWelcome(storage: Storage): boolean {

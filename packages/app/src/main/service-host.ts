@@ -152,6 +152,7 @@ import {
   templateAuthoringIpc,
 } from "./template-authoring-service.js";
 import { AiSettingsService } from "./ai-settings-service.js";
+import { WorkspaceLayoutService } from "./workspace-layout-service.js";
 import { DEFAULT_SETTINGS } from "./settings.js";
 import type { AiSettings, UserSettings } from "./settings.js";
 
@@ -349,6 +350,7 @@ export class AppServiceHost {
   public readonly mlworker: MlworkerSupervisor;
   public readonly credentials: CredentialStore;
   public readonly aiSettings: AiSettingsService;
+  public readonly workspaceLayout: WorkspaceLayoutService;
   public readonly skillRegistry: SkillRegistry;
   readonly #options: AppServiceHostOptions;
   readonly #windows = new Set<WindowServiceHost>();
@@ -357,6 +359,14 @@ export class AppServiceHost {
     this.#options = options;
     this.credentials = options.credentials ?? new FileCredentialStore({
       userDir: options.userDirectory,
+    });
+    this.workspaceLayout = new WorkspaceLayoutService({
+      userDirectory: options.userDirectory,
+      onChange: (document, clientId) => {
+        for (const window of this.#windows) {
+          window.publisher.publish({ kind: "workspace.layout", clientId, document });
+        }
+      },
     });
     this.aiSettings = new AiSettingsService({
       userDirectory: options.userDirectory,
@@ -1093,7 +1103,8 @@ export class WindowServiceHost {
       service === "ProjectStore" ||
       service === "AuditLog" ||
       service === "CostMeter" ||
-      service === "AiSettings"
+      service === "AiSettings" ||
+      service === "WorkspaceLayout"
     ) return resolved;
     return this.#bindProjectService(project, resolved);
   }
@@ -1844,6 +1855,8 @@ export class WindowServiceHost {
           : templateAuthoringIpc(project.templateAuthoring);
       case "AiSettings":
         return this.#app.aiSettings.surface();
+      case "WorkspaceLayout":
+        return this.#app.workspaceLayout.surface();
       case "AuditLog":
         return {
           readSession: ({ sessionId }: { sessionId: string }) => this.#app.auditLog.readSession(sessionId),

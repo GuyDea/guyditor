@@ -10,7 +10,7 @@ import {
 import type { PanelId } from "./state/view-state.js";
 
 export function revealPanel(panel: PanelId): void {
-  useWorkspaceStore.getState().expandPanel(panel);
+  useWorkspaceStore.getState().revealPanel(panel);
   queueMicrotask(() => document.querySelector<HTMLElement>(`[data-panel="${panel}"]`)?.focus());
 }
 

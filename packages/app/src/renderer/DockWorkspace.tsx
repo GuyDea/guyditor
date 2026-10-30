@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { createContext, Fragment, useCallback, useEffect, useRef, useState } from "react";
 import type {
   CSSProperties,
   DragEvent,
@@ -7,19 +7,21 @@ import type {
 } from "react";
 
 import { panelHelpKey } from "./help/help-texts.js";
-import {
-  DOCK_PANEL_IDS,
-  splitterRange,
-} from "./state/layout-state.js";
-import type {
-  DockPanelId,
-  DockRegionId,
-  SplitterId,
-} from "./state/layout-state.js";
+import { PanelPicker } from "./PanelPicker.js";
+import { DOCK_PANEL_IDS } from "./state/layout-state.js";
+import type { DockPanelId } from "./state/layout-state.js";
+import { placedPanels } from "./state/layout-tree.js";
+import type { LayoutGroup, LayoutNode, LayoutSplit } from "./state/layout-tree.js";
 import { PANEL_LABELS } from "./state/tool-rail.js";
 import { useWorkspaceStore } from "./state/view-state.js";
 
 const PANEL_DRAG_MIME = "application/x-guyditor-panel";
+
+/**
+ * Where a panel portals its header actions. `undefined` means the panel is rendered
+ * outside a dock group (tests, server render) and draws them inline instead.
+ */
+export const PanelActionsSlot = createContext<HTMLElement | null | undefined>(undefined);
 
 function isDockPanelId(value: string): value is DockPanelId {
   return (DOCK_PANEL_IDS as readonly string[]).includes(value);
@@ -37,237 +39,318 @@ function draggedPanel(event: DragEvent<HTMLElement>): DockPanelId | null {
   return isDockPanelId(value) ? value : null;
 }
 
-interface DockRegionProps {
-  regionId: DockRegionId;
-  panels: Record<DockPanelId, ReactNode>;
+type Panels = Record<DockPanelId, ReactNode>;
+
+function usePlacedPanels(): DockPanelId[] {
+  const layout = useWorkspaceStore((state) => state.layout);
+  return placedPanels(layout);
 }
 
-function DockRegion({ regionId, panels }: DockRegionProps): React.JSX.Element {
-  const region = useWorkspaceStore((state) => state.layout.regions[regionId]);
-  const railCollapsed = useWorkspaceStore((state) => state.layout.railCollapsed);
-  const assignPanel = useWorkspaceStore((state) => state.assignPanel);
-  const activatePanel = useWorkspaceStore((state) => state.activatePanel);
-  const togglePanel = useWorkspaceStore((state) => state.togglePanel);
-  const [dropActive, setDropActive] = useState(false);
-  const expandedPanelIds = region.panelIds.filter((panelId) => !railCollapsed[panelId]);
-  const activePanelId = region.activePanelId !== null &&
-    expandedPanelIds.includes(region.activePanelId)
-    ? region.activePanelId
-    : expandedPanelIds[0] ?? null;
+function GroupMenu({ group, onClose }: { group: LayoutGroup; onClose: () => void }): React.JSX.Element {
+  const openPicker = useWorkspaceStore((state) => state.openPicker);
+  const closeGroup = useWorkspaceStore((state) => state.closeGroup);
+  const item = (testId: string, label: string, run: () => void): React.JSX.Element => (
+    <button
+      type="button"
+      role="menuitem"
+      data-testid={testId}
+      onClick={() => {
+        onClose();
+        run();
+      }}
+    >
+      {label}
+    </button>
+  );
+  return (
+    <div className="dock-group-menu" role="menu" data-testid="group-menu-list">
+      {item("group-menu-split-right", "Split right", () =>
+        openPicker({ mode: "split", groupId: group.id, side: "right" }))}
+      {item("group-menu-split-down", "Split down", () =>
+        openPicker({ mode: "split", groupId: group.id, side: "down" }))}
+      {item("group-menu-add-tab", "Add tab…", () =>
+        openPicker({ mode: "add-tab", groupId: group.id }))}
+      {item("group-menu-close", "Close panel", () => closeGroup(group.id))}
+    </div>
+  );
+}
 
-  const receiveDrop = (
-    event: DragEvent<HTMLElement>,
-    targetIndex?: number,
-  ): void => {
+function DockGroup({ group, panels }: { group: LayoutGroup; panels: Panels }): React.JSX.Element {
+  const activateTab = useWorkspaceStore((state) => state.activateTab);
+  const closeTab = useWorkspaceStore((state) => state.closeTab);
+  const closeGroup = useWorkspaceStore((state) => state.closeGroup);
+  const moveTab = useWorkspaceStore((state) => state.moveTab);
+  const focusPanel = useWorkspaceStore((state) => state.focusPanel);
+  const openPicker = useWorkspaceStore((state) => state.openPicker);
+  const picker = useWorkspaceStore((state) => state.picker);
+  const cancelPicker = useWorkspaceStore((state) => state.cancelPicker);
+  const choosePanel = useWorkspaceStore((state) => state.choosePanel);
+  const placed = usePlacedPanels();
+  const [slot, setSlot] = useState<HTMLElement | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [dropActive, setDropActive] = useState(false);
+  const controls = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!menuOpen) return undefined;
+    const dismissOutside = (event: PointerEvent): void => {
+      if (!controls.current?.contains(event.target as Node | null)) setMenuOpen(false);
+    };
+    const dismissOnEscape = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") setMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", dismissOutside, true);
+    document.addEventListener("keydown", dismissOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", dismissOutside, true);
+      document.removeEventListener("keydown", dismissOnEscape);
+    };
+  }, [menuOpen]);
+  const label = PANEL_LABELS[group.activePanelId].name;
+
+  const receiveDrop = (event: DragEvent<HTMLElement>, index?: number): void => {
     event.preventDefault();
     event.stopPropagation();
     setDropActive(false);
     const panelId = draggedPanel(event);
-    if (panelId !== null) assignPanel(panelId, regionId, targetIndex);
+    if (panelId !== null) moveTab(panelId, group.id, index);
   };
 
-  return (
+  const section = (
     <section
-      className="dock-region"
-      data-testid={`dock-region-${regionId}`}
-      data-region={regionId}
-      data-active-panel={activePanelId ?? ""}
-      data-drop-active={dropActive}
-      onDragEnter={(event) => {
-        event.preventDefault();
-        setDropActive(true);
-      }}
-      onDragLeave={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
-          setDropActive(false);
-        }
-      }}
-      onDragOver={(event) => {
-        event.preventDefault();
-        event.dataTransfer.dropEffect = "move";
-      }}
-      onDrop={(event) => receiveDrop(event)}
+      className="dock-group"
+      data-testid="dock-group"
+      data-group-id={group.id}
+      data-active-panel={group.activePanelId}
+      onPointerDownCapture={() => focusPanel(group.activePanelId)}
     >
-      {region.panelIds.length > 1 ? (
+      <header className="dock-group-header">
         <div
           className="dock-tabs"
           role="tablist"
-          aria-label={`${regionId} panels`}
-          data-testid={`dock-tabs-${regionId}`}
+          aria-label="Panels in this group"
+          data-drop-active={dropActive}
+          onDragEnter={(event) => {
+            event.preventDefault();
+            setDropActive(true);
+          }}
+          onDragLeave={(event) => {
+            if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+              setDropActive(false);
+            }
+          }}
+          onDragOver={(event) => {
+            event.preventDefault();
+            event.dataTransfer.dropEffect = "move";
+          }}
+          onDrop={(event) => receiveDrop(event)}
         >
-          {region.panelIds.map((panelId, index) => {
-            const label = PANEL_LABELS[panelId];
+          {group.panelIds.map((panelId, index) => {
+            const tab = PANEL_LABELS[panelId];
             return (
-              <button
-                type="button"
-                role="tab"
-                draggable
-                aria-selected={activePanelId === panelId}
-                className="dock-tab"
-                data-collapsed={railCollapsed[panelId]}
-                data-testid={`dock-tab-${panelId}`}
-                data-help={panelHelpKey(panelId)}
-                key={panelId}
-                title={label.name}
-                onClick={() => {
-                  if (railCollapsed[panelId]) togglePanel(panelId);
-                  activatePanel(regionId, panelId);
-                }}
-                onDragStart={(event) => beginPanelDrag(event, panelId)}
-                onDragOver={(event) => event.preventDefault()}
-                onDrop={(event) => receiveDrop(event, index)}
-              >
-                <span aria-hidden="true">{label.icon}</span>
-                {label.name}
-              </button>
+              <div className="dock-tab-slot" key={panelId}>
+                <button
+                  type="button"
+                  role="tab"
+                  draggable
+                  id={`${panelId}-title`}
+                  aria-selected={group.activePanelId === panelId}
+                  className="dock-tab"
+                  data-testid={`dock-tab-${panelId}`}
+                  data-help={panelHelpKey(panelId)}
+                  title={tab.name}
+                  onClick={() => activateTab(panelId)}
+                  onDragStart={(event) => beginPanelDrag(event, panelId)}
+                  onDragOver={(event) => event.preventDefault()}
+                  onDrop={(event) => receiveDrop(event, index)}
+                >
+                  <span aria-hidden="true">{tab.icon}</span>
+                  {tab.name}
+                </button>
+                <button
+                  type="button"
+                  className="dock-tab-close"
+                  data-testid={`dock-tab-close-${panelId}`}
+                  aria-label={`Close ${tab.name}`}
+                  title={`Close ${tab.name}`}
+                  onClick={() => closeTab(panelId)}
+                >
+                  ×
+                </button>
+              </div>
             );
           })}
         </div>
-      ) : null}
+        <div className="panel-actions" data-testid="group-actions" ref={setSlot} />
+        <div className="dock-group-controls" ref={controls}>
+          <button
+            type="button"
+            className="icon-button"
+            data-testid="group-split-right"
+            aria-label={`Split ${label} right`}
+            title="Split right"
+            onClick={() => openPicker({ mode: "split", groupId: group.id, side: "right" })}
+          >
+            ◫
+          </button>
+          <button
+            type="button"
+            className="icon-button"
+            data-testid="group-split-down"
+            aria-label={`Split ${label} down`}
+            title="Split down"
+            onClick={() => openPicker({ mode: "split", groupId: group.id, side: "down" })}
+          >
+            ⊟
+          </button>
+          <button
+            type="button"
+            className="icon-button"
+            data-testid="group-menu"
+            aria-label={`${label} panel options`}
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
+            title="More"
+            onClick={() => setMenuOpen((open) => !open)}
+          >
+            ⋯
+          </button>
+          <button
+            type="button"
+            className="icon-button"
+            data-testid="group-close"
+            aria-label={`Close ${label} panel`}
+            title="Close panel"
+            onClick={() => closeGroup(group.id)}
+          >
+            ✕
+          </button>
+          {menuOpen ? <GroupMenu group={group} onClose={() => setMenuOpen(false)} /> : null}
+        </div>
+      </header>
       <div className="dock-panel-stage">
-        {activePanelId === null ? (
-          <div className="empty-dock-target">
-            <span>Drop a panel here</span>
+        <PanelActionsSlot.Provider value={slot}>
+          {panels[group.activePanelId]}
+        </PanelActionsSlot.Provider>
+        {picker?.mode === "add-tab" && picker.groupId === group.id ? (
+          <div className="panel-picker-overlay">
+            <PanelPicker placed={placed} onChoose={choosePanel} onCancel={cancelPicker} />
           </div>
-        ) : panels[activePanelId]}
+        ) : null}
       </div>
     </section>
   );
+
+  // The host wrapper is always rendered so opening a split never remounts the panel.
+  const pendingSide = picker?.mode === "split" && picker.groupId === group.id ? picker.side : null;
+  return (
+    <div
+      className="dock-group-host"
+      data-direction={pendingSide === "down" ? "column" : "row"}
+    >
+      {section}
+      {pendingSide === null ? null : (
+        <div className="pending-split" data-testid="pending-split">
+          <PanelPicker placed={placed} onChoose={choosePanel} onCancel={cancelPicker} />
+        </div>
+      )}
+    </div>
+  );
 }
 
-interface SplitterProps {
-  splitterId: SplitterId;
-  orientation: "vertical" | "horizontal";
-}
-
-function Splitter({ splitterId, orientation }: SplitterProps): React.JSX.Element {
-  const value = useWorkspaceStore((state) => state.layout.splitters[splitterId]);
-  const setSplitter = useWorkspaceStore((state) => state.setSplitter);
-  const drag = useRef<{
-    pointerId: number;
-    startX: number;
-    startY: number;
-    startValue: number;
-    denominator: number;
-  } | null>(null);
-  const [minimum, maximum] = splitterRange(splitterId);
-
-  const adjustedValue = (event: ReactPointerEvent<HTMLDivElement>): number => {
-    const current = drag.current;
-    if (current === null) return value;
-    const deltaX = event.clientX - current.startX;
-    const deltaY = event.clientY - current.startY;
-    if (splitterId === "left") return current.startValue + deltaX;
-    if (splitterId === "right") return current.startValue - deltaX;
-    if (splitterId === "center-horizontal" || splitterId === "right-horizontal") {
-      return current.startValue + deltaY / current.denominator;
-    }
-    return current.startValue - deltaY;
+function SplitDivider({ split, index }: { split: LayoutSplit; index: number }): React.JSX.Element {
+  const resizeSplit = useWorkspaceStore((state) => state.resizeSplit);
+  const drag = useRef<{ pointerId: number; last: number; extent: number } | null>(null);
+  const row = split.direction === "row";
+  const extentOf = (element: HTMLElement): number => {
+    const box = element.parentElement?.getBoundingClientRect();
+    return Math.max(1, (row ? box?.width : box?.height) ?? 1);
   };
+  const position = (event: ReactPointerEvent<HTMLElement>): number =>
+    row ? event.clientX : event.clientY;
 
-  const finishPointer = (event: ReactPointerEvent<HTMLDivElement>): void => {
-    if (drag.current?.pointerId !== event.pointerId) return;
-    setSplitter(splitterId, adjustedValue(event));
+  const finish = (event: ReactPointerEvent<HTMLDivElement>): void => {
+    const current = drag.current;
+    if (current?.pointerId !== event.pointerId) return;
+    resizeSplit(split.id, index, position(event) - current.last, current.extent, true);
     drag.current = null;
     event.currentTarget.releasePointerCapture(event.pointerId);
   };
 
   return (
     <div
-      className={`workspace-splitter splitter-${splitterId}`}
+      className="split-divider"
       role="separator"
       tabIndex={0}
-      aria-label={`${splitterId.replaceAll("-", " ")} splitter`}
-      aria-orientation={orientation}
-      aria-valuemin={minimum}
-      aria-valuemax={maximum}
-      aria-valuenow={value}
-      data-testid={`splitter-${splitterId}`}
-      data-splitter-value={String(value)}
-      onDoubleClick={() => {
-        const defaults: Record<SplitterId, number> = {
-          left: 250,
-          right: 310,
-          "center-horizontal": 0.58,
-          "right-horizontal": 0.56,
-          timeline: 170,
-          status: 132,
-        };
-        setSplitter(splitterId, defaults[splitterId]);
-      }}
+      aria-orientation={row ? "vertical" : "horizontal"}
+      aria-label={row ? "Resize panels horizontally" : "Resize panels vertically"}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={Math.round((split.sizes[index] ?? 0) * 100)}
+      data-testid="split-divider"
+      data-split-id={split.id}
       onKeyDown={(event) => {
-        const smallStep = splitterId.includes("horizontal") ? 0.02 : 10;
-        const decrease = orientation === "vertical" ? "ArrowLeft" : "ArrowDown";
-        const increase = orientation === "vertical" ? "ArrowRight" : "ArrowUp";
-        if (event.key === decrease || event.key === increase) {
-          event.preventDefault();
-          setSplitter(splitterId, value + (event.key === increase ? smallStep : -smallStep));
-        } else if (event.key === "Home") {
-          event.preventDefault();
-          setSplitter(splitterId, minimum);
-        } else if (event.key === "End") {
-          event.preventDefault();
-          setSplitter(splitterId, maximum);
-        }
+        const decrease = row ? "ArrowLeft" : "ArrowUp";
+        const increase = row ? "ArrowRight" : "ArrowDown";
+        if (event.key !== decrease && event.key !== increase) return;
+        event.preventDefault();
+        const extent = extentOf(event.currentTarget);
+        resizeSplit(split.id, index, (event.key === increase ? 0.02 : -0.02) * extent, extent);
       }}
       onPointerDown={(event) => {
-        const parentHeight = event.currentTarget.parentElement?.getBoundingClientRect().height ?? 1;
         drag.current = {
           pointerId: event.pointerId,
-          startX: event.clientX,
-          startY: event.clientY,
-          startValue: value,
-          denominator: Math.max(1, parentHeight),
+          last: position(event),
+          extent: extentOf(event.currentTarget),
         };
         event.currentTarget.setPointerCapture(event.pointerId);
       }}
       onPointerMove={(event) => {
-        if (drag.current?.pointerId === event.pointerId) {
-          setSplitter(splitterId, adjustedValue(event), false);
-        }
+        const current = drag.current;
+        if (current?.pointerId !== event.pointerId) return;
+        const next = position(event);
+        resizeSplit(split.id, index, next - current.last, current.extent, false);
+        current.last = next;
       }}
-      onPointerUp={finishPointer}
-      onPointerCancel={finishPointer}
+      onPointerUp={finish}
+      onPointerCancel={finish}
     >
       <span aria-hidden="true" />
     </div>
   );
 }
 
-interface DockWorkspaceProps {
-  panels: Record<DockPanelId, ReactNode>;
+function DockNode({ node, panels }: { node: LayoutNode; panels: Panels }): React.JSX.Element {
+  if (node.kind === "group") return <DockGroup group={node} panels={panels} />;
+  return (
+    <div className="dock-split" data-testid="dock-split" data-direction={node.direction}>
+      {node.children.map((child, index) => (
+        <Fragment key={child.id}>
+          {index > 0 ? <SplitDivider split={node} index={index - 1} /> : null}
+          <div
+            className="dock-split-child"
+            style={{ flex: `${String(node.sizes[index] ?? 0)} 1 0px` } as CSSProperties}
+          >
+            <DockNode node={child} panels={panels} />
+          </div>
+        </Fragment>
+      ))}
+    </div>
+  );
 }
 
-export function DockWorkspace({
-  panels,
-}: DockWorkspaceProps): React.JSX.Element {
+interface DockWorkspaceProps {
+  panels: Panels;
+}
+
+export function DockWorkspace({ panels }: DockWorkspaceProps): React.JSX.Element {
   const layout = useWorkspaceStore((state) => state.layout);
   const activePhase = useWorkspaceStore((state) => state.activePhase);
-  const leftCollapsed = layout.regions.left.panelIds.every(
-    (panelId) => layout.railCollapsed[panelId],
-  );
-  const rightCollapsed = [
-    ...layout.regions["right-top"].panelIds,
-    ...layout.regions["right-bottom"].panelIds,
-  ].every((panelId) => layout.railCollapsed[panelId]);
-  const timelineCollapsed = layout.regions["bottom-timeline"].panelIds.every(
-    (panelId) => layout.railCollapsed[panelId],
-  );
-  const statusCollapsed = layout.regions["bottom-status"].panelIds.every(
-    (panelId) => layout.railCollapsed[panelId],
-  );
-  const style = {
-    "--left-width": `${String(leftCollapsed ? 46 : layout.splitters.left)}px`,
-    "--right-width": `${String(rightCollapsed ? 46 : layout.splitters.right)}px`,
-    "--panel-left-width": `${String(layout.splitters.left)}px`,
-    "--panel-right-width": `${String(layout.splitters.right)}px`,
-    "--center-top": `${String(layout.splitters["center-horizontal"])}fr`,
-    "--center-bottom": `${String(1 - layout.splitters["center-horizontal"])}fr`,
-    "--right-top": `${String(layout.splitters["right-horizontal"])}fr`,
-    "--right-bottom": `${String(1 - layout.splitters["right-horizontal"])}fr`,
-    "--timeline-height": `${String(timelineCollapsed ? 31 : layout.splitters.timeline)}px`,
-    "--status-height": `${String(statusCollapsed ? 31 : layout.splitters.status)}px`,
-  } as CSSProperties;
+  const picker = useWorkspaceStore((state) => state.picker);
+  const openPicker = useWorkspaceStore((state) => state.openPicker);
+  const cancelPicker = useWorkspaceStore((state) => state.cancelPicker);
+  const choosePanel = useWorkspaceStore((state) => state.choosePanel);
+  const openRootPicker = useCallback(() => openPicker({ mode: "root" }), [openPicker]);
 
   return (
     <div
@@ -275,31 +358,25 @@ export function DockWorkspace({
       id="workspace-layout"
       data-testid="workspace-layout"
       data-phase={activePhase}
-      style={style}
     >
-      <div className="left-dock-column">
-        <DockRegion regionId="left" panels={panels} />
-        <div className="utility-panel-stack" data-testid="left-utility-panels" />
-      </div>
-      <Splitter splitterId="left" orientation="vertical" />
-      <div className="center-dock-stack">
-        <DockRegion regionId="center-top" panels={panels} />
-        <Splitter splitterId="center-horizontal" orientation="horizontal" />
-        <DockRegion regionId="center-bottom" panels={panels} />
-      </div>
-      <Splitter splitterId="right" orientation="vertical" />
-      <div className="right-dock-stack">
-        <DockRegion regionId="right-top" panels={panels} />
-        <Splitter splitterId="right-horizontal" orientation="horizontal" />
-        <div className="right-bottom-dock">
-          <DockRegion regionId="right-bottom" panels={panels} />
-          <div className="utility-panel-stack" data-testid="right-utility-panels" />
+      {layout.root === null ? (
+        <div className="workspace-empty">
+          {picker?.mode === "root" ? (
+            <PanelPicker placed={[]} onChoose={choosePanel} onCancel={cancelPicker} />
+          ) : (
+            <button
+              type="button"
+              className="primary-action"
+              data-testid="workspace-add-panel"
+              onClick={openRootPicker}
+            >
+              Add panel
+            </button>
+          )}
         </div>
-      </div>
-      <Splitter splitterId="timeline" orientation="horizontal" />
-      <DockRegion regionId="bottom-timeline" panels={panels} />
-      <Splitter splitterId="status" orientation="horizontal" />
-      <DockRegion regionId="bottom-status" panels={panels} />
+      ) : (
+        <DockNode node={layout.root} panels={panels} />
+      )}
     </div>
   );
 }

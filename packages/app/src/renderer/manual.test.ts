@@ -23,7 +23,7 @@ describe("in-app manual markdown pipeline", () => {
     expect(html).toContain("<table>");
     expect(html).toContain("Global progress bar");
     expect(html).toContain("Master tool rail");
-    expect(html).toContain("per-region rails are not used");
+    expect(html).toContain("Layouts are global: saved in your user settings");
   });
 
   it("filters whole manual sections by heading or body text", () => {

@@ -19,13 +19,13 @@ export const TOUR_STOPS: readonly TourStop[] = [
     id: "phase-tabs",
     selector: "[data-testid='workflow-phase-tabs']",
     title: "Work left to right",
-    copy: "These five phase tabs are layout presets for the editorial workflow. Nothing is locked: every panel can still move wherever you need it.",
+    copy: "These five phase tabs each remember their own layout. Split, close, or add panels from any panel header; your layouts follow you into every project.",
   },
   {
     id: "master-tool-rail",
     selector: "[data-testid='master-tool-rail']",
     title: "Keep every tool within reach",
-    copy: "The master rail is the complete panel map. Activate a tool to expand or collapse it in this tab; tools added here return to their home region.",
+    copy: "The master rail is the complete panel map. Activate a tool to jump to it, or to add it next to the panel you last used if this tab does not show it yet.",
   },
   {
     id: "global-progress",

@@ -1,6 +1,6 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { CandidateSegment, ContextFile } from "../../../../transcript/src/assembly/types.js";
 import type { Asset } from "../../../../core/src/index.js";
@@ -11,7 +11,6 @@ import type {
   ProjectSnapshot,
 } from "../../shared/ipc.js";
 import { useJobsStore } from "../state/jobs.js";
-import { useWorkspaceStore } from "../state/view-state.js";
 import {
   activeSession,
   AssemblePanel,
@@ -138,16 +137,11 @@ function render(overrides: Partial<AssemblePanelProps> = {}): string {
   return renderToStaticMarkup(createElement(AssemblePanel, props(overrides)));
 }
 
-beforeEach(() => {
-  useWorkspaceStore.getInitialState().railCollapsed.assemble = false;
-});
-
 describe("Assemble panel", () => {
   it("renders inputs with the external notice and a disabled analyze button without a project", () => {
     const html = render({ snapshot: null });
 
     expect(html).toContain('data-testid="assemble-panel"');
-    expect(html).toContain("P14");
     expect(html).not.toContain('data-testid="assembly-script-path"');
     expect(html).toContain("anthropic · claude-opus-5-5 · high · tightening: ask");
     expect(html).toMatch(/data-testid="assembly-analyze"[^>]*disabled/u);

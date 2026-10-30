@@ -1,22 +1,10 @@
-import {
-  activatePanel,
-  assignPanel,
-  DOCK_REGION_IDS,
-  setRailCollapsed,
-  WORKFLOW_PHASES,
-} from "./layout-state.js";
-import type {
-  DockPanelId,
-  DockRegionId,
-  WorkflowPhase,
-  WorkspaceLayout,
-} from "./layout-state.js";
+import { WORKFLOW_PHASES } from "./layout-state.js";
+import type { DockPanelId, WorkflowPhase } from "./layout-state.js";
+import { groupOf } from "./layout-tree.js";
+import type { PhaseLayout } from "./layout-tree.js";
 
 export type ToolRailGroupId = WorkflowPhase | "system";
-export type ToolRailPanelState =
-  | "expanded-here"
-  | "collapsed"
-  | "in-another-tab-only";
+export type ToolRailPanelState = "here" | "other-phase" | "absent";
 
 export interface ToolRailGroup {
   id: ToolRailGroupId;
@@ -32,23 +20,6 @@ export const TOOL_RAIL_GROUPS: readonly ToolRailGroup[] = [
   { id: "publish", label: "Publish", panelIds: ["status", "publish"] },
   { id: "system", label: "System", panelIds: ["help", "storage", "inspector"] },
 ] as const;
-
-export const PANEL_HOME_REGIONS: Record<DockPanelId, DockRegionId> = {
-  media: "left",
-  preview: "center-top",
-  transcript: "center-bottom",
-  inspector: "right-bottom",
-  agent: "right-top",
-  timeline: "bottom-timeline",
-  status: "bottom-status",
-  graphics: "left",
-  publish: "center-top",
-  skills: "center-bottom",
-  broll: "left",
-  storage: "center-top",
-  help: "right-bottom",
-  assemble: "right-top",
-};
 
 export const PANEL_LABELS: Record<DockPanelId, { icon: string; name: string }> = {
   media: { icon: "M", name: "Media" },
@@ -67,50 +38,14 @@ export const PANEL_LABELS: Record<DockPanelId, { icon: string; name: string }> =
   assemble: { icon: "A", name: "Assemble" },
 };
 
-export function panelRegion(
-  layout: WorkspaceLayout,
-  panelId: DockPanelId,
-): DockRegionId | null {
-  return DOCK_REGION_IDS.find((regionId) =>
-    layout.regions[regionId].panelIds.includes(panelId)) ?? null;
-}
-
 export function toolRailPanelState(
-  layouts: Record<WorkflowPhase, WorkspaceLayout>,
+  layouts: Record<WorkflowPhase, PhaseLayout>,
   activePhase: WorkflowPhase,
   panelId: DockPanelId,
 ): ToolRailPanelState {
-  const current = layouts[activePhase];
-  if (panelRegion(current, panelId) !== null) {
-    return current.railCollapsed[panelId] ? "collapsed" : "expanded-here";
-  }
+  if (groupOf(layouts[activePhase], panelId) !== null) return "here";
   return WORKFLOW_PHASES.some((phase) =>
-    phase !== activePhase && panelRegion(layouts[phase], panelId) !== null)
-    ? "in-another-tab-only"
-    : "collapsed";
-}
-
-export function togglePanelFromRail(
-  layout: WorkspaceLayout,
-  panelId: DockPanelId,
-): { layout: WorkspaceLayout; expanded: boolean } {
-  const assignedRegion = panelRegion(layout, panelId);
-  if (assignedRegion !== null && !layout.railCollapsed[panelId]) {
-    return {
-      layout: setRailCollapsed(layout, panelId, true),
-      expanded: false,
-    };
-  }
-  const targetRegion = assignedRegion ?? PANEL_HOME_REGIONS[panelId];
-  const assigned = assignedRegion === null
-    ? assignPanel(layout, panelId, targetRegion)
-    : layout;
-  return {
-    layout: activatePanel(
-      setRailCollapsed(assigned, panelId, false),
-      targetRegion,
-      panelId,
-    ),
-    expanded: true,
-  };
+    phase !== activePhase && groupOf(layouts[phase], panelId) !== null)
+    ? "other-phase"
+    : "absent";
 }

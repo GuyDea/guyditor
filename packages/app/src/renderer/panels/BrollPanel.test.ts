@@ -3,7 +3,6 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 import { BROLL_SOURCE_TAXONOMY } from "../../../../core/src/index.js";
-import { useWorkspaceStore } from "../state/view-state.js";
 import { BrollPanel } from "./BrollPanel.js";
 import type { WorkspacePanelProps } from "./types.js";
 
@@ -31,7 +30,6 @@ function props(): WorkspacePanelProps {
 
 describe("B-roll panel", () => {
   it("exposes every source class, generation preflight, review checklist, and rights state", () => {
-    useWorkspaceStore.getInitialState().railCollapsed.broll = false;
     const html = renderToStaticMarkup(createElement(BrollPanel, props()));
 
     for (const source of BROLL_SOURCE_TAXONOMY) expect(html).toContain(source.label);

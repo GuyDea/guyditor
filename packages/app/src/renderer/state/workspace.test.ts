@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { projectFixture } from "../../../../core/src/project/test-fixtures.js";
 import type { JobOverview } from "../../shared/ipc.js";
@@ -10,74 +10,16 @@ import {
 import { useProjectMirror } from "./project-mirror.js";
 import { useUndoStore } from "./undo.js";
 import {
+  configureLayoutSaver,
   usePreviewStore,
   useSelectionStore,
   useWorkspaceStore,
 } from "./view-state.js";
-import {
-  assignPanel,
-  clampSplitterValue,
-  createDefaultLayout,
-  createDefaultLayouts,
-  DOCK_PANEL_IDS,
-  LEGACY_LAYOUT_STORAGE_KEY,
-  LAYOUT_STORAGE_KEY,
-  loadProjectLayouts,
-  parseLayout,
-  reorderPanel,
-  WORKFLOW_PHASES,
-} from "./layout-state.js";
+import { WORKFLOW_PHASES } from "./layout-state.js";
+import { presetLayout } from "./layout-presets.js";
+import { findGroup, firstGroup, groupOf, placedPanels } from "./layout-tree.js";
+import type { LayoutNode } from "./layout-tree.js";
 import { panelBadgeCounts, phaseBadgeCounts } from "../workflow-phases.js";
-
-function memoryStorage(initial: Record<string, string> = {}): Storage {
-  const values = new Map(Object.entries(initial));
-  return {
-    get length() {
-      return values.size;
-    },
-    clear: () => values.clear(),
-    getItem: (key) => values.get(key) ?? null,
-    key: (index) => [...values.keys()][index] ?? null,
-    removeItem: (key) => {
-      values.delete(key);
-    },
-    setItem: (key, value) => {
-      values.set(key, value);
-    },
-  };
-}
-
-function legacyLayout(left = 250): Record<string, unknown> {
-  return {
-    schema: "layout/v1",
-    regions: {
-      left: { panelIds: ["media"], activePanelId: "media" },
-      "center-top": { panelIds: ["preview"], activePanelId: "preview" },
-      "center-bottom": { panelIds: ["transcript"], activePanelId: "transcript" },
-      "right-top": { panelIds: ["agent"], activePanelId: "agent" },
-      "right-bottom": { panelIds: ["inspector"], activePanelId: "inspector" },
-      "bottom-timeline": { panelIds: ["timeline"], activePanelId: "timeline" },
-      "bottom-status": { panelIds: ["status"], activePanelId: "status" },
-    },
-    splitters: {
-      left,
-      right: 310,
-      "center-horizontal": 0.58,
-      "right-horizontal": 0.56,
-      timeline: 170,
-      status: 132,
-    },
-    collapsed: {
-      media: false,
-      preview: false,
-      transcript: false,
-      inspector: false,
-      agent: false,
-      timeline: false,
-      status: false,
-    },
-  };
-}
 
 afterEach(() => {
   useSelectionStore.setState({
@@ -261,12 +203,12 @@ describe("workspace renderer state", () => {
   it("keeps panel, selection, and preview choices in Zustand view state", () => {
     useWorkspaceStore.getState().setPhase("ingest");
     useWorkspaceStore.getState().resetLayout();
-    useWorkspaceStore.getState().togglePanel("media");
+    useWorkspaceStore.getState().closeTab("media");
     useSelectionStore.getState().selectWord("w000042");
     usePreviewStore.getState().setPlayhead({ frames: 12, fps: "24/1" });
     usePreviewStore.getState().setSettled(false);
 
-    expect(useWorkspaceStore.getState().railCollapsed.media).toBe(true);
+    expect(placedPanels(useWorkspaceStore.getState().layout)).not.toContain("media");
     expect(useSelectionStore.getState().selectedWordId).toBe("w000042");
     expect(usePreviewStore.getState()).toMatchObject({
       playhead: { frames: 12, fps: "24/1" },
@@ -297,290 +239,6 @@ describe("workspace renderer state", () => {
     });
   });
 
-  it("assigns panels between regions and keeps every panel in exactly one region", () => {
-    const moved = assignPanel(createDefaultLayout("cut"), "transcript", "right-top", 1);
-
-    expect(moved.regions["right-top"].panelIds).toContain("transcript");
-    expect(moved.regions["right-top"].activePanelId).toBe("transcript");
-    expect(Object.values(moved.regions).flatMap(({ panelIds }) => panelIds)
-      .filter((panelId) => panelId === "transcript")).toHaveLength(1);
-  });
-
-  it("reorders tabs within a region without duplicating a panel", () => {
-    const stacked = assignPanel(createDefaultLayout("cut"), "transcript", "right-top", 1);
-    const reordered = reorderPanel(stacked, "right-top", "transcript", 0);
-
-    expect(reordered.regions["right-top"].panelIds[0]).toBe("transcript");
-    expect(reordered.regions["right-top"].activePanelId).toBe("transcript");
-  });
-
-  it("creates five curated defaults while keeping every panel rail-reachable", () => {
-    const defaults = createDefaultLayouts();
-    const expandedByPhase = {
-      ingest: ["assemble", "media", "status", "storage"],
-      cut: ["preview", "transcript", "agent", "assemble", "timeline"],
-      polish: ["preview", "transcript", "inspector", "agent", "graphics"],
-      review: ["media", "preview", "agent"],
-      publish: ["status", "publish"],
-    };
-
-    expect(defaults.activePhase).toBe("cut");
-    for (const phase of WORKFLOW_PHASES) {
-      const layout = defaults.layouts[phase];
-      const panels = Object.values(layout.regions).flatMap(({ panelIds }) => panelIds);
-      expect(panels.sort()).toEqual([...expandedByPhase[phase]].sort());
-      expect(new Set(panels).size).toBe(panels.length);
-      expect(Object.keys(layout.railCollapsed).sort()).toEqual([...DOCK_PANEL_IDS].sort());
-      expect(panels.every((panelId) => !layout.railCollapsed[panelId])).toBe(true);
-    }
-  });
-
-  it("keeps Help rail-collapsed by default until it is added to a phase", () => {
-    const defaults = createDefaultLayouts();
-
-    expect(DOCK_PANEL_IDS).toContain("help");
-    for (const phase of WORKFLOW_PHASES) {
-      expect(defaults.layouts[phase].railCollapsed.help).toBe(true);
-      expect(Object.values(defaults.layouts[phase].regions)
-        .flatMap(({ panelIds }) => panelIds)).not.toContain("help");
-    }
-  });
-
-  it("loads layouts persisted before Amendment 006 without losing their panels", () => {
-    const complete = createDefaultLayouts();
-    for (const phase of WORKFLOW_PHASES) {
-      for (const panelId of DOCK_PANEL_IDS.filter(
-        (candidate) => candidate !== "help" && candidate !== "assemble",
-      )) {
-        const present = Object.values(complete.layouts[phase].regions)
-          .some(({ panelIds }) => panelIds.includes(panelId));
-        if (!present) {
-          complete.layouts[phase] = assignPanel(complete.layouts[phase], panelId, "left");
-        }
-      }
-    }
-    const prior = structuredClone(complete) as unknown as {
-      activePhase: string;
-      layouts: Record<string, {
-        collapsed: Record<string, boolean>;
-        railCollapsed?: Record<string, boolean>;
-        regions: Record<string, { activePanelId: string | null; panelIds: string[] }>;
-        schema: string;
-        splitters: Record<string, number>;
-      }>;
-      schema: string;
-    };
-    for (const phase of WORKFLOW_PHASES) {
-      const layout = prior.layouts[phase]!;
-      layout.collapsed = { ...layout.railCollapsed };
-      delete layout.railCollapsed;
-      delete layout.collapsed["help"];
-      delete layout.collapsed["assemble"];
-      for (const region of Object.values(layout.regions)) {
-        region.panelIds = region.panelIds.filter((panelId) => panelId !== "assemble");
-        if (region.activePanelId === "assemble") region.activePanelId = null;
-      }
-    }
-    prior.layouts.cut!.splitters.left = 377;
-    const storage = memoryStorage({
-      [LAYOUT_STORAGE_KEY]: JSON.stringify({
-        schema: "layout/v2",
-        projects: { "/project": prior },
-      }),
-    });
-
-    const migrated = loadProjectLayouts("/project", storage);
-
-    expect(migrated.layouts.cut.splitters.left).toBe(377);
-    for (const phase of WORKFLOW_PHASES) {
-      expect(migrated.layouts[phase].railCollapsed.help).toBe(true);
-      for (const regionId of Object.keys(prior.layouts[phase]!.regions)) {
-        expect(migrated.layouts[phase].regions[
-          regionId as keyof typeof migrated.layouts[typeof phase]["regions"]
-        ].panelIds.filter((panelId) => panelId !== "help" && panelId !== "assemble"))
-          .toEqual(prior.layouts[phase]!.regions[regionId]!.panelIds);
-      }
-      expect(migrated.layouts[phase].regions["right-bottom"].panelIds).toContain("help");
-    }
-  });
-
-  it("migrates a pre-assemble layout without resetting regions", () => {
-    const current = createDefaultLayouts();
-    const prior = structuredClone(current) as unknown as {
-      layouts: Record<string, {
-        railCollapsed: Record<string, boolean>;
-        regions: Record<string, { activePanelId: string | null; panelIds: string[] }>;
-        splitters: Record<string, number>;
-      }>;
-    };
-    for (const layout of Object.values(prior.layouts)) {
-      delete layout.railCollapsed["assemble"];
-      for (const region of Object.values(layout.regions)) {
-        region.panelIds = region.panelIds.filter((panelId) => panelId !== "assemble");
-        if (region.activePanelId === "assemble") region.activePanelId = null;
-      }
-    }
-    prior.layouts.cut!.splitters.left = 377;
-    prior.layouts.cut!.regions["right-top"]!.panelIds = ["agent"];
-    prior.layouts.cut!.regions["right-top"]!.activePanelId = "agent";
-    const storage = memoryStorage({
-      [LAYOUT_STORAGE_KEY]: JSON.stringify({
-        schema: "layout/v2",
-        projects: { "/project": prior },
-      }),
-    });
-
-    const migrated = loadProjectLayouts("/project", storage);
-
-    expect(migrated.layouts.cut.splitters.left).toBe(377);
-    expect(migrated.layouts.cut.regions["right-top"].panelIds).toEqual(["agent", "assemble"]);
-    expect(migrated.layouts.cut.regions["right-top"].activePanelId).toBe("agent");
-    expect(migrated.layouts.cut.regions["center-top"].panelIds).toEqual(["preview"]);
-    expect(migrated.layouts.ingest.regions["right-bottom"].panelIds).toEqual(["assemble"]);
-    expect(migrated.layouts.polish.regions["right-top"].panelIds).toEqual(["agent"]);
-    for (const phase of WORKFLOW_PHASES) {
-      expect(migrated.layouts[phase].railCollapsed.assemble).toBe(false);
-    }
-  });
-
-  it("migrates a collapsed-keyed layout that contains help without resetting it", () => {
-    const base = createDefaultLayouts();
-    const prior = structuredClone(base) as unknown as {
-      layouts: Record<string, {
-        collapsed?: Record<string, boolean>;
-        railCollapsed?: Record<string, boolean>;
-        regions: Record<string, { activePanelId: string | null; panelIds: string[] }>;
-        splitters: Record<string, number>;
-      }>;
-    };
-    for (const layout of Object.values(prior.layouts)) {
-      layout.collapsed = { ...layout.railCollapsed };
-      delete layout.collapsed["assemble"];
-      delete layout.railCollapsed;
-      for (const region of Object.values(layout.regions)) {
-        region.panelIds = region.panelIds.filter((panelId) => panelId !== "assemble");
-        if (region.activePanelId === "assemble") region.activePanelId = region.panelIds[0] ?? null;
-      }
-      layout.regions["right-bottom"]!.panelIds.push("help");
-      layout.regions["right-bottom"]!.activePanelId ??= "help";
-    }
-    prior.layouts.cut!.splitters.left = 377;
-    prior.layouts.cut!.regions["right-top"]!.panelIds = ["agent"];
-    prior.layouts.cut!.regions["right-top"]!.activePanelId = "agent";
-    const storage = memoryStorage({
-      [LAYOUT_STORAGE_KEY]: JSON.stringify({
-        schema: "layout/v2",
-        projects: { "/project": prior },
-      }),
-    });
-
-    const migrated = loadProjectLayouts("/project", storage);
-
-    expect(migrated.layouts.cut.splitters.left).toBe(377);
-    expect(migrated.layouts.cut.regions["right-top"].panelIds).toEqual(["agent", "assemble"]);
-    expect(migrated.layouts.cut.regions["right-bottom"].panelIds).toContain("help");
-    expect(migrated.layouts.ingest.regions["right-bottom"].panelIds).toEqual(["help", "assemble"]);
-    expect(migrated.layouts.polish.regions["right-bottom"].panelIds).toEqual(["inspector", "help"]);
-    for (const phase of WORKFLOW_PHASES) {
-      expect(migrated.layouts[phase].railCollapsed.assemble).toBe(false);
-    }
-  });
-
-  it("keeps a current layout untouched when assemble was moved out of every region", () => {
-    const current = createDefaultLayouts();
-    current.layouts.cut = assignPanel(current.layouts.cut, "assemble", "left");
-    const stripped = structuredClone(current);
-    stripped.layouts.polish.railCollapsed.assemble = true;
-    const storage = memoryStorage({
-      [LAYOUT_STORAGE_KEY]: JSON.stringify({
-        schema: "layout/v2",
-        projects: { "/project": stripped },
-      }),
-    });
-
-    const loaded = loadProjectLayouts("/project", storage);
-
-    expect(loaded.layouts.cut.regions.left.panelIds).toContain("assemble");
-    expect(loaded.layouts.polish.regions["right-top"].panelIds).toEqual(["agent"]);
-    expect(loaded.layouts.polish.railCollapsed.assemble).toBe(true);
-  });
-
-  it("migrates layout/v1 into Cut while the other phases use v2 defaults", () => {
-    const storage = memoryStorage({
-      [LEGACY_LAYOUT_STORAGE_KEY]: JSON.stringify({
-        schema: "layout/v1",
-        projects: {
-          "/project": legacyLayout(377),
-        },
-      }),
-    });
-
-    const migrated = loadProjectLayouts("/project", storage);
-
-    expect(migrated.schema).toBe("layout/v2");
-    expect(migrated.activePhase).toBe("cut");
-    expect(migrated.layouts.cut.splitters.left).toBe(377);
-    expect(migrated.layouts.cut.regions.left.panelIds[0]).toBe("media");
-    expect(migrated.layouts.cut.regions["center-bottom"].activePanelId).toBe("transcript");
-    expect(migrated.layouts.ingest).toEqual(createDefaultLayout("ingest"));
-    expect(migrated.layouts.review).toEqual(createDefaultLayout("review"));
-  });
-
-  it("clamps every splitter to its supported range", () => {
-    expect(clampSplitterValue("left", -100)).toBe(220);
-    expect(clampSplitterValue("right", 9_999)).toBe(520);
-    expect(clampSplitterValue("right", -100)).toBe(280);
-    expect(clampSplitterValue("center-horizontal", 0.01)).toBe(0.25);
-    expect(clampSplitterValue("right-horizontal", 0.99)).toBe(0.75);
-    expect(clampSplitterValue("timeline", 10)).toBe(112);
-    expect(clampSplitterValue("status", -1_000)).toBe(112);
-    expect(clampSplitterValue("status", 1_000)).toBe(220);
-  });
-
-  it("resets the live workspace layout to a fresh default", () => {
-    useWorkspaceStore.getState().setPhase("cut");
-    useWorkspaceStore.getState().assignPanel("transcript", "right-top", 1);
-    useWorkspaceStore.getState().setSplitter("left", 410);
-    useWorkspaceStore.getState().togglePanel("agent");
-
-    useWorkspaceStore.getState().resetLayout();
-
-    expect(useWorkspaceStore.getState().layout).toEqual(createDefaultLayout("cut"));
-  });
-
-  it("resets only the active phase and can reset all five phases", () => {
-    useWorkspaceStore.getState().resetAllLayouts();
-    useWorkspaceStore.getState().setPhase("cut");
-    useWorkspaceStore.getState().setSplitter("left", 333);
-    useWorkspaceStore.getState().setPhase("review");
-    useWorkspaceStore.getState().setSplitter("right", 444);
-
-    useWorkspaceStore.getState().resetLayout();
-
-    expect(useWorkspaceStore.getState().layout).toEqual(createDefaultLayout("review"));
-    expect(useWorkspaceStore.getState().layouts.cut.splitters.left).toBe(333);
-
-    useWorkspaceStore.getState().resetAllLayouts();
-
-    expect(useWorkspaceStore.getState().activePhase).toBe("review");
-    for (const phase of WORKFLOW_PHASES) {
-      expect(useWorkspaceStore.getState().layouts[phase]).toEqual(createDefaultLayout(phase));
-    }
-  });
-
-  it("falls back to the default for absent, older, or malformed schemas", () => {
-    const fallback = createDefaultLayout("cut");
-
-    expect(parseLayout(undefined, "cut")).toEqual(fallback);
-    expect(parseLayout({ schema: "layout/v0" }, "cut")).toEqual(fallback);
-    expect(parseLayout({
-      ...fallback,
-      regions: {
-        ...fallback.regions,
-        left: { panelIds: ["media", "media"], activePanelId: "media" },
-      },
-    }, "cut")).toEqual(fallback);
-  });
 
   it("caps direct undo history at 200 and clears redo on a new action", () => {
     useUndoStore.getState().clear();
@@ -606,5 +264,189 @@ describe("workspace renderer state", () => {
       inverse: [],
     });
     expect(useUndoStore.getState().redo).toHaveLength(0);
+  });
+});
+
+function shape(node: LayoutNode | null): unknown {
+  if (node === null) return null;
+  if (node.kind === "group") return [...node.panelIds];
+  return { [node.direction]: node.children.map(shape) };
+}
+
+describe("workspace layout store", () => {
+  const save = vi.fn();
+
+  beforeEach(() => {
+    configureLayoutSaver(() => undefined);
+    useWorkspaceStore.getState().hydrateLayouts(null);
+    save.mockReset();
+    configureLayoutSaver(save);
+  });
+
+  function groupId(panel: Parameters<typeof groupOf>[1]): string {
+    const group = groupOf(useWorkspaceStore.getState().layout, panel);
+    if (group === null) throw new Error(`${panel} is not placed.`);
+    return group.id;
+  }
+
+  it("hydrates garbage into the presets without saving", () => {
+    useWorkspaceStore.getState().hydrateLayouts({ activePhase: 7, layouts: "x" });
+
+    for (const phase of WORKFLOW_PHASES) {
+      expect(shape(useWorkspaceStore.getState().layouts[phase].root))
+        .toEqual(shape(presetLayout(phase).root));
+    }
+    expect(useWorkspaceStore.getState().activePhase).toBe("cut");
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it("commits a split when a panel is picked and saves the whole document", () => {
+    const store = useWorkspaceStore.getState();
+    store.openPicker({ mode: "split", groupId: groupId("preview"), side: "right" });
+    useWorkspaceStore.getState().choosePanel("inspector");
+
+    const state = useWorkspaceStore.getState();
+    expect(shape(state.layout.root)).toEqual({
+      column: [
+        { row: [{ column: [{ row: [["preview"], ["inspector"]] }, ["transcript"]] }, ["agent", "assemble"]] },
+        ["timeline"],
+      ],
+    });
+    expect(state.picker).toBeNull();
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(save.mock.calls[0]![0]).toMatchObject({ activePhase: "cut" });
+    expect(Object.keys(save.mock.calls[0]![0].layouts as object)).toEqual(["cut"]);
+  });
+
+  it("saves only the active phase on a phase switch and every phase on reset all", () => {
+    useWorkspaceStore.getState().setPhase("review");
+    expect(save).toHaveBeenLastCalledWith({ activePhase: "review", layouts: {} });
+
+    useWorkspaceStore.getState().resetAllLayouts();
+    expect(Object.keys(save.mock.lastCall![0].layouts as object).sort())
+      .toEqual([...WORKFLOW_PHASES].sort());
+  });
+
+  it("keeps locally edited phases when the stored document arrives late", () => {
+    useWorkspaceStore.getState().closeGroup(groupId("timeline"));
+    const stored = {
+      activePhase: "publish",
+      layouts: {
+        cut: { root: null },
+        review: { root: { kind: "group", id: "g_r", panelIds: ["help"], activePanelId: "help" } },
+      },
+    };
+
+    useWorkspaceStore.getState().hydrateLayouts(stored, { phases: ["cut"], activePhase: true });
+
+    const state = useWorkspaceStore.getState();
+    expect(state.activePhase).toBe("cut");
+    expect(placedPanels(state.layouts.cut)).toEqual(["preview", "transcript", "agent", "assemble"]);
+    expect(placedPanels(state.layouts.review)).toEqual(["help"]);
+  });
+
+  it("applies another window's layouts without changing this window's phase", () => {
+    useWorkspaceStore.getState().openPicker({ mode: "split", groupId: groupId("preview"), side: "right" });
+
+    useWorkspaceStore.getState().applyRemoteLayouts({
+      activePhase: "publish",
+      layouts: { cut: { root: { kind: "group", id: "g_x", panelIds: ["help"], activePanelId: "help" } } },
+    });
+
+    const state = useWorkspaceStore.getState();
+    expect(state.activePhase).toBe("cut");
+    expect(placedPanels(state.layout)).toEqual(["help"]);
+    expect(state.picker).toBeNull();
+    expect(placedPanels(state.layouts.review)).toEqual(placedPanels(presetLayout("review")));
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it("leaves the layout untouched when the picker is cancelled", () => {
+    const before = shape(useWorkspaceStore.getState().layout.root);
+    useWorkspaceStore.getState().openPicker({ mode: "split", groupId: groupId("preview"), side: "down" });
+    useWorkspaceStore.getState().cancelPicker();
+
+    expect(shape(useWorkspaceStore.getState().layout.root)).toEqual(before);
+    expect(useWorkspaceStore.getState().picker).toBeNull();
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it("cancels an open picker when the phase changes", () => {
+    useWorkspaceStore.getState().openPicker({ mode: "split", groupId: groupId("preview"), side: "right" });
+    useWorkspaceStore.getState().setPhase("polish");
+
+    expect(useWorkspaceStore.getState().picker).toBeNull();
+    expect(shape(useWorkspaceStore.getState().layout.root))
+      .toEqual(shape(presetLayout("polish").root));
+  });
+
+  it("reveals into the first group after the last-used group was closed", () => {
+    useWorkspaceStore.getState().focusPanel("agent");
+    useWorkspaceStore.getState().closeGroup(groupId("agent"));
+    useWorkspaceStore.getState().revealPanel("inspector");
+
+    const state = useWorkspaceStore.getState();
+    expect(groupOf(state.layout, "inspector")?.id).toBe(firstGroup(state.layout)?.id);
+    expect(state.flashingPanel).toBe("inspector");
+  });
+
+  it("reveals into the group the user last clicked into", () => {
+    useWorkspaceStore.getState().focusPanel("transcript");
+    useWorkspaceStore.getState().revealPanel("inspector");
+
+    expect(groupId("inspector")).toBe(groupId("transcript"));
+    expect(useWorkspaceStore.getState().focusedPanel).toBe("inspector");
+  });
+
+  it("activates an already placed panel without flashing it", () => {
+    useWorkspaceStore.getState().revealPanel("assemble");
+
+    const state = useWorkspaceStore.getState();
+    expect(findGroup(state.layout, groupId("assemble"))?.activePanelId).toBe("assemble");
+    expect(state.flashingPanel).toBeNull();
+    expect(save).toHaveBeenCalledTimes(1);
+  });
+
+  it("saves divider moves only when asked to persist", () => {
+    const root = useWorkspaceStore.getState().layout.root;
+    if (root?.kind !== "split") throw new Error("Cut preset root should be a split.");
+
+    useWorkspaceStore.getState().resizeSplit(root.id, 0, -40, 1000, false);
+    expect(save).not.toHaveBeenCalled();
+    useWorkspaceStore.getState().resizeSplit(root.id, 0, -40, 1000);
+    expect(save).toHaveBeenCalledTimes(1);
+  });
+
+  it("adds a root group from the empty workspace picker", () => {
+    const store = useWorkspaceStore.getState();
+    for (const panel of placedPanels(store.layout)) useWorkspaceStore.getState().closeTab(panel);
+    expect(useWorkspaceStore.getState().layout.root).toBeNull();
+
+    useWorkspaceStore.getState().openPicker({ mode: "root" });
+    useWorkspaceStore.getState().choosePanel("help");
+
+    expect(shape(useWorkspaceStore.getState().layout.root)).toEqual(["help"]);
+  });
+
+  it("moves a dragged tab into another group", () => {
+    useWorkspaceStore.getState().moveTab("timeline", groupId("preview"), 0);
+
+    expect(groupId("timeline")).toBe(groupId("preview"));
+    expect(placedPanels(useWorkspaceStore.getState().layout).filter((panel) => panel === "timeline"))
+      .toHaveLength(1);
+  });
+
+  it("resets the active phase or every phase to presets", () => {
+    useWorkspaceStore.getState().closeGroup(groupId("timeline"));
+    useWorkspaceStore.getState().setPhase("review");
+    useWorkspaceStore.getState().closeGroup(groupId("agent"));
+
+    useWorkspaceStore.getState().resetLayout();
+    expect(shape(useWorkspaceStore.getState().layout.root)).toEqual(shape(presetLayout("review").root));
+    expect(placedPanels(useWorkspaceStore.getState().layouts.cut)).not.toContain("timeline");
+
+    useWorkspaceStore.getState().resetAllLayouts();
+    expect(useWorkspaceStore.getState().activePhase).toBe("review");
+    expect(placedPanels(useWorkspaceStore.getState().layouts.cut)).toContain("timeline");
   });
 });

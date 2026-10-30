@@ -34,7 +34,7 @@ test("help mode explains a section, swallows clicks, and leaves cleanly", async 
     const cursor = async (testId: string): Promise<string> =>
       page.getByTestId(testId).evaluate((element) => getComputedStyle(element).cursor);
     expect(await cursor("reset-layout")).toBe("help");
-    expect(await cursor("media-panel-drag-handle")).toBe("help");
+    expect(await cursor("dock-tab-media")).toBe("help");
     expect(await cursor("help-mode-toggle")).not.toBe("help");
 
     // The click explains the section instead of toggling it.

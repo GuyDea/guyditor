@@ -47,14 +47,7 @@ function selectShortForServerRender(): void {
     selectedDeliverableId: "dlv_bbbbbbbbbb",
   });
   stateHookMock.selectionServerSnapshot = useSelectionStore.getState();
-  const workspace = useWorkspaceStore.getState();
-  stateHookMock.workspaceServerSnapshot = {
-    ...workspace,
-    railCollapsed: {
-      ...workspace.railCollapsed,
-      status: false,
-    },
-  };
+  stateHookMock.workspaceServerSnapshot = useWorkspaceStore.getState();
 }
 
 afterEach(() => {

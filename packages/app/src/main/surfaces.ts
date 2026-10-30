@@ -299,8 +299,30 @@ const assemblySurface: IpcSurface = {
   },
 };
 
+const workspaceLayoutSurface: IpcSurface = {
+  service: "WorkspaceLayout",
+  methods: {
+    get: { paramsSchema: emptyParams, resultSchema: anyResult, budgetMs: 50 },
+    update: {
+      paramsSchema: {
+        type: "object",
+        required: ["clientId", "activePhase", "layouts"],
+        properties: {
+          clientId: { type: "string", minLength: 1 },
+          activePhase: { type: "string", enum: ["ingest", "cut", "polish", "review", "publish"] },
+          layouts: { type: "object" },
+        },
+        additionalProperties: false,
+      },
+      resultSchema: anyResult,
+      budgetMs: 50,
+    },
+  },
+};
+
 export const IPC_SURFACES: readonly IpcSurface[] = Object.freeze([
   aiSettingsSurface,
+  workspaceLayoutSurface,
   assemblySurface,
   {
     service: "ProjectStore",

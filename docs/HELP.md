@@ -18,7 +18,7 @@ The first stage: get your iPhone and OBS clips into the project and let Guyditor
 1. Click the tab, or press `Ctrl+Alt+1`.
 2. Import clips in the Media panel; each gets background jobs for a proxy (a light copy for smooth scrubbing), a waveform (a picture of the sound) and a transcript.
 3. The number on the tab counts those jobs still running or queued; click it to jump to the Status panel. It disappears when all are done.
-4. Panels you move or close stay that way in this tab for this project; **Reset layout** in the title bar brings the default back.
+4. Split, close or add panels from any panel header; this tab remembers its layout in every project. **Reset layout** in the title bar brings the default back.
 
 ## phase.cut
 Title: Cut tab
@@ -86,8 +86,8 @@ The complete list of panels, grouped by the stage you use them in (Ingest, Cut, 
 
 ### How to use it
 1. Hover the rail, or press **Tools ›** at its top, to see the names beside the letters.
-2. Click an entry to open that panel in this tab; click again to collapse it. A panel that isn't in this tab opens in its usual spot.
-3. The dot on the right: amber = open in this tab, blue = only in another tab, empty ring = not open here.
+2. Click an entry to jump to that panel. If this tab doesn't show it yet, it is added as a tab next to the panel you last used; close it with the × on its tab.
+3. The dot on the right: amber = in this tab, blue = only in another tab, empty ring = not placed anywhere.
 4. An amber dot on the letter means something waits there, such as clips still importing for Media; hover to see how many.
 
 ## chrome.global-progress

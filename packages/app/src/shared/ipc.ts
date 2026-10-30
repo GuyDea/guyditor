@@ -16,7 +16,8 @@ export type ServiceName =
   | "CompositorModel" | "RenderService" | "JobQueue" | "AgentGateway"
   | "AuditLog" | "CostMeter" | "BackupService" | "DeliverableService"
   | "AnnotationService" | "SkillRegistry" | "AdapterRegistry" | "CaptureWatcher"
-  | "GenerationService" | "TemplateAuthoringService" | "AiSettings" | "Assembly";
+  | "GenerationService" | "TemplateAuthoringService" | "AiSettings" | "Assembly"
+  | "WorkspaceLayout";
 
 export interface IpcRequest {
   v: 1;
@@ -124,7 +125,8 @@ export type GdEvent =
   | { kind: "watcher.ingested";   seq: number; assetIds: string[] }
   | { kind: "mlworker.state";     seq: number; state: "starting"|"ready"|"restarting"|"unavailable" }
   | { kind: "capability.changed"; seq: number; report: CapabilityReport }
-  | { kind: "perf.budget.exceeded"; seq: number; budget: string; observedMs: number };
+  | { kind: "perf.budget.exceeded"; seq: number; budget: string; observedMs: number }
+  | { kind: "workspace.layout";   seq: number; clientId: string; document: unknown };
 
 /*
 Rules:

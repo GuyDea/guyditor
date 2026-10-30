@@ -23,7 +23,7 @@ const KEYBOARD_MAP = [
   ["Ctrl/Cmd+Alt+1…5", "Switch workflow phase"],
   ["1…9", "Focus the matching workspace panel"],
   ["Rail ↑ / ↓ / ← / →", "Move between master tool rail entries"],
-  ["Rail Enter", "Expand or collapse the selected panel in this tab"],
+  ["Rail Enter", "Show the selected panel, adding it to this tab if needed"],
   ["Space", "Play or pause"],
   ["← / →", "Step one frame"],
   ["Shift+← / Shift+→", "Step ten frames"],

@@ -1,9 +1,9 @@
+import { useContext } from "react";
 import type { PropsWithChildren } from "react";
+import { createPortal } from "react-dom";
 
-import { beginPanelDrag } from "../DockWorkspace.js";
+import { PanelActionsSlot } from "../DockWorkspace.js";
 import { panelHelpKey } from "../help/help-texts.js";
-import { DOCK_PANEL_IDS } from "../state/layout-state.js";
-import type { DockPanelId } from "../state/layout-state.js";
 import { useWorkspaceStore } from "../state/view-state.js";
 import type { PanelId } from "../state/view-state.js";
 
@@ -15,6 +15,10 @@ interface PanelProps extends PropsWithChildren {
   actions?: React.ReactNode;
 }
 
+/**
+ * Body of a docked panel. The dock group's tab strip is the panel's only header, so
+ * `actions` are portalled into the group header rather than drawn here.
+ */
 export function Panel({
   id,
   title,
@@ -23,66 +27,31 @@ export function Panel({
   actions,
   children,
 }: PanelProps): React.JSX.Element {
-  const dockable = (DOCK_PANEL_IDS as readonly string[]).includes(id);
-  const collapsed = useWorkspaceStore((state) => state.railCollapsed[id]);
+  const slot = useContext(PanelActionsSlot);
   const flashing = useWorkspaceStore((state) => state.flashingPanel === id);
-  const togglePanel = useWorkspaceStore((state) => state.togglePanel);
   const clearPanelFlash = useWorkspaceStore((state) => state.clearPanelFlash);
   const focusPanel = useWorkspaceStore((state) => state.focusPanel);
+  const actionBar = actions === undefined ? null : (
+    <div className="panel-actions" data-testid={`${id}-panel-actions`}>{actions}</div>
+  );
   return (
     <section
-      className={`workspace-panel panel-${id} ${collapsed ? "is-collapsed" : ""} ${
-        flashing ? "panel-flash" : ""
-      } ${className}`}
+      className={`workspace-panel panel-${id} ${flashing ? "panel-flash" : ""} ${className}`}
       data-testid={`${id}-panel`}
       data-panel={id}
       data-help={panelHelpKey(id)}
       tabIndex={-1}
-      aria-labelledby={`${id}-title`}
+      aria-label={title}
+      aria-description={eyebrow}
       onFocusCapture={() => focusPanel(id)}
       onAnimationEnd={(event) => {
         if (event.animationName === "panel-border-pulse") clearPanelFlash(id);
       }}
     >
-      <header
-        className="panel-bar"
-        draggable={dockable}
-        data-testid={dockable ? `${id}-panel-drag-handle` : undefined}
-        title={dockable ? `Drag ${title} to another docking region` : undefined}
-        onDragStart={(event) => {
-          if (dockable) beginPanelDrag(event, id as DockPanelId);
-        }}
-      >
-        <div className="panel-title">
-          <span className="panel-index">P{String(panelNumber(id))}</span>
-          <div>
-            <span className="eyebrow">{eyebrow}</span>
-            <h2 id={`${id}-title`}>{title}</h2>
-          </div>
-        </div>
-        <div className="panel-actions">
-          {collapsed ? null : actions}
-          <button
-            type="button"
-            className="icon-button"
-            data-testid={`${id}-panel-toggle`}
-            aria-label={`${collapsed ? "Expand" : "Collapse"} ${title}`}
-            aria-expanded={!collapsed}
-            onClick={() => togglePanel(id)}
-          >
-            {collapsed ? "+" : "−"}
-          </button>
-        </div>
-      </header>
-      {collapsed ? null : (
-        <div className="panel-body" data-testid={`${id}-panel-scroll`}>
-          {children}
-        </div>
-      )}
+      {slot === undefined ? actionBar : slot === null ? null : createPortal(actionBar, slot)}
+      <div className="panel-body" data-testid={`${id}-panel-scroll`}>
+        {children}
+      </div>
     </section>
   );
-}
-
-function panelNumber(id: PanelId): number {
-  return ({ media: 1, preview: 2, transcript: 3, inspector: 4, agent: 5, timeline: 6, status: 7, graphics: 8, publish: 9, skills: 10, broll: 11, storage: 12, help: 13, assemble: 14 })[id];
 }

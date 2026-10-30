@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { DIVERGENCE_CLASSES } from "../../../core/src/index.js";
+import { createRpcDispatcher } from "./rpc.js";
 import { IPC_SURFACES } from "./surfaces.js";
 
 describe("workspace IPC surfaces", () => {
@@ -162,6 +163,31 @@ describe("workspace IPC surfaces", () => {
       "setKey",
       "update",
     ]);
+  });
+
+  it("validates workspace layout saves", async () => {
+    const saved: unknown[] = [];
+    const dispatch = createRpcDispatcher(IPC_SURFACES, (service) =>
+      service === "WorkspaceLayout"
+        ? { get: () => null, update: (params: unknown) => { saved.push(params); } }
+        : undefined);
+    const call = (method: string, params: unknown) => dispatch({
+      v: 1,
+      requestId: "req_aaaaaaaaaa",
+      service: "WorkspaceLayout",
+      method,
+      params,
+    });
+
+    expect((await call("update", {})).ok).toBe(false);
+    expect((await call("update", { clientId: "a", activePhase: "later", layouts: {} })).ok)
+      .toBe(false);
+    expect((await call("update", { clientId: "a", activePhase: "cut", layouts: 1 })).ok)
+      .toBe(false);
+    expect((await call("update", { clientId: "a", activePhase: "cut", layouts: {} })).ok)
+      .toBe(true);
+    expect((await call("get", {})).ok).toBe(true);
+    expect(saved).toEqual([{ clientId: "a", activePhase: "cut", layouts: {} }]);
   });
 
   it("exposes the assembly session methods", () => {

@@ -4,7 +4,6 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import type { SkillManifest } from "../../../../agent/src/index.js";
 import { projectFixture } from "../../../../core/src/project/test-fixtures.js";
-import { useWorkspaceStore } from "../state/view-state.js";
 import { latestSkillVersions, SkillsPanel } from "./SkillsPanel.js";
 
 function skill(id: string, title: string, version: string): SkillManifest {
@@ -35,7 +34,6 @@ describe("SkillsPanel", () => {
   });
 
   it("renders library, exact project pin, upgrade review, and inactive draft controls", () => {
-    useWorkspaceStore.getInitialState().railCollapsed.skills = false;
     const v1 = skill("skl_aaaaaaaaaa", "Pacing", "1.0.0");
     const v2 = skill("skl_aaaaaaaaaa", "Pacing", "2.0.0");
     const draft = skill("skl_aaaaaaaaaa", "Pacing", "2.1.0");
