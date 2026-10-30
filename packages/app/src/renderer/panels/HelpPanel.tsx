@@ -52,15 +52,18 @@ export function HelpPanel({
   const completed = CHECKLIST_STEPS.filter(({ id }) => onboarding.checklist[id]).length;
 
   // "Open in manual" from the help popup: clear the search so every section renders, scroll to
-  // the requested heading once it has, then mark the request handled.
+  // the requested heading once it has, then mark the request handled. The section's own heading
+  // is the scroll target because it carries scroll-margin-top, which keeps it clear of the sticky
+  // search bar; the <section> itself has none.
   useEffect(() => {
     if (manualRequest !== null && query !== "") setQuery("");
   }, [manualRequest, query]);
   useEffect(() => {
     if (manualRequest === null || query !== "") return;
-    document
-      .querySelector(`[data-manual-section="${CSS.escape(manualRequest.heading)}"]`)
-      ?.scrollIntoView({ block: "start" });
+    const section = document.querySelector(
+      `[data-manual-section="${CSS.escape(manualRequest.heading)}"]`,
+    );
+    (section?.querySelector("h1, h2, h3") ?? section)?.scrollIntoView({ block: "start" });
     useHelpMode.getState().consumeManualRequest();
   }, [manualRequest, query]);
 

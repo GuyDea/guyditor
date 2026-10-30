@@ -72,6 +72,40 @@ test("help mode explains a section, swallows clicks, and leaves cleanly", async 
   }
 });
 
+test("Open in manual lands with the section heading below the manual search bar", async () => {
+  const template = await createWorkspaceProject();
+  const launched = await launchApp({ projectTemplate: template });
+  const { page } = launched;
+  try {
+    await page.getByTestId("phase-tab-ingest").click();
+    await page.getByTestId("help-mode-toggle").click();
+    await page.locator('summary[data-help="section.media.capture-watcher"]').click();
+    await expect(page.getByTestId("help-popup-title")).toHaveText("Capture watcher");
+
+    await page.getByTestId("help-popup-manual").click();
+    await expect(page.getByTestId("help-popup")).toHaveCount(0);
+    const panel = page.getByTestId("help-panel");
+    await expect(panel).toBeVisible();
+
+    const heading = panel.locator('[data-manual-section="3. Ingest tab — get material in"] h2').first();
+    await expect(heading).toBeVisible();
+    const tools = panel.locator(".help-tools");
+    const scroller = page.getByTestId("help-panel-scroll");
+    // The heading sits fully below the sticky search bar and inside the scrolled area.
+    await expect.poll(async () => {
+      const [headingBox, toolsBox, scrollBox] = await Promise.all([
+        heading.boundingBox(), tools.boundingBox(), scroller.boundingBox(),
+      ]);
+      if (headingBox === null || toolsBox === null || scrollBox === null) return false;
+      return headingBox.y >= toolsBox.y + toolsBox.height - 1
+        && headingBox.y + headingBox.height <= scrollBox.y + scrollBox.height;
+    }).toBe(true);
+  } finally {
+    await launched.electronApp.close();
+    await rm(template, { recursive: true, force: true });
+  }
+});
+
 test("Shift+F1 turns help mode on and off", async () => {
   const template = await createWorkspaceProject();
   const launched = await launchApp({ projectTemplate: template });
