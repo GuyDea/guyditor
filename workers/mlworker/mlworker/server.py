@@ -6,7 +6,7 @@ from multiprocessing.process import BaseProcess
 import os
 from queue import Empty
 import sys
-from threading import Lock, Thread
+from threading import Event, Lock, Thread
 from typing import Any, TextIO
 
 from .capabilities import advertised_capabilities, disabled_tasks, hello_params
@@ -14,6 +14,12 @@ from .tasks import TASKS
 
 
 JsonObject = dict[str, Any]
+
+# The supervisor restarts a worker that stays silent for 120 seconds during a
+# task. Model loads (a first transcription downloads about 3 GB) and long
+# decode windows report nothing for minutes, so the task process repeats its
+# last progress well inside that window for as long as the task runs.
+HEARTBEAT_INTERVAL_SECONDS = 15.0
 
 
 def _task_entry(
@@ -24,16 +30,32 @@ def _task_entry(
     os.dup2(sys.stderr.fileno(), sys.stdout.fileno())
     try:
         task_id = str(params["taskId"])
+        last: dict[str, Any] = {"progress": 0.0, "stage": "starting"}
+        lock = Lock()
+
+        def emit() -> None:
+            with lock:
+                events.put(("progress", {"taskId": task_id, **last}))
 
         def progress(value: float, stage: str) -> None:
-            events.put(
-                (
-                    "progress",
-                    {"taskId": task_id, "progress": value, "stage": stage},
-                )
-            )
+            with lock:
+                last["progress"] = value
+                last["stage"] = stage
+            emit()
 
-        result = TASKS[method](params, progress)
+        stop = Event()
+
+        def heartbeat() -> None:
+            while not stop.wait(HEARTBEAT_INTERVAL_SECONDS):
+                emit()
+
+        beat = Thread(target=heartbeat, daemon=True)
+        beat.start()
+        try:
+            result = TASKS[method](params, progress)
+        finally:
+            stop.set()
+            beat.join()
         events.put(("result", result))
     except BaseException as error:
         events.put(("error", {"code": -32001, "message": str(error)}))
