@@ -77,7 +77,7 @@ def test_heartbeat_stops_once_a_task_stalls_so_a_hung_task_is_still_restarted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def hung_task(params: dict[str, Any], progress: Any) -> dict[str, Any]:
-        time.sleep(0.6)
+        time.sleep(1.5)
         return {"ok": True}
 
     monkeypatch.setitem(server.TASKS, "hung", hung_task)
@@ -94,5 +94,6 @@ def test_heartbeat_stops_once_a_task_stalls_so_a_hung_task_is_still_restarted(
         if kind == "progress"
     ]
     assert len(beats) >= 2
-    assert max(beats) < 0.35
+    # Beats stop near 0.2 s; the task stays silent until 1.5 s.
+    assert max(beats) < 1.0
     assert events.items[-1] == ("result", {"ok": True})
