@@ -30,6 +30,7 @@ const KEYBOARD_MAP = [
   ["Home", "Go to frame zero"],
   ["Alt+← / Alt+→", "Move between transcript words"],
   ["A / Shift+A", "Move between annotations"],
+  ["Shift+F1", "Turn help mode on or off"],
 ] as const;
 
 export function HelpPanel({

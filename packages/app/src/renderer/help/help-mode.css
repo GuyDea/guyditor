@@ -1,0 +1,32 @@
+/* Help mode: outline every explainable region and highlight the innermost one under the pointer. */
+:root[data-help-mode="on"] [data-help] {
+  outline: 1px dashed var(--blue);
+  outline-offset: -1px;
+  cursor: help;
+}
+
+:root[data-help-mode="on"] [data-help]:hover:not(:has([data-help]:hover)) {
+  outline: 2px solid var(--blue);
+  background-color: color-mix(in srgb, var(--blue) 14%, transparent);
+}
+
+:root[data-help-mode="on"] body {
+  cursor: help;
+}
+
+.help-mode-toggle {
+  min-width: 2rem;
+}
+
+.help-mode-toggle-on {
+  background: var(--blue);
+  color: var(--well);
+}
+
+.help-mode-banner {
+  padding: 0.35rem 0.75rem;
+  text-align: center;
+  font-size: var(--fs-body);
+  background: color-mix(in srgb, var(--blue) 22%, transparent);
+  border-bottom: 1px solid var(--blue);
+}
