@@ -34,6 +34,7 @@ import {
   undoLast,
 } from "./ipc.js";
 import { InspectorPanel } from "./panels/InspectorPanel.js";
+import { startLayoutPersistence } from "./layout-persistence.js";
 import { MediaBrowserPanel } from "./panels/MediaBrowserPanel.js";
 import { PreviewPanel } from "./panels/PreviewPanel.js";
 import { ProposalPanel } from "./panels/ProposalPanel.js";
@@ -51,6 +52,7 @@ import {
   applyOnboardingSignal as reduceOnboardingSignal,
   dismissWelcome,
   loadOnboardingState,
+  markProjectOpened,
   saveOnboardingState,
   shouldShowWelcome,
   welcomeVisible,
@@ -648,7 +650,7 @@ export function App(): React.JSX.Element {
       }
 
       if (projectChanged) {
-        useWorkspaceStore.getState().setProjectKey(next.projectPath);
+        markProjectOpened(window.localStorage);
       }
       replaceSnapshot(next);
       if (projectChanged || active.id !== requestedDeliverableId) {
@@ -769,6 +771,8 @@ export function App(): React.JSX.Element {
       }
     }
   }, [beginProjectLoad, hydrate]);
+
+  useEffect(() => startLayoutPersistence(), []);
 
   useEffect(() => {
     let active = true;

@@ -1,29 +1,21 @@
 import { create } from "zustand";
 
 import type { FrameTime, KeySettings } from "../../../../core/src/index.js";
+import type { DockPanelId, WorkflowPhase } from "./layout-state.js";
+import { presetLayout, presetLayouts } from "./layout-presets.js";
 import {
-  activatePanel as activateLayoutPanel,
-  assignPanel as assignLayoutPanel,
-  createDefaultLayout,
-  createDefaultLayouts,
-  LAYOUT_SCHEMA,
-  loadProjectLayouts,
-  reorderPanel as reorderLayoutPanel,
-  saveProjectLayouts,
-  setSplitter as setLayoutSplitter,
-} from "./layout-state.js";
-import {
-  panelRegion,
-  togglePanelFromRail as toggleLayoutPanelFromRail,
-} from "./tool-rail.js";
-import type {
-  DockPanelId,
-  DockRegionId,
-  SplitterId,
-  WorkflowLayouts,
-  WorkflowPhase,
-  WorkspaceLayout,
-} from "./layout-state.js";
+  activateTab,
+  addTab,
+  closeGroup as closeLayoutGroup,
+  closeTab as closeLayoutTab,
+  groupOf,
+  moveTab as moveLayoutTab,
+  normalizeLayoutsDocument,
+  resizeSplit as resizeLayoutSplit,
+  revealInLayout,
+  splitGroup,
+} from "./layout-tree.js";
+import type { LayoutsDocument, PhaseLayout } from "./layout-tree.js";
 
 export type DiagnosticBackground = "none" | "black" | "white" | "saturated" | "checkerboard";
 
@@ -56,41 +48,40 @@ interface TimelineViewState {
   toggleSnapping: () => void;
 }
 
+export type PickerRequest =
+  | { mode: "split"; groupId: string; side: "right" | "down" }
+  | { mode: "add-tab"; groupId: string }
+  | { mode: "root" };
+
 interface WorkspaceState {
-  layout: WorkspaceLayout;
-  layouts: Record<WorkflowPhase, WorkspaceLayout>;
+  layouts: Record<WorkflowPhase, PhaseLayout>;
+  layout: PhaseLayout;
   activePhase: WorkflowPhase;
-  projectKey: string | null;
-  railCollapsed: Record<PanelId, boolean>;
-  flashingPanel: PanelId | null;
+  focusedGroupId: string | null;
   focusedPanel: PanelId;
-  leftWidth: number;
-  rightWidth: number;
-  statusHeight: number;
-  jobsPanelWidth: number;
-  setProjectKey: (projectKey: string) => void;
+  flashingPanel: PanelId | null;
+  picker: PickerRequest | null;
+  hydrateLayouts: (stored: unknown) => void;
   setPhase: (phase: WorkflowPhase) => void;
-  togglePanel: (panel: PanelId) => void;
-  expandPanel: (panel: PanelId) => void;
-  clearPanelFlash: (panel: PanelId) => void;
   focusPanel: (panel: PanelId) => void;
-  assignPanel: (
-    panel: DockPanelId,
-    region: DockRegionId,
-    targetIndex?: number,
+  revealPanel: (panel: PanelId) => void;
+  clearPanelFlash: (panel: PanelId) => void;
+  activateTab: (panel: PanelId) => void;
+  closeTab: (panel: PanelId) => void;
+  closeGroup: (groupId: string) => void;
+  openPicker: (request: PickerRequest) => void;
+  cancelPicker: () => void;
+  choosePanel: (panel: DockPanelId) => void;
+  moveTab: (panel: DockPanelId, targetGroupId: string, index?: number) => void;
+  resizeSplit: (
+    splitId: string,
+    dividerIndex: number,
+    delta: number,
+    containerPx: number,
+    persist?: boolean,
   ) => void;
-  reorderPanel: (
-    region: DockRegionId,
-    panel: DockPanelId,
-    targetIndex: number,
-  ) => void;
-  activatePanel: (region: DockRegionId, panel: DockPanelId) => void;
-  setSplitter: (splitter: SplitterId, value: number, persistChange?: boolean) => void;
   resetLayout: () => void;
   resetAllLayouts: () => void;
-  setLeftWidth: (width: number) => void;
-  setRightWidth: (width: number) => void;
-  setJobsPanelWidth: (width: number) => void;
 }
 
 interface PreviewState {
@@ -166,170 +157,121 @@ export const useTimelineViewStore = create<TimelineViewState>((set) => ({
   toggleSnapping: () => set((state) => ({ snapping: !state.snapping })),
 }));
 
-function browserStorage(): Storage | null {
-  return typeof window === "undefined" ? null : window.localStorage;
+let saveLayouts: (document: LayoutsDocument) => void = () => undefined;
+
+/** Installs where layout changes are persisted (App wires this to the WorkspaceLayout RPC). */
+export function configureLayoutSaver(save: (document: LayoutsDocument) => void): void {
+  saveLayouts = save;
 }
 
-function persisted(
-  projectKey: string | null,
-  layouts: WorkflowLayouts,
-): void {
-  const storage = browserStorage();
-  if (projectKey === null || storage === null) return;
-  try {
-    saveProjectLayouts(projectKey, layouts, storage);
-  } catch {
-    // Browser storage failures leave the current in-memory view state usable.
-  }
-}
+const initialLayouts = presetLayouts();
 
-function layoutFields(
-  layout: WorkspaceLayout,
-): Pick<
-  WorkspaceState,
-  "layout" | "railCollapsed" | "leftWidth" | "rightWidth" | "statusHeight" | "jobsPanelWidth"
-> {
-  return {
-    layout,
-    railCollapsed: { ...layout.railCollapsed },
-    leftWidth: layout.splitters.left,
-    rightWidth: layout.splitters.right,
-    statusHeight: layout.splitters.status,
-    jobsPanelWidth: layout.splitters.right,
+export const useWorkspaceStore = create<WorkspaceState>((set, get) => {
+  /** Replaces the active phase's layout, keeps focus on a live group, and saves. */
+  const commit = (
+    layout: PhaseLayout,
+    extra: Partial<WorkspaceState> = {},
+    persist = true,
+  ): void => {
+    const state = get();
+    const layouts = { ...state.layouts, [state.activePhase]: layout };
+    const focusedGroupId = groupOf(layout, extra.focusedPanel ?? state.focusedPanel)?.id ??
+      state.focusedGroupId;
+    set({ layouts, layout, focusedGroupId, ...extra });
+    if (persist) saveLayouts({ activePhase: state.activePhase, layouts });
   };
-}
 
-function workflowDocument(
-  activePhase: WorkflowPhase,
-  layouts: Record<WorkflowPhase, WorkspaceLayout>,
-): WorkflowLayouts {
-  return { schema: LAYOUT_SCHEMA, activePhase, layouts };
-}
-
-const initialLayouts = createDefaultLayouts();
-const initialLayout = initialLayouts.layouts[initialLayouts.activePhase];
-
-export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
-  ...layoutFields(initialLayout),
-  layouts: initialLayouts.layouts,
-  activePhase: initialLayouts.activePhase,
-  projectKey: null,
-  flashingPanel: null,
-  focusedPanel: "preview",
-  setProjectKey: (projectKey) => {
-    const storage = browserStorage();
-    const projectLayouts = storage === null
-      ? createDefaultLayouts()
-      : loadProjectLayouts(projectKey, storage);
-    set({
-      projectKey,
-      layouts: projectLayouts.layouts,
-      activePhase: projectLayouts.activePhase,
-      flashingPanel: null,
-      ...layoutFields(projectLayouts.layouts[projectLayouts.activePhase]),
-    });
-  },
-  setPhase: (activePhase) => {
-    const state = get();
-    const document = workflowDocument(activePhase, state.layouts);
-    persisted(state.projectKey, document);
-    set({
-      activePhase,
-      flashingPanel: null,
-      ...layoutFields(state.layouts[activePhase]),
-    });
-  },
-  togglePanel: (panel) => {
-    const state = get();
-    const { layout, expanded } = toggleLayoutPanelFromRail(state.layout, panel);
-    const layouts = { ...state.layouts, [state.activePhase]: layout };
-    persisted(state.projectKey, workflowDocument(state.activePhase, layouts));
-    set({
-      layouts,
-      flashingPanel: expanded
-        ? panel
-        : state.flashingPanel === panel ? null : state.flashingPanel,
-      ...layoutFields(layout),
-    });
-  },
-  expandPanel: (panel) => {
-    const state = get();
-    const region = panelRegion(state.layout, panel);
-    const alreadyExpanded = region !== null && !state.railCollapsed[panel];
-    const result = alreadyExpanded
-      ? { layout: activateLayoutPanel(state.layout, region, panel), expanded: false }
-      : toggleLayoutPanelFromRail(state.layout, panel);
-    const layouts = { ...state.layouts, [state.activePhase]: result.layout };
-    persisted(state.projectKey, workflowDocument(state.activePhase, layouts));
-    set({
-      layouts,
-      focusedPanel: panel,
-      flashingPanel: result.expanded ? panel : state.flashingPanel,
-      ...layoutFields(result.layout),
-    });
-  },
-  clearPanelFlash: (panel) => set((state) => ({
-    flashingPanel: state.flashingPanel === panel ? null : state.flashingPanel,
-  })),
-  focusPanel: (focusedPanel) => set({ focusedPanel }),
-  assignPanel: (panel, region, targetIndex) => {
-    const state = get();
-    const layout = assignLayoutPanel(state.layout, panel, region, targetIndex);
-    const layouts = { ...state.layouts, [state.activePhase]: layout };
-    persisted(state.projectKey, workflowDocument(state.activePhase, layouts));
-    set({ layouts, flashingPanel: null, ...layoutFields(layout) });
-  },
-  reorderPanel: (region, panel, targetIndex) => {
-    const state = get();
-    const layout = reorderLayoutPanel(state.layout, region, panel, targetIndex);
-    const layouts = { ...state.layouts, [state.activePhase]: layout };
-    persisted(state.projectKey, workflowDocument(state.activePhase, layouts));
-    set({ layouts, ...layoutFields(layout) });
-  },
-  activatePanel: (region, panel) => {
-    const state = get();
-    const layout = activateLayoutPanel(state.layout, region, panel);
-    const layouts = { ...state.layouts, [state.activePhase]: layout };
-    persisted(state.projectKey, workflowDocument(state.activePhase, layouts));
-    set({ layouts, ...layoutFields(layout) });
-  },
-  setSplitter: (splitter, value, persistChange = true) => {
-    const state = get();
-    const layout = setLayoutSplitter(state.layout, splitter, value);
-    const layouts = { ...state.layouts, [state.activePhase]: layout };
-    if (persistChange) {
-      persisted(state.projectKey, workflowDocument(state.activePhase, layouts));
-    }
-    set({ layouts, ...layoutFields(layout) });
-  },
-  resetLayout: () => {
-    const state = get();
-    const layout = createDefaultLayout(state.activePhase);
-    const layouts = { ...state.layouts, [state.activePhase]: layout };
-    persisted(state.projectKey, workflowDocument(state.activePhase, layouts));
-    set({ layouts, flashingPanel: null, ...layoutFields(layout) });
-  },
-  resetAllLayouts: () => {
-    const state = get();
-    const defaults = createDefaultLayouts(state.activePhase);
-    persisted(state.projectKey, defaults);
-    set({
-      layouts: defaults.layouts,
-      activePhase: defaults.activePhase,
-      flashingPanel: null,
-      ...layoutFields(defaults.layouts[defaults.activePhase]),
-    });
-  },
-  setLeftWidth: (leftWidth) => {
-    get().setSplitter("left", leftWidth);
-  },
-  setRightWidth: (rightWidth) => {
-    get().setSplitter("right", rightWidth);
-  },
-  setJobsPanelWidth: (jobsPanelWidth) => set({
-    jobsPanelWidth: Math.min(520, Math.max(240, jobsPanelWidth)),
-  }),
-}));
+  return {
+    layouts: initialLayouts.layouts,
+    layout: initialLayouts.layouts[initialLayouts.activePhase],
+    activePhase: initialLayouts.activePhase,
+    focusedGroupId: null,
+    focusedPanel: "preview",
+    flashingPanel: null,
+    picker: null,
+    hydrateLayouts: (stored) => {
+      const document = normalizeLayoutsDocument(stored);
+      set({
+        layouts: document.layouts,
+        layout: document.layouts[document.activePhase],
+        activePhase: document.activePhase,
+        focusedGroupId: null,
+        flashingPanel: null,
+        picker: null,
+      });
+    },
+    setPhase: (activePhase) => {
+      const { layouts } = get();
+      set({
+        activePhase,
+        layout: layouts[activePhase],
+        focusedGroupId: null,
+        flashingPanel: null,
+        picker: null,
+      });
+      saveLayouts({ activePhase, layouts });
+    },
+    focusPanel: (focusedPanel) => set((state) => ({
+      focusedPanel,
+      focusedGroupId: groupOf(state.layout, focusedPanel)?.id ?? state.focusedGroupId,
+    })),
+    revealPanel: (panel) => {
+      const state = get();
+      const { layout, added } = revealInLayout(state.layout, panel, state.focusedGroupId);
+      commit(layout, {
+        focusedPanel: panel,
+        flashingPanel: added ? panel : state.flashingPanel,
+      });
+    },
+    clearPanelFlash: (panel) => set((state) => ({
+      flashingPanel: state.flashingPanel === panel ? null : state.flashingPanel,
+    })),
+    activateTab: (panel) => {
+      commit(activateTab(get().layout, panel), { focusedPanel: panel });
+    },
+    closeTab: (panel) => {
+      commit(closeLayoutTab(get().layout, panel));
+    },
+    closeGroup: (groupId) => {
+      commit(closeLayoutGroup(get().layout, groupId));
+    },
+    openPicker: (picker) => set({ picker }),
+    cancelPicker: () => set({ picker: null }),
+    choosePanel: (panel) => {
+      const { layout, picker } = get();
+      if (picker === null) return;
+      const next = picker.mode === "split"
+        ? splitGroup(layout, picker.groupId, picker.side, panel)
+        : addTab(layout, picker.mode === "add-tab" ? picker.groupId : null, panel);
+      commit(next, { picker: null, focusedPanel: panel });
+    },
+    moveTab: (panel, targetGroupId, index) => {
+      commit(moveLayoutTab(get().layout, panel, targetGroupId, index), { focusedPanel: panel });
+    },
+    resizeSplit: (splitId, dividerIndex, delta, containerPx, persist = true) => {
+      commit(
+        resizeLayoutSplit(get().layout, splitId, dividerIndex, delta, containerPx),
+        {},
+        persist,
+      );
+    },
+    resetLayout: () => {
+      commit(presetLayout(get().activePhase), { flashingPanel: null, picker: null });
+    },
+    resetAllLayouts: () => {
+      const { activePhase } = get();
+      const document = presetLayouts(activePhase);
+      set({
+        layouts: document.layouts,
+        layout: document.layouts[activePhase],
+        focusedGroupId: null,
+        flashingPanel: null,
+        picker: null,
+      });
+      saveLayouts(document);
+    },
+  };
+});
 
 export const usePreviewStore = create<PreviewState>((set) => ({
   playhead: { frames: 0, fps: "24/1" },
