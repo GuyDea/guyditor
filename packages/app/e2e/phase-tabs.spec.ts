@@ -37,18 +37,20 @@ test("phase-specific customization persists independently across relaunch", asyn
   const template = await createWorkspaceProject();
   const first = await launchApp({ projectTemplate: template });
   let second: Awaited<ReturnType<typeof launchApp>> | null = null;
+  const firstDivider = (page: typeof first.page) =>
+    page.locator("[data-testid='split-divider'][aria-orientation='vertical']").first();
   try {
     await first.page.getByTestId("phase-tab-cut").click();
-    await first.page.getByTestId("splitter-left").focus();
-    await first.page.keyboard.press("End");
-    await expect(first.page.getByTestId("splitter-left"))
-      .toHaveAttribute("data-splitter-value", "420");
+    await firstDivider(first.page).focus();
+    for (let step = 0; step < 3; step += 1) await first.page.keyboard.press("ArrowLeft");
+    const cutValue = await firstDivider(first.page).getAttribute("aria-valuenow");
+    expect(cutValue).toBe("74");
 
     await first.page.getByTestId("phase-tab-review").click();
-    await first.page.getByTestId("splitter-right").focus();
-    await first.page.keyboard.press("Home");
-    await expect(first.page.getByTestId("splitter-right"))
-      .toHaveAttribute("data-splitter-value", "280");
+    await firstDivider(first.page).focus();
+    for (let step = 0; step < 2; step += 1) await first.page.keyboard.press("ArrowRight");
+    const reviewValue = await firstDivider(first.page).getAttribute("aria-valuenow");
+    expect(reviewValue).toBe("22");
 
     await first.electronApp.close();
     if (first.projectPath === undefined) throw new Error("Relaunch fixture path was missing.");
@@ -59,14 +61,10 @@ test("phase-specific customization persists independently across relaunch", asyn
 
     await expect(second.page.getByTestId("phase-tab-review"))
       .toHaveAttribute("aria-selected", "true");
-    await expect(second.page.getByTestId("splitter-right"))
-      .toHaveAttribute("data-splitter-value", "280");
+    await expect(firstDivider(second.page)).toHaveAttribute("aria-valuenow", "22");
 
     await second.page.getByTestId("phase-tab-cut").click();
-    await expect(second.page.getByTestId("splitter-left"))
-      .toHaveAttribute("data-splitter-value", "420");
-    await expect(second.page.getByTestId("splitter-right"))
-      .toHaveAttribute("data-splitter-value", "310");
+    await expect(firstDivider(second.page)).toHaveAttribute("aria-valuenow", "74");
   } finally {
     await first.electronApp.close().catch(() => undefined);
     await second?.electronApp.close().catch(() => undefined);

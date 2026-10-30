@@ -299,7 +299,12 @@ test("renders master metering and journals automatic and manual ducking", async 
     await launched.page.getByTestId("loudness-reset").click();
 
     await launched.page.getByTestId("layer-select-lyr_bbbbbbbbbb").click();
-    await launched.page.getByTestId("tool-rail-entry-inspector").click();
+    // Inspector goes beside the timeline: a rail click would tab it over the timeline,
+    // which was the last-used panel, and hide the ducking visualization.
+    await launched.page.getByTestId("dock-group")
+      .filter({ has: launched.page.getByTestId("dock-tab-timeline") })
+      .getByTestId("group-split-right").click();
+    await launched.page.getByTestId("panel-picker-option-inspector").click();
     await expect(launched.page.getByTestId("audio-inspector")).toBeVisible();
     await launched.page.getByTestId("duck-db").fill("-15");
     await launched.page.getByTestId("duck-save").click();
